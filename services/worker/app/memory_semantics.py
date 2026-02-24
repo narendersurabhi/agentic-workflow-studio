@@ -72,6 +72,11 @@ MEMORY_ONLY_INPUTS.pop("llm_generate_cover_letter_from_resume", None)
 MEMORY_ONLY_INPUTS.pop("document_spec_validate", None)
 MEMORY_ONLY_INPUTS.pop("docx_generate_from_spec", None)
 MEMORY_ONLY_INPUTS.pop("cover_letter_generate_ats_docx", None)
+# Iterative generators support either seed spec (from memory/dependency) OR job input.
+# Do not enforce memory-only for these tools.
+MEMORY_ONLY_INPUTS.pop("llm_iterative_improve_document_spec", None)
+MEMORY_ONLY_INPUTS.pop("llm_iterative_improve_runbook_spec", None)
+MEMORY_ONLY_INPUTS.pop("llm_iterative_improve_openapi_spec", None)
 
 MEMORY_PREFERRED_KEYS = {
     "tailored_resume": "tailored_resume:latest",

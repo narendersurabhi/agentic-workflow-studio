@@ -13,15 +13,19 @@ import redis
 from jsonschema import Draft202012Validator
 
 from libs.core import (
+    capability_registry,
     document_store,
     events,
     llm_provider,
     logging as core_logging,
+    mcp_gateway,
     models,
+    payload_resolver,
     tool_registry,
     tracing as core_tracing,
 )
 from libs.core.memory_client import MemoryClient
+from libs.framework.tool_runtime import classify_tool_error
 from services.worker.app.memory_semantics import (
     apply_memory_defaults,
     missing_memory_only_inputs,
@@ -135,6 +139,112 @@ if LLM_ENABLED:
     )
 
 
+def _capability_mode() -> str:
+    return capability_registry.resolve_capability_mode()
+
+
+def _resolve_enabled_capability_request(
+    capability_id: str,
+) -> capability_registry.CapabilitySpec | None:
+    mode = _capability_mode()
+    if mode == "disabled":
+        return None
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception as exc:  # noqa: BLE001
+        core_logging.log_event(
+            LOGGER,
+            "capability_registry_load_failed",
+            {"capability_id": capability_id, "mode": mode, "error": str(exc)},
+        )
+        return None
+    spec = registry.get(capability_id)
+    if spec is None or not spec.enabled:
+        return None
+    if mode == "dry_run":
+        core_logging.log_event(
+            LOGGER,
+            "capability_mode_dry_run",
+            {"capability_id": capability_id},
+        )
+    return spec
+
+
+def _execute_capability_request(
+    *,
+    capability_id: str,
+    payload: dict[str, Any],
+    trace_id: str,
+    idempotency_key: str,
+    registry: tool_registry.ToolRegistry,
+    task_payload: dict[str, Any] | None = None,
+) -> models.ToolCall:
+    started_at = datetime.utcnow()
+    task_payload = task_payload if isinstance(task_payload, dict) else {}
+    task_id = task_payload.get("task_id")
+
+    def _execute_native_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        try:
+            tool = registry.get(tool_name)
+        except KeyError as exc:
+            raise tool_registry.ToolExecutionError(f"unknown_tool:{tool_name}") from exc
+        tool_payload = dict(arguments)
+        memory_payload = _load_memory_inputs(tool, task_payload, trace_id)
+        if memory_payload:
+            existing_memory = tool_payload.get("memory")
+            merged_memory = dict(existing_memory) if isinstance(existing_memory, dict) else {}
+            merged_memory.update(memory_payload)
+            tool_payload["memory"] = merged_memory
+        tool_payload = apply_memory_defaults(tool.spec.name, tool_payload)
+        missing = missing_memory_only_inputs(tool.spec.name, tool_payload)
+        if missing:
+            raise tool_registry.ToolExecutionError(
+                f"contract.input_missing:memory_only_inputs_missing:{','.join(missing)}"
+            )
+        _log_candidate_resume(tool.spec.name, tool_payload, task_id, trace_id)
+        tool_payload["_registry"] = registry
+        call = registry.execute(
+            tool_name,
+            payload=tool_payload,
+            idempotency_key=str(uuid.uuid4()),
+            trace_id=trace_id,
+            max_output_bytes=OUTPUT_SIZE_CAP,
+        )
+        if call.status != "completed":
+            output = call.output_or_error if isinstance(call.output_or_error, dict) else {}
+            error_text = output.get("error", "capability_native_tool_failed")
+            raise tool_registry.ToolExecutionError(str(error_text))
+        _persist_memory_outputs(tool, task_payload, call, trace_id)
+        output = call.output_or_error
+        if isinstance(output, dict):
+            return output
+        return {"result": output}
+
+    try:
+        result = mcp_gateway.invoke_capability(
+            capability_id,
+            payload,
+            execute_tool=_execute_native_tool,
+        )
+        output = result if isinstance(result, dict) else {"result": result}
+        status = "completed"
+    except Exception as exc:  # noqa: BLE001
+        error_text = str(exc)
+        output = {"error": error_text, "error_code": classify_tool_error(error_text)}
+        status = "failed"
+    finished_at = datetime.utcnow()
+    return models.ToolCall(
+        tool_name=capability_id,
+        input=payload,
+        idempotency_key=idempotency_key,
+        trace_id=trace_id,
+        started_at=started_at,
+        finished_at=finished_at,
+        status=status,
+        output_or_error=output,
+    )
+
+
 def execute_task(task_payload: dict) -> models.TaskResult:
     task_id = task_payload.get("task_id")
     trace_id = str(task_payload.get("correlation_id", ""))
@@ -147,6 +257,7 @@ def execute_task(task_payload: dict) -> models.TaskResult:
         TOOL_HTTP_FETCH_ENABLED,
         llm_enabled=LLM_ENABLED,
         llm_provider=LLM_PROVIDER_INSTANCE,
+        service_name="worker",
     )
     tool_calls = []
     started_at = datetime.utcnow()
@@ -192,12 +303,186 @@ def execute_task(task_payload: dict) -> models.TaskResult:
                     "tool.version": TOOL_VERSION,
                 },
             ) as tool_span:
+                capability_spec = _resolve_enabled_capability_request(tool_name)
+                if capability_spec is not None:
+                    payload = _tool_payload(
+                        tool_name,
+                        task_payload.get("instruction", ""),
+                        context,
+                        task_payload,
+                        tool_inputs,
+                    )
+                    idempotency_key = str(uuid.uuid4())
+                    tool_started_at = time.monotonic()
+                    core_logging.log_event(
+                        LOGGER,
+                        "tool_call_started",
+                        {
+                            "run_id": run_id,
+                            "job_id": job_id,
+                            "task_id": task_id,
+                            "tool_sequence": tool_index + 1,
+                            "task_attempt": task_attempt,
+                            "task_max_attempts": task_max_attempts,
+                            "tool_name": tool_name,
+                            "tool_intent": f"capability:{capability_spec.idempotency}",
+                            "tool_timeout_s": capability_spec.adapters[0].timeout_s
+                            if capability_spec.adapters
+                            and capability_spec.adapters[0].timeout_s is not None
+                            else None,
+                            "trace_id": trace_id,
+                            "idempotency_key": idempotency_key,
+                            "model_provider": LLM_PROVIDER,
+                            "model_name": OPENAI_MODEL,
+                            "prompt_version": PROMPT_VERSION,
+                            "policy_version": POLICY_VERSION,
+                            "tool_version": TOOL_VERSION,
+                            "payload_keys": sorted(payload.keys()),
+                            "capability_id": capability_spec.capability_id,
+                        },
+                    )
+                    call = _execute_capability_request(
+                        capability_id=capability_spec.capability_id,
+                        payload=payload,
+                        trace_id=trace_id,
+                        idempotency_key=idempotency_key,
+                        registry=registry,
+                        task_payload=task_payload,
+                    )
+                    core_logging.log_event(
+                        LOGGER,
+                        "tool_call_finished",
+                        {
+                            "run_id": run_id,
+                            "job_id": job_id,
+                            "task_id": task_id,
+                            "tool_sequence": tool_index + 1,
+                            "task_attempt": task_attempt,
+                            "task_max_attempts": task_max_attempts,
+                            "tool_name": tool_name,
+                            "trace_id": trace_id,
+                            "idempotency_key": idempotency_key,
+                            "status": call.status,
+                            "duration_ms": int((time.monotonic() - tool_started_at) * 1000),
+                            "error_code": call.output_or_error.get("error_code"),
+                            "error": call.output_or_error.get("error"),
+                            "capability_id": capability_spec.capability_id,
+                        },
+                    )
+                    core_tracing.set_span_attributes(
+                        tool_span,
+                        {
+                            "tool.status": call.status,
+                            "tool.idempotency_key": idempotency_key,
+                            "tool.error": call.output_or_error.get("error", ""),
+                            "tool.error_code": call.output_or_error.get("error_code", ""),
+                            "tool.duration_ms": int((time.monotonic() - tool_started_at) * 1000),
+                            "tool.is_capability": True,
+                            "capability.id": capability_spec.capability_id,
+                        },
+                    )
+                    tool_calls.append(call)
+                    outputs[tool_name] = call.output_or_error
+                    if call.status == "completed":
+                        _sync_output_artifact(call.output_or_error, task_id, tool_name, trace_id)
+                        continue
+                    tool_error = call.output_or_error.get("error", "capability_failed")
+                    if isinstance(tool_error, str):
+                        lowered = tool_error.lower()
+                        if (
+                            "timed out" in lowered
+                            or "timeout" in lowered
+                            or "mcp_sdk_timeout:" in lowered
+                        ):
+                            if not tool_error.startswith("tool_call_timed_out"):
+                                tool_error = f"tool_call_timed_out:{tool_error}"
+                                call.output_or_error["error"] = tool_error
+                                outputs[tool_name] = call.output_or_error
+                    if isinstance(tool_error, str):
+                        core_logging.log_event(
+                            LOGGER,
+                            "tool_call_failed",
+                            {
+                                "run_id": run_id,
+                                "job_id": job_id,
+                                "task_id": task_id,
+                                "tool_sequence": tool_index + 1,
+                                "task_attempt": task_attempt,
+                                "task_max_attempts": task_max_attempts,
+                                "tool_name": tool_name,
+                                "trace_id": trace_id,
+                                "idempotency_key": idempotency_key,
+                                "error": tool_error,
+                                "error_code": call.output_or_error.get("error_code"),
+                                "duration_ms": int((time.monotonic() - tool_started_at) * 1000),
+                                "capability_id": capability_spec.capability_id,
+                            },
+                        )
+                    break
                 try:
                     tool = registry.get(tool_name)
                 except KeyError:
                     tool_error = f"contract.tool_not_found:unknown_tool:{tool_name}"
                     outputs[tool_name] = {"error": tool_error}
                     core_tracing.set_span_attributes(tool_span, {"tool.error": tool_error})
+                    break
+                governance_context = {
+                    "job_id": job_id,
+                    "tenant_id": task_payload.get("tenant_id"),
+                    "org_id": task_payload.get("org_id"),
+                    "job_type": task_payload.get("job_type"),
+                    "context": context,
+                    "job_context": context.get("job_context")
+                    if isinstance(context, dict)
+                    else None,
+                }
+                allow_decision = tool_registry.evaluate_tool_allowlist(
+                    tool_name,
+                    "worker",
+                    context=governance_context,
+                    tool_spec=tool.spec,
+                )
+                if allow_decision.violated and allow_decision.mode == "dry_run":
+                    core_logging.log_event(
+                        LOGGER,
+                        "tool_governance_violation_dry_run",
+                        {
+                            "run_id": run_id,
+                            "job_id": job_id,
+                            "task_id": task_id,
+                            "tool_name": tool_name,
+                            "reason": allow_decision.reason,
+                            "mode": allow_decision.mode,
+                            "trace_id": trace_id,
+                        },
+                    )
+                if not allow_decision.allowed:
+                    tool_error = f"policy.tool_not_allowed:{tool_name}:{allow_decision.reason}"
+                    outputs[tool_name] = {"error": tool_error, "error_code": "policy.tool_not_allowed"}
+                    tool_calls.append(
+                        models.ToolCall(
+                            tool_name=tool_name,
+                            input={},
+                            idempotency_key=str(uuid.uuid4()),
+                            trace_id=trace_id,
+                            started_at=started_at,
+                            finished_at=datetime.utcnow(),
+                            status="failed",
+                            output_or_error={
+                                "error": tool_error,
+                                "error_code": "policy.tool_not_allowed",
+                            },
+                        )
+                    )
+                    core_tracing.set_span_attributes(
+                        tool_span,
+                        {
+                            "tool.error": tool_error,
+                            "tool.error_code": "policy.tool_not_allowed",
+                            "tool.allowlist_reason": allow_decision.reason,
+                            "tool.governance_mode": allow_decision.mode,
+                        },
+                    )
                     break
                 mismatch = _intent_mismatch(task_intent, tool.spec.tool_intent, tool_name)
                 if mismatch:
@@ -757,39 +1042,13 @@ def _tool_payload(
     task_payload: dict,
     tool_inputs: dict,
 ) -> dict:
-    if task_payload.get("tool_inputs_resolved"):
-        resolved = tool_inputs.get(tool_name) if isinstance(tool_inputs, dict) else None
-        if isinstance(resolved, dict):
-            return resolved
-    has_tool_inputs = False
-    payload = {}
-    if isinstance(tool_inputs, dict) and tool_name in tool_inputs:
-        tool_payload = tool_inputs.get(tool_name)
-        if isinstance(tool_payload, dict):
-            payload = dict(tool_payload)
-            has_tool_inputs = True
-    payload = _merge_payload_from_task(payload, task_payload, instruction)
-    payload = _fill_payload_from_context(payload, context)
-    if tool_name == "llm_generate":
-        base_text = payload.get("text") or payload.get("prompt") or instruction
-        if context:
-            try:
-                context_blob = json.dumps(context, indent=2, ensure_ascii=True)
-            except (TypeError, ValueError):
-                context_blob = str(context)
-            base_text = f"{base_text}\n\nContext (JSON):\n{context_blob}"
-        return {"text": base_text}
-    if has_tool_inputs:
-        return payload
-    if payload:
-        return payload
-    if not context:
-        return {"text": instruction}
-    try:
-        context_blob = json.dumps(context, indent=2, ensure_ascii=True)
-    except (TypeError, ValueError):
-        context_blob = str(context)
-    return {"text": f"{instruction}\n\nContext (JSON):\n{context_blob}"}
+    return payload_resolver.resolve_tool_payload(
+        tool_name,
+        instruction,
+        context if isinstance(context, dict) else {},
+        task_payload if isinstance(task_payload, dict) else {},
+        tool_inputs if isinstance(tool_inputs, dict) else {},
+    )
 
 
 def _merge_payload_from_task(payload: dict, task_payload: dict, instruction: str) -> dict:

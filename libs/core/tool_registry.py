@@ -6,14 +6,20 @@ import math
 import os
 import re
 import shutil
+import inspect
 import time
+from datetime import UTC, datetime
 from subprocess import CompletedProcess, run
+from importlib import import_module
+from importlib import metadata as importlib_metadata
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from .llm_provider import LLMProvider
 from . import prompts, tracing as core_tracing
+from libs.core import mcp_gateway
 from .models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import (
     Tool,
@@ -23,6 +29,7 @@ from libs.framework.tool_runtime import (
     validate_schema as _validate_schema,
 )
 from libs.tools.docx_generate_from_spec import register_docx_tools
+from libs.tools.pdf_generate_from_spec import register_pdf_tools
 from libs.tools.document_spec_validate import register_document_spec_tools
 from libs.tools.resume_doc_spec_validate import register_resume_doc_spec_tools
 from libs.tools.resume_doc_spec_to_document_spec import register_resume_doc_spec_convert_tools
@@ -49,7 +56,44 @@ from libs.tools import coder_tools
 from libs.tools.github_tools import register_github_tools
 from libs.tools.openapi_iterative import register_openapi_iterative_tools
 
+try:  # Optional at import-time; policy service already depends on PyYAML.
+    import yaml
+except Exception:  # noqa: BLE001
+    yaml = None
+
 LOGGER = logging.getLogger(__name__)
+
+
+class ToolPluginLoadError(ToolExecutionError):
+    pass
+
+
+@dataclass
+class ToolAllowDecision:
+    allowed: bool
+    reason: str
+    mode: str = "enforce"
+    violated: bool = False
+
+
+@dataclass
+class _Ruleset:
+    allow: set[str]
+    deny: set[str]
+
+
+@dataclass
+class _GovernanceConfig:
+    mode: str
+    global_rules: _Ruleset
+    service_rules: dict[str, _Ruleset]
+    tenant_rules: dict[str, _Ruleset]
+    job_type_rules: dict[str, _Ruleset]
+    blocked_risk_by_service: dict[str, set[str]]
+
+
+_GOVERNANCE_CACHE_KEY: tuple[str, float] | None = None
+_GOVERNANCE_CACHE_VALUE: _GovernanceConfig | None = None
 
 
 def _extract_mcp_error_phase(error_text: str) -> str | None:
@@ -215,10 +259,420 @@ def _host_allowed(host: str, allowlist: List[str]) -> bool:
     return False
 
 
+def _parse_csv_values(raw: str | None) -> set[str]:
+    if not raw:
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _tool_governance_enabled() -> bool:
+    return os.getenv("TOOL_GOVERNANCE_ENABLED", "true").lower() == "true"
+
+
+def _tool_governance_mode_env() -> str | None:
+    raw = os.getenv("TOOL_GOVERNANCE_MODE", "").strip().lower()
+    if raw in {"enforce", "dry_run"}:
+        return raw
+    return None
+
+
+def _normalize_rule_key(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"[^A-Za-z0-9]+", "_", value.strip()).lower().strip("_")
+
+
+def _resolve_tool_governance_config_path() -> Path:
+    raw = os.getenv("TOOL_GOVERNANCE_CONFIG_PATH", "config/tool_governance.yaml").strip()
+    return Path(raw).expanduser()
+
+
+def _ruleset_from_raw(raw: Any) -> _Ruleset:
+    if not isinstance(raw, dict):
+        return _Ruleset(allow=set(), deny=set())
+    allow = (
+        {str(item).strip() for item in raw.get("allow", []) if str(item).strip()}
+        if isinstance(raw.get("allow"), list)
+        else set()
+    )
+    deny = (
+        {str(item).strip() for item in raw.get("deny", []) if str(item).strip()}
+        if isinstance(raw.get("deny"), list)
+        else set()
+    )
+    return _Ruleset(allow=allow, deny=deny)
+
+
+def _rules_map_from_raw(raw: Any) -> dict[str, _Ruleset]:
+    if not isinstance(raw, dict):
+        return {}
+    mapped: dict[str, _Ruleset] = {}
+    for key, value in raw.items():
+        norm_key = _normalize_rule_key(str(key))
+        if not norm_key:
+            continue
+        mapped[norm_key] = _ruleset_from_raw(value)
+    return mapped
+
+
+def _blocked_risk_by_service_from_raw(raw: Any) -> dict[str, set[str]]:
+    if not isinstance(raw, dict):
+        return {}
+    mapped: dict[str, set[str]] = {}
+    for key, value in raw.items():
+        norm_key = _normalize_rule_key(str(key))
+        if not norm_key:
+            continue
+        if isinstance(value, list):
+            mapped[norm_key] = {
+                str(entry).strip().lower() for entry in value if str(entry).strip()
+            }
+    return mapped
+
+
+def _default_governance_config() -> _GovernanceConfig:
+    mode = _tool_governance_mode_env() or "enforce"
+    return _GovernanceConfig(
+        mode=mode,
+        global_rules=_Ruleset(allow=set(), deny=set()),
+        service_rules={},
+        tenant_rules={},
+        job_type_rules={},
+        blocked_risk_by_service={},
+    )
+
+
+def _load_governance_config() -> _GovernanceConfig:
+    global _GOVERNANCE_CACHE_KEY, _GOVERNANCE_CACHE_VALUE
+    config = _default_governance_config()
+    if not _tool_governance_enabled():
+        config.mode = "enforce"
+        return config
+    config_path = _resolve_tool_governance_config_path()
+    try:
+        mtime = config_path.stat().st_mtime
+    except OSError:
+        mtime = -1.0
+    cache_key = (str(config_path), mtime)
+    if _GOVERNANCE_CACHE_KEY == cache_key and _GOVERNANCE_CACHE_VALUE is not None:
+        return _GOVERNANCE_CACHE_VALUE
+    loaded = config
+    if mtime >= 0 and yaml is not None:
+        try:
+            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("tool_governance_config_load_failed path=%s error=%s", config_path, exc)
+            data = {}
+        gov = data.get("tool_governance", {}) if isinstance(data, dict) else {}
+        if isinstance(gov, dict):
+            mode = _tool_governance_mode_env() or str(gov.get("mode", "")).strip().lower() or "enforce"
+            if mode not in {"enforce", "dry_run"}:
+                mode = "enforce"
+            loaded = _GovernanceConfig(
+                mode=mode,
+                global_rules=_ruleset_from_raw(gov.get("global", {})),
+                service_rules=_rules_map_from_raw(gov.get("services", {})),
+                tenant_rules=_rules_map_from_raw(gov.get("tenants", {})),
+                job_type_rules=_rules_map_from_raw(gov.get("job_types", {})),
+                blocked_risk_by_service=_blocked_risk_by_service_from_raw(
+                    (gov.get("risk", {}) or {}).get("blocked_levels_by_service", {})
+                    if isinstance(gov.get("risk", {}), dict)
+                    else {}
+                ),
+            )
+    _GOVERNANCE_CACHE_KEY = cache_key
+    _GOVERNANCE_CACHE_VALUE = loaded
+    return loaded
+
+
+def _plugin_fail_fast() -> bool:
+    return os.getenv("TOOL_PLUGIN_FAIL_FAST", "true").lower() == "true"
+
+
+def _normalize_service_name(service_name: str | None) -> str:
+    if not service_name:
+        return ""
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", service_name.strip())
+    return normalized.upper().strip("_")
+
+
+def _service_env_name(service_name: str, suffix: str) -> str:
+    return f"{service_name}_{suffix}"
+
+
+def _context_lookup(context: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    nested = context.get("job_context")
+    if isinstance(nested, dict):
+        for key in keys:
+            value = nested.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _resolve_allowlist_sets(
+    service_name: str | None, context: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    gov = _load_governance_config()
+    normalized_service_key = _normalize_rule_key(service_name)
+    service_rules = gov.service_rules.get(normalized_service_key, _Ruleset(set(), set()))
+    context = context if isinstance(context, dict) else {}
+    tenant_key = _normalize_rule_key(
+        _context_lookup(context, "tenant_id", "org_id", "organization_id")
+    )
+    job_type_key = _normalize_rule_key(_context_lookup(context, "job_type", "workflow_type"))
+    tenant_rules = gov.tenant_rules.get(tenant_key, _Ruleset(set(), set()))
+    job_type_rules = gov.job_type_rules.get(job_type_key, _Ruleset(set(), set()))
+    normalized_service = _normalize_service_name(service_name)
+    global_enabled = _parse_csv_values(os.getenv("ENABLED_TOOLS"))
+    global_disabled = _parse_csv_values(os.getenv("DISABLED_TOOLS"))
+    service_enabled = set()
+    service_disabled = set()
+    if normalized_service:
+        service_enabled = _parse_csv_values(
+            os.getenv(_service_env_name(normalized_service, "ENABLED_TOOLS"))
+        )
+        service_disabled = _parse_csv_values(
+            os.getenv(_service_env_name(normalized_service, "DISABLED_TOOLS"))
+        )
+    return {
+        "mode": gov.mode,
+        "global_enabled": global_enabled,
+        "global_disabled": global_disabled,
+        "service_enabled": service_enabled,
+        "service_disabled": service_disabled,
+        "config_global_allow": gov.global_rules.allow,
+        "config_global_deny": gov.global_rules.deny,
+        "config_service_allow": service_rules.allow,
+        "config_service_deny": service_rules.deny,
+        "config_tenant_allow": tenant_rules.allow,
+        "config_tenant_deny": tenant_rules.deny,
+        "config_job_type_allow": job_type_rules.allow,
+        "config_job_type_deny": job_type_rules.deny,
+        "blocked_risk_levels": gov.blocked_risk_by_service.get(normalized_service_key, set()),
+    }
+
+
+def _deny_decision(mode: str, reason: str) -> ToolAllowDecision:
+    if mode == "dry_run":
+        return ToolAllowDecision(True, f"dry_run:{reason}", mode=mode, violated=True)
+    return ToolAllowDecision(False, reason, mode=mode, violated=True)
+
+
+def evaluate_tool_allowlist(
+    tool_name: str,
+    service_name: str | None = None,
+    *,
+    context: dict[str, Any] | None = None,
+    tool_spec: ToolSpec | None = None,
+) -> ToolAllowDecision:
+    sets = _resolve_allowlist_sets(service_name, context=context)
+    mode = str(sets.get("mode") or "enforce")
+
+    deny_checks = (
+        ("global_disabled", sets["global_disabled"]),
+        ("service_disabled", sets["service_disabled"]),
+        ("config_global_deny", sets["config_global_deny"]),
+        ("config_service_deny", sets["config_service_deny"]),
+        ("config_tenant_deny", sets["config_tenant_deny"]),
+        ("config_job_type_deny", sets["config_job_type_deny"]),
+    )
+    for reason, denied_set in deny_checks:
+        if denied_set and tool_name in denied_set:
+            return _deny_decision(mode, reason)
+
+    blocked_risk_levels = sets.get("blocked_risk_levels", set())
+    if blocked_risk_levels and tool_spec is not None:
+        risk_level = (
+            tool_spec.risk_level.value
+            if isinstance(tool_spec.risk_level, RiskLevel)
+            else str(tool_spec.risk_level).lower()
+        )
+        if risk_level in blocked_risk_levels:
+            return _deny_decision(mode, f"risk_blocked:{risk_level}")
+
+    allow_checks = (
+        ("not_in_global_enabled", sets["global_enabled"]),
+        ("not_in_service_enabled", sets["service_enabled"]),
+        ("not_in_config_global_allow", sets["config_global_allow"]),
+        ("not_in_config_service_allow", sets["config_service_allow"]),
+        ("not_in_config_tenant_allow", sets["config_tenant_allow"]),
+        ("not_in_config_job_type_allow", sets["config_job_type_allow"]),
+    )
+    for reason, allowed_set in allow_checks:
+        if allowed_set and tool_name not in allowed_set:
+            return _deny_decision(mode, reason)
+    return ToolAllowDecision(True, "allowed", mode=mode, violated=False)
+
+
+def _tool_enabled(
+    name: str, service_name: str | None = None, tool_spec: ToolSpec | None = None
+) -> bool:
+    return evaluate_tool_allowlist(name, service_name, tool_spec=tool_spec).allowed
+
+
+def _filter_registry_tools(registry: ToolRegistry, service_name: str | None = None) -> None:
+    sets = _resolve_allowlist_sets(service_name)
+    effective_lists = [
+        sets.get("global_enabled", set()),
+        sets.get("global_disabled", set()),
+        sets.get("service_enabled", set()),
+        sets.get("service_disabled", set()),
+        sets.get("config_global_allow", set()),
+        sets.get("config_global_deny", set()),
+        sets.get("config_service_allow", set()),
+        sets.get("config_service_deny", set()),
+        sets.get("blocked_risk_levels", set()),
+    ]
+    if not any(effective_lists):
+        return
+    kept: dict[str, Tool] = {}
+    for tool_name in list(registry._tools.keys()):
+        tool = registry._tools[tool_name]
+        if _tool_enabled(tool_name, service_name, tool.spec):
+            kept[tool_name] = registry._tools[tool_name]
+    registry._tools = kept
+
+
+def _parse_plugin_spec(spec: str) -> tuple[str, str]:
+    value = spec.strip()
+    if not value:
+        raise ToolPluginLoadError("Empty plugin spec in TOOL_PLUGIN_MODULES")
+    if ":" not in value:
+        return value, "register_tools"
+    module_path, attr_name = value.split(":", 1)
+    module_path = module_path.strip()
+    attr_name = attr_name.strip() or "register_tools"
+    if not module_path:
+        raise ToolPluginLoadError(f"Invalid plugin spec: {spec}")
+    return module_path, attr_name
+
+
+def _resolve_module_register_fn(module: Any, attr_name: str) -> Callable[..., None]:
+    candidates = [attr_name]
+    if attr_name == "register_tools":
+        candidates.append("register")
+    for candidate in candidates:
+        register_fn = getattr(module, candidate, None)
+        if callable(register_fn):
+            return register_fn
+    raise ToolPluginLoadError(
+        f"Tool plugin module '{module.__name__}' missing callable '{attr_name}'"
+    )
+
+
+def _call_register_fn(
+    register_fn: Callable[..., None],
+    registry: ToolRegistry,
+    *,
+    llm_enabled: bool,
+    llm_provider: Optional[LLMProvider],
+    http_fetch_enabled: bool,
+) -> None:
+    signature = inspect.signature(register_fn)
+    kwargs: dict[str, Any] = {}
+    if "context" in signature.parameters:
+        kwargs["context"] = {
+            "llm_enabled": llm_enabled,
+            "llm_provider": llm_provider,
+            "http_fetch_enabled": http_fetch_enabled,
+        }
+    if "llm_enabled" in signature.parameters:
+        kwargs["llm_enabled"] = llm_enabled
+    if "llm_provider" in signature.parameters:
+        kwargs["llm_provider"] = llm_provider
+    if "http_fetch_enabled" in signature.parameters:
+        kwargs["http_fetch_enabled"] = http_fetch_enabled
+    if "provider" in signature.parameters and "llm_provider" not in signature.parameters:
+        kwargs["provider"] = llm_provider
+    try:
+        register_fn(registry, **kwargs)
+    except TypeError as exc:
+        raise ToolPluginLoadError(f"Invalid tool plugin signature for {register_fn}: {exc}") from exc
+
+
+def _load_module_plugins(
+    registry: ToolRegistry,
+    *,
+    llm_enabled: bool,
+    llm_provider: Optional[LLMProvider],
+    http_fetch_enabled: bool,
+) -> None:
+    plugin_specs = _parse_csv_values(os.getenv("TOOL_PLUGIN_MODULES"))
+    for plugin_spec in sorted(plugin_specs):
+        try:
+            module_path, attr_name = _parse_plugin_spec(plugin_spec)
+            module = import_module(module_path)
+            register_fn = _resolve_module_register_fn(module, attr_name)
+            _call_register_fn(
+                register_fn,
+                registry,
+                llm_enabled=llm_enabled,
+                llm_provider=llm_provider,
+                http_fetch_enabled=http_fetch_enabled,
+            )
+            LOGGER.info("tool_plugin_loaded source=module plugin=%s", plugin_spec)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error(
+                "tool_plugin_load_failed source=module plugin=%s error=%s",
+                plugin_spec,
+                exc,
+            )
+            if _plugin_fail_fast():
+                raise
+
+
+def _iter_entry_points(group: str) -> list[Any]:
+    eps = importlib_metadata.entry_points()
+    if hasattr(eps, "select"):
+        return list(eps.select(group=group))
+    return list(eps.get(group, []))
+
+
+def _load_entrypoint_plugins(
+    registry: ToolRegistry,
+    *,
+    llm_enabled: bool,
+    llm_provider: Optional[LLMProvider],
+    http_fetch_enabled: bool,
+) -> None:
+    if os.getenv("TOOL_PLUGIN_DISCOVERY_ENABLED", "false").lower() != "true":
+        return
+    group = os.getenv("TOOL_PLUGIN_ENTRYPOINT_GROUP", "awe.tools")
+    for entry_point in _iter_entry_points(group):
+        try:
+            loaded = entry_point.load()
+            if callable(loaded):
+                register_fn = loaded
+            else:
+                register_fn = _resolve_module_register_fn(loaded, "register_tools")
+            _call_register_fn(
+                register_fn,
+                registry,
+                llm_enabled=llm_enabled,
+                llm_provider=llm_provider,
+                http_fetch_enabled=http_fetch_enabled,
+            )
+            LOGGER.info("tool_plugin_loaded source=entry_point plugin=%s", entry_point.name)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error(
+                "tool_plugin_load_failed source=entry_point plugin=%s error=%s",
+                entry_point.name,
+                exc,
+            )
+            if _plugin_fail_fast():
+                raise
+
+
 def default_registry(
     http_fetch_enabled: bool = False,
     llm_enabled: bool = False,
     llm_provider: Optional[LLMProvider] = None,
+    service_name: Optional[str] = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -265,6 +719,14 @@ def default_registry(
             workspace_write_code=_workspace_write_code,
             workspace_read_text=_workspace_read_text,
             workspace_list_files=_list_workspace_files,
+            artifact_mkdir=_artifact_mkdir,
+            workspace_mkdir=_workspace_mkdir,
+            artifact_delete=_artifact_delete,
+            workspace_delete=_workspace_delete,
+            artifact_rename=_artifact_rename,
+            workspace_rename=_workspace_rename,
+            artifact_copy=_artifact_copy,
+            workspace_copy=_workspace_copy,
             artifact_move=_artifact_move_to_workspace,
             derive_output_filename=_derive_output_filename,
             run_tests=_run_tests,
@@ -277,6 +739,7 @@ def default_registry(
     )
 
     register_docx_tools(registry)
+    register_pdf_tools(registry)
     register_document_spec_tools(registry)
     register_resume_doc_spec_tools(registry)
     register_resume_doc_spec_convert_tools(registry)
@@ -304,6 +767,7 @@ def default_registry(
             handler_autonomous=lambda payload, provider=llm_provider: _coding_agent_autonomous(
                 payload, provider
             ),
+            handler_publish_pr=_coding_agent_publish_pr,
         )
         register_tailor_mcp_tools(
             registry,
@@ -353,6 +817,20 @@ def default_registry(
             llm_provider,
             timeout_s=llm_iterative_timeout_s,
         )
+
+    _load_module_plugins(
+        registry,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+        http_fetch_enabled=http_fetch_enabled,
+    )
+    _load_entrypoint_plugins(
+        registry,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+        http_fetch_enabled=http_fetch_enabled,
+    )
+    _filter_registry_tools(registry, service_name)
 
     return registry
 
@@ -493,6 +971,174 @@ def _list_workspace_files(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"entries": entries}
 
 
+def _artifact_mkdir(payload: Dict[str, Any]) -> Dict[str, Any]:
+    path = payload.get("path", "")
+    if not path:
+        raise ToolExecutionError("Missing path")
+    parents = bool(payload.get("parents", True))
+    exist_ok = bool(payload.get("exist_ok", True))
+    candidate = _safe_artifact_path(path, "")
+    candidate.mkdir(parents=parents, exist_ok=exist_ok)
+    return {"path": str(candidate)}
+
+
+def _workspace_mkdir(payload: Dict[str, Any]) -> Dict[str, Any]:
+    path = payload.get("path", "")
+    if not path:
+        raise ToolExecutionError("Missing path")
+    parents = bool(payload.get("parents", True))
+    exist_ok = bool(payload.get("exist_ok", True))
+    candidate = _safe_workspace_path(path, "")
+    candidate.mkdir(parents=parents, exist_ok=exist_ok)
+    return {"path": str(candidate)}
+
+
+def _delete_path(target: Path, *, recursive: bool, missing_ok: bool) -> Dict[str, Any]:
+    if not target.exists():
+        if missing_ok:
+            return {"path": str(target), "deleted": False}
+        raise ToolExecutionError("Path not found")
+    if target.is_dir():
+        if recursive:
+            shutil.rmtree(target)
+        else:
+            target.rmdir()
+    else:
+        target.unlink()
+    return {"path": str(target), "deleted": True}
+
+
+def _artifact_delete(payload: Dict[str, Any]) -> Dict[str, Any]:
+    path = payload.get("path", "")
+    if not path:
+        raise ToolExecutionError("Missing path")
+    recursive = bool(payload.get("recursive", False))
+    missing_ok = bool(payload.get("missing_ok", False))
+    target = _safe_artifact_path(path, "")
+    return _delete_path(target, recursive=recursive, missing_ok=missing_ok)
+
+
+def _workspace_delete(payload: Dict[str, Any]) -> Dict[str, Any]:
+    path = payload.get("path", "")
+    if not path:
+        raise ToolExecutionError("Missing path")
+    recursive = bool(payload.get("recursive", False))
+    missing_ok = bool(payload.get("missing_ok", False))
+    target = _safe_workspace_path(path, "")
+    return _delete_path(target, recursive=recursive, missing_ok=missing_ok)
+
+
+def _replace_existing_path(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _rename_path(
+    source: Path,
+    destination: Path,
+    *,
+    overwrite: bool,
+) -> Dict[str, Any]:
+    if not source.exists():
+        raise ToolExecutionError("Source path not found")
+    if destination.exists():
+        if not overwrite:
+            raise ToolExecutionError("Destination already exists")
+        _replace_existing_path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(destination)
+    return {"path": str(destination)}
+
+
+def _artifact_rename(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source_path = payload.get("source_path", "")
+    destination_path = payload.get("destination_path", "")
+    overwrite = bool(payload.get("overwrite", False))
+    if not source_path:
+        raise ToolExecutionError("Missing source_path")
+    if not destination_path:
+        raise ToolExecutionError("Missing destination_path")
+    if destination_path.endswith("/"):
+        raise ToolExecutionError("Missing file or directory name in destination_path")
+    source = _safe_artifact_path(source_path, "")
+    destination = _safe_artifact_path(destination_path, "")
+    return _rename_path(source, destination, overwrite=overwrite)
+
+
+def _workspace_rename(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source_path = payload.get("source_path", "")
+    destination_path = payload.get("destination_path", "")
+    overwrite = bool(payload.get("overwrite", False))
+    if not source_path:
+        raise ToolExecutionError("Missing source_path")
+    if not destination_path:
+        raise ToolExecutionError("Missing destination_path")
+    if destination_path.endswith("/"):
+        raise ToolExecutionError("Missing file or directory name in destination_path")
+    source = _safe_workspace_path(source_path, "")
+    destination = _safe_workspace_path(destination_path, "")
+    return _rename_path(source, destination, overwrite=overwrite)
+
+
+def _copy_path(
+    source: Path,
+    destination: Path,
+    *,
+    overwrite: bool,
+    recursive: bool,
+) -> Dict[str, Any]:
+    if not source.exists():
+        raise ToolExecutionError("Source path not found")
+    if destination.exists():
+        if not overwrite:
+            raise ToolExecutionError("Destination already exists")
+        _replace_existing_path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        if not recursive:
+            raise ToolExecutionError("Source is a directory; set recursive=true")
+        shutil.copytree(source, destination)
+    else:
+        shutil.copy2(source, destination)
+    return {"path": str(destination)}
+
+
+def _artifact_copy(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source_path = payload.get("source_path", "")
+    destination_path = payload.get("destination_path", "")
+    overwrite = bool(payload.get("overwrite", False))
+    recursive = bool(payload.get("recursive", True))
+    if not source_path:
+        raise ToolExecutionError("Missing source_path")
+    if not destination_path:
+        raise ToolExecutionError("Missing destination_path")
+    if destination_path.endswith("/"):
+        raise ToolExecutionError("Missing file or directory name in destination_path")
+    source = _safe_artifact_path(source_path, "")
+    destination = _safe_artifact_path(destination_path, "")
+    return _copy_path(source, destination, overwrite=overwrite, recursive=recursive)
+
+
+def _workspace_copy(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source_path = payload.get("source_path", "")
+    destination_path = payload.get("destination_path", "")
+    overwrite = bool(payload.get("overwrite", False))
+    recursive = bool(payload.get("recursive", True))
+    if not source_path:
+        raise ToolExecutionError("Missing source_path")
+    if not destination_path:
+        raise ToolExecutionError("Missing destination_path")
+    if destination_path.endswith("/"):
+        raise ToolExecutionError("Missing file or directory name in destination_path")
+    source = _safe_workspace_path(source_path, "")
+    destination = _safe_workspace_path(destination_path, "")
+    return _copy_path(source, destination, overwrite=overwrite, recursive=recursive)
+
+
 def _artifact_move_to_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_path = payload.get("source_path", "")
     destination_path = payload.get("destination_path", "")
@@ -596,8 +1242,56 @@ def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:
         memory_context.get("document_type"),
         nested_context.get("document_type"),
     )
+    extension_hint = pick_str(
+        payload.get("output_extension"),
+        payload.get("file_extension"),
+        payload.get("extension"),
+        payload.get("format"),
+        memory_context.get("output_extension"),
+        memory_context.get("file_extension"),
+        memory_context.get("extension"),
+        memory_context.get("format"),
+        nested_context.get("output_extension"),
+        nested_context.get("file_extension"),
+        nested_context.get("extension"),
+        nested_context.get("format"),
+    )
     normalized_doc_type = document_type.lower().replace("-", "_")
     is_cover_letter = normalized_doc_type in {"cover_letter", "coverletter"}
+    known_format_types = {
+        "pdf",
+        "docx",
+        "md",
+        "markdown",
+        "txt",
+        "html",
+        "htm",
+        "json",
+        "yaml",
+        "yml",
+        "xml",
+        "csv",
+    }
+
+    def normalize_extension(raw: str) -> str:
+        value = raw.strip().lower()
+        if value.startswith("."):
+            value = value[1:]
+        if value == "markdown":
+            value = "md"
+        if not value:
+            return ""
+        if not re.fullmatch(r"[a-z0-9]{1,16}", value):
+            raise ToolExecutionError("Invalid output_extension")
+        return value
+
+    output_extension = ""
+    if extension_hint:
+        output_extension = normalize_extension(extension_hint)
+    elif normalized_doc_type in known_format_types:
+        output_extension = normalize_extension(normalized_doc_type)
+    if not output_extension:
+        output_extension = "docx"
     if not isinstance(output_dir, str):
         output_dir = "resumes"
     output_dir = output_dir.strip().strip("/")
@@ -664,28 +1358,34 @@ def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if candidate_label and role_label and company_label:
         doc_label = "Cover Letter" if is_cover_letter else "Resume"
-        filename = f"{candidate_label} {doc_label} - {role_label} - {company_label}.docx"
+        filename = (
+            f"{candidate_label} {doc_label} - {role_label} - {company_label}"
+            f".{output_extension}"
+        )
         return {
             "path": f"{output_dir}/{filename}",
             "document_type": "cover_letter" if is_cover_letter else "resume",
+            "output_extension": output_extension,
         }
 
     if not role_label:
         raise ToolExecutionError("Missing target_role_name")
     if not isinstance(date_value, str) or not date_value.strip():
-        raise ToolExecutionError("Missing date")
+        # Fallback for plans that omit date/today in output-path derivation.
+        date_value = datetime.now(UTC).date().isoformat()
 
     role_slug = slugify(role_label or str(role_name), r"[^a-z0-9]+") or "document"
     date_slug = slugify(date_value, r"[^0-9]+")
     if not date_slug:
         raise ToolExecutionError("Invalid date")
     if is_cover_letter:
-        filename = f"cover_letter_{role_slug}_{date_slug}.docx"
+        filename = f"cover_letter_{role_slug}_{date_slug}.{output_extension}"
     else:
-        filename = f"{role_slug}_{date_slug}.docx"
+        filename = f"{role_slug}_{date_slug}.{output_extension}"
     return {
         "path": f"{output_dir}/{filename}",
         "document_type": "cover_letter" if is_cover_letter else "resume",
+        "output_extension": output_extension,
     }
 
 
@@ -873,12 +1573,14 @@ def _call_mcp_tool_sdk(
     tool_name: str,
     arguments: Dict[str, Any],
     timeout_s: float,
+    headers: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     return mcp_client.call_mcp_tool_sdk(
         mcp_url,
         tool_name,
         arguments,
         timeout_s,
+        headers=headers,
         tracing_module=core_tracing,
         logger=LOGGER,
     )
@@ -889,20 +1591,34 @@ def _call_mcp_tool_sdk_inproc(
     tool_name: str,
     arguments: Dict[str, Any],
     timeout_s: float,
+    headers: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     return mcp_client.call_mcp_tool_sdk_inproc(
         mcp_url,
         tool_name,
         arguments,
         timeout_s,
+        headers=headers,
         tracing_module=core_tracing,
     )
 
 
 def _mcp_process_entry(
-    queue: Any, mcp_url: str, tool_name: str, arguments: Dict[str, Any], timeout_s: float
+    queue: Any,
+    mcp_url: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    timeout_s: float,
+    headers: Dict[str, str] | None = None,
 ) -> None:
-    mcp_client.mcp_process_entry(queue, mcp_url, tool_name, arguments, timeout_s)
+    mcp_client.mcp_process_entry(
+        queue,
+        mcp_url,
+        tool_name,
+        arguments,
+        timeout_s,
+        headers,
+    )
 
 
 def _call_mcp_tool_sdk_process(
@@ -910,12 +1626,14 @@ def _call_mcp_tool_sdk_process(
     tool_name: str,
     arguments: Dict[str, Any],
     timeout_s: float,
+    headers: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     return mcp_client.call_mcp_tool_sdk_process(
         mcp_url,
         tool_name,
         arguments,
         timeout_s,
+        headers=headers,
         logger=LOGGER,
         tracing_module=core_tracing,
     )
@@ -960,6 +1678,14 @@ def _coding_agent_autonomous(payload: Dict[str, Any], provider: LLMProvider) -> 
         post_mcp_tool_call=_post_mcp_tool_call,
         write_workspace_text_file=_write_workspace_text_file,
         extract_json=_extract_json,
+    )
+
+
+def _coding_agent_publish_pr(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return coder_tools.coding_agent_publish_pr(
+        payload,
+        safe_workspace_path=_safe_workspace_path,
+        invoke_capability=mcp_gateway.invoke_capability,
     )
 
 

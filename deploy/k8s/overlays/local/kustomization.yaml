@@ -1,5 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namespace: awe
 resources:
   - ../../namespace.yaml
   - ../../configmap.yaml
@@ -8,6 +9,7 @@ resources:
   - ../../postgres.yaml
   - ../../redis.yaml
   - ../../jaeger.yaml
+  - ../../github-mcp.yaml
   - ../../coder.yaml
   - ../../tailor.yaml
   - ../../planner.yaml
@@ -20,6 +22,15 @@ resources:
   - ../../hpa-tailor.yaml
   - pv-postgres-hostpath.yaml
   - pv-redis-hostpath.yaml
+configMapGenerator:
+  - name: capability-registry
+    files:
+      - capability_registry.yaml=../../../../config/capability_registry.yaml
+  - name: mcp-servers-config
+    files:
+      - mcp_servers.yaml=../../../../config/mcp_servers.yaml
+generatorOptions:
+  disableNameSuffixHash: true
 images:
   - name: ghcr.io/your-org/awe-api
     newName: localhost:5001/localhost/awe-api

@@ -53,6 +53,7 @@ def register_coding_agent_tools(
     timeout_s: int,
     handler_generate: PayloadHandler,
     handler_autonomous: PayloadHandler,
+    handler_publish_pr: PayloadHandler | None = None,
 ) -> None:
     registry.register(
         Tool(
@@ -144,6 +145,90 @@ def register_coding_agent_tools(
             handler=handler_autonomous,
         )
     )
+
+    if handler_publish_pr is not None:
+        registry.register(
+            Tool(
+                spec=ToolSpec(
+                    name="coding_agent_publish_pr",
+                    description=(
+                        "Publish workspace codegen changes to GitHub via MCP (create branch, "
+                        "push files, create PR)"
+                    ),
+                    usage_guidance=(
+                        "Provide owner, repo, branch, base, and workspace_path. Optional: "
+                        "title, body, message, include_globs, exclude_globs, max_files, "
+                        "max_file_bytes, max_total_bytes, draft."
+                    ),
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "owner": {"type": "string", "minLength": 1},
+                            "repo": {"type": "string", "minLength": 1},
+                            "branch": {"type": "string", "minLength": 1},
+                            "base": {"type": "string", "minLength": 1},
+                            "workspace_path": {"type": "string", "minLength": 1},
+                            "title": {"type": "string"},
+                            "body": {"type": "string"},
+                            "message": {"type": "string"},
+                            "head": {"type": "string"},
+                            "draft": {"type": "boolean"},
+                            "maintainer_can_modify": {"type": "boolean"},
+                            "include_globs": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "exclude_globs": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "max_files": {"type": "integer", "minimum": 1, "maximum": 2000},
+                            "max_file_bytes": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 5_000_000,
+                            },
+                            "max_total_bytes": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 20_000_000,
+                            },
+                        },
+                        "required": ["owner", "repo", "branch", "base", "workspace_path"],
+                    },
+                    output_schema={
+                        "type": "object",
+                        "properties": {
+                            "branch": {"type": "string"},
+                            "base": {"type": "string"},
+                            "selected_files": {"type": "integer"},
+                            "selected_paths_preview": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "skipped": {"type": "object"},
+                            "branch_create": {"type": "object"},
+                            "push_result": {"type": "object"},
+                            "pull_request": {"type": "object"},
+                        },
+                        "required": [
+                            "branch",
+                            "base",
+                            "selected_files",
+                            "selected_paths_preview",
+                            "skipped",
+                            "branch_create",
+                            "push_result",
+                            "pull_request",
+                        ],
+                    },
+                    timeout_s=timeout_s,
+                    risk_level=RiskLevel.high,
+                    tool_intent=ToolIntent.io,
+                ),
+                handler=handler_publish_pr,
+            )
+        )
 
 
 def register_tailor_mcp_tools(

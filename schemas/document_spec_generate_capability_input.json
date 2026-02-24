@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DocumentSpecGenerateCapabilityInput",
+  "type": "object",
+  "properties": {
+    "job": {"type": "object"},
+    "allowed_block_types": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "required": ["job", "allowed_block_types"],
+  "additionalProperties": true
+}

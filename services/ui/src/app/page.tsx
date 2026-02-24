@@ -8,8 +8,11 @@ const TEMPLATE_ORDER_KEY = "ape.templates.order.v1";
 const TEMPLATE_DEFAULTS_KEY = "ape.template.defaults.v1";
 const MEMORY_LIMIT_STORAGE_KEY = "ape.memory.limit.v1";
 const SIDEBAR_MIN_WIDTH = 260;
-const SIDEBAR_MAX_WIDTH = 420;
 const AUTO_TEMPLATE_KEYS = new Set(["today", "today_pretty"]);
+const TEMPLATE_INPUT_DEFAULTS: Record<string, string> = {
+  run_iterative_improve: "false",
+  generate_cover_letter: "false"
+};
 
 const formatLocalIsoDate = (date: Date) => {
   const year = date.getFullYear();
@@ -94,6 +97,96 @@ const downloadHrefForPath = (path: string) => {
     return `${apiUrl}/workspace/download?path=${encodeURIComponent(trimmed)}`;
   }
   return `${apiUrl}/artifacts/download?path=${encodeURIComponent(trimmed)}`;
+};
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const isCapabilityMentioned = (goalText: string, capabilityId: string) => {
+  const pattern = new RegExp(
+    `(^|[^A-Za-z0-9_.-])${escapeRegExp(capabilityId)}([^A-Za-z0-9_.-]|$)`
+  );
+  return pattern.test(goalText);
+};
+
+const defaultValueForSchemaType = (schemaProperty: Record<string, unknown> | null | undefined) => {
+  const rawType = schemaProperty?.type;
+  const schemaType = Array.isArray(rawType) ? String(rawType[0] || "") : String(rawType || "");
+  if (schemaType === "integer" || schemaType === "number") {
+    return 0;
+  }
+  if (schemaType === "boolean") {
+    return false;
+  }
+  if (schemaType === "array") {
+    return [];
+  }
+  if (schemaType === "object") {
+    return {};
+  }
+  return "";
+};
+
+const templateForCapability = (item: CapabilityItem): Record<string, unknown> => {
+  const template: Record<string, unknown> = {};
+  const required = item.required_inputs || [];
+  const schemaProperties = (
+    item.input_schema &&
+    typeof item.input_schema === "object" &&
+    !Array.isArray(item.input_schema) &&
+    (item.input_schema as Record<string, unknown>).properties &&
+    typeof (item.input_schema as Record<string, unknown>).properties === "object"
+  )
+    ? ((item.input_schema as Record<string, unknown>).properties as Record<string, unknown>)
+    : {};
+
+  required.forEach((field) => {
+    const property =
+      schemaProperties[field] &&
+      typeof schemaProperties[field] === "object" &&
+      !Array.isArray(schemaProperties[field])
+        ? (schemaProperties[field] as Record<string, unknown>)
+        : undefined;
+    template[field] = defaultValueForSchemaType(property);
+  });
+  return template;
+};
+
+const detectCapabilitiesInGoal = (goalText: string, catalogItems: CapabilityItem[]) => {
+  const trimmedGoal = goalText.trim();
+  if (!trimmedGoal) {
+    return [] as CapabilityItem[];
+  }
+  return catalogItems.filter((item) => isCapabilityMentioned(trimmedGoal, item.id));
+};
+
+const mergeContextWithCapabilityTemplates = (
+  contextText: string,
+  capabilities: CapabilityItem[]
+): { nextContext: string; mergedFieldCount: number; invalidContext: boolean } => {
+  let parsedContext: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(contextText || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      parsedContext = { ...(parsed as Record<string, unknown>) };
+    }
+  } catch {
+    return { nextContext: contextText, mergedFieldCount: 0, invalidContext: true };
+  }
+  let mergedFieldCount = 0;
+  capabilities.forEach((item) => {
+    const patch = templateForCapability(item);
+    Object.entries(patch).forEach(([key, value]) => {
+      if (parsedContext[key] === undefined) {
+        parsedContext[key] = value;
+        mergedFieldCount += 1;
+      }
+    });
+  });
+  return {
+    nextContext: JSON.stringify(parsedContext, null, 2),
+    mergedFieldCount,
+    invalidContext: false,
+  };
 };
 
 type Job = {
@@ -181,6 +274,42 @@ type TaskDlqEntry = {
   task_id?: string | null;
   envelope?: Record<string, unknown>;
   task_payload?: Record<string, unknown>;
+};
+
+type CapabilityAdapter = {
+  type: string;
+  server_id: string;
+  tool_name: string;
+};
+
+type CapabilityItem = {
+  id: string;
+  description: string;
+  enabled: boolean;
+  risk_tier: string;
+  idempotency: string;
+  group?: string | null;
+  subgroup?: string | null;
+  tags: string[];
+  input_schema_ref?: string | null;
+  input_schema?: Record<string, unknown> | null;
+  required_inputs?: string[];
+  adapters?: CapabilityAdapter[];
+};
+
+type CapabilityCatalog = {
+  mode: string;
+  items: CapabilityItem[];
+};
+
+type CapabilitySubgroupSection = {
+  subgroupName: string;
+  items: CapabilityItem[];
+};
+
+type CapabilityGroupSection = {
+  groupName: string;
+  subgroups: CapabilitySubgroupSection[];
 };
 
 type TemplateVariable = {
@@ -458,28 +587,22 @@ const BUILT_IN_TEMPLATES: Template[] = [
   {
     id: "tpl-resume-tailor-docspec",
     name: "Resume Tailor -> DOCX",
-    description: "Tailor resume JSON, improve it, render resume DOCX, and optionally generate/render a cover letter DOCX.",
+    description:
+      "Tailor resume text, improve alignment iteratively, render resume DOCX, and optionally generate/render cover letter DOCX.",
     goal:
-      "Use llm_tailor_resume_text to tailor my resume for the {{target_role_name}} role. " +
-      "Iteratively improve it with llm_iterative_improve_tailored_resume_text until alignment >= {{min_alignment_score}} or {{max_iterations}} iterations. " +
-      "Then use llm_generate_resume_doc_spec_from_text on the improved tailored JSON to produce resume_doc_spec. " +
-      "This tool performs resume_doc_spec_validate (strict) internally before returning the spec. " +
-      "Convert with resume_doc_spec_to_document_spec. " +
-      "Derive a filesystem-safe output path with derive_output_filename using candidate_name, target_role_name, and company_name " +
-      "so the file is named 'Firstname Lastname Resume - Target Role - Company.docx'. " +
-      "If those are omitted, allow derive_output_filename to infer them from job_description and candidate_resume " +
-      "(fallback to date naming when needed), " +
-      "then render a DOCX with docx_generate_from_spec using the derived path. " +
-      "If {{generate_cover_letter}} is true, you MUST use this exact cover-letter tool chain: " +
-      "llm_generate_coverletter_doc_spec_from_text -> coverletter_doc_spec_to_document_spec -> derive_output_filename(document_type='cover_letter') -> docx_generate_from_spec. " +
-      "Do NOT use llm_generate_cover_letter_from_resume or cover_letter_generate_ats_docx. " +
-      "Call llm_generate_coverletter_doc_spec_from_text using the improved tailored resume and job description (today_pretty='{{today_pretty}}'). " +
-      "Convert with coverletter_doc_spec_to_document_spec. " +
-      "Derive a cover-letter path with derive_output_filename using document_type 'cover_letter' " +
-      "so the file is named 'Firstname Lastname Cover Letter - Target Role - Company.docx'. " +
-      "Then render a DOCX with docx_generate_from_spec using the derived path.",
+      "Use this base resume chain in order: " +
+      "llm_tailor_resume_text -> llm_generate_resume_doc_spec_from_text -> resume_doc_spec_to_document_spec -> derive_output_filename(document_type='resume', output_extension='docx') -> docx_generate_from_spec. " +
+      "If {{run_iterative_improve}} is true, insert llm_iterative_improve_tailored_resume_text between llm_tailor_resume_text and llm_generate_resume_doc_spec_from_text. " +
+      "Tailor against {{job_description}} and {{candidate_resume}} for {{target_role_name}}. " +
+      "When iterative improve is enabled, run until alignment >= {{min_alignment_score}} or {{max_iterations}} iterations. " +
+      "When improving, preserve factual claims and only add defendable skills/bullets. " +
+      "When deriving output path, use candidate_name, target_role_name, company_name, today, and output_dir='{{output_dir}}'. " +
+      "Render DOCX with the derived path and the converted DocumentSpec. " +
+      "If {{generate_cover_letter}} is true, run this exact chain after resume rendering: " +
+      "llm_generate_coverletter_doc_spec_from_text -> coverletter_doc_spec_to_document_spec -> derive_output_filename(document_type='cover_letter', output_extension='docx') -> docx_generate_from_spec. " +
+      "Do not use llm_generate_cover_letter_from_resume or cover_letter_generate_ats_docx.",
     contextJson:
-      '{\n  "job_description": "{{job_description}}",\n  "candidate_resume": "{{candidate_resume}}",\n  "candidate_name": "{{candidate_name}}",\n  "target_role_name": "{{target_role_name}}",\n  "company_name": "{{company_name}}",\n  "today": "{{today}}",\n  "today_pretty": "{{today_pretty}}",\n  "generate_cover_letter": "{{generate_cover_letter}}",\n  "seniority_level": "{{seniority_level}}",\n  "min_alignment_score": "{{min_alignment_score}}",\n  "max_iterations": "{{max_iterations}}"\n}',
+      '{\n  "job_description": "{{job_description}}",\n  "candidate_resume": "{{candidate_resume}}",\n  "candidate_name": "{{candidate_name}}",\n  "target_role_name": "{{target_role_name}}",\n  "company_name": "{{company_name}}",\n  "today": "{{today}}",\n  "today_pretty": "{{today_pretty}}",\n  "output_dir": "{{output_dir}}",\n  "run_iterative_improve": "{{run_iterative_improve}}",\n  "generate_cover_letter": "{{generate_cover_letter}}",\n  "seniority_level": "{{seniority_level}}",\n  "min_alignment_score": "{{min_alignment_score}}",\n  "max_iterations": "{{max_iterations}}"\n}',
     priority: 2,
     builtIn: true,
     variables: [
@@ -531,6 +654,20 @@ const BUILT_IN_TEMPLATES: Template[] = [
         scope: "per_run",
         required: false,
         placeholder: "February 13, 2026"
+      },
+      {
+        key: "output_dir",
+        label: "Output Directory",
+        scope: "default",
+        required: false,
+        placeholder: "resumes"
+      },
+      {
+        key: "run_iterative_improve",
+        label: "Run Iterative Improve",
+        scope: "per_run",
+        required: false,
+        placeholder: "false"
       },
       {
         key: "generate_cover_letter",
@@ -672,6 +809,62 @@ const BUILT_IN_TEMPLATES: Template[] = [
         scope: "per_run",
         required: true,
         placeholder: "2026-02-10"
+      },
+      {
+        key: "output_dir",
+        label: "Output Folder",
+        scope: "default",
+        required: false,
+        placeholder: "documents"
+      }
+    ]
+  },
+  {
+    id: "tpl-doc-chaining-explicit",
+    name: "Document Pipeline (Explicit Chaining)",
+    description:
+      "Demonstrate capability chaining by passing outputs to downstream inputs with $from references.",
+    goal:
+      "Create a 4-task plan with these exact task names: GenerateSpec, ValidateSpec, DeriveOutputPath, RenderDocx. " +
+      "Use capability IDs document.spec.generate, document.spec.validate, document.output.derive, and document.docx.generate. " +
+      "You MUST use explicit tool_inputs reference objects for chaining. " +
+      "For ValidateSpec.document_spec use {\"$from\":[\"dependencies_by_name\",\"GenerateSpec\",\"document.spec.generate\",\"document_spec\"]}. " +
+      "For RenderDocx.document_spec use the same GenerateSpec reference. " +
+      "For RenderDocx.path use {\"$from\":[\"dependencies_by_name\",\"DeriveOutputPath\",\"document.output.derive\",\"path\"]}. " +
+      "Set allowed_block_types to [\"text\",\"paragraph\",\"heading\",\"bullets\",\"spacer\",\"optional_paragraph\",\"repeat\"], set strict=true, and set document_type='document'. " +
+      "Keep references as array paths because capability IDs contain dots.",
+    contextJson:
+      '{\n  "topic": "{{topic}}",\n  "audience": "{{audience}}",\n  "tone": "{{tone}}",\n  "today": "{{today}}",\n  "output_dir": "{{output_dir}}"\n}',
+    priority: 2,
+    builtIn: true,
+    variables: [
+      {
+        key: "topic",
+        label: "Topic",
+        scope: "per_run",
+        required: true,
+        placeholder: "e.g., Kubernetes persistent volume best practices"
+      },
+      {
+        key: "audience",
+        label: "Audience",
+        scope: "default",
+        required: false,
+        placeholder: "e.g., Senior engineers and architects"
+      },
+      {
+        key: "tone",
+        label: "Tone",
+        scope: "default",
+        required: false,
+        placeholder: "e.g., Practical and step-by-step"
+      },
+      {
+        key: "today",
+        label: "Today (YYYY-MM-DD)",
+        scope: "per_run",
+        required: true,
+        placeholder: "2026-02-24"
       },
       {
         key: "output_dir",
@@ -897,11 +1090,16 @@ export default function Home() {
   const [templateName, setTemplateName] = useState("");
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [templateDefaults, setTemplateDefaults] = useState<Record<string, string>>({});
+  const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalog | null>(null);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [templateDefaults, setTemplateDefaults] = useState<Record<string, string>>(
+    TEMPLATE_INPUT_DEFAULTS
+  );
   const [activeTemplate, setActiveTemplate] = useState<Template | null>(null);
   const [templateInputs, setTemplateInputs] = useState<Record<string, string>>({});
   const [templateInputError, setTemplateInputError] = useState<string | null>(null);
   const [templateMissingKeys, setTemplateMissingKeys] = useState<Set<string>>(new Set());
+  const [composeNotice, setComposeNotice] = useState<string | null>(null);
   const [defaultsTemplateId, setDefaultsTemplateId] = useState<string>("");
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [customVariables, setCustomVariables] = useState<TemplateVariable[]>([]);
@@ -938,6 +1136,21 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [isResizing, setIsResizing] = useState(false);
+  const [capabilitySidebarOpen, setCapabilitySidebarOpen] = useState(false);
+  const [capabilitySidebarWidth, setCapabilitySidebarWidth] = useState(320);
+  const [isCapabilityResizing, setIsCapabilityResizing] = useState(false);
+  const [collapsedCapabilityGroups, setCollapsedCapabilityGroups] = useState<Set<string>>(new Set());
+  const [collapsedCapabilitySubgroups, setCollapsedCapabilitySubgroups] = useState<Set<string>>(
+    new Set()
+  );
+  const [chainSourceTaskName, setChainSourceTaskName] = useState("GenerateSpec");
+  const [chainSourceCapabilityId, setChainSourceCapabilityId] = useState("document.spec.generate");
+  const [chainSourceOutputPath, setChainSourceOutputPath] = useState("document_spec");
+  const [chainTargetTaskName, setChainTargetTaskName] = useState("RenderDocx");
+  const [chainTargetCapabilityId, setChainTargetCapabilityId] = useState("document.docx.generate");
+  const [chainTargetInputField, setChainTargetInputField] = useState("document_spec");
+  const [chainDefaultValue, setChainDefaultValue] = useState("");
+  const [chainComposerNotice, setChainComposerNotice] = useState<string | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
   const [hasSetInitialSidebar, setHasSetInitialSidebar] = useState(false);
   const devToolsEnabled = process.env.NEXT_PUBLIC_DEV_TOOLS === "true";
@@ -945,6 +1158,31 @@ export default function Home() {
   const selectedJob = selectedJobId
     ? jobs.find((job) => job.id === selectedJobId) || null
     : null;
+  const sidebarLayout = useMemo(() => {
+    if (!isDesktop) {
+      return { left: 0, right: 0 };
+    }
+    return {
+      left: sidebarOpen ? sidebarWidth : 0,
+      right: capabilitySidebarOpen ? capabilitySidebarWidth : 0
+    };
+  }, [
+    capabilitySidebarOpen,
+    capabilitySidebarWidth,
+    isDesktop,
+    sidebarOpen,
+    sidebarWidth
+  ]);
+  const taskNameOptions = useMemo(() => {
+    const names = new Set<string>();
+    selectedTasks.forEach((task) => {
+      const taskName = task.name?.trim();
+      if (taskName) {
+        names.add(taskName);
+      }
+    });
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [selectedTasks]);
 
   useEffect(() => {
     selectedJobIdRef.current = selectedJobId;
@@ -954,6 +1192,305 @@ export default function Home() {
     const response = await fetch(`${apiUrl}/jobs`);
     const data = await response.json();
     setJobs(data);
+  };
+
+  const loadCapabilities = async () => {
+    try {
+      const response = await fetch(`${apiUrl}/capabilities`);
+      if (!response.ok) {
+        const text = await response.text();
+        setCapabilityError(
+          text
+            ? `Failed to load capabilities (${response.status}): ${text}`
+            : `Failed to load capabilities (${response.status}).`
+        );
+        return;
+      }
+      const data = (await response.json()) as CapabilityCatalog;
+      setCapabilityCatalog(data);
+      setCapabilityError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Network error";
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes("failed to fetch") ||
+        normalized.includes("load failed") ||
+        normalized.includes("networkerror")
+      ) {
+        setCapabilityError(
+          `Network error while loading capabilities from ${apiUrl}/capabilities. ` +
+            "Confirm API port-forward is active: kubectl port-forward -n awe svc/api 18000:8000"
+        );
+      } else {
+        setCapabilityError(message);
+      }
+    }
+  };
+
+  const availableCapabilities = useMemo(() => {
+    const items = capabilityCatalog?.items || [];
+    return [...items].sort((a, b) => a.id.localeCompare(b.id));
+  }, [capabilityCatalog]);
+
+  const capabilitiesByGroup = useMemo(() => {
+    const grouped = new Map<string, Map<string, CapabilityItem[]>>();
+    availableCapabilities.forEach((item) => {
+      const groupName = item.group?.trim() || "Ungrouped";
+      const subgroupName = item.subgroup?.trim() || "General";
+      const groupMap = grouped.get(groupName) || new Map<string, CapabilityItem[]>();
+      const subgroupItems = groupMap.get(subgroupName) || [];
+      subgroupItems.push(item);
+      groupMap.set(subgroupName, subgroupItems);
+      grouped.set(groupName, groupMap);
+    });
+
+    const sections: CapabilityGroupSection[] = Array.from(grouped.entries()).map(
+      ([groupName, subgroupMap]) => ({
+        groupName,
+        subgroups: Array.from(subgroupMap.entries())
+          .map(([subgroupName, items]) => ({
+            subgroupName,
+            items: [...items].sort((a, b) => a.id.localeCompare(b.id)),
+          }))
+          .sort((a, b) => a.subgroupName.localeCompare(b.subgroupName)),
+      })
+    );
+
+    return sections.sort((a, b) => a.groupName.localeCompare(b.groupName));
+  }, [availableCapabilities]);
+
+  const toggleCapabilityGroup = (groupName: string) => {
+    setCollapsedCapabilityGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  };
+
+  const toggleCapabilitySubgroup = (groupName: string, subgroupName: string) => {
+    const key = `${groupName}::${subgroupName}`;
+    setCollapsedCapabilitySubgroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const appendCapabilityToGoal = (capabilityId: string) => {
+    setGoal((prev) => {
+      const trimmed = prev.trim();
+      if (isCapabilityMentioned(trimmed, capabilityId)) {
+        return prev;
+      }
+      if (!trimmed) {
+        return `Use capability ${capabilityId}`;
+      }
+      return `${trimmed}. Use capability ${capabilityId}`;
+    });
+    const capability = availableCapabilities.find((item) => item.id === capabilityId);
+    if (!capability) {
+      return;
+    }
+    setContextJson((prev) => {
+      const merged = mergeContextWithCapabilityTemplates(prev, [capability]);
+      if (merged.invalidContext) {
+        setComposeNotice("Context JSON is invalid. Fix it before auto-filling capability inputs.");
+        return prev;
+      }
+      if (merged.mergedFieldCount > 0) {
+        setComposeNotice(
+          `Auto-filled ${merged.mergedFieldCount} Context JSON field(s) for ${capabilityId}.`
+        );
+      } else {
+        setComposeNotice(`Context already had required starter fields for ${capabilityId}.`);
+      }
+      return merged.nextContext;
+    });
+  };
+
+  const insertCapabilityTemplate = (item: CapabilityItem) => {
+    const patch = templateForCapability(item);
+    if (Object.keys(patch).length === 0) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      const base =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {};
+      const next = { ...base, ...patch };
+      setContextJson(JSON.stringify(next, null, 2));
+      setComposeNotice(
+        Object.keys(patch).length > 0
+          ? `Inserted context starter fields for ${item.id}.`
+          : `No starter fields available for ${item.id}.`
+      );
+    } catch {
+      setContextJson(JSON.stringify(patch, null, 2));
+      setComposeNotice(`Context JSON was invalid; replaced with starter fields for ${item.id}.`);
+    }
+  };
+
+  const fillContextFromDetectedCapabilities = () => {
+    if (detectedCapabilities.length === 0) {
+      setComposeNotice("No capabilities detected in Goal. Add capability IDs first.");
+      return;
+    }
+    const merged = mergeContextWithCapabilityTemplates(contextJson, detectedCapabilities);
+    if (merged.invalidContext) {
+      setComposeNotice("Context JSON is invalid. Fix it before auto-filling required fields.");
+      return;
+    }
+    setContextJson(merged.nextContext);
+    if (merged.mergedFieldCount > 0) {
+      setComposeNotice(
+        `Auto-filled ${merged.mergedFieldCount} missing Context JSON field(s) from detected capabilities.`
+      );
+    } else {
+      setComposeNotice("No missing starter fields were found for detected capabilities.");
+    }
+  };
+
+  const buildChainReference = () => {
+    const sourceTask = chainSourceTaskName.trim();
+    const sourceCapability = chainSourceCapabilityId.trim();
+    if (!sourceTask || !sourceCapability) {
+      return null;
+    }
+    const outputSegments = chainSourceOutputPath
+      .split(".")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    const reference: Record<string, unknown> = {
+      $from: ["dependencies_by_name", sourceTask, sourceCapability, ...outputSegments]
+    };
+    const defaultText = chainDefaultValue.trim();
+    if (defaultText) {
+      try {
+        reference.$default = JSON.parse(defaultText);
+      } catch {
+        reference.$default = defaultText;
+      }
+    }
+    return reference;
+  };
+
+  const chainReference = useMemo(() => buildChainReference(), [
+    chainSourceTaskName,
+    chainSourceCapabilityId,
+    chainSourceOutputPath,
+    chainDefaultValue
+  ]);
+
+  const chainRuleText = useMemo(() => {
+    const targetTask = chainTargetTaskName.trim();
+    const targetCapability = chainTargetCapabilityId.trim();
+    const targetField = chainTargetInputField.trim();
+    if (!targetTask || !targetCapability || !targetField || !chainReference) {
+      return "";
+    }
+    return (
+      `For task ${targetTask}, set tool_inputs.${targetCapability}.${targetField} to ` +
+      `${JSON.stringify(chainReference)}.`
+    );
+  }, [
+    chainTargetTaskName,
+    chainTargetCapabilityId,
+    chainTargetInputField,
+    chainReference
+  ]);
+
+  const appendChainingRuleToGoal = () => {
+    if (!chainRuleText) {
+      setChainComposerNotice(
+        "Provide source task/capability and target task/capability/input field."
+      );
+      return;
+    }
+    setGoal((prev) => {
+      const trimmed = prev.trim();
+      if (!trimmed) {
+        return chainRuleText;
+      }
+      if (trimmed.includes(chainRuleText)) {
+        return prev;
+      }
+      return `${trimmed} ${chainRuleText}`;
+    });
+    setChainComposerNotice("Added chaining rule to goal.");
+  };
+
+  const insertChainingHintToContext = () => {
+    if (!chainReference) {
+      setChainComposerNotice("Cannot build chaining reference. Check source fields.");
+      return;
+    }
+    const sourceTask = chainSourceTaskName.trim();
+    const sourceCapability = chainSourceCapabilityId.trim();
+    const targetTask = chainTargetTaskName.trim();
+    const targetCapability = chainTargetCapabilityId.trim();
+    const targetField = chainTargetInputField.trim();
+    if (!sourceTask || !sourceCapability || !targetTask || !targetCapability || !targetField) {
+      setChainComposerNotice(
+        "Provide source task/capability and target task/capability/input field."
+      );
+      return;
+    }
+    const outputSegments = chainSourceOutputPath
+      .split(".")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    const hint = {
+      from_task: sourceTask,
+      from_capability: sourceCapability,
+      from_output_path: outputSegments,
+      to_task: targetTask,
+      to_capability: targetCapability,
+      to_input_field: targetField,
+      reference: chainReference
+    };
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      const base =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {};
+      const existing = Array.isArray(base.chaining_hints)
+        ? [...(base.chaining_hints as unknown[])]
+        : [];
+      existing.push(hint);
+      const next = { ...base, chaining_hints: existing };
+      setContextJson(JSON.stringify(next, null, 2));
+      setChainComposerNotice("Inserted chaining_hints entry into context.");
+    } catch {
+      setChainComposerNotice("Context JSON is invalid. Fix it before inserting chaining hints.");
+    }
+  };
+
+  const copyChainingReference = async () => {
+    if (!chainReference) {
+      setChainComposerNotice("Cannot copy empty reference.");
+      return;
+    }
+    if (!navigator?.clipboard) {
+      setChainComposerNotice("Clipboard API is not available in this browser.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(chainReference, null, 2));
+      setChainComposerNotice("Copied reference JSON.");
+    } catch {
+      setChainComposerNotice("Failed to copy reference JSON.");
+    }
   };
 
   const jobsToShow = useMemo(() => {
@@ -988,8 +1525,47 @@ export default function Home() {
     return Array.from(found).sort();
   }, [selectedTasks, taskResults]);
 
+  const parsedContextForCapabilities = useMemo(() => {
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return null;
+      }
+      return parsed as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }, [contextJson]);
+
+  const detectedCapabilities = useMemo(() => {
+    const catalogItems = capabilityCatalog?.items || [];
+    return detectCapabilitiesInGoal(goal, catalogItems);
+  }, [capabilityCatalog, goal]);
+
+  const missingCapabilityInputs = useMemo(() => {
+    if (!parsedContextForCapabilities) {
+      return [] as Array<{ capabilityId: string; field: string }>;
+    }
+    const missing: Array<{ capabilityId: string; field: string }> = [];
+    detectedCapabilities.forEach((item) => {
+      const required = item.required_inputs || [];
+      required.forEach((field) => {
+        const value = parsedContextForCapabilities[field];
+        if (value === undefined || value === null) {
+          missing.push({ capabilityId: item.id, field });
+          return;
+        }
+        if (typeof value === "string" && !value.trim()) {
+          missing.push({ capabilityId: item.id, field });
+        }
+      });
+    });
+    return missing;
+  }, [detectedCapabilities, parsedContextForCapabilities]);
+
   useEffect(() => {
     loadJobs();
+    loadCapabilities();
     const source = new EventSource(`${apiUrl}/events/stream`);
     source.onmessage = (event) => {
       try {
@@ -1104,11 +1680,14 @@ export default function Home() {
       if (!desktop && sidebarOpen) {
         setSidebarOpen(false);
       }
+      if (!desktop && capabilitySidebarOpen) {
+        setCapabilitySidebarOpen(false);
+      }
     };
     updateDesktop();
     window.addEventListener("resize", updateDesktop);
     return () => window.removeEventListener("resize", updateDesktop);
-  }, [hasSetInitialSidebar, sidebarOpen]);
+  }, [capabilitySidebarOpen, hasSetInitialSidebar, sidebarOpen]);
 
   useEffect(() => {
     if (!isResizing) {
@@ -1118,10 +1697,7 @@ export default function Home() {
       if (!sidebarOpen || !isDesktop) {
         return;
       }
-      const nextWidth = Math.min(
-        SIDEBAR_MAX_WIDTH,
-        Math.max(SIDEBAR_MIN_WIDTH, event.clientX)
-      );
+      const nextWidth = Math.max(SIDEBAR_MIN_WIDTH, event.clientX);
       setSidebarWidth(nextWidth);
     };
     const handleMouseUp = () => {
@@ -1136,6 +1712,29 @@ export default function Home() {
   }, [isResizing, isDesktop, sidebarOpen]);
 
   useEffect(() => {
+    if (!isCapabilityResizing) {
+      return;
+    }
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!capabilitySidebarOpen || !isDesktop) {
+        return;
+      }
+      const proposedWidth = window.innerWidth - event.clientX;
+      const nextWidth = Math.max(SIDEBAR_MIN_WIDTH, proposedWidth);
+      setCapabilitySidebarWidth(nextWidth);
+    };
+    const handleMouseUp = () => {
+      setIsCapabilityResizing(false);
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [capabilitySidebarOpen, isCapabilityResizing, isDesktop]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -1146,7 +1745,7 @@ export default function Home() {
     try {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
-        setTemplateDefaults(parsed);
+        setTemplateDefaults({ ...TEMPLATE_INPUT_DEFAULTS, ...(parsed as Record<string, string>) });
       }
     } catch {
       return;
@@ -1210,6 +1809,17 @@ export default function Home() {
       setSubmitError("Context JSON must be valid.");
       return;
     }
+    if (!parsedContext || typeof parsedContext !== "object" || Array.isArray(parsedContext)) {
+      setSubmitError("Context JSON must be an object.");
+      return;
+    }
+    if (missingCapabilityInputs.length > 0) {
+      const details = missingCapabilityInputs
+        .map((item) => `${item.capabilityId}.${item.field}`)
+        .join(", ");
+      setSubmitError(`Missing required capability inputs in Context JSON: ${details}`);
+      return;
+    }
     try {
       const response = await fetch(`${apiUrl}/jobs`, {
         method: "POST",
@@ -1237,9 +1847,22 @@ export default function Home() {
   };
 
   const applyTemplate = (template: Template, values: Record<string, string>) => {
-    setGoal(replaceTokens(template.goal, values));
-    setContextJson(replaceTokensForJson(template.contextJson, values));
+    const nextGoal = replaceTokens(template.goal, values);
+    const nextContext = replaceTokensForJson(template.contextJson, values);
+    const detected = detectCapabilitiesInGoal(nextGoal, capabilityCatalog?.items || []);
+    const merged = mergeContextWithCapabilityTemplates(nextContext, detected);
+    setGoal(nextGoal);
+    setContextJson(merged.nextContext);
     setPriority(template.priority);
+    if (merged.invalidContext) {
+      setComposeNotice("Template produced invalid Context JSON; skipped capability auto-fill.");
+    } else if (merged.mergedFieldCount > 0) {
+      setComposeNotice(
+        `Template applied and ${merged.mergedFieldCount} capability field(s) were auto-filled.`
+      );
+    } else {
+      setComposeNotice("Template applied.");
+    }
   };
 
   const saveTemplate = () => {
@@ -1339,11 +1962,7 @@ const openTemplateModal = (template: Template) => {
         nextInputs[variable.key] = autoValues[variable.key as keyof typeof autoValues] || "";
         continue;
       }
-      if (variable.scope === "default") {
-        nextInputs[variable.key] = templateDefaults[variable.key] || "";
-      } else {
-        nextInputs[variable.key] = "";
-      }
+      nextInputs[variable.key] = templateDefaults[variable.key] || "";
     }
   setActiveTemplate(template);
   setTemplateInputs(nextInputs);
@@ -1413,9 +2032,18 @@ const openTemplateModal = (template: Template) => {
       setTemplateInputError("Rendered context JSON is invalid.");
       return;
     }
+    const detected = detectCapabilitiesInGoal(nextGoal, capabilityCatalog?.items || []);
+    const merged = mergeContextWithCapabilityTemplates(nextContext, detected);
     setGoal(nextGoal);
-    setContextJson(nextContext);
+    setContextJson(merged.nextContext);
     setPriority(activeTemplate.priority);
+    if (merged.mergedFieldCount > 0) {
+      setComposeNotice(
+        `Template applied and ${merged.mergedFieldCount} capability field(s) were auto-filled.`
+      );
+    } else {
+      setComposeNotice("Template applied.");
+    }
     closeTemplateModal();
   };
 
@@ -1797,7 +2425,7 @@ const openTemplateModal = (template: Template) => {
   };
 
   return (
-    <main className={`relative${isResizing ? " select-none" : ""}`}>
+    <main className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
       <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
       <div className="pointer-events-none absolute top-48 -left-16 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl animate-float-soft" />
       <button
@@ -1814,11 +2442,25 @@ const openTemplateModal = (template: Template) => {
           Show templates
         </button>
       ) : null}
+      <button
+        className="fixed right-4 top-4 z-40 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-md lg:hidden"
+        onClick={() => setCapabilitySidebarOpen(true)}
+      >
+        Capabilities
+      </button>
+      {!capabilitySidebarOpen ? (
+        <button
+          className="fixed right-4 top-4 z-40 hidden rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-md lg:inline-flex"
+          onClick={() => setCapabilitySidebarOpen(true)}
+        >
+          Show capabilities
+        </button>
+      ) : null}
       <aside
         className={`fixed inset-y-0 left-0 z-50 transform bg-white/95 shadow-xl transition-transform duration-300 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
-        style={{ width: sidebarWidth }}
+        style={{ width: isDesktop && sidebarOpen ? sidebarLayout.left : sidebarWidth }}
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <div className="font-display text-lg text-slate-900">Template Vault</div>
@@ -2141,6 +2783,274 @@ const openTemplateModal = (template: Template) => {
         </div>
       </aside>
 
+      <aside
+        className={`fixed inset-y-0 right-0 z-50 transform bg-white/95 shadow-xl transition-transform duration-300 ${
+          capabilitySidebarOpen ? "translate-x-0" : "translate-x-full"
+        }`}
+        style={{
+          width: isDesktop && capabilitySidebarOpen ? sidebarLayout.right : capabilitySidebarWidth
+        }}
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div className="font-display text-lg text-slate-900">Capability Catalog</div>
+          <div className="flex items-center gap-2">
+            <button
+              className="rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 lg:hidden"
+              onClick={() => setCapabilitySidebarOpen(false)}
+            >
+              Close
+            </button>
+            <button
+              className="hidden rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 lg:inline-flex"
+              onClick={() => setCapabilitySidebarOpen(false)}
+            >
+              Collapse
+            </button>
+          </div>
+        </div>
+        <div
+          className="absolute left-0 top-0 hidden h-full w-2 cursor-col-resize bg-transparent transition hover:bg-slate-200/50 lg:block"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            setIsCapabilityResizing(true);
+          }}
+        />
+        <div className="h-full overflow-y-auto px-5 pb-8 pt-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-medium text-slate-700">Available Capabilities</div>
+              <div className="text-[11px] text-slate-500">
+                Mode: {capabilityCatalog?.mode || "unknown"}
+              </div>
+            </div>
+            {capabilityError ? (
+              <div className="mt-2 text-xs text-rose-600">{capabilityError}</div>
+            ) : null}
+            {capabilitiesByGroup.length === 0 ? (
+              <div className="mt-2 text-xs text-slate-500">Capability catalog unavailable.</div>
+            ) : (
+              <div className="mt-2 space-y-3">
+                {capabilitiesByGroup.map((group) => (
+                  <div key={group.groupName}>
+                    <button
+                      type="button"
+                      className="mb-1 flex w-full items-center justify-between rounded-md bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+                      onClick={() => toggleCapabilityGroup(group.groupName)}
+                    >
+                      <span>{group.groupName}</span>
+                      <span>{collapsedCapabilityGroups.has(group.groupName) ? "+" : "-"}</span>
+                    </button>
+                    {collapsedCapabilityGroups.has(group.groupName) ? null : (
+                      <div className="space-y-2">
+                        {group.subgroups.map((subgroup) => {
+                          const subgroupKey = `${group.groupName}::${subgroup.subgroupName}`;
+                          const isSubgroupCollapsed = collapsedCapabilitySubgroups.has(subgroupKey);
+                          return (
+                            <div key={subgroupKey} className="rounded-lg border border-slate-200 bg-slate-100/60 p-2">
+                              <button
+                                type="button"
+                                className="flex w-full items-center justify-between rounded-md bg-white px-2 py-1 text-left text-[11px] font-semibold text-slate-600"
+                                onClick={() =>
+                                  toggleCapabilitySubgroup(group.groupName, subgroup.subgroupName)
+                                }
+                              >
+                                <span>{subgroup.subgroupName}</span>
+                                <span>{isSubgroupCollapsed ? "+" : "-"}</span>
+                              </button>
+                              {isSubgroupCollapsed ? null : (
+                                <div className="mt-2 space-y-2">
+                                  {subgroup.items.map((item) => {
+                                    const required = item.required_inputs || [];
+                                    const template = templateForCapability(item);
+                                    const hasTemplate = Object.keys(template).length > 0;
+                                    return (
+                                      <div
+                                        key={item.id}
+                                        className="rounded-lg border border-slate-200 bg-white px-3 py-2"
+                                      >
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <div className="text-xs font-semibold text-slate-800">{item.id}</div>
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <button
+                                              className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                              onClick={() => appendCapabilityToGoal(item.id)}
+                                            >
+                                              Add to Goal
+                                            </button>
+                                            <button
+                                              className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
+                                              onClick={() => insertCapabilityTemplate(item)}
+                                              disabled={!hasTemplate}
+                                            >
+                                              Insert Context
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <div className="mt-1 text-xs text-slate-600">{item.description}</div>
+                                        {required.length > 0 ? (
+                                          <div className="mt-2 space-y-2">
+                                            <div className="flex flex-wrap gap-2">
+                                              {required.map((field) => (
+                                                <span
+                                                  key={`${item.id}-required-${field}`}
+                                                  className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-700"
+                                                >
+                                                  required: {field}
+                                                </span>
+                                              ))}
+                                            </div>
+                                            {item.id === "github.repo.list" ? (
+                                              <div className="text-[11px] text-slate-500">
+                                                Example:{" "}
+                                                <code>{'{"query":"user:octocat sort:updated-desc","perPage":10}'}</code>
+                                              </div>
+                                            ) : null}
+                                          </div>
+                                        ) : (
+                                          <div className="mt-2 text-[11px] text-slate-500">No required inputs.</div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-slate-700">Chaining Composer</div>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={appendChainingRuleToGoal}
+              >
+                Add Rule to Goal
+              </button>
+            </div>
+            <div className="mt-2 text-[11px] text-slate-500">
+              Compose a <code>$from</code> reference and insert planner hints without manually writing
+              nested JSON.
+            </div>
+            <datalist id="capability-id-options">
+              {availableCapabilities.map((item) => (
+                <option key={`cap-opt-${item.id}`} value={item.id} />
+              ))}
+            </datalist>
+            <datalist id="task-name-options">
+              {taskNameOptions.map((taskName) => (
+                <option key={`task-opt-${taskName}`} value={taskName} />
+              ))}
+            </datalist>
+            <div className="mt-3 grid gap-2">
+              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Source Task Name
+              </label>
+              <input
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                value={chainSourceTaskName}
+                onChange={(event) => setChainSourceTaskName(event.target.value)}
+                list="task-name-options"
+                placeholder="GenerateSpec"
+              />
+              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Source Capability ID
+              </label>
+              <input
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                value={chainSourceCapabilityId}
+                onChange={(event) => setChainSourceCapabilityId(event.target.value)}
+                list="capability-id-options"
+                placeholder="document.spec.generate"
+              />
+              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Source Output Path (dot path)
+              </label>
+              <input
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                value={chainSourceOutputPath}
+                onChange={(event) => setChainSourceOutputPath(event.target.value)}
+                placeholder="document_spec"
+              />
+              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Target Task Name
+              </label>
+              <input
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                value={chainTargetTaskName}
+                onChange={(event) => setChainTargetTaskName(event.target.value)}
+                list="task-name-options"
+                placeholder="RenderDocx"
+              />
+              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Target Capability ID
+              </label>
+              <input
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                value={chainTargetCapabilityId}
+                onChange={(event) => setChainTargetCapabilityId(event.target.value)}
+                list="capability-id-options"
+                placeholder="document.docx.generate"
+              />
+              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Target Input Field
+              </label>
+              <input
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                value={chainTargetInputField}
+                onChange={(event) => setChainTargetInputField(event.target.value)}
+                placeholder="document_spec"
+              />
+              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Default Value (optional JSON or string)
+              </label>
+              <input
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                value={chainDefaultValue}
+                onChange={(event) => setChainDefaultValue(event.target.value)}
+                placeholder='{"title":"Fallback"}'
+              />
+            </div>
+            <div className="mt-3">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                Reference Preview
+              </div>
+              <pre className="mt-1 max-h-32 overflow-auto rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-800">
+                {chainReference ? JSON.stringify(chainReference, null, 2) : "{\n  \"$from\": []\n}"}
+              </pre>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-2">
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={insertChainingHintToContext}
+              >
+                Insert chaining_hints into Context
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={copyChainingReference}
+              >
+                Copy Reference JSON
+              </button>
+            </div>
+            {chainRuleText ? (
+              <div className="mt-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-700">
+                Rule preview: {chainRuleText}
+              </div>
+            ) : null}
+            {chainComposerNotice ? (
+              <div className="mt-2 text-[11px] text-slate-600">{chainComposerNotice}</div>
+            ) : null}
+          </div>
+        </div>
+      </aside>
+
 
       {showTemplateModal && activeTemplate ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/60 px-4 py-10 backdrop-blur-sm">
@@ -2222,7 +3132,10 @@ const openTemplateModal = (template: Template) => {
 
       <div
         className="space-y-10 transition-[margin] duration-300"
-        style={{ marginLeft: isDesktop && sidebarOpen ? sidebarWidth : 0 }}
+        style={{
+          marginLeft: isDesktop && sidebarOpen ? sidebarLayout.left : 0,
+          marginRight: isDesktop && capabilitySidebarOpen ? sidebarLayout.right : 0
+        }}
       >
 
         <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-8 text-white shadow-2xl animate-fade-up">
@@ -2273,6 +3186,73 @@ const openTemplateModal = (template: Template) => {
                       value={contextJson}
                       onChange={(event) => setContextJson(event.target.value)}
                     />
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-medium text-slate-700">Capability Inputs</div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                          onClick={fillContextFromDetectedCapabilities}
+                        >
+                          Fill Missing in Context
+                        </button>
+                        <div className="text-[11px] text-slate-500">
+                          Mode: {capabilityCatalog?.mode || "unknown"}
+                        </div>
+                      </div>
+                    </div>
+                    {composeNotice ? (
+                      <div className="mt-2 text-[11px] text-slate-600">{composeNotice}</div>
+                    ) : null}
+                    {detectedCapabilities.length === 0 ? (
+                      <div className="mt-2 text-xs text-slate-500">
+                        Mention a capability id in Goal (for example: <code>github.repo.list</code>)
+                        to see required Context JSON fields.
+                      </div>
+                    ) : (
+                      <div className="mt-2 space-y-2">
+                        {detectedCapabilities.map((item) => {
+                          const required = item.required_inputs || [];
+                          return (
+                            <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                              <div className="text-xs font-semibold text-slate-800">{item.id}</div>
+                              <div className="mt-1 text-xs text-slate-600">{item.description}</div>
+                              {required.length > 0 ? (
+                                <div className="mt-2 space-y-2">
+                                  <div className="flex flex-wrap gap-2">
+                                    {required.map((field) => {
+                                      const isMissing = missingCapabilityInputs.some(
+                                        (entry) => entry.capabilityId === item.id && entry.field === field
+                                      );
+                                      return (
+                                        <span
+                                          key={`${item.id}-${field}`}
+                                          className={`rounded-full px-2 py-1 text-[11px] ${
+                                            isMissing
+                                              ? "bg-rose-100 text-rose-700"
+                                              : "bg-emerald-100 text-emerald-700"
+                                          }`}
+                                        >
+                                          {field}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                  {item.id === "github.repo.list" ? (
+                                    <div className="text-[11px] text-slate-500">
+                                      Example: <code>{'{"query":"user:octocat sort:updated-desc","perPage":10}'}</code>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-[11px] text-slate-500">No required inputs.</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-700">Priority</label>

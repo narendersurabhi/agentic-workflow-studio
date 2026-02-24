@@ -15,6 +15,7 @@ from services.api.app.database import Base, engine
 from services.api.app.database import SessionLocal
 from services.api.app.models import JobRecord, PlanRecord, TaskRecord
 from libs.core import events, models
+from libs.core import capability_registry as cap_registry
 
 
 Base.metadata.create_all(bind=engine)
@@ -292,6 +293,165 @@ def test_read_task_dlq_returns_503_on_redis_error(monkeypatch):
     response = client.get("/jobs/job-a/tasks/dlq?limit=5")
     assert response.status_code == 503
     assert response.json()["detail"].startswith("redis_error:")
+
+
+def test_list_capabilities_returns_required_inputs(monkeypatch):
+    capability = cap_registry.CapabilitySpec(
+        capability_id="github.repo.list",
+        description="List repos",
+        risk_tier="read_only",
+        idempotency="read",
+        group="github",
+        subgroup="repositories",
+        input_schema_ref="github_repo_list_capability_input",
+        output_schema_ref=None,
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="mcp",
+                server_id="github_local",
+                tool_name="search_repositories",
+            ),
+        ),
+        tags=("github",),
+        enabled=True,
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"github.repo.list": capability})
+    monkeypatch.setattr(main.capability_registry, "resolve_capability_mode", lambda: "enabled")
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(
+        main,
+        "_load_schema_from_ref",
+        lambda schema_ref: {
+            "type": "object",
+            "required": ["query"],
+            "properties": {"query": {"type": "string"}},
+        },
+    )
+    response = client.get("/capabilities")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "enabled"
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["id"] == "github.repo.list"
+    assert item["group"] == "github"
+    assert item["subgroup"] == "repositories"
+    assert item["required_inputs"] == ["query"]
+
+
+def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:
+    now = datetime.utcnow()
+    record = TaskRecord(
+        id=f"task-ref-{uuid.uuid4()}",
+        job_id="job-ref",
+        plan_id="plan-ref",
+        name="RenderDocument",
+        description="Render document",
+        instruction="Render",
+        acceptance_criteria=["docx created"],
+        expected_output_schema_ref="schemas/docx_output",
+        status=models.TaskStatus.ready.value,
+        deps=["GenerateDocumentSpec"],
+        attempts=0,
+        max_attempts=3,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        intent="render",
+        tool_requests=["docx_generate_from_spec"],
+        tool_inputs={
+            "docx_generate_from_spec": {
+                "path": "documents/out.docx",
+                "document_spec": {
+                    "$from": "dependencies_by_name.GenerateDocumentSpec.llm_generate_document_spec.document_spec"
+                },
+            }
+        },
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+    payload = main._task_payload_from_record(record, correlation_id="corr", context={})
+    validation = payload.get("tool_inputs_validation", {})
+    assert "docx_generate_from_spec" in validation
+    assert "input reference resolution failed" in validation["docx_generate_from_spec"]
+
+
+def test_plan_preflight_compiler_accepts_valid_dependency_chain() -> None:
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="json chain",
+        dag_edges=[["MakeJson", "ReuseJson"]],
+        tasks=[
+            models.TaskCreate(
+                name="MakeJson",
+                description="Build json",
+                instruction="Build",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/json_object",
+                deps=[],
+                tool_requests=["json_transform"],
+                tool_inputs={"json_transform": {"input": {"name": "demo"}}},
+                critic_required=False,
+            ),
+            models.TaskCreate(
+                name="ReuseJson",
+                description="Reuse json",
+                instruction="Reuse",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/json_object",
+                deps=["MakeJson"],
+                tool_requests=["json_transform"],
+                tool_inputs={
+                    "json_transform": {
+                        "input": {"$from": "dependencies_by_name.MakeJson.json_transform.result"}
+                    }
+                },
+                critic_required=False,
+            ),
+        ],
+    )
+    errors = main._compile_plan_preflight(plan, job_context={})
+    assert errors == {}
+
+
+def test_plan_preflight_compiler_flags_broken_reference_path() -> None:
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="broken ref",
+        dag_edges=[["MakeJson", "ReuseJson"]],
+        tasks=[
+            models.TaskCreate(
+                name="MakeJson",
+                description="Build json",
+                instruction="Build",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/json_object",
+                deps=[],
+                tool_requests=["json_transform"],
+                tool_inputs={"json_transform": {"input": {"name": "demo"}}},
+                critic_required=False,
+            ),
+            models.TaskCreate(
+                name="ReuseJson",
+                description="Reuse json",
+                instruction="Reuse",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/json_object",
+                deps=["MakeJson"],
+                tool_requests=["json_transform"],
+                tool_inputs={
+                    "json_transform": {
+                        "input": {"$from": "dependencies_by_name.MakeJson.missing_tool.result"}
+                    }
+                },
+                critic_required=False,
+            ),
+        ],
+    )
+    errors = main._compile_plan_preflight(plan, job_context={})
+    assert "ReuseJson" in errors
+    assert "input reference resolution failed" in errors["ReuseJson"]
 
 
 def test_retry_task_from_dlq_resets_task_and_deletes_stream_entry(monkeypatch):

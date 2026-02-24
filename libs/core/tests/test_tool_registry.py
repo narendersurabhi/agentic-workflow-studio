@@ -1,11 +1,18 @@
 import json
 import time
+from datetime import UTC, datetime
 
 import pytest
 
 from libs.core.llm_provider import LLMProvider, LLMResponse
 from libs.core.models import RiskLevel, ToolSpec
-from libs.core.tool_registry import Tool, ToolExecutionError, ToolRegistry, default_registry
+from libs.core.tool_registry import (
+    Tool,
+    ToolExecutionError,
+    ToolRegistry,
+    default_registry,
+    evaluate_tool_allowlist,
+)
 from libs.core import tool_registry as tool_registry_module
 
 
@@ -146,6 +153,16 @@ def test_docx_render_tool_registered() -> None:
     assert "output_path" in schema["required"]
 
 
+def test_pdf_generate_tool_registered() -> None:
+    registry = default_registry()
+    tool = registry.get("pdf_generate_from_spec")
+    schema = tool.spec.input_schema
+    assert "document_spec" in schema["properties"]
+    assert "path" in schema["properties"]
+    assert "render_context" in schema["properties"]
+    assert "strict" in schema["properties"]
+
+
 def test_file_write_text_requires_path() -> None:
     registry = default_registry()
     call = registry.execute("file_write_text", {"content": "hello"}, "id", "trace")
@@ -227,7 +244,226 @@ def test_derive_output_filename_cover_letter_style() -> None:
         call.output_or_error["path"]
         == "resumes/Narender Surabhi Cover Letter - Software Engineer AI - Figma.docx"
     )
-    assert call.output_or_error["document_type"] == "cover_letter"
+
+
+def test_derive_output_filename_with_output_extension_pdf() -> None:
+    registry = default_registry()
+    call = registry.execute(
+        "derive_output_filename",
+        {
+            "target_role_name": "Senior AI/ML Engineer",
+            "date": "2026-02-09",
+            "output_extension": "pdf",
+        },
+        "id",
+        "trace",
+    )
+    assert call.status == "completed"
+    assert call.output_or_error["path"] == "resumes/senior_ai_ml_engineer_2026_02_09.pdf"
+    assert call.output_or_error["output_extension"] == "pdf"
+
+
+def test_derive_output_filename_accepts_document_type_as_format_when_extension_missing() -> None:
+    registry = default_registry()
+    call = registry.execute(
+        "derive_output_filename",
+        {
+            "target_role_name": "Staff Platform Engineer",
+            "date": "2026-02-09",
+            "document_type": "md",
+        },
+        "id",
+        "trace",
+    )
+    assert call.status == "completed"
+    assert call.output_or_error["path"] == "resumes/staff_platform_engineer_2026_02_09.md"
+    assert call.output_or_error["output_extension"] == "md"
+
+
+def test_derive_output_filename_defaults_to_today_when_missing_date() -> None:
+    registry = default_registry()
+    today_slug = datetime.now(UTC).date().isoformat().replace("-", "_")
+    call = registry.execute(
+        "derive_output_filename",
+        {"target_role_name": "Platform Engineer", "output_extension": "pdf"},
+        "id",
+        "trace",
+    )
+    assert call.status == "completed"
+    assert call.output_or_error["path"] == f"resumes/platform_engineer_{today_slug}.pdf"
+    assert call.output_or_error["output_extension"] == "pdf"
+
+
+def test_default_registry_loads_module_plugins(monkeypatch, tmp_path) -> None:
+    plugin_path = tmp_path / "demo_plugin.py"
+    plugin_path.write_text(
+        (
+            "from libs.core.models import ToolSpec, RiskLevel\n"
+            "from libs.framework.tool_runtime import Tool\n"
+            "\n"
+            "def register_tools(registry):\n"
+            "    registry.register(\n"
+            "        Tool(\n"
+            "            spec=ToolSpec(\n"
+            "                name='plugin_echo',\n"
+            "                description='plugin',\n"
+            "                input_schema={'type':'object'},\n"
+            "                output_schema={'type':'object','properties':{'ok':{'type':'boolean'}},'required':['ok']},\n"
+            "                timeout_s=1,\n"
+            "                risk_level=RiskLevel.low,\n"
+            "            ),\n"
+            "            handler=lambda payload: {'ok': True},\n"
+            "        )\n"
+            "    )\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("TOOL_PLUGIN_MODULES", "demo_plugin")
+    registry = default_registry()
+    call = registry.execute("plugin_echo", {}, "id", "trace")
+    assert call.status == "completed"
+    assert call.output_or_error["ok"] is True
+
+
+def test_default_registry_applies_enabled_disabled_tool_filters(monkeypatch) -> None:
+    monkeypatch.delenv("TOOL_PLUGIN_MODULES", raising=False)
+    monkeypatch.setenv("ENABLED_TOOLS", "math_eval,text_summarize")
+    monkeypatch.setenv("DISABLED_TOOLS", "text_summarize")
+    registry = default_registry()
+    specs = {spec.name for spec in registry.list_specs()}
+    assert specs == {"math_eval"}
+
+
+def test_tool_allowlist_precedence_service_and_global(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLED_TOOLS", "math_eval,text_summarize")
+    monkeypatch.setenv("WORKER_ENABLED_TOOLS", "math_eval,sleep")
+    monkeypatch.setenv("DISABLED_TOOLS", "sleep")
+    monkeypatch.setenv("WORKER_DISABLED_TOOLS", "math_eval")
+    assert evaluate_tool_allowlist("math_eval", "worker").allowed is False
+    assert evaluate_tool_allowlist("math_eval", "worker").reason == "service_disabled"
+    assert evaluate_tool_allowlist("sleep", "worker").allowed is False
+    assert evaluate_tool_allowlist("sleep", "worker").reason == "global_disabled"
+    assert evaluate_tool_allowlist("text_summarize", "worker").allowed is False
+    assert evaluate_tool_allowlist("text_summarize", "worker").reason == "not_in_service_enabled"
+
+
+def test_default_registry_applies_service_specific_allowlist(monkeypatch) -> None:
+    monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "false")
+    monkeypatch.setenv("ENABLED_TOOLS", "math_eval,text_summarize,file_write_text")
+    monkeypatch.setenv("WORKER_ENABLED_TOOLS", "math_eval,file_write_text")
+    monkeypatch.setenv("WORKER_DISABLED_TOOLS", "file_write_text")
+    registry = default_registry(service_name="worker")
+    specs = {spec.name for spec in registry.list_specs()}
+    assert specs == {"math_eval"}
+
+
+def test_evaluate_tool_allowlist_uses_governance_config_enforce(monkeypatch, tmp_path) -> None:
+    cfg_path = tmp_path / "tool_governance.yaml"
+    cfg_path.write_text(
+        (
+            "tool_governance:\n"
+            "  mode: enforce\n"
+            "  global:\n"
+            "    allow: []\n"
+            "    deny: []\n"
+            "  services:\n"
+            "    worker:\n"
+            "      allow: [math_eval]\n"
+            "      deny: [sleep]\n"
+            "  tenants:\n"
+            "    tenant_a:\n"
+            "      deny: [math_eval]\n"
+            "  job_types: {}\n"
+            "  risk:\n"
+            "    blocked_levels_by_service:\n"
+            "      worker: [high]\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TOOL_GOVERNANCE_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "true")
+    monkeypatch.setenv("TOOL_GOVERNANCE_MODE", "enforce")
+    decision = evaluate_tool_allowlist("sleep", "worker")
+    assert decision.allowed is False
+    assert decision.reason == "config_service_deny"
+    decision = evaluate_tool_allowlist(
+        "math_eval",
+        "worker",
+        context={"tenant_id": "tenant_a"},
+    )
+    assert decision.allowed is False
+    assert decision.reason == "config_tenant_deny"
+    high_risk_tool = ToolSpec(
+        name="high_tool",
+        description="high",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        timeout_s=1,
+        risk_level=RiskLevel.high,
+    )
+    decision = evaluate_tool_allowlist(
+        "high_tool",
+        "worker",
+        tool_spec=high_risk_tool,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "risk_blocked:high"
+
+
+def test_evaluate_tool_allowlist_dry_run_does_not_block(monkeypatch, tmp_path) -> None:
+    cfg_path = tmp_path / "tool_governance.yaml"
+    cfg_path.write_text(
+        (
+            "tool_governance:\n"
+            "  mode: dry_run\n"
+            "  global:\n"
+            "    deny: [sleep]\n"
+            "  services: {}\n"
+            "  tenants: {}\n"
+            "  job_types: {}\n"
+            "  risk:\n"
+            "    blocked_levels_by_service: {}\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TOOL_GOVERNANCE_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "true")
+    monkeypatch.setenv("TOOL_GOVERNANCE_MODE", "dry_run")
+    decision = evaluate_tool_allowlist("sleep", "worker")
+    assert decision.allowed is True
+    assert decision.violated is True
+    assert decision.reason.startswith("dry_run:")
+    assert decision.mode == "dry_run"
+
+
+def test_default_registry_plugin_fail_fast_toggle(monkeypatch, tmp_path) -> None:
+    plugin_path = tmp_path / "bad_plugin.py"
+    plugin_path.write_text(
+        "def register_tools(registry):\n"
+        "    raise RuntimeError('boom')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("TOOL_PLUGIN_MODULES", "bad_plugin")
+    monkeypatch.setenv("TOOL_PLUGIN_FAIL_FAST", "false")
+    registry = default_registry()
+    with pytest.raises(KeyError):
+        registry.get("bad_plugin_tool")
+
+
+def test_default_registry_plugin_fail_fast_raises(monkeypatch, tmp_path) -> None:
+    plugin_path = tmp_path / "bad_plugin_raise.py"
+    plugin_path.write_text(
+        "def register_tools(registry):\n"
+        "    raise RuntimeError('boom')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("TOOL_PLUGIN_MODULES", "bad_plugin_raise")
+    monkeypatch.setenv("TOOL_PLUGIN_FAIL_FAST", "true")
+    with pytest.raises(RuntimeError):
+        default_registry()
 
 
 def test_derive_output_filename_derives_from_jd_and_resume() -> None:

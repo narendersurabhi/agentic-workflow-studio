@@ -6,13 +6,23 @@ import uuid
 from datetime import datetime
 from enum import Enum
 from functools import wraps
+from pathlib import Path
 from time import perf_counter
-from typing import List
+from typing import Any, List
 
 import redis
 from pydantic import BaseModel
 
-from libs.core import events, llm_provider, logging as core_logging, models, tool_registry, prompts
+from libs.core import (
+    capability_registry,
+    events,
+    llm_provider,
+    logging as core_logging,
+    models,
+    payload_resolver,
+    prompts,
+    tool_registry,
+)
 
 core_logging.configure_logging("planner")
 
@@ -27,6 +37,7 @@ OPENAI_MAX_OUTPUT_TOKENS = os.getenv("OPENAI_MAX_OUTPUT_TOKENS")
 PLANNER_MAX_DEPTH = os.getenv("PLANNER_MAX_DEPTH")
 OPENAI_TIMEOUT_S = os.getenv("OPENAI_TIMEOUT_S")
 OPENAI_MAX_RETRIES = os.getenv("OPENAI_MAX_RETRIES")
+SCHEMA_REGISTRY_PATH = os.getenv("SCHEMA_REGISTRY_PATH", "/app/schemas")
 
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -175,9 +186,10 @@ def llm_plan(
         raise ValueError("Invalid plan generated: parse_failed")
     candidate = _ensure_llm_tool(candidate)
     candidate = _ensure_job_inputs(candidate, job, tools)
+    candidate = _ensure_renderer_output_extensions(candidate)
     candidate = _apply_max_depth(candidate)
     logger.info("llm_plan_candidate", plan=candidate.model_dump())
-    valid, reason = _validate_plan(candidate, tools)
+    valid, reason = _validate_plan(candidate, tools, job)
     if not valid:
         logger.warning("llm_plan_invalid", reason=reason)
         raise ValueError(f"Invalid plan generated: {reason}")
@@ -197,9 +209,14 @@ def plan_job(job: models.Job) -> models.PlanCreate:
             timeout_s=_parse_optional_float(OPENAI_TIMEOUT_S),
             max_retries=_parse_optional_int(OPENAI_MAX_RETRIES),
         )
-        registry = tool_registry.default_registry(False, llm_enabled=True, llm_provider=provider)
+        registry = tool_registry.default_registry(
+            False,
+            llm_enabled=True,
+            llm_provider=provider,
+            service_name="planner",
+        )
         return llm_plan(job, registry.list_specs(), provider)
-    registry = tool_registry.default_registry(False)
+    registry = tool_registry.default_registry(False, service_name="planner")
     return rule_based_plan(job, registry.list_specs())
 
 
@@ -251,9 +268,12 @@ def _parse_datetime(value: object, fallback: datetime) -> datetime:
 
 
 def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
-    tool_names = ", ".join(sorted(tool.name for tool in tools))
+    capabilities = _planner_capabilities()
+    allowed_names = sorted({tool.name for tool in tools} | set(capabilities.keys()))
+    tool_names = ", ".join(allowed_names)
     tool_catalog = [
         {
+            "type": "tool",
             "name": tool.name,
             "description": tool.description,
             "input_schema": tool.input_schema,
@@ -267,8 +287,32 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
         }
         for tool in tools
     ]
+    capability_catalog = [
+        {
+            "type": "capability",
+            "name": spec.capability_id,
+            "description": spec.description,
+            "risk_tier": spec.risk_tier,
+            "idempotency": spec.idempotency,
+            "group": spec.group,
+            "subgroup": spec.subgroup,
+            "input_schema_ref": spec.input_schema_ref,
+            "output_schema_ref": spec.output_schema_ref,
+            "adapters": [
+                {
+                    "type": adapter.type,
+                    "server_id": adapter.server_id,
+                    "tool_name": adapter.tool_name,
+                }
+                for adapter in spec.adapters
+                if adapter.enabled
+            ],
+        }
+        for spec in capabilities.values()
+    ]
+    combined_catalog = tool_catalog + capability_catalog
     tool_catalog_json = json.dumps(
-        tool_catalog, ensure_ascii=False, indent=2, default=_json_fallback
+        combined_catalog, ensure_ascii=False, indent=2, default=_json_fallback
     )
     job_json = json.dumps(
         job.model_dump(mode="json"), ensure_ascii=False, indent=2, default=_json_fallback
@@ -313,9 +357,10 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
         "4) If a tool requires specific inputs, put them in task.tool_inputs "
         "(a dict keyed by tool name). Do NOT embed JSON in instruction text.\n"
         "5) Do NOT use placeholder strings like ${Task.output} in tool_inputs. "
-        "If a tool needs dependency output (e.g., document_spec), omit that field and rely on deps; "
-        "the runtime will pull the object from context. You may still include other inputs like "
-        "strict, allowed_block_types, or path.\n"
+        "When a later task needs dependency output, either omit the field and rely on deps context "
+        "injection OR use explicit reference objects like "
+        '{"$from":"dependencies_by_name.TaskA.tool_name.field"} (or add "$default"). '
+        "You may still include other inputs like strict, allowed_block_types, or path.\n"
         "6) Prefer the generic validation + rendering pipeline:\n"
         "   - Generate a DocumentSpec JSON.\n"
         "   - Validate with document_spec_validate.\n"
@@ -342,7 +387,9 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
 def _llm_plan_repair_prompt(
     *, original_prompt: str, raw_output: str, tools: List[models.ToolSpec]
 ) -> str:
-    tool_names = ", ".join(sorted(tool.name for tool in tools))
+    capabilities = _planner_capabilities()
+    allowed_names = sorted({tool.name for tool in tools} | set(capabilities.keys()))
+    tool_names = ", ".join(allowed_names)
     return (
         "You are fixing a malformed planner response.\n"
         "Return ONLY one valid JSON object for PlanCreate.\n"
@@ -477,10 +524,8 @@ def _ensure_job_inputs(
             tool = tool_map.get(tool_name)
             if tool is None:
                 continue
-            required_sets = _required_sets_from_schema(tool.input_schema or {})
-            if not required_sets:
-                continue
-            if not any("job" in required for required in required_sets):
+            schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
+            if not _schema_requires_key(schema, "job"):
                 continue
             payload = tool_inputs.get(tool_name)
             if isinstance(payload, dict) and "job" in payload:
@@ -496,73 +541,387 @@ def _ensure_job_inputs(
     return plan.model_copy(update={"tasks": updated_tasks})
 
 
-def _validate_plan(plan: models.PlanCreate, tools: List[models.ToolSpec]) -> tuple[bool, str]:
+def _ensure_renderer_output_extensions(plan: models.PlanCreate) -> models.PlanCreate:
+    derive_request_ids, renderer_extension_by_request = _planner_renderer_hints()
+    if not derive_request_ids or not renderer_extension_by_request:
+        return plan
+    task_by_name = {task.name: task for task in plan.tasks}
+    derive_ext_requests: dict[str, set[str]] = {}
+
+    for task in plan.tasks:
+        if not task.tool_requests:
+            continue
+        tool_inputs = task.tool_inputs if isinstance(task.tool_inputs, dict) else {}
+        for request_id in task.tool_requests:
+            required_ext = renderer_extension_by_request.get(request_id)
+            if not required_ext:
+                continue
+            payload = tool_inputs.get(request_id)
+            if not isinstance(payload, dict):
+                continue
+            derive_task_name = _derive_task_name_from_path_reference(
+                payload.get("path"), derive_request_ids
+            )
+            if not derive_task_name:
+                continue
+            derive_task = task_by_name.get(derive_task_name)
+            if not derive_task or not any(
+                tool in derive_request_ids for tool in (derive_task.tool_requests or [])
+            ):
+                continue
+            derive_ext_requests.setdefault(derive_task_name, set()).add(required_ext)
+
+    if not derive_ext_requests:
+        return plan
+
+    updated_tasks: list[models.TaskCreate] = []
+    changed = False
+    for task in plan.tasks:
+        requested = derive_ext_requests.get(task.name)
+        if not requested or len(requested) != 1:
+            updated_tasks.append(task)
+            continue
+        derive_request_id = _derive_request_id_for_task(task, derive_request_ids)
+        if not derive_request_id:
+            updated_tasks.append(task)
+            continue
+        extension = next(iter(requested))
+        tool_inputs = dict(task.tool_inputs) if isinstance(task.tool_inputs, dict) else {}
+        payload = tool_inputs.get(derive_request_id)
+        payload_dict = dict(payload) if isinstance(payload, dict) else {}
+        if _normalize_extension_hint(payload_dict.get("output_extension")) == extension:
+            updated_tasks.append(task)
+            continue
+        payload_dict["output_extension"] = extension
+        tool_inputs[derive_request_id] = payload_dict
+        updated_tasks.append(task.model_copy(update={"tool_inputs": tool_inputs}))
+        changed = True
+    if not changed:
+        return plan
+    return plan.model_copy(update={"tasks": updated_tasks})
+
+
+def _planner_renderer_hints() -> tuple[set[str], dict[str, str]]:
+    capabilities = _planner_capabilities()
+    derive_request_ids: set[str] = set()
+    renderer_extension_by_request: dict[str, str] = {}
+    for capability_id, spec in capabilities.items():
+        hints = spec.planner_hints if isinstance(spec.planner_hints, dict) else {}
+        if bool(hints.get("derives_output_path")):
+            derive_request_ids.add(capability_id)
+        required_ext = hints.get("required_output_extension")
+        normalized_ext = _normalize_extension_hint(required_ext)
+        if normalized_ext:
+            renderer_extension_by_request[capability_id] = normalized_ext
+    return derive_request_ids, renderer_extension_by_request
+
+
+def _derive_task_name_from_path_reference(
+    path_value: Any, derive_request_ids: set[str]
+) -> str | None:
+    if not isinstance(path_value, dict):
+        return None
+    path_spec = path_value.get("$from")
+    segments: list[Any]
+    if isinstance(path_spec, list):
+        segments = list(path_spec)
+    elif isinstance(path_spec, str):
+        raw = path_spec.strip()
+        if not raw:
+            return None
+        segments = [segment for segment in raw.split(".") if segment]
+    else:
+        return None
+    if len(segments) < 4:
+        return None
+    if segments[0] not in ("dependencies_by_name", "dependencies"):
+        return None
+    source_tool = str(segments[2])
+    output_field = str(segments[3])
+    if source_tool not in derive_request_ids:
+        return None
+    if output_field != "path":
+        return None
+    return str(segments[1])
+
+
+def _derive_request_id_for_task(
+    task: models.TaskCreate, derive_request_ids: set[str]
+) -> str | None:
+    for request_id in task.tool_requests or []:
+        if request_id in derive_request_ids:
+            return request_id
+    return None
+
+
+def _normalize_extension_hint(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower()
+    if normalized.startswith("."):
+        normalized = normalized[1:]
+    if normalized == "markdown":
+        normalized = "md"
+    return normalized
+
+
+def _validate_plan(
+    plan: models.PlanCreate, tools: List[models.ToolSpec], job: models.Job
+) -> tuple[bool, str]:
     tool_map = {tool.name: tool for tool in tools}
+    tool_schemas = {tool.name: tool.input_schema or {} for tool in tools}
+    capabilities = _planner_capabilities()
     for task in plan.tasks:
         if not task.tool_requests:
             continue
         for tool_name in task.tool_requests:
             tool = tool_map.get(tool_name)
-            if tool is None:
-                return False, f"unknown_tool:{tool_name}"
-            required_sets = _required_sets_from_schema(tool.input_schema or {})
-            if not required_sets:
+            capability = capabilities.get(tool_name)
+            if tool is None and capability is None:
+                return False, f"unknown_tool_or_capability:{tool_name}"
+            if tool is None and capability is not None:
+                raw_tool_inputs = {}
+                if isinstance(task.tool_inputs, dict) and tool_name in task.tool_inputs:
+                    entry = task.tool_inputs.get(tool_name)
+                    if not isinstance(entry, dict):
+                        return (
+                            False,
+                            f"capability_inputs_invalid:{tool_name}:{task.name}:payload_not_object",
+                        )
+                    raw_tool_inputs = dict(entry)
+                validation_error = _validate_capability_inputs(
+                    capability,
+                    task,
+                    raw_tool_inputs,
+                    job,
+                )
+                if validation_error:
+                    return (
+                        False,
+                        f"capability_inputs_invalid:{tool_name}:{task.name}:{validation_error}",
+                    )
                 continue
-            tool_inputs = _extract_tool_inputs(task, tool_name)
-            if _inputs_satisfy_required(required_sets, tool_inputs, bool(task.deps)):
-                continue
-            return False, f"tool_inputs_missing:{tool_name}:{task.name}"
+            governance_context = {
+                "job_id": job.id,
+                "job_type": job.metadata.get("job_type")
+                if isinstance(job.metadata, dict)
+                else None,
+                "tenant_id": job.metadata.get("tenant_id")
+                if isinstance(job.metadata, dict)
+                else None,
+                "org_id": job.metadata.get("org_id")
+                if isinstance(job.metadata, dict)
+                else None,
+                "job_context": job.context_json if isinstance(job.context_json, dict) else {},
+            }
+            allow_decision = tool_registry.evaluate_tool_allowlist(
+                tool_name,
+                "planner",
+                context=governance_context,
+                tool_spec=tool,
+            )
+            if not allow_decision.allowed:
+                return False, f"tool_not_allowed:{tool_name}:{allow_decision.reason}"
+            if allow_decision.violated and allow_decision.mode == "dry_run":
+                core_logging.get_logger("planner").warning(
+                    "tool_governance_violation_dry_run",
+                    tool_name=tool_name,
+                    mode=allow_decision.mode,
+                    reason=allow_decision.reason,
+                    task_name=task.name,
+                    job_id=job.id,
+                )
+            raw_tool_inputs = {}
+            if isinstance(task.tool_inputs, dict) and tool_name in task.tool_inputs:
+                entry = task.tool_inputs.get(tool_name)
+                if not isinstance(entry, dict):
+                    return False, f"tool_inputs_invalid:{tool_name}:{task.name}:payload_not_object"
+                raw_tool_inputs = dict(entry)
+            validation_payload = _build_validation_payload(task, tool, job, raw_tool_inputs)
+            validation_errors = payload_resolver.validate_tool_inputs(
+                {tool_name: validation_payload}, tool_schemas
+            )
+            message = validation_errors.get(tool_name)
+            if message:
+                return False, f"tool_inputs_invalid:{tool_name}:{task.name}:{message}"
     return True, "ok"
 
 
-def _inputs_satisfy_required(
-    required_sets: list[set[str]], inputs: set[str], has_deps: bool
-) -> bool:
-    context_fillable = {
-        "content",
-        "text",
-        "prompt",
-        "data",
-        "document_spec",
-        "validation_report",
-        "errors",
-        "original_spec",
-        "tailored_resume",
-        "resume_content",
+def _build_validation_payload(
+    task: models.TaskCreate,
+    tool: models.ToolSpec,
+    job: models.Job,
+    raw_tool_inputs: dict,
+) -> dict:
+    payload = payload_resolver.normalize_reference_payload_for_validation(
+        dict(raw_tool_inputs),
+        dependency_defaults=_dependency_fill_defaults(),
+    )
+    schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
+    if _schema_requires_key(schema, "job"):
+        payload.setdefault("job", job.model_dump(mode="json"))
+    if task.deps:
+        for key, default_value in _dependency_fill_defaults().items():
+            payload.setdefault(key, default_value)
+    if isinstance(tool.memory_reads, list) and tool.memory_reads:
+        payload.setdefault("memory", {})
+    job_context = job.context_json if isinstance(job.context_json, dict) else {}
+    for key in (
+        "topic",
+        "today",
+        "date",
+        "target_pages",
+        "page_count",
+        "target_role_name",
+        "role_name",
+        "company_name",
+        "company",
+        "candidate_name",
+        "first_name",
+        "last_name",
+        "job_description",
+        "candidate_resume",
         "tailored_text",
-        "resume_doc_spec",
+        "output_dir",
+        "document_type",
+    ):
+        if key in payload:
+            continue
+        value = job_context.get(key)
+        if isinstance(value, str) and value.strip():
+            payload[key] = value
+            continue
+        if isinstance(value, (int, float, bool)):
+            payload[key] = value
+    return payload
+
+
+def _dependency_fill_defaults() -> dict[str, object]:
+    return {
+        "content": "__dependency__",
+        "text": "__dependency__",
+        "prompt": "__dependency__",
+        "data": {},
+        "document_spec": {},
+        "validation_report": {},
+        "errors": [],
+        "original_spec": {},
+        "tailored_resume": {},
+        "resume_content": "__dependency__",
+        "tailored_text": "__dependency__",
+        "resume_doc_spec": {},
+        "coverletter_doc_spec": {},
+        "openapi_spec": {},
     }
-    for required in required_sets:
-        missing = required - inputs
-        if not missing:
-            return True
-        if has_deps and missing.issubset(context_fillable):
-            return True
-    return False
 
 
-def _required_sets_from_schema(schema: dict) -> list[set[str]]:
+def _planner_capabilities() -> dict[str, capability_registry.CapabilitySpec]:
+    mode = capability_registry.resolve_capability_mode()
+    if mode == "disabled":
+        return {}
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception as exc:  # noqa: BLE001
+        core_logging.get_logger("planner").warning(
+            "capability_registry_load_failed",
+            mode=mode,
+            error=str(exc),
+        )
+        return {}
+    return dict(sorted(registry.enabled_capabilities().items()))
+
+
+def _validate_capability_inputs(
+    capability: capability_registry.CapabilitySpec,
+    task: models.TaskCreate,
+    raw_tool_inputs: dict[str, Any],
+    job: models.Job,
+) -> str | None:
+    if not capability.input_schema_ref:
+        return None
+    schema = _load_schema_from_ref(capability.input_schema_ref)
+    if schema is None:
+        return f"capability_schema_not_found:{capability.input_schema_ref}"
+    payload = _build_capability_validation_payload(task, raw_tool_inputs, job)
+    errors = payload_resolver.validate_tool_inputs(
+        {capability.capability_id: payload},
+        {capability.capability_id: schema},
+    )
+    return errors.get(capability.capability_id)
+
+
+def _load_schema_from_ref(schema_ref: str) -> dict[str, Any] | None:
+    candidate = Path(schema_ref)
+    if not candidate.is_absolute():
+        candidate = Path(SCHEMA_REGISTRY_PATH) / (
+            schema_ref if schema_ref.endswith(".json") else f"{schema_ref}.json"
+        )
+    if not candidate.exists():
+        return None
+    try:
+        parsed = json.loads(candidate.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _build_capability_validation_payload(
+    task: models.TaskCreate,
+    raw_tool_inputs: dict[str, Any],
+    job: models.Job,
+) -> dict[str, Any]:
+    payload = payload_resolver.normalize_reference_payload_for_validation(
+        dict(raw_tool_inputs),
+        dependency_defaults=_dependency_fill_defaults(),
+    )
+    if task.deps:
+        for key, default_value in _dependency_fill_defaults().items():
+            payload.setdefault(key, default_value)
+    job_context = job.context_json if isinstance(job.context_json, dict) else {}
+    for key in (
+        "topic",
+        "today",
+        "date",
+        "target_pages",
+        "page_count",
+        "target_role_name",
+        "role_name",
+        "company_name",
+        "company",
+        "candidate_name",
+        "first_name",
+        "last_name",
+        "job_description",
+        "candidate_resume",
+        "tailored_text",
+        "output_dir",
+        "document_type",
+    ):
+        if key in payload:
+            continue
+        value = job_context.get(key)
+        if isinstance(value, str) and value.strip():
+            payload[key] = value
+            continue
+        if isinstance(value, (int, float, bool)):
+            payload[key] = value
+    return payload
+
+
+def _schema_requires_key(schema: dict, key: str) -> bool:
     if not isinstance(schema, dict):
-        return []
-    required_sets: list[set[str]] = []
-    if isinstance(schema.get("required"), list):
-        required_sets.append(set(schema["required"]))
-    for keyword in ("anyOf", "oneOf"):
-        if isinstance(schema.get(keyword), list):
-            for entry in schema[keyword]:
-                if isinstance(entry, dict) and isinstance(entry.get("required"), list):
-                    required_sets.append(set(entry["required"]))
-    if not required_sets:
-        return []
-    return required_sets
-
-
-def _extract_tool_inputs(task: models.TaskCreate, tool_name: str) -> set[str]:
-    if isinstance(task.tool_inputs, dict) and tool_name in task.tool_inputs:
-        payload = task.tool_inputs.get(tool_name)
-        if isinstance(payload, dict):
-            return {key for key in payload.keys() if isinstance(key, str)}
-    return set()
+        return False
+    required = schema.get("required")
+    if isinstance(required, list) and key in required:
+        return True
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        entries = schema.get(keyword)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and _schema_requires_key(entry, key):
+                return True
+    return False
 
 
 def _parse_optional_float(value: str | None) -> float | None:

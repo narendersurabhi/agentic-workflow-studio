@@ -69,6 +69,45 @@ Tool registration is centralized in `libs/core/tool_registry.py`, but implementa
 
 This keeps `tool_registry` focused on wiring and composition while tool families evolve independently.
 
+### Plug-and-Play Tool Loading
+
+`default_registry()` now supports dynamic plugin loading and runtime tool filters:
+
+- `TOOL_PLUGIN_MODULES`: comma-separated module specs loaded at startup.
+  - Format: `module.path` (defaults to `register_tools`) or `module.path:callable_name`.
+  - Callable contract: `register_tools(registry, ...)` (first arg must be registry).
+- `TOOL_PLUGIN_DISCOVERY_ENABLED=true` enables Python entry-point discovery.
+- `TOOL_PLUGIN_ENTRYPOINT_GROUP` sets the entry-point group (default: `awe.tools`).
+- `TOOL_PLUGIN_FAIL_FAST=true|false` controls startup behavior on plugin load failure.
+- `ENABLED_TOOLS`: optional allowlist of final tool names.
+- `DISABLED_TOOLS`: optional denylist of final tool names.
+- Per-service allow/deny:
+  - `PLANNER_ENABLED_TOOLS` / `PLANNER_DISABLED_TOOLS`
+  - `WORKER_ENABLED_TOOLS` / `WORKER_DISABLED_TOOLS`
+  - `API_ENABLED_TOOLS` / `API_DISABLED_TOOLS`
+  - Deny wins over allow.
+- Governance policy config:
+  - `TOOL_GOVERNANCE_ENABLED=true|false`
+  - `TOOL_GOVERNANCE_MODE=enforce|dry_run`
+  - `TOOL_GOVERNANCE_CONFIG_PATH=config/tool_governance.yaml`
+  - Supports global/service/tenant/job_type rules and risk-level blocks.
+
+Example:
+
+```bash
+TOOL_PLUGIN_MODULES=my_tools.my_plugin
+ENABLED_TOOLS=llm_generate,my_custom_tool
+DISABLED_TOOLS=sleep
+WORKER_DISABLED_TOOLS=run_tests,workspace_write_code
+```
+
+In `dry_run`, violations are logged (`tool_governance_violation_dry_run`) but not blocked.
+
+In-repo template:
+
+- `plugins/example_tool_plugin.py`
+- load with `TOOL_PLUGIN_MODULES=plugins.example_tool_plugin`
+
 ## Local Development (Docker Compose)
 
 1. Create local env from template.
@@ -257,10 +296,11 @@ TAILOR_EVAL_OPENAI_MAX_RETRIES=1
 
 ## Add a New Tool
 
-1. Add `ToolSpec` + handler in `libs/core/tool_registry.py`.
-2. Add/update tests in `libs/core/tests` and/or service tests.
-3. Wire tool usage into planner/task flow as needed.
-4. Update docs.
+1. Implement your tool module with `register_tools(registry, ...)`.
+2. Register one or more `Tool` objects with `ToolSpec` + handler.
+3. Load it via `TOOL_PLUGIN_MODULES` (or entry points).
+4. Add/update tests in `libs/core/tests` and/or service tests.
+5. Update planner prompts/tool usage guidance only if needed.
 
 ## Troubleshooting
 

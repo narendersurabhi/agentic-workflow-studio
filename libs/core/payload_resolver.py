@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, Dict
 
 from jsonschema import Draft202012Validator
+
+
+class ToolInputReferenceError(ValueError):
+    """Raised when a tool input reference cannot be resolved."""
 
 
 def resolve_tool_inputs(
@@ -13,14 +18,37 @@ def resolve_tool_inputs(
     task_payload: dict[str, Any],
     tool_inputs: dict[str, Any],
 ) -> dict[str, Any]:
+    resolved, _ = resolve_tool_inputs_with_errors(
+        tool_requests, instruction, context, task_payload, tool_inputs
+    )
+    return resolved
+
+
+def resolve_tool_inputs_with_errors(
+    tool_requests: list[str],
+    instruction: str,
+    context: dict[str, Any] | None,
+    task_payload: dict[str, Any],
+    tool_inputs: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]]:
     resolved: dict[str, Any] = {}
+    errors: dict[str, str] = {}
     for tool_name in tool_requests:
-        resolved_payload = resolve_tool_payload(
-            tool_name, instruction, context or {}, task_payload, tool_inputs
-        )
+        try:
+            resolved_payload = resolve_tool_payload(
+                tool_name,
+                instruction,
+                context or {},
+                task_payload,
+                tool_inputs,
+                strict_references=True,
+            )
+        except ToolInputReferenceError as exc:
+            errors[tool_name] = f"input reference resolution failed: {exc}"
+            continue
         if isinstance(resolved_payload, dict):
             resolved[tool_name] = resolved_payload
-    return resolved
+    return resolved, errors
 
 
 def validate_tool_inputs(
@@ -49,13 +77,19 @@ def resolve_tool_payload(
     context: dict[str, Any],
     task_payload: dict[str, Any],
     tool_inputs: dict[str, Any],
+    *,
+    strict_references: bool = False,
 ) -> dict[str, Any]:
     has_tool_inputs = False
     payload: dict[str, Any] = {}
     if isinstance(tool_inputs, dict) and tool_name in tool_inputs:
         tool_payload = tool_inputs.get(tool_name)
         if isinstance(tool_payload, dict):
-            payload = dict(tool_payload)
+            payload = _resolve_payload_references(
+                dict(tool_payload),
+                context,
+                strict=strict_references,
+            )
             has_tool_inputs = True
     payload = _merge_payload_from_task(payload, task_payload, instruction)
     payload = _fill_payload_from_context(payload, context)
@@ -201,6 +235,129 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
     return filled
 
 
+def normalize_reference_payload_for_validation(
+    payload: dict[str, Any],
+    *,
+    dependency_defaults: dict[str, Any] | None = None,
+    unknown_default: Any = "__dependency__",
+) -> dict[str, Any]:
+    defaults = dependency_defaults or {}
+
+    def _normalize(value: Any, key_hint: str | None = None) -> Any:
+        if isinstance(value, dict):
+            if "$from" in value:
+                if "$default" in value:
+                    return copy.deepcopy(value.get("$default"))
+                if key_hint and key_hint in defaults:
+                    return copy.deepcopy(defaults[key_hint])
+                return copy.deepcopy(unknown_default)
+            return {k: _normalize(v, k) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_normalize(item, key_hint) for item in value]
+        return value
+
+    return _normalize(dict(payload))
+
+
+def _resolve_payload_references(value: Any, context: dict[str, Any], *, strict: bool) -> Any:
+    if isinstance(value, dict):
+        if "$from" in value:
+            try:
+                return _resolve_reference_value(value, context)
+            except ToolInputReferenceError:
+                if strict:
+                    raise
+                return dict(value)
+        return {k: _resolve_payload_references(v, context, strict=strict) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_payload_references(item, context, strict=strict) for item in value]
+    return value
+
+
+def _resolve_reference_value(reference: dict[str, Any], context: dict[str, Any]) -> Any:
+    extras = set(reference.keys()) - {"$from", "$default"}
+    if extras:
+        raise ToolInputReferenceError(
+            f"invalid reference object keys: {', '.join(sorted(extras))}"
+        )
+    path_spec = reference.get("$from")
+    if path_spec is None:
+        raise ToolInputReferenceError("reference is missing $from")
+    try:
+        value = _resolve_reference_path(path_spec, context)
+    except ToolInputReferenceError:
+        if "$default" in reference:
+            return copy.deepcopy(reference.get("$default"))
+        raise
+    return copy.deepcopy(value)
+
+
+def _resolve_reference_path(path_spec: Any, context: dict[str, Any]) -> Any:
+    candidate_paths = _candidate_reference_paths(path_spec, context)
+    errors: list[str] = []
+    for segments in candidate_paths:
+        try:
+            return _walk_path(context, segments)
+        except ToolInputReferenceError as exc:
+            errors.append(str(exc))
+    path_repr = path_spec if isinstance(path_spec, str) else json.dumps(path_spec, ensure_ascii=True)
+    detail = "; ".join(errors) if errors else "path not found"
+    raise ToolInputReferenceError(f"path '{path_repr}' could not be resolved ({detail})")
+
+
+def _candidate_reference_paths(path_spec: Any, context: dict[str, Any]) -> list[list[Any]]:
+    if isinstance(path_spec, list):
+        return [list(path_spec)]
+    if isinstance(path_spec, tuple):
+        return [list(path_spec)]
+    if not isinstance(path_spec, str):
+        raise ToolInputReferenceError("$from must be a string or array path")
+    raw = path_spec.strip()
+    if not raw:
+        raise ToolInputReferenceError("$from path is empty")
+    if raw.startswith("$."):
+        raw = raw[2:]
+    if raw.startswith("/"):
+        parts = [part.replace("~1", "/").replace("~0", "~") for part in raw.split("/")[1:]]
+        return [parts]
+    segments = [segment for segment in raw.split(".") if segment]
+    if not segments:
+        raise ToolInputReferenceError("$from path is empty")
+    candidates = [segments]
+    roots = {"dependencies_by_name", "dependencies", "job_context"}
+    if segments[0] not in roots:
+        if isinstance(context.get("dependencies_by_name"), dict):
+            candidates.append(["dependencies_by_name", *segments])
+        if isinstance(context.get("dependencies"), dict):
+            candidates.append(["dependencies", *segments])
+    return candidates
+
+
+def _walk_path(root: Any, segments: list[Any]) -> Any:
+    current = root
+    for segment in segments:
+        if isinstance(current, dict):
+            if segment not in current:
+                raise ToolInputReferenceError(f"missing key '{segment}'")
+            current = current[segment]
+            continue
+        if isinstance(current, list):
+            try:
+                index = int(segment)
+            except (TypeError, ValueError):
+                raise ToolInputReferenceError(
+                    f"list index '{segment}' is not a valid integer"
+                ) from None
+            if index < 0 or index >= len(current):
+                raise ToolInputReferenceError(f"list index '{index}' out of range")
+            current = current[index]
+            continue
+        raise ToolInputReferenceError(
+            f"cannot traverse segment '{segment}' on non-container value"
+        )
+    return current
+
+
 def _extract_json_from_context(context: dict) -> dict | None:
     if not isinstance(context, dict):
         return None
@@ -280,6 +437,12 @@ def _extract_validation_errors_from_context(context: dict) -> list[dict] | None:
                 errors = entry.get("errors")
                 if isinstance(errors, list):
                     return errors
+            for candidate in output.values():
+                if not isinstance(candidate, dict):
+                    continue
+                errors = candidate.get("errors")
+                if isinstance(errors, list):
+                    return errors
     return None
 
 
@@ -296,6 +459,11 @@ def _extract_validation_report_from_context(context: dict) -> dict | None:
             entry = output.get("document_spec_validate")
             if isinstance(entry, dict):
                 return entry
+            for candidate in output.values():
+                if not isinstance(candidate, dict):
+                    continue
+                if "errors" in candidate and "valid" in candidate:
+                    return candidate
     return None
 
 
@@ -416,6 +584,17 @@ def _extract_document_spec_from_outputs(outputs: dict) -> dict | None:
     direct = outputs.get("document_spec")
     if isinstance(direct, dict):
         return direct
+    for candidate in outputs.values():
+        if not isinstance(candidate, dict):
+            continue
+        document_spec = candidate.get("document_spec")
+        if isinstance(document_spec, dict):
+            return document_spec
+        result = candidate.get("result")
+        if isinstance(result, dict):
+            nested_document_spec = result.get("document_spec")
+            if isinstance(nested_document_spec, dict):
+                return nested_document_spec
     return None
 
 

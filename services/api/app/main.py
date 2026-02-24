@@ -18,6 +18,7 @@ from prometheus_client import Counter, make_asgi_app
 from sqlalchemy.orm import Session
 
 from libs.core import (
+    capability_registry,
     document_store,
     events,
     logging as core_logging,
@@ -58,6 +59,7 @@ app.mount("/metrics", metrics_app)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", "/shared/artifacts")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/shared/workspace")
+SCHEMA_REGISTRY_PATH = os.getenv("SCHEMA_REGISTRY_PATH", "/app/schemas")
 ORCHESTRATOR_ENABLED = os.getenv("ORCHESTRATOR_ENABLED", "true").lower() == "true"
 POLICY_GATE_ENABLED = os.getenv("POLICY_GATE_ENABLED", "false").lower() == "true"
 JOB_RECOVERY_ENABLED = os.getenv("JOB_RECOVERY_ENABLED", "true").lower() == "true"
@@ -76,6 +78,7 @@ _tool_spec_registry = tool_registry.default_registry(
     http_fetch_enabled=False,
     llm_enabled=True,
     llm_provider=MockLLMProvider(),
+    service_name="api",
 )
 TOOL_INPUT_SCHEMAS = {spec.name: spec.input_schema for spec in _tool_spec_registry.list_specs()}
 
@@ -201,6 +204,21 @@ def _resolve_artifact_path(path: str) -> str:
 
 def _resolve_workspace_path(path: str) -> str:
     return _resolve_download_path(path, WORKSPACE_DIR, "workspace")
+
+
+def _load_schema_from_ref(schema_ref: str) -> dict[str, Any] | None:
+    candidate = Path(schema_ref)
+    if not candidate.is_absolute():
+        candidate = Path(SCHEMA_REGISTRY_PATH) / (
+            schema_ref if schema_ref.endswith(".json") else f"{schema_ref}.json"
+        )
+    if not candidate.exists():
+        return None
+    try:
+        parsed = json.loads(candidate.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _plan_created_payload(plan: models.PlanCreate, job_id: str) -> dict[str, Any]:
@@ -343,6 +361,27 @@ def _handle_plan_created(envelope: dict) -> None:
         return
     now = datetime.utcnow()
     with SessionLocal() as db:
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
+        preflight_errors = _compile_plan_preflight(plan, job_context)
+        if preflight_errors:
+            if job:
+                _set_job_status(job, models.JobStatus.failed)
+                metadata = job.metadata_json or {}
+                metadata["plan_preflight_errors"] = preflight_errors
+                job.metadata_json = metadata
+                job.updated_at = now
+                db.commit()
+            _emit_event(
+                "plan.failed",
+                {
+                    "job_id": job_id,
+                    "error": "plan_preflight_failed",
+                    "preflight_errors": preflight_errors,
+                    "correlation_id": envelope.get("correlation_id") or str(uuid.uuid4()),
+                },
+            )
+            return
         existing = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
         if existing:
             plan_id = existing.id
@@ -389,7 +428,6 @@ def _handle_plan_created(envelope: dict) -> None:
                 critic_required=1 if task.critic_required else 0,
             )
             db.add(task_record)
-        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         if job:
             _set_job_status(job, models.JobStatus.planning)
             job.updated_at = now
@@ -665,21 +703,24 @@ def _task_payload_from_record(
     ctx = context or {}
     if context:
         payload["context"] = context
-    resolved_inputs = payload_resolver.resolve_tool_inputs(
+    resolved_inputs, resolution_errors = payload_resolver.resolve_tool_inputs_with_errors(
         payload["tool_requests"],
         payload["instruction"],
         ctx,
         payload,
         payload.get("tool_inputs", {}),
     )
+    validation_errors: dict[str, str] = {}
     if resolved_inputs:
         payload["tool_inputs"] = resolved_inputs
         payload["tool_inputs_resolved"] = True
-        validation_errors = payload_resolver.validate_tool_inputs(
-            resolved_inputs, TOOL_INPUT_SCHEMAS
+        validation_errors.update(
+            payload_resolver.validate_tool_inputs(resolved_inputs, TOOL_INPUT_SCHEMAS)
         )
-        if validation_errors:
-            payload["tool_inputs_validation"] = validation_errors
+    if resolution_errors:
+        validation_errors.update(resolution_errors)
+    if validation_errors:
+        payload["tool_inputs_validation"] = validation_errors
     return payload
 
 
@@ -827,6 +868,244 @@ def _resolve_task_deps(task_records: list[TaskRecord]) -> list[models.Task]:
                 resolved.append(dep)
         tasks.append(task.model_copy(update={"deps": resolved}))
     return tasks
+
+
+def _preflight_placeholder_for_key(key: str) -> Any:
+    normalized = key.strip().lower()
+    if normalized in {
+        "path",
+        "output_path",
+        "topic",
+        "target_role_name",
+        "role_name",
+        "company_name",
+        "company",
+        "candidate_name",
+        "first_name",
+        "last_name",
+        "job_description",
+        "candidate_resume",
+        "tailored_text",
+        "date",
+        "today",
+        "document_type",
+        "output_extension",
+        "file_extension",
+        "extension",
+        "format",
+    }:
+        return "preflight"
+    if normalized in {"errors", "warnings", "allowed_block_types", "items"}:
+        return []
+    if normalized in {"valid", "strict"}:
+        return True
+    if normalized in {"max_iterations", "max_blocks", "max_depth", "target_pages", "page_count"}:
+        return 1
+    if normalized in {"document_spec", "validation_report", "job", "result", "data"}:
+        return {}
+    return {
+        "document_spec": {},
+        "validation_report": {"valid": True, "errors": [], "warnings": []},
+        "path": "documents/preflight.pdf",
+        "result": {},
+        "text": "preflight",
+    }
+
+
+def _put_nested_value(root: dict[str, Any], segments: list[str], value: Any) -> None:
+    cursor: dict[str, Any] = root
+    for idx, segment in enumerate(segments):
+        if idx == len(segments) - 1:
+            cursor[segment] = value
+            return
+        next_value = cursor.get(segment)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            cursor[segment] = next_value
+        cursor = next_value
+
+
+def _collect_reference_paths(value: Any) -> list[list[str]]:
+    refs: list[list[str]] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            from_path = node.get("$from")
+            if isinstance(from_path, str) and from_path.strip():
+                raw = from_path.strip()
+                if raw.startswith("$."):
+                    raw = raw[2:]
+                if raw.startswith("/"):
+                    parts = [part for part in raw.split("/")[1:] if part]
+                else:
+                    parts = [segment for segment in raw.split(".") if segment]
+                if parts:
+                    refs.append(parts)
+            for child in node.values():
+                _walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                _walk(child)
+
+    _walk(value)
+    return refs
+
+
+def _build_preflight_dependency_output(task: models.TaskCreate) -> dict[str, Any]:
+    output: dict[str, Any] = {
+        "document_spec": {},
+        "validation_report": {"valid": True, "errors": [], "warnings": []},
+        "path": "documents/preflight.pdf",
+    }
+    for tool_name in task.tool_requests:
+        output[tool_name] = {
+            "document_spec": {},
+            "validation_report": {"valid": True, "errors": [], "warnings": []},
+            "path": "documents/preflight.pdf",
+            "result": {},
+            "text": "preflight",
+        }
+    return output
+
+
+def _collect_ancestor_task_names(
+    task: models.TaskCreate, tasks_by_name: dict[str, models.TaskCreate]
+) -> set[str]:
+    ancestors: set[str] = set()
+    stack = list(task.deps or [])
+    while stack:
+        dep_name = stack.pop()
+        if dep_name in ancestors:
+            continue
+        ancestors.add(dep_name)
+        dep = tasks_by_name.get(dep_name)
+        if dep:
+            for child in dep.deps or []:
+                if child not in ancestors:
+                    stack.append(child)
+    return ancestors
+
+
+def _compile_plan_preflight(
+    plan: models.PlanCreate, job_context: dict[str, Any] | None
+) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    tasks_by_name: dict[str, models.TaskCreate] = {}
+    duplicate_names: set[str] = set()
+    for task in plan.tasks:
+        if task.name in tasks_by_name:
+            duplicate_names.add(task.name)
+        tasks_by_name[task.name] = task
+    if duplicate_names:
+        for name in sorted(duplicate_names):
+            errors[name] = "duplicate_task_name"
+        return errors
+
+    for task in plan.tasks:
+        missing_deps = [dep for dep in (task.deps or []) if dep not in tasks_by_name]
+        if missing_deps:
+            errors[task.name] = f"unknown_dependencies:{', '.join(sorted(missing_deps))}"
+
+    if errors:
+        return errors
+
+    for task in plan.tasks:
+        dependency_names = _collect_ancestor_task_names(task, tasks_by_name)
+        context: dict[str, Any] = {"dependencies_by_name": {}, "dependencies": {}}
+        for dep_name in dependency_names:
+            dep_task = tasks_by_name.get(dep_name)
+            if not dep_task:
+                continue
+            stub = _build_preflight_dependency_output(dep_task)
+            context["dependencies_by_name"][dep_name] = stub
+            context["dependencies"][dep_name] = stub
+        if isinstance(job_context, dict) and job_context:
+            context["job_context"] = job_context
+
+        task_payload = {
+            "name": task.name,
+            "instruction": task.instruction,
+            "tool_requests": list(task.tool_requests or []),
+            "tool_inputs": task.tool_inputs or {},
+        }
+
+        # Seed exact $from paths with typed placeholders to reduce false negatives
+        # when dependency outputs are not available yet.
+        references = _collect_reference_paths(task.tool_inputs or {})
+        reference_error: str | None = None
+        for path in references:
+            if not path:
+                continue
+            if path[0] in {"dependencies_by_name", "dependencies", "job_context"}:
+                root_key = path[0]
+                if root_key == "job_context":
+                    if len(path) > 1 and "job_context" in context:
+                        _put_nested_value(
+                            context["job_context"],
+                            path[1:],
+                            _preflight_placeholder_for_key(path[-1]),
+                        )
+                    continue
+                if len(path) >= 4:
+                    dep_name = path[1]
+                    dep_task = tasks_by_name.get(dep_name)
+                    if dep_name in dependency_names and dep_task:
+                        referenced_tool = path[2]
+                        if referenced_tool not in set(dep_task.tool_requests or []):
+                            reference_error = (
+                                "input reference resolution failed: "
+                                f"path '{'.'.join(path)}' references unknown dependency tool "
+                                f"'{referenced_tool}' for task '{dep_name}'"
+                            )
+                            break
+                _put_nested_value(
+                    context[root_key], path[1:], _preflight_placeholder_for_key(path[-1])
+                )
+            else:
+                if len(path) >= 3:
+                    dep_name = path[0]
+                    dep_task = tasks_by_name.get(dep_name)
+                    if dep_name in dependency_names and dep_task:
+                        referenced_tool = path[1]
+                        if referenced_tool not in set(dep_task.tool_requests or []):
+                            reference_error = (
+                                "input reference resolution failed: "
+                                f"path '{'.'.join(path)}' references unknown dependency tool "
+                                f"'{referenced_tool}' for task '{dep_name}'"
+                            )
+                            break
+                _put_nested_value(
+                    context["dependencies_by_name"],
+                    path,
+                    _preflight_placeholder_for_key(path[-1]),
+                )
+                _put_nested_value(
+                    context["dependencies"], path, _preflight_placeholder_for_key(path[-1])
+                )
+        if reference_error:
+            errors[task.name] = reference_error
+            continue
+
+        resolved_inputs, resolution_errors = payload_resolver.resolve_tool_inputs_with_errors(
+            task_payload["tool_requests"],
+            task_payload["instruction"],
+            context,
+            task_payload,
+            task_payload["tool_inputs"],
+        )
+        if resolution_errors:
+            first_tool, message = next(iter(resolution_errors.items()))
+            errors[task.name] = f"{first_tool}:{message}"
+            continue
+
+        validation_errors = payload_resolver.validate_tool_inputs(
+            resolved_inputs, TOOL_INPUT_SCHEMAS
+        )
+        if validation_errors:
+            first_tool, message = next(iter(validation_errors.items()))
+            errors[task.name] = f"{first_tool}:{message}"
+
+    return errors
 
 
 def _store_task_output(task_id: str, outputs: dict[str, Any]) -> None:
@@ -1102,6 +1381,53 @@ def _seed_task_output_memory(db: Session, job_id: str, context_json: Dict[str, A
 def list_jobs(db: Session = Depends(get_db)) -> List[models.Job]:
     jobs = db.query(JobRecord).all()
     return [_job_from_record(job) for job in jobs]
+
+
+@app.get("/capabilities")
+def list_capabilities(include_disabled: bool = Query(False)) -> dict[str, Any]:
+    mode = capability_registry.resolve_capability_mode()
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"capability_registry_load_failed:{exc}") from exc
+
+    items: list[dict[str, Any]] = []
+    for capability_id, spec in sorted(registry.capabilities.items()):
+        if not include_disabled and not spec.enabled:
+            continue
+        input_schema: dict[str, Any] | None = None
+        required_inputs: list[str] = []
+        if spec.input_schema_ref:
+            input_schema = _load_schema_from_ref(spec.input_schema_ref)
+            if isinstance(input_schema, dict):
+                required = input_schema.get("required")
+                if isinstance(required, list):
+                    required_inputs = [entry for entry in required if isinstance(entry, str)]
+        items.append(
+            {
+                "id": capability_id,
+                "description": spec.description,
+                "enabled": spec.enabled,
+                "risk_tier": spec.risk_tier,
+                "idempotency": spec.idempotency,
+                "group": spec.group,
+                "subgroup": spec.subgroup,
+                "tags": list(spec.tags),
+                "input_schema_ref": spec.input_schema_ref,
+                "input_schema": input_schema,
+                "required_inputs": required_inputs,
+                "adapters": [
+                    {
+                        "type": adapter.type,
+                        "server_id": adapter.server_id,
+                        "tool_name": adapter.tool_name,
+                    }
+                    for adapter in spec.adapters
+                    if adapter.enabled
+                ],
+            }
+        )
+    return {"mode": mode, "items": items}
 
 
 @app.get("/jobs/{job_id}", response_model=models.Job)
@@ -1542,6 +1868,17 @@ def read_task_dlq(job_id: str, limit: int = Query(25, ge=1, le=200)) -> List[mod
 
 @app.post("/plans", response_model=models.Plan)
 def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_db)) -> models.Plan:
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
+    preflight_errors = _compile_plan_preflight(plan, job_context)
+    if preflight_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "plan_preflight_failed",
+                "preflight_errors": preflight_errors,
+            },
+        )
     plan_id = str(uuid.uuid4())
     now = datetime.utcnow()
     record = PlanRecord(
