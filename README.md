@@ -103,6 +103,24 @@ WORKER_DISABLED_TOOLS=run_tests,workspace_write_code
 
 In `dry_run`, violations are logged (`tool_governance_violation_dry_run`) but not blocked.
 
+### Capability Governance and Contracts
+
+Capability execution has separate controls so planner-selected capabilities can be governed independently from local tools:
+
+- `CAPABILITY_MODE=disabled|dry_run|enabled`
+- `CAPABILITY_REGISTRY_PATH=config/capability_registry.yaml`
+- `CAPABILITY_GOVERNANCE_ENABLED=true|false`
+- `CAPABILITY_GOVERNANCE_MODE=enforce|dry_run`
+- `ENABLED_CAPABILITIES` / `DISABLED_CAPABILITIES`
+- Per-service allow/deny (for worker runtime):
+  - `WORKER_ENABLED_CAPABILITIES` / `WORKER_DISABLED_CAPABILITIES`
+- Runtime input contract enforcement:
+  - `CAPABILITY_INPUT_VALIDATION_ENABLED=true|false`
+  - `CAPABILITY_ENFORCE_SCHEMA_PROPERTIES=true|false`
+
+When enabled, worker validates capability payloads against the capability input schema and can prune out undeclared top-level keys before execution.
+In `dry_run`, capability violations are logged (`capability_governance_violation_dry_run`) and execution continues.
+
 In-repo template:
 
 - `plugins/example_tool_plugin.py`

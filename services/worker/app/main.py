@@ -55,6 +55,12 @@ TOOL_OUTPUT_SIZE_CAP = os.getenv("TOOL_OUTPUT_SIZE_CAP", "50000")
 PROMPT_VERSION = os.getenv("PROMPT_VERSION", "unknown")
 POLICY_VERSION = os.getenv("POLICY_VERSION", "unknown")
 TOOL_VERSION = os.getenv("TOOL_VERSION", "unknown")
+CAPABILITY_INPUT_VALIDATION_ENABLED = (
+    os.getenv("CAPABILITY_INPUT_VALIDATION_ENABLED", "true").lower() == "true"
+)
+CAPABILITY_ENFORCE_SCHEMA_PROPERTIES = (
+    os.getenv("CAPABILITY_ENFORCE_SCHEMA_PROPERTIES", "false").lower() == "true"
+)
 
 LLM_ENABLED = WORKER_MODE == "llm"
 
@@ -305,6 +311,64 @@ def execute_task(task_payload: dict) -> models.TaskResult:
             ) as tool_span:
                 capability_spec = _resolve_enabled_capability_request(tool_name)
                 if capability_spec is not None:
+                    capability_allow_decision = capability_registry.evaluate_capability_allowlist(
+                        capability_spec.capability_id,
+                        "worker",
+                    )
+                    if (
+                        capability_allow_decision.violated
+                        and capability_allow_decision.mode == "dry_run"
+                    ):
+                        core_logging.log_event(
+                            LOGGER,
+                            "capability_governance_violation_dry_run",
+                            {
+                                "run_id": run_id,
+                                "job_id": job_id,
+                                "task_id": task_id,
+                                "tool_name": tool_name,
+                                "capability_id": capability_spec.capability_id,
+                                "reason": capability_allow_decision.reason,
+                                "mode": capability_allow_decision.mode,
+                                "trace_id": trace_id,
+                            },
+                        )
+                    if not capability_allow_decision.allowed:
+                        tool_error = (
+                            "policy.capability_not_allowed:"
+                            f"{capability_spec.capability_id}:"
+                            f"{capability_allow_decision.reason}"
+                        )
+                        outputs[tool_name] = {
+                            "error": tool_error,
+                            "error_code": "policy.capability_not_allowed",
+                        }
+                        tool_calls.append(
+                            models.ToolCall(
+                                tool_name=tool_name,
+                                input={},
+                                idempotency_key=str(uuid.uuid4()),
+                                trace_id=trace_id,
+                                started_at=started_at,
+                                finished_at=datetime.utcnow(),
+                                status="failed",
+                                output_or_error={
+                                    "error": tool_error,
+                                    "error_code": "policy.capability_not_allowed",
+                                },
+                            )
+                        )
+                        core_tracing.set_span_attributes(
+                            tool_span,
+                            {
+                                "tool.error": tool_error,
+                                "tool.error_code": "policy.capability_not_allowed",
+                                "capability.id": capability_spec.capability_id,
+                                "capability.governance_mode": capability_allow_decision.mode,
+                                "capability.allowlist_reason": capability_allow_decision.reason,
+                            },
+                        )
+                        break
                     payload = _tool_payload(
                         tool_name,
                         task_payload.get("instruction", ""),
@@ -312,6 +376,56 @@ def execute_task(task_payload: dict) -> models.TaskResult:
                         task_payload,
                         tool_inputs,
                     )
+                    payload, capability_payload_error, dropped_payload_keys = (
+                        _enforce_capability_input_contract(
+                            capability_spec,
+                            payload,
+                        )
+                    )
+                    if dropped_payload_keys:
+                        core_logging.log_event(
+                            LOGGER,
+                            "capability_payload_pruned",
+                            {
+                                "run_id": run_id,
+                                "job_id": job_id,
+                                "task_id": task_id,
+                                "tool_name": tool_name,
+                                "capability_id": capability_spec.capability_id,
+                                "dropped_keys": dropped_payload_keys,
+                                "trace_id": trace_id,
+                            },
+                        )
+                    if capability_payload_error:
+                        tool_error = capability_payload_error
+                        outputs[tool_name] = {
+                            "error": tool_error,
+                            "error_code": "contract.input_invalid",
+                        }
+                        tool_calls.append(
+                            models.ToolCall(
+                                tool_name=tool_name,
+                                input=payload,
+                                idempotency_key=str(uuid.uuid4()),
+                                trace_id=trace_id,
+                                started_at=started_at,
+                                finished_at=datetime.utcnow(),
+                                status="failed",
+                                output_or_error={
+                                    "error": tool_error,
+                                    "error_code": "contract.input_invalid",
+                                },
+                            )
+                        )
+                        core_tracing.set_span_attributes(
+                            tool_span,
+                            {
+                                "tool.error": tool_error,
+                                "tool.error_code": "contract.input_invalid",
+                                "capability.id": capability_spec.capability_id,
+                            },
+                        )
+                        break
                     idempotency_key = str(uuid.uuid4())
                     tool_started_at = time.monotonic()
                     core_logging.log_event(
@@ -1587,6 +1701,59 @@ def _extract_text_from_outputs(outputs: dict) -> str | None:
             if isinstance(text, str) and text:
                 return text
     return None
+
+
+def _load_schema_from_ref(schema_ref: str) -> dict[str, Any] | None:
+    schema_path = _resolve_schema_path(schema_ref)
+    if schema_path is None or not schema_path.exists():
+        return None
+    try:
+        parsed = json.loads(schema_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _prune_capability_payload_by_schema(
+    payload: dict[str, Any],
+    schema: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    if not CAPABILITY_ENFORCE_SCHEMA_PROPERTIES:
+        return dict(payload), []
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return dict(payload), []
+    allowed_keys = set(properties.keys())
+    pruned = {key: value for key, value in payload.items() if key in allowed_keys}
+    dropped = sorted(key for key in payload.keys() if key not in allowed_keys)
+    return pruned, dropped
+
+
+def _enforce_capability_input_contract(
+    capability: capability_registry.CapabilitySpec,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], str | None, list[str]]:
+    normalized_payload = dict(payload) if isinstance(payload, dict) else {}
+    if not CAPABILITY_INPUT_VALIDATION_ENABLED or not capability.input_schema_ref:
+        return normalized_payload, None, []
+    schema = _load_schema_from_ref(capability.input_schema_ref)
+    if schema is None:
+        return (
+            normalized_payload,
+            f"contract.input_schema_not_found:{capability.input_schema_ref}",
+            [],
+        )
+    normalized_payload, dropped = _prune_capability_payload_by_schema(normalized_payload, schema)
+    validation_errors = payload_resolver.validate_tool_inputs(
+        {capability.capability_id: normalized_payload},
+        {capability.capability_id: schema},
+    )
+    error = validation_errors.get(capability.capability_id)
+    if error:
+        return normalized_payload, f"contract.input_invalid:{error}", dropped
+    return normalized_payload, None, dropped
 
 
 def _validate_expected_output(task_payload: dict, outputs: dict) -> str | None:

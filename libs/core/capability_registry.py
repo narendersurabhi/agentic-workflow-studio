@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,14 @@ class CapabilityAdapterSpec:
     arg_map: dict[str, Any] = field(default_factory=dict)
     response_path: str | None = None
     enabled: bool = True
+
+
+@dataclass(frozen=True)
+class CapabilityAllowDecision:
+    allowed: bool
+    reason: str
+    mode: str = "enforce"
+    violated: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,82 @@ def resolve_capability_mode() -> str:
 def resolve_capability_registry_path() -> Path:
     raw = os.getenv("CAPABILITY_REGISTRY_PATH", "config/capability_registry.yaml").strip()
     return Path(raw).expanduser()
+
+
+def _capability_governance_enabled() -> bool:
+    return os.getenv("CAPABILITY_GOVERNANCE_ENABLED", "true").strip().lower() == "true"
+
+
+def _capability_governance_mode() -> str:
+    raw = os.getenv("CAPABILITY_GOVERNANCE_MODE", "enforce").strip().lower()
+    if raw in {"enforce", "dry_run"}:
+        return raw
+    return "enforce"
+
+
+def _parse_csv_values(raw: str | None) -> set[str]:
+    if not raw:
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _normalize_service_name(service_name: str | None) -> str:
+    if not service_name:
+        return ""
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", service_name.strip())
+    return normalized.upper().strip("_")
+
+
+def _service_env_name(service_name: str, suffix: str) -> str:
+    return f"{service_name}_{suffix}"
+
+
+def _deny_decision(mode: str, reason: str) -> CapabilityAllowDecision:
+    if mode == "dry_run":
+        return CapabilityAllowDecision(True, f"dry_run:{reason}", mode=mode, violated=True)
+    return CapabilityAllowDecision(False, reason, mode=mode, violated=True)
+
+
+def evaluate_capability_allowlist(
+    capability_id: str,
+    service_name: str | None = None,
+) -> CapabilityAllowDecision:
+    if not capability_id:
+        return CapabilityAllowDecision(False, "missing_capability_id", mode="enforce", violated=True)
+    if not _capability_governance_enabled():
+        return CapabilityAllowDecision(True, "governance_disabled", mode="enforce", violated=False)
+
+    mode = _capability_governance_mode()
+    disabled_capabilities = _parse_csv_values(os.getenv("DISABLED_CAPABILITIES"))
+    enabled_capabilities = _parse_csv_values(os.getenv("ENABLED_CAPABILITIES"))
+
+    normalized_service = _normalize_service_name(service_name)
+    service_disabled: set[str] = set()
+    service_enabled: set[str] = set()
+    if normalized_service:
+        service_disabled = _parse_csv_values(
+            os.getenv(_service_env_name(normalized_service, "DISABLED_CAPABILITIES"))
+        )
+        service_enabled = _parse_csv_values(
+            os.getenv(_service_env_name(normalized_service, "ENABLED_CAPABILITIES"))
+        )
+
+    deny_checks = (
+        ("global_disabled", disabled_capabilities),
+        ("service_disabled", service_disabled),
+    )
+    for reason, denied_set in deny_checks:
+        if denied_set and capability_id in denied_set:
+            return _deny_decision(mode, reason)
+
+    allow_checks = (
+        ("not_in_global_enabled", enabled_capabilities),
+        ("not_in_service_enabled", service_enabled),
+    )
+    for reason, allowed_set in allow_checks:
+        if allowed_set and capability_id not in allowed_set:
+            return _deny_decision(mode, reason)
+    return CapabilityAllowDecision(True, "allowed", mode=mode, violated=False)
 
 
 def load_capability_registry(path: Path | None = None) -> CapabilityRegistry:
