@@ -30,7 +30,7 @@ def register_docx_tools(registry) -> None:
                 usage_guidance=(
                     "Provide path (relative .docx filename). document_spec is "
                     "resolved from memory (document_spec:latest) unless explicitly provided. "
-                    "path can be resolved from memory (docx_path:latest) when using derive_output_filename. "
+                    "path can be resolved from memory (docx_path:latest) when using derive_output_path or derive_output_filename. "
                     "render_context (merged into tokens), and strict (default true). "
                     "Supported blocks: text, paragraph, heading, bullets, spacer, "
                     "optional_paragraph, repeat. "

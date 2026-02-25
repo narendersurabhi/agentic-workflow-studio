@@ -1,18 +1,53 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import ComposerDagCanvas from "./components/composer/ComposerDagCanvas";
+import ComposerStepInspector from "./components/composer/ComposerStepInspector";
+import ComposerValidationPanel from "./components/composer/ComposerValidationPanel";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const jaegerUiUrl = (process.env.NEXT_PUBLIC_JAEGER_URL || "http://localhost:16686").replace(
+  /\/+$/,
+  ""
+);
+const grafanaUiUrl = (process.env.NEXT_PUBLIC_GRAFANA_URL || "http://localhost:3000").replace(
+  /\/+$/,
+  ""
+);
+const grafanaLokiDatasource = process.env.NEXT_PUBLIC_GRAFANA_LOKI_DATASOURCE || "Loki";
 const TEMPLATE_STORAGE_KEY = "ape.templates.v1";
 const TEMPLATE_ORDER_KEY = "ape.templates.order.v1";
 const TEMPLATE_DEFAULTS_KEY = "ape.template.defaults.v1";
 const MEMORY_LIMIT_STORAGE_KEY = "ape.memory.limit.v1";
 const SIDEBAR_MIN_WIDTH = 260;
+const DAG_CANVAS_NODE_WIDTH = 220;
+const DAG_CANVAS_NODE_HEIGHT = 96;
+const DAG_CANVAS_PADDING = 16;
+const DAG_CANVAS_SNAP = 8;
+const DAG_CANVAS_MIN_WIDTH = 960;
+const DAG_CANVAS_MIN_HEIGHT = 460;
 const AUTO_TEMPLATE_KEYS = new Set(["today", "today_pretty"]);
 const TEMPLATE_INPUT_DEFAULTS: Record<string, string> = {
   run_iterative_improve: "false",
   generate_cover_letter: "false"
 };
+
+const GUIDED_STARTER_TEMPLATES: Array<{
+  id: GuidedStarterTemplateId;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "document_pipeline",
+    label: "Document Pipeline",
+    description: "Generate a DocumentSpec, derive output path, and render to selected format."
+  },
+  {
+    id: "runbook_pipeline",
+    label: "Runbook Pipeline",
+    description: "Generate a runbook-style spec, derive output path, and render to selected format."
+  }
+];
 
 const formatLocalIsoDate = (date: Date) => {
   const year = date.getFullYear();
@@ -108,6 +143,30 @@ const isCapabilityMentioned = (goalText: string, capabilityId: string) => {
   return pattern.test(goalText);
 };
 
+const _escapeForLokiSearch = (value: string) => value.replaceAll('"', '\\"');
+
+const buildJaegerTraceHref = (traceId: string) => {
+  const trimmed = traceId.trim();
+  if (!trimmed || !jaegerUiUrl) {
+    return "";
+  }
+  return `${jaegerUiUrl}/trace/${encodeURIComponent(trimmed)}`;
+};
+
+const buildGrafanaLogsHref = (needle: string) => {
+  const trimmed = needle.trim();
+  if (!trimmed || !grafanaUiUrl) {
+    return "";
+  }
+  const expr = `{namespace="awe"} |= "${_escapeForLokiSearch(trimmed)}"`;
+  const left = {
+    datasource: grafanaLokiDatasource,
+    queries: [{ refId: "A", expr }],
+    range: { from: "now-6h", to: "now" },
+  };
+  return `${grafanaUiUrl}/explore?left=${encodeURIComponent(JSON.stringify(left))}`;
+};
+
 const defaultValueForSchemaType = (schemaProperty: Record<string, unknown> | null | undefined) => {
   const rawType = schemaProperty?.type;
   const schemaType = Array.isArray(rawType) ? String(rawType[0] || "") : String(rawType || "");
@@ -126,9 +185,104 @@ const defaultValueForSchemaType = (schemaProperty: Record<string, unknown> | nul
   return "";
 };
 
+const DEFAULT_DOCUMENT_ALLOWED_BLOCK_TYPES = [
+  "text",
+  "paragraph",
+  "heading",
+  "bullets",
+  "spacer",
+  "optional_paragraph",
+  "repeat"
+];
+
+const defaultJobContextTemplate = () => ({
+  instruction: "Generate a practical technical document",
+  topic: "Distributed systems latency best practices",
+  audience: "Senior Engineers, Architects",
+  tone: "practical",
+  today: formatLocalIsoDate(new Date()),
+  output_dir: "documents"
+});
+
+const topLevelFieldFromPath = (path: string) =>
+  path
+    .split(/[.[\]]/)[0]
+    .trim();
+
+const getCapabilityRequiredInputs = (item: CapabilityItem | undefined | null): string[] => {
+  if (!item) {
+    return [];
+  }
+  const explicit = (item.required_inputs || [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (explicit.length > 0) {
+    return Array.from(new Set(explicit));
+  }
+
+  const fromInputSchema =
+    item.input_schema &&
+    typeof item.input_schema === "object" &&
+    !Array.isArray(item.input_schema) &&
+    Array.isArray((item.input_schema as Record<string, unknown>).required)
+      ? ((item.input_schema as Record<string, unknown>).required as unknown[])
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      : [];
+  if (fromInputSchema.length > 0) {
+    return Array.from(new Set(fromInputSchema));
+  }
+
+  const requiredFromFields = (item.input_fields || [])
+    .filter((field) => field.required)
+    .map((field) => topLevelFieldFromPath(field.path))
+    .filter(Boolean);
+  return Array.from(new Set(requiredFromFields));
+};
+
 const templateForCapability = (item: CapabilityItem): Record<string, unknown> => {
+  const capabilityId = item.id.trim().toLowerCase();
+  if (capabilityId === "document.spec.generate") {
+    return {
+      ...defaultJobContextTemplate(),
+      allowed_block_types: DEFAULT_DOCUMENT_ALLOWED_BLOCK_TYPES
+    };
+  }
+  if (capabilityId === "document.spec.generate_iterative") {
+    return {
+      job: defaultJobContextTemplate(),
+      allowed_block_types: DEFAULT_DOCUMENT_ALLOWED_BLOCK_TYPES,
+      strict: true,
+      max_iterations: 3
+    };
+  }
+  if (capabilityId === "document.runbook.generate_iterative") {
+    return {
+      job: {
+        ...defaultJobContextTemplate(),
+        instruction: "Generate a runbook with clear operational steps",
+        topic: "Kubernetes production deployment with rollback and verification"
+      },
+      allowed_block_types: DEFAULT_DOCUMENT_ALLOWED_BLOCK_TYPES,
+      strict: true,
+      max_iterations: 3
+    };
+  }
+  if (capabilityId === "openapi.spec.generate_iterative") {
+    return {
+      job: {
+        instruction: "Generate an OpenAPI 3.1 specification",
+        topic: "REST API for document generation and artifact downloads",
+        audience: "Backend Engineers",
+        tone: "technical",
+        today: formatLocalIsoDate(new Date())
+      },
+      max_iterations: 3
+    };
+  }
+
   const template: Record<string, unknown> = {};
-  const required = item.required_inputs || [];
+  const required = getCapabilityRequiredInputs(item);
   const schemaProperties = (
     item.input_schema &&
     typeof item.input_schema === "object" &&
@@ -146,9 +300,190 @@ const templateForCapability = (item: CapabilityItem): Record<string, unknown> =>
       !Array.isArray(schemaProperties[field])
         ? (schemaProperties[field] as Record<string, unknown>)
         : undefined;
+    if (field === "job") {
+      template[field] = defaultJobContextTemplate();
+      return;
+    }
+    if (field === "allowed_block_types") {
+      template[field] = DEFAULT_DOCUMENT_ALLOWED_BLOCK_TYPES;
+      return;
+    }
     template[field] = defaultValueForSchemaType(property);
   });
   return template;
+};
+
+const capabilityInputSchemaProperties = (
+  item: CapabilityItem | undefined | null
+): Record<string, Record<string, unknown>> => {
+  if (
+    !item?.input_schema ||
+    typeof item.input_schema !== "object" ||
+    Array.isArray(item.input_schema)
+  ) {
+    return {};
+  }
+  const properties = (item.input_schema as Record<string, unknown>).properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(properties).filter(
+      ([, value]) => value && typeof value === "object" && !Array.isArray(value)
+    )
+  ) as Record<string, Record<string, unknown>>;
+};
+
+const schemaPropertyTypeLabel = (property: Record<string, unknown> | undefined) => {
+  if (!property) {
+    return "string";
+  }
+  const rawType = property.type;
+  if (Array.isArray(rawType)) {
+    return rawType.map((value) => String(value)).join(" | ") || "string";
+  }
+  if (typeof rawType === "string" && rawType.trim()) {
+    return rawType;
+  }
+  return "string";
+};
+
+const serializeContextInputForSchemaType = (value: unknown, schemaType: string) => {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  const normalizedType = schemaType.toLowerCase();
+  if (normalizedType.includes("string") && typeof value === "string") {
+    return value;
+  }
+  if (normalizedType.includes("object") || normalizedType.includes("array")) {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const parseContextInputForSchemaType = (raw: string, schemaType: string) => {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: true as const, clear: true as const };
+  }
+  const normalizedType = schemaType.toLowerCase();
+  if (normalizedType.includes("boolean")) {
+    const lowered = trimmed.toLowerCase();
+    if (lowered === "true") {
+      return { ok: true as const, value: true };
+    }
+    if (lowered === "false") {
+      return { ok: true as const, value: false };
+    }
+    return { ok: false as const, error: "Expected true or false." };
+  }
+  if (normalizedType.includes("integer")) {
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed)) {
+      return { ok: false as const, error: "Expected an integer value." };
+    }
+    return { ok: true as const, value: parsed };
+  }
+  if (normalizedType.includes("number")) {
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { ok: false as const, error: "Expected a numeric value." };
+    }
+    return { ok: true as const, value: parsed };
+  }
+  if (normalizedType.includes("object")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { ok: false as const, error: "Expected a JSON object." };
+      }
+      return { ok: true as const, value: parsed };
+    } catch {
+      return { ok: false as const, error: "Expected valid JSON object syntax." };
+    }
+  }
+  if (normalizedType.includes("array")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return { ok: false as const, error: "Expected a JSON array." };
+      }
+      return { ok: true as const, value: parsed };
+    } catch {
+      return { ok: false as const, error: "Expected valid JSON array syntax." };
+    }
+  }
+  if (normalizedType.includes("string")) {
+    return { ok: true as const, value: raw };
+  }
+  try {
+    return { ok: true as const, value: JSON.parse(raw) };
+  } catch {
+    return { ok: true as const, value: raw };
+  }
+};
+
+const outputPathSuggestionsForCapability = (
+  capabilityId: string,
+  preferredOutputPath?: string
+) => {
+  const candidates = new Set<string>();
+  const normalized = capabilityId.toLowerCase();
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      candidates.add(trimmed);
+    }
+  };
+  add(preferredOutputPath || "");
+  add(inferCapabilityOutputPath(capabilityId));
+  add("result");
+  if (normalized.includes("spec")) {
+    add("document_spec");
+    add("openapi_spec");
+    add("validation_report");
+  }
+  if (normalized.includes("docx") || normalized.includes("pdf") || normalized.includes("render")) {
+    add("path");
+  }
+  if (normalized.includes("filename") || normalized.includes("output.derive")) {
+    add("path");
+    add("output_path");
+  }
+  if (normalized.includes("resume")) {
+    add("tailored_resume");
+    add("tailored_text");
+  }
+  if (normalized.includes("json.transform")) {
+    add("result");
+    add("data");
+  }
+  if (normalized.includes("llm.text.generate")) {
+    add("text");
+  }
+  return [...candidates];
+};
+
+const outputPathSuggestionsForNode = (node: ComposerDraftNode | undefined) => {
+  if (!node) {
+    return ["result"];
+  }
+  return outputPathSuggestionsForCapability(node.capabilityId, node.outputPath);
 };
 
 const detectCapabilitiesInGoal = (goalText: string, catalogItems: CapabilityItem[]) => {
@@ -206,6 +541,26 @@ type Plan = {
   planner_version: string;
   tasks_summary: string;
   dag_edges: string[][];
+};
+
+type PlanCreateTaskPayload = {
+  name: string;
+  description: string;
+  instruction: string;
+  acceptance_criteria: string[];
+  expected_output_schema_ref: string;
+  deps: string[];
+  tool_requests: string[];
+  tool_inputs: Record<string, unknown>;
+  critic_required: boolean;
+  intent?: string;
+};
+
+type PlanCreatePayload = {
+  planner_version: string;
+  tasks_summary: string;
+  dag_edges: string[][];
+  tasks: PlanCreateTaskPayload[];
 };
 
 type Task = {
@@ -276,10 +631,57 @@ type TaskDlqEntry = {
   task_payload?: Record<string, unknown>;
 };
 
+type DebuggerTimelineEntry = {
+  stream_id: string;
+  type: string;
+  occurred_at: string;
+  job_id?: string | null;
+  task_id?: string | null;
+  status?: string | null;
+  attempts?: number | null;
+  max_attempts?: number | null;
+  worker_consumer?: string | null;
+  run_id?: string | null;
+  error?: string | null;
+};
+
+type DebuggerTaskEntry = {
+  task: Task;
+  resolved_tool_inputs: Record<string, unknown>;
+  tool_inputs_validation: Record<string, string>;
+  tool_inputs_resolved: boolean;
+  context_keys: string[];
+  timeline: DebuggerTimelineEntry[];
+  latest_result: Record<string, unknown>;
+  error: {
+    category: string;
+    code: string;
+    retryable: boolean;
+    message: string;
+    hint: string;
+  };
+};
+
+type JobDebuggerPayload = {
+  job_id: string;
+  job_status: string;
+  plan_id?: string | null;
+  generated_at: string;
+  timeline_events_scanned: number;
+  tasks: DebuggerTaskEntry[];
+};
+
 type CapabilityAdapter = {
   type: string;
   server_id: string;
   tool_name: string;
+};
+
+type CapabilitySchemaField = {
+  path: string;
+  type: string;
+  required: boolean;
+  description?: string | null;
 };
 
 type CapabilityItem = {
@@ -293,13 +695,23 @@ type CapabilityItem = {
   tags: string[];
   input_schema_ref?: string | null;
   input_schema?: Record<string, unknown> | null;
+  output_schema_ref?: string | null;
+  output_schema?: Record<string, unknown> | null;
+  input_fields?: CapabilitySchemaField[];
+  output_fields?: CapabilitySchemaField[];
   required_inputs?: string[];
   adapters?: CapabilityAdapter[];
+  planner_hints?: Record<string, unknown> | null;
 };
 
 type CapabilityCatalog = {
   mode: string;
   items: CapabilityItem[];
+};
+
+type PlanPreflightResponse = {
+  valid: boolean;
+  errors: Record<string, string>;
 };
 
 type CapabilitySubgroupSection = {
@@ -310,6 +722,245 @@ type CapabilitySubgroupSection = {
 type CapabilityGroupSection = {
   groupName: string;
   subgroups: CapabilitySubgroupSection[];
+};
+
+type ComposerInputBinding =
+  | {
+      kind: "step_output";
+      sourceNodeId: string;
+      sourcePath: string;
+      defaultValue?: string;
+    }
+  | {
+      kind: "literal";
+      value: string;
+    }
+  | {
+      kind: "context";
+      path: string;
+    }
+  | {
+      kind: "memory";
+      scope: "job" | "global";
+      name: string;
+      key?: string;
+    };
+
+type ComposerDraftNode = {
+  id: string;
+  taskName: string;
+  capabilityId: string;
+  outputPath: string;
+  inputBindings: Record<string, ComposerInputBinding>;
+};
+
+type ComposerDraftEdge = {
+  fromNodeId: string;
+  toNodeId: string;
+};
+
+type ComposerDraft = {
+  summary: string;
+  nodes: ComposerDraftNode[];
+  edges: ComposerDraftEdge[];
+};
+
+type GuidedStarterTemplateId = "document_pipeline" | "runbook_pipeline";
+
+type CanvasPoint = {
+  x: number;
+  y: number;
+};
+
+type ComposerCompileDiagnostic = {
+  code: string;
+  message: string;
+  field?: string;
+  node_id?: string;
+};
+
+type ComposerCompileResponse = {
+  valid: boolean;
+  diagnostics: {
+    valid: boolean;
+    errors: ComposerCompileDiagnostic[];
+    warnings: ComposerCompileDiagnostic[];
+  };
+  plan: PlanCreatePayload | null;
+  preflight_errors: Record<string, string>;
+};
+
+type ChainPreflightResult = {
+  valid: boolean;
+  localErrors: string[];
+  serverErrors: Record<string, string>;
+  checkedAt: string;
+};
+
+type ComposerValidationIssue = {
+  severity: "error" | "warning";
+  source: "local" | "compile" | "preflight";
+  code: string;
+  message: string;
+  field?: string;
+  nodeId?: string;
+};
+
+type ComposerIssueFocus = {
+  nodeId: string;
+  field?: string;
+};
+
+const _extractStepTaskName = (message: string): string | null => {
+  const stepMatch = message.match(/^Step\s+([^:]+):/);
+  if (!stepMatch || !stepMatch[1]) {
+    return null;
+  }
+  const raw = stepMatch[1].trim();
+  if (!raw) {
+    return null;
+  }
+  const indexMatch = raw.match(/^\d+\s+\((.+)\)$/);
+  if (indexMatch && indexMatch[1]) {
+    return indexMatch[1].trim() || null;
+  }
+  return raw;
+};
+
+const _extractFieldHint = (message: string): string | null => {
+  const quotedMatch = message.match(/'([^']+)'/);
+  if (quotedMatch && quotedMatch[1]) {
+    return quotedMatch[1].trim() || null;
+  }
+  return null;
+};
+
+const _findNodeIdByTaskName = (
+  taskName: string | null | undefined,
+  nodes: ComposerDraftNode[]
+): string | undefined => {
+  if (!taskName) {
+    return undefined;
+  }
+  const match = nodes.find((node) => node.taskName.trim() === taskName.trim());
+  return match?.id;
+};
+
+const collectComposerValidationIssues = (
+  preflightResult: ChainPreflightResult | null,
+  compileResult: ComposerCompileResponse | null,
+  nodes: ComposerDraftNode[]
+): ComposerValidationIssue[] => {
+  const issues: ComposerValidationIssue[] = [];
+  const push = (issue: ComposerValidationIssue) => issues.push(issue);
+
+  if (preflightResult) {
+    preflightResult.localErrors.forEach((message) => {
+      const taskName = _extractStepTaskName(message);
+      push({
+        severity: "error",
+        source: "local",
+        code: "local_check",
+        message,
+        nodeId: _findNodeIdByTaskName(taskName, nodes),
+        field: _extractFieldHint(message) || undefined
+      });
+    });
+    Object.entries(preflightResult.serverErrors).forEach(([field, message]) => {
+      const nodeId = _findNodeIdByTaskName(field, nodes);
+      push({
+        severity: "error",
+        source: "preflight",
+        code: "preflight_error",
+        field,
+        nodeId,
+        message
+      });
+    });
+  }
+
+  if (compileResult) {
+    compileResult.diagnostics.errors.forEach((diag) => {
+      push({
+        severity: "error",
+        source: "compile",
+        code: diag.code || "compile_error",
+        field: diag.field,
+        nodeId: diag.node_id,
+        message: diag.message
+      });
+    });
+    compileResult.diagnostics.warnings.forEach((diag) => {
+      push({
+        severity: "warning",
+        source: "compile",
+        code: diag.code || "compile_warning",
+        field: diag.field,
+        nodeId: diag.node_id,
+        message: diag.message
+      });
+    });
+  }
+
+  const dedupe = new Set<string>();
+  const deduped: ComposerValidationIssue[] = [];
+  issues.forEach((issue) => {
+    const key = `${issue.severity}|${issue.source}|${issue.code}|${issue.field || ""}|${
+      issue.nodeId || ""
+    }|${issue.message}`;
+    if (dedupe.has(key)) {
+      return;
+    }
+    dedupe.add(key);
+    deduped.push(issue);
+  });
+
+  const severityRank: Record<ComposerValidationIssue["severity"], number> = {
+    error: 0,
+    warning: 1
+  };
+  const sourceRank: Record<ComposerValidationIssue["source"], number> = {
+    local: 0,
+    compile: 1,
+    preflight: 2
+  };
+
+  deduped.sort((left, right) => {
+    const severityDiff = severityRank[left.severity] - severityRank[right.severity];
+    if (severityDiff !== 0) {
+      return severityDiff;
+    }
+    const sourceDiff = sourceRank[left.source] - sourceRank[right.source];
+    if (sourceDiff !== 0) {
+      return sourceDiff;
+    }
+    return left.message.localeCompare(right.message);
+  });
+
+  return deduped;
+};
+
+const buildSequentialComposerEdges = (nodes: ComposerDraftNode[]): ComposerDraftEdge[] =>
+  nodes.slice(1).map((node, index) => ({
+    fromNodeId: nodes[index].id,
+    toNodeId: node.id
+  }));
+
+const defaultDagNodePosition = (index: number): CanvasPoint => {
+  const columns = 4;
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  return {
+    x: DAG_CANVAS_PADDING + column * (DAG_CANVAS_NODE_WIDTH + 32),
+    y: DAG_CANVAS_PADDING + row * (DAG_CANVAS_NODE_HEIGHT + 24)
+  };
+};
+
+const isInteractiveCanvasTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return Boolean(target.closest("button,a,input,select,textarea,label"));
 };
 
 type TemplateVariable = {
@@ -330,6 +981,93 @@ type Template = {
   priority: number;
   builtIn?: boolean;
   variables?: TemplateVariable[];
+};
+
+const CHAINABLE_REQUIRED_FIELDS = new Set([
+  "document_spec",
+  "validation_report",
+  "errors",
+  "original_spec",
+  "data",
+  "path",
+  "text",
+  "content",
+  "openapi_spec",
+  "resume_doc_spec",
+  "coverletter_doc_spec",
+  "tailored_text",
+  "tailored_resume",
+  "resume_content"
+]);
+
+const isContextInputPresent = (value: unknown) => {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return true;
+};
+
+const inferCapabilityOutputPath = (capabilityId: string) => {
+  if (capabilityId.includes("output.derive")) {
+    return "path";
+  }
+  if (capabilityId.includes("spec.validate")) {
+    return "validation_report";
+  }
+  if (capabilityId.includes("spec")) {
+    if (capabilityId.includes("openapi")) {
+      return "openapi_spec";
+    }
+    return "document_spec";
+  }
+  if (capabilityId.includes("docx") || capabilityId.includes("pdf") || capabilityId.includes("render")) {
+    return "path";
+  }
+  if (capabilityId.includes("json.transform")) {
+    return "result";
+  }
+  if (capabilityId.includes("llm.text.generate")) {
+    return "text";
+  }
+  return "result";
+};
+
+const inferOutputExtensionForCapability = (capabilityId: string): string => {
+  const normalized = capabilityId.toLowerCase();
+  if (normalized.includes(".docx.")) {
+    return "docx";
+  }
+  if (normalized.includes(".pdf.")) {
+    return "pdf";
+  }
+  if (normalized.includes("write_text")) {
+    return "txt";
+  }
+  if (normalized.includes("write_content")) {
+    return "json";
+  }
+  return "txt";
+};
+
+const taskNameFromCapability = (capabilityId: string) => {
+  const cleaned = capabilityId.replace(/[^a-zA-Z0-9]+/g, " ").trim();
+  if (!cleaned) {
+    return "Task";
+  }
+  const pascal = cleaned
+    .split(/\s+/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join("");
+  return pascal || "Task";
 };
 
 const BUILT_IN_TEMPLATES: Template[] = [
@@ -970,6 +1708,7 @@ const statusColors: Record<string, { fill: string; stroke: string }> = {
 
 const truncate = (value: string, length: number) =>
   value.length > length ? `${value.slice(0, length - 3)}...` : value;
+const JOB_GOAL_PREVIEW_LENGTH = 280;
 
 const buildDagLayout = (tasks: Task[]): DagLayout => {
   const nodeWidth = 180;
@@ -1086,6 +1825,11 @@ export default function Home() {
   const selectedJobIdRef = useRef<string | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [jobDebugger, setJobDebugger] = useState<JobDebuggerPayload | null>(null);
+  const [jobDebuggerLoading, setJobDebuggerLoading] = useState(false);
+  const [jobDebuggerError, setJobDebuggerError] = useState<string | null>(null);
+  const [showDebugger, setShowDebugger] = useState(false);
+  const [debuggerActionNotice, setDebuggerActionNotice] = useState<string | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateName, setTemplateName] = useState("");
   const [templateError, setTemplateError] = useState<string | null>(null);
@@ -1114,6 +1858,7 @@ export default function Home() {
   const [showRecentEvents, setShowRecentEvents] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
   const [showAllJobs, setShowAllJobs] = useState(false);
+  const [expandedJobGoals, setExpandedJobGoals] = useState<Set<string>>(new Set());
   const [expandedTaskInputs, setExpandedTaskInputs] = useState<Set<string>>(new Set());
   const [expandedRecentEvents, setExpandedRecentEvents] = useState<Set<number>>(new Set());
   const [expandedMemoryGroups, setExpandedMemoryGroups] = useState<Set<string>>(new Set());
@@ -1143,6 +1888,7 @@ export default function Home() {
   const [collapsedCapabilitySubgroups, setCollapsedCapabilitySubgroups] = useState<Set<string>>(
     new Set()
   );
+  const capabilityCollapseInitializedRef = useRef(false);
   const [chainSourceTaskName, setChainSourceTaskName] = useState("GenerateSpec");
   const [chainSourceCapabilityId, setChainSourceCapabilityId] = useState("document.spec.generate");
   const [chainSourceOutputPath, setChainSourceOutputPath] = useState("document_spec");
@@ -1150,10 +1896,243 @@ export default function Home() {
   const [chainTargetCapabilityId, setChainTargetCapabilityId] = useState("document.docx.generate");
   const [chainTargetInputField, setChainTargetInputField] = useState("document_spec");
   const [chainDefaultValue, setChainDefaultValue] = useState("");
+  const [chainCapabilityQuery, setChainCapabilityQuery] = useState("");
+  const [llmCapabilityRecommendations, setLlmCapabilityRecommendations] = useState<
+    Array<{ id: string; reason: string; score: number; confidence?: number }>
+  >([]);
+  const [llmCapabilityRecommendationSource, setLlmCapabilityRecommendationSource] = useState<
+    "llm" | "heuristic" | "llm_fallback" | null
+  >(null);
+  const [llmCapabilityRecommendationWarning, setLlmCapabilityRecommendationWarning] = useState<
+    string | null
+  >(null);
+  const [llmCapabilityRecommendationLoading, setLlmCapabilityRecommendationLoading] = useState(false);
+  const [capabilityInputDrafts, setCapabilityInputDrafts] = useState<Record<string, string>>({});
+  const [composerDraft, setComposerDraft] = useState<ComposerDraft>({
+    summary: "Chain composer preflight",
+    nodes: [],
+    edges: []
+  });
+  const [composerNodePositions, setComposerNodePositions] = useState<Record<string, CanvasPoint>>(
+    {}
+  );
+  const [dagEdgeDraftSourceNodeId, setDagEdgeDraftSourceNodeId] = useState<string | null>(null);
+  const [selectedDagNodeId, setSelectedDagNodeId] = useState<string | null>(null);
+  const [hoveredDagEdgeKey, setHoveredDagEdgeKey] = useState<string | null>(null);
+  const [dagConnectorDrag, setDagConnectorDrag] = useState<{
+    sourceNodeId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [dagConnectorHoverTargetNodeId, setDagConnectorHoverTargetNodeId] = useState<string | null>(
+    null
+  );
+  const [dagCanvasDraggingNodeId, setDagCanvasDraggingNodeId] = useState<string | null>(null);
+  const dagCanvasDragOffsetRef = useRef<CanvasPoint>({ x: 0, y: 0 });
+  const inspectorBindingRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const dagCanvasViewportRef = useRef<HTMLDivElement | null>(null);
+  const dagCanvasRef = useRef<HTMLDivElement | null>(null);
+  const [collapsedVisualChainNodeIds, setCollapsedVisualChainNodeIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [draggingVisualChainNodeId, setDraggingVisualChainNodeId] = useState<string | null>(null);
+  const [dragOverVisualChainNodeId, setDragOverVisualChainNodeId] = useState<string | null>(null);
+  const [visualChainDraftCapability, setVisualChainDraftCapability] = useState(
+    "document.spec.generate"
+  );
+  const [guidedStarterTemplate, setGuidedStarterTemplate] =
+    useState<GuidedStarterTemplateId>("document_pipeline");
+  const [guidedStarterFormat, setGuidedStarterFormat] = useState<"docx" | "pdf">("docx");
+  const [guidedStarterUseIterative, setGuidedStarterUseIterative] = useState(false);
+  const [guidedStarterStrict, setGuidedStarterStrict] = useState(true);
+  const [guidedStarterMaxIterations, setGuidedStarterMaxIterations] = useState("3");
   const [chainComposerNotice, setChainComposerNotice] = useState<string | null>(null);
+  const [chainPreflightLoading, setChainPreflightLoading] = useState(false);
+  const [chainPreflightResult, setChainPreflightResult] = useState<ChainPreflightResult | null>(
+    null
+  );
+  const [composerCompileResult, setComposerCompileResult] = useState<ComposerCompileResponse | null>(
+    null
+  );
+  const [activeComposerIssueFocus, setActiveComposerIssueFocus] = useState<ComposerIssueFocus | null>(
+    null
+  );
+  const [composerCompileLoading, setComposerCompileLoading] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [hasSetInitialSidebar, setHasSetInitialSidebar] = useState(false);
   const devToolsEnabled = process.env.NEXT_PUBLIC_DEV_TOOLS === "true";
+
+  const visualChainNodes = composerDraft.nodes;
+  const composerDraftEdges = composerDraft.edges;
+  const normalizeComposerEdges = (
+    nodes: ComposerDraftNode[],
+    edges: ComposerDraftEdge[]
+  ): ComposerDraftEdge[] => {
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const dedupe = new Set<string>();
+    const normalized: ComposerDraftEdge[] = [];
+    edges.forEach((edge) => {
+      const fromNodeId = String(edge.fromNodeId || "").trim();
+      const toNodeId = String(edge.toNodeId || "").trim();
+      if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) {
+        return;
+      }
+      if (!nodeIds.has(fromNodeId) || !nodeIds.has(toNodeId)) {
+        return;
+      }
+      const key = `${fromNodeId}->${toNodeId}`;
+      if (dedupe.has(key)) {
+        return;
+      }
+      dedupe.add(key);
+      normalized.push({ fromNodeId, toNodeId });
+    });
+    return normalized;
+  };
+  const setVisualChainNodes = (
+    next:
+      | ComposerDraftNode[]
+      | ((prev: ComposerDraftNode[]) => ComposerDraftNode[])
+  ) => {
+    setComposerDraft((prev) => {
+      const nextNodes =
+        typeof next === "function"
+          ? (next as (nodes: ComposerDraftNode[]) => ComposerDraftNode[])(prev.nodes)
+          : next;
+      return {
+        ...prev,
+        nodes: nextNodes,
+        edges: normalizeComposerEdges(nextNodes, prev.edges)
+      };
+    });
+  };
+
+  useEffect(() => {
+    setComposerNodePositions((prev) => {
+      const next: Record<string, CanvasPoint> = {};
+      visualChainNodes.forEach((node, index) => {
+        next[node.id] = prev[node.id] || defaultDagNodePosition(index);
+      });
+      return next;
+    });
+  }, [visualChainNodes]);
+
+  useEffect(() => {
+    if (!dagEdgeDraftSourceNodeId) {
+      return;
+    }
+    if (!visualChainNodes.some((node) => node.id === dagEdgeDraftSourceNodeId)) {
+      setDagEdgeDraftSourceNodeId(null);
+    }
+  }, [dagEdgeDraftSourceNodeId, visualChainNodes]);
+
+  useEffect(() => {
+    if (!dagConnectorDrag) {
+      return;
+    }
+    if (!visualChainNodes.some((node) => node.id === dagConnectorDrag.sourceNodeId)) {
+      setDagConnectorDrag(null);
+      setDagConnectorHoverTargetNodeId(null);
+    }
+  }, [dagConnectorDrag, visualChainNodes]);
+
+  useEffect(() => {
+    if (!selectedDagNodeId) {
+      return;
+    }
+    if (!visualChainNodes.some((node) => node.id === selectedDagNodeId)) {
+      setSelectedDagNodeId(null);
+    }
+  }, [selectedDagNodeId, visualChainNodes]);
+
+  useEffect(() => {
+    if (!hoveredDagEdgeKey) {
+      return;
+    }
+    const hasEdge = composerDraftEdges.some(
+      (edge) => `${edge.fromNodeId}->${edge.toNodeId}` === hoveredDagEdgeKey
+    );
+    if (!hasEdge) {
+      setHoveredDagEdgeKey(null);
+    }
+  }, [composerDraftEdges, hoveredDagEdgeKey]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDagEdgeDraftSourceNodeId(null);
+        setHoveredDagEdgeKey(null);
+        setDagConnectorDrag(null);
+        setDagConnectorHoverTargetNodeId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dagCanvasDraggingNodeId && !dagConnectorDrag) {
+      return;
+    }
+    const handleMouseMove = (event: MouseEvent) => {
+      const canvas = dagCanvasRef.current;
+      if (!canvas) {
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      if (dagCanvasDraggingNodeId) {
+        const rawX = event.clientX - rect.left - dagCanvasDragOffsetRef.current.x;
+        const rawY = event.clientY - rect.top - dagCanvasDragOffsetRef.current.y;
+        const maxX = Math.max(
+          DAG_CANVAS_PADDING,
+          rect.width - DAG_CANVAS_NODE_WIDTH - DAG_CANVAS_PADDING
+        );
+        const maxY = Math.max(
+          DAG_CANVAS_PADDING,
+          rect.height - DAG_CANVAS_NODE_HEIGHT - DAG_CANVAS_PADDING
+        );
+        const snappedX = Math.round(rawX / DAG_CANVAS_SNAP) * DAG_CANVAS_SNAP;
+        const snappedY = Math.round(rawY / DAG_CANVAS_SNAP) * DAG_CANVAS_SNAP;
+        const x = Math.max(DAG_CANVAS_PADDING, Math.min(maxX, snappedX));
+        const y = Math.max(DAG_CANVAS_PADDING, Math.min(maxY, snappedY));
+        setComposerNodePositions((prev) => ({
+          ...prev,
+          [dagCanvasDraggingNodeId]: { x, y }
+        }));
+      }
+      if (dagConnectorDrag) {
+        const x = Math.max(0, event.clientX - rect.left);
+        const y = Math.max(0, event.clientY - rect.top);
+        setDagConnectorDrag((prev) =>
+          prev
+            ? {
+                ...prev,
+                x,
+                y
+              }
+            : prev
+        );
+      }
+    };
+    const handleMouseUp = () => {
+      if (dagCanvasDraggingNodeId) {
+        setDagCanvasDraggingNodeId(null);
+      }
+      if (dagConnectorDrag) {
+        setDagConnectorDrag(null);
+        setDagConnectorHoverTargetNodeId(null);
+        setDagEdgeDraftSourceNodeId(null);
+      }
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [dagCanvasDraggingNodeId, dagConnectorDrag]);
 
   const selectedJob = selectedJobId
     ? jobs.find((job) => job.id === selectedJobId) || null
@@ -1196,7 +2175,7 @@ export default function Home() {
 
   const loadCapabilities = async () => {
     try {
-      const response = await fetch(`${apiUrl}/capabilities`);
+      const response = await fetch(`${apiUrl}/capabilities?with_schemas=true`);
       if (!response.ok) {
         const text = await response.text();
         setCapabilityError(
@@ -1218,7 +2197,7 @@ export default function Home() {
         normalized.includes("networkerror")
       ) {
         setCapabilityError(
-          `Network error while loading capabilities from ${apiUrl}/capabilities. ` +
+          `Network error while loading capabilities from ${apiUrl}/capabilities?with_schemas=true. ` +
             "Confirm API port-forward is active: kubectl port-forward -n awe svc/api 18000:8000"
         );
       } else {
@@ -1231,6 +2210,154 @@ export default function Home() {
     const items = capabilityCatalog?.items || [];
     return [...items].sort((a, b) => a.id.localeCompare(b.id));
   }, [capabilityCatalog]);
+
+  const capabilityById = useMemo(
+    () => new Map(availableCapabilities.map((item) => [item.id, item])),
+    [availableCapabilities]
+  );
+
+  const chainCapabilityOptions = useMemo(() => {
+    if (availableCapabilities.length > 0) {
+      return availableCapabilities.map((item) => ({
+        id: item.id,
+        label: item.id,
+        description: item.description || "",
+        group: item.group || "",
+        subgroup: item.subgroup || "",
+        requiredInputs: getCapabilityRequiredInputs(item)
+      }));
+    }
+    const fallback = Array.from(
+      new Set(
+        visualChainNodes
+          .map((node) => node.capabilityId.trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+    return fallback.map((id) => ({
+      id,
+      label: `${id} (cached)`,
+      description: "",
+      group: "",
+      subgroup: "",
+      requiredInputs: []
+    }));
+  }, [availableCapabilities, visualChainNodes]);
+
+  const filteredChainCapabilityOptions = useMemo(() => {
+    const query = chainCapabilityQuery.trim().toLowerCase();
+    if (!query) {
+      return chainCapabilityOptions;
+    }
+    return chainCapabilityOptions.filter((item) =>
+      [item.id, item.label, item.description, item.group, item.subgroup]
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [chainCapabilityOptions, chainCapabilityQuery]);
+
+  const chainCapabilityRecommendations = useMemo(() => {
+    if (chainCapabilityOptions.length === 0) {
+      return [] as Array<{ id: string; reason: string; score: number }>;
+    }
+    const context = readContextObject();
+    const lastNode = visualChainNodes.length > 0 ? visualChainNodes[visualChainNodes.length - 1] : null;
+
+    const scored = chainCapabilityOptions.map((item) => {
+      let score = 0;
+      const reasons: string[] = [];
+      if (isCapabilityMentioned(goal, item.id)) {
+        score += 100;
+        reasons.push("mentioned in goal");
+      }
+      if (visualChainNodes.some((node) => node.capabilityId === item.id)) {
+        score -= 6;
+      }
+      const contextCovered = item.requiredInputs.filter((field) => isContextInputPresent(context[field]));
+      if (contextCovered.length > 0) {
+        score += Math.min(24, contextCovered.length * 8);
+        reasons.push(`context covers ${contextCovered.length} required input(s)`);
+      }
+      if (item.requiredInputs.length === 0) {
+        score += 4;
+      }
+
+      if (lastNode) {
+        const lastOutput = lastNode.outputPath || inferCapabilityOutputPath(lastNode.capabilityId);
+        if (item.requiredInputs.includes(lastOutput)) {
+          score += 32;
+          reasons.push(`uses previous output '${lastOutput}'`);
+        }
+        if (
+          item.id === "document.output.derive" &&
+          (lastNode.capabilityId.startsWith("document.spec.") ||
+            lastNode.capabilityId.startsWith("document.runbook."))
+        ) {
+          score += 30;
+          reasons.push("common next step after document spec generation");
+        }
+        if (
+          (item.id === "document.docx.generate" || item.id === "document.pdf.generate") &&
+          lastNode.capabilityId === "document.output.derive"
+        ) {
+          score += 36;
+          reasons.push("render after derive output path");
+        }
+      }
+
+      if (reasons.length === 0) {
+        reasons.push("general match");
+      }
+      return {
+        id: item.id,
+        score,
+        reason: reasons.join(" • ")
+      };
+    });
+
+    return scored
+      .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
+      .slice(0, 6);
+  }, [chainCapabilityOptions, goal, visualChainNodes, contextJson]);
+
+  const displayedCapabilityRecommendations = useMemo(() => {
+    if (llmCapabilityRecommendations.length === 0) {
+      return chainCapabilityRecommendations;
+    }
+    const validIds = new Set(chainCapabilityOptions.map((item) => item.id));
+    const filtered = llmCapabilityRecommendations.filter((item) => validIds.has(item.id));
+    return filtered.length > 0 ? filtered : chainCapabilityRecommendations;
+  }, [chainCapabilityOptions, chainCapabilityRecommendations, llmCapabilityRecommendations]);
+
+  useEffect(() => {
+    if (!visualChainDraftCapability && chainCapabilityOptions.length > 0) {
+      setVisualChainDraftCapability(chainCapabilityOptions[0].id);
+      return;
+    }
+    if (
+      visualChainDraftCapability &&
+      chainCapabilityOptions.length > 0 &&
+      !chainCapabilityOptions.some((item) => item.id === visualChainDraftCapability)
+    ) {
+      setVisualChainDraftCapability(chainCapabilityOptions[0].id);
+    }
+  }, [chainCapabilityOptions, visualChainDraftCapability]);
+
+  useEffect(() => {
+    if (filteredChainCapabilityOptions.length === 0) {
+      return;
+    }
+    if (!filteredChainCapabilityOptions.some((item) => item.id === visualChainDraftCapability)) {
+      setVisualChainDraftCapability(filteredChainCapabilityOptions[0].id);
+    }
+  }, [filteredChainCapabilityOptions, visualChainDraftCapability]);
+
+  useEffect(() => {
+    setLlmCapabilityRecommendations([]);
+    setLlmCapabilityRecommendationSource(null);
+    setLlmCapabilityRecommendationWarning(null);
+  }, [goal, contextJson, visualChainNodes, composerDraftEdges]);
 
   const capabilitiesByGroup = useMemo(() => {
     const grouped = new Map<string, Map<string, CapabilityItem[]>>();
@@ -1258,6 +2385,21 @@ export default function Home() {
 
     return sections.sort((a, b) => a.groupName.localeCompare(b.groupName));
   }, [availableCapabilities]);
+
+  useEffect(() => {
+    if (capabilityCollapseInitializedRef.current || capabilitiesByGroup.length === 0) {
+      return;
+    }
+    setCollapsedCapabilityGroups(new Set(capabilitiesByGroup.map((group) => group.groupName)));
+    setCollapsedCapabilitySubgroups(
+      new Set(
+        capabilitiesByGroup.flatMap((group) =>
+          group.subgroups.map((subgroup) => `${group.groupName}::${subgroup.subgroupName}`)
+        )
+      )
+    );
+    capabilityCollapseInitializedRef.current = true;
+  }, [capabilitiesByGroup]);
 
   const toggleCapabilityGroup = (groupName: string) => {
     setCollapsedCapabilityGroups((prev) => {
@@ -1341,11 +2483,13 @@ export default function Home() {
   };
 
   const fillContextFromDetectedCapabilities = () => {
-    if (detectedCapabilities.length === 0) {
-      setComposeNotice("No capabilities detected in Goal. Add capability IDs first.");
+    if (requiredContextCapabilities.length === 0) {
+      setComposeNotice(
+        "No required capabilities found. Mention capability IDs in Goal or add chain steps first."
+      );
       return;
     }
-    const merged = mergeContextWithCapabilityTemplates(contextJson, detectedCapabilities);
+    const merged = mergeContextWithCapabilityTemplates(contextJson, requiredContextCapabilities);
     if (merged.invalidContext) {
       setComposeNotice("Context JSON is invalid. Fix it before auto-filling required fields.");
       return;
@@ -1353,12 +2497,1794 @@ export default function Home() {
     setContextJson(merged.nextContext);
     if (merged.mergedFieldCount > 0) {
       setComposeNotice(
-        `Auto-filled ${merged.mergedFieldCount} missing Context JSON field(s) from detected capabilities.`
+        `Auto-filled ${merged.mergedFieldCount} missing Context JSON field(s) from required capabilities.`
       );
     } else {
-      setComposeNotice("No missing starter fields were found for detected capabilities.");
+      setComposeNotice("No missing starter fields were found for required capabilities.");
     }
   };
+
+  function readContextObject() {
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return {} as Record<string, unknown>;
+    }
+    return {} as Record<string, unknown>;
+  }
+
+  const recommendCapabilitiesWithLlm = async () => {
+    setLlmCapabilityRecommendationLoading(true);
+    setLlmCapabilityRecommendationWarning(null);
+    try {
+      const response = await fetch(`${apiUrl}/composer/recommend_capabilities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          goal,
+          context_json: readContextObject(),
+          draft: composerDraft,
+          max_results: 6,
+          use_llm: true
+        })
+      });
+      const body = (await response.json()) as {
+        source?: "llm" | "heuristic" | "llm_fallback";
+        warning?: string;
+        recommendations?: Array<{
+          id?: string;
+          reason?: string;
+          score?: number;
+          confidence?: number;
+        }>;
+      };
+      if (!response.ok) {
+        const detail =
+          body && typeof body === "object" && "detail" in body
+            ? String((body as { detail?: unknown }).detail || "")
+            : "";
+        setLlmCapabilityRecommendationWarning(
+          detail || `Recommendation request failed (${response.status}).`
+        );
+        return;
+      }
+      const normalized = (body.recommendations || [])
+        .map((entry) => ({
+          id: String(entry.id || "").trim(),
+          reason: String(entry.reason || "recommended"),
+          score: Number.isFinite(Number(entry.score)) ? Number(entry.score) : 0,
+          confidence: Number.isFinite(Number(entry.confidence))
+            ? Number(entry.confidence)
+            : undefined
+        }))
+        .filter((entry) => Boolean(entry.id));
+      setLlmCapabilityRecommendations(normalized);
+      setLlmCapabilityRecommendationSource(body.source || "heuristic");
+      setLlmCapabilityRecommendationWarning(body.warning || null);
+      if (normalized.length > 0) {
+        setVisualChainDraftCapability(normalized[0].id);
+        setChainComposerNotice(
+          body.source === "llm"
+            ? "LLM recommendations ready."
+            : "Using fallback recommendations."
+        );
+      }
+    } catch (error) {
+      setLlmCapabilityRecommendationWarning(
+        error instanceof Error ? error.message : "Recommendation request failed."
+      );
+    } finally {
+      setLlmCapabilityRecommendationLoading(false);
+    }
+  };
+
+  const contextFieldDraftKey = (capabilityId: string, field: string) =>
+    `${capabilityId}::${field}`;
+
+  const getCapabilityInputDraftValue = (
+    capabilityId: string,
+    field: string,
+    schemaType: string
+  ) => {
+    const key = contextFieldDraftKey(capabilityId, field);
+    if (Object.prototype.hasOwnProperty.call(capabilityInputDrafts, key)) {
+      return capabilityInputDrafts[key] || "";
+    }
+    const context = readContextObject();
+    return serializeContextInputForSchemaType(context[field], schemaType);
+  };
+
+  const setCapabilityInputDraftValue = (capabilityId: string, field: string, value: string) => {
+    const key = contextFieldDraftKey(capabilityId, field);
+    setCapabilityInputDrafts((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const clearCapabilityInputField = (capabilityId: string, field: string) => {
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setComposeNotice("Context JSON must be an object before clearing fields.");
+        return;
+      }
+      const next = { ...(parsed as Record<string, unknown>) };
+      delete next[field];
+      setContextJson(JSON.stringify(next, null, 2));
+      setComposeNotice(`Cleared Context JSON field '${field}'.`);
+      const key = contextFieldDraftKey(capabilityId, field);
+      setCapabilityInputDrafts((prev) => {
+        const nextDrafts = { ...prev };
+        delete nextDrafts[key];
+        return nextDrafts;
+      });
+    } catch {
+      setComposeNotice("Context JSON is invalid. Fix it before clearing fields.");
+    }
+  };
+
+  const applyCapabilityInputDraft = (
+    capabilityId: string,
+    field: string,
+    schemaType: string
+  ) => {
+    const rawValue = getCapabilityInputDraftValue(capabilityId, field, schemaType);
+    const parsedValue = parseContextInputForSchemaType(rawValue, schemaType);
+    if (!parsedValue.ok) {
+      setComposeNotice(`Field '${field}': ${parsedValue.error}`);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setComposeNotice("Context JSON must be an object before applying field updates.");
+        return;
+      }
+      const next = { ...(parsed as Record<string, unknown>) };
+      if (parsedValue.clear) {
+        delete next[field];
+      } else {
+        next[field] = parsedValue.value;
+      }
+      setContextJson(JSON.stringify(next, null, 2));
+      const key = contextFieldDraftKey(capabilityId, field);
+      setCapabilityInputDrafts((prev) => {
+        const nextDrafts = { ...prev };
+        delete nextDrafts[key];
+        return nextDrafts;
+      });
+      setComposeNotice(
+        parsedValue.clear
+          ? `Cleared Context JSON field '${field}'.`
+          : `Updated Context JSON field '${field}'.`
+      );
+    } catch {
+      setComposeNotice("Context JSON is invalid. Fix it before applying field updates.");
+    }
+  };
+
+  const uniqueTaskName = (
+    baseName: string,
+    nodes: ComposerDraftNode[],
+    skipNodeId?: string
+  ) => {
+    const cleaned = baseName.trim() || "Task";
+    const existing = new Set(
+      nodes.filter((node) => node.id !== skipNodeId).map((node) => node.taskName.trim())
+    );
+    if (!existing.has(cleaned)) {
+      return cleaned;
+    }
+    let suffix = 2;
+    let candidate = `${cleaned}${suffix}`;
+    while (existing.has(candidate)) {
+      suffix += 1;
+      candidate = `${cleaned}${suffix}`;
+    }
+    return candidate;
+  };
+
+  const normalizeVisualChainBindings = (nodes: ComposerDraftNode[]) => {
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    return nodes.map((node) => {
+      const nextBindings: Record<string, ComposerInputBinding> = {};
+      Object.entries(node.inputBindings).forEach(([field, binding]) => {
+        if (binding.kind === "step_output") {
+          if (!nodeIds.has(binding.sourceNodeId) || binding.sourceNodeId === node.id) {
+            return;
+          }
+        }
+        nextBindings[field] = binding;
+      });
+      return {
+        ...node,
+        inputBindings: nextBindings
+      };
+    });
+  };
+
+  const addCapabilityNodeToVisualChain = (capabilityId: string) => {
+    const capability = capabilityById.get(capabilityId);
+    const context = readContextObject();
+    setComposerDraft((prev) => {
+      const baseTaskName = taskNameFromCapability(capabilityId);
+      const taskName = uniqueTaskName(baseTaskName, prev.nodes);
+      const nodeId = `chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const previousNode = prev.nodes.length > 0 ? prev.nodes[prev.nodes.length - 1] : null;
+      const inputBindings: Record<string, ComposerInputBinding> = {};
+      const requiredInputs = getCapabilityRequiredInputs(capability);
+      requiredInputs.forEach((field) => {
+        if (!CHAINABLE_REQUIRED_FIELDS.has(field)) {
+          return;
+        }
+        if (isContextInputPresent(context[field])) {
+          return;
+        }
+        if (!previousNode) {
+          return;
+        }
+        inputBindings[field] = {
+          kind: "step_output",
+          sourceNodeId: previousNode.id,
+          sourcePath: previousNode.outputPath || "result"
+        };
+      });
+      const nextNodes = [
+        ...prev.nodes,
+        {
+          id: nodeId,
+          taskName,
+          capabilityId,
+          outputPath: inferCapabilityOutputPath(capabilityId),
+          inputBindings
+        }
+      ];
+      const nextEdges = previousNode
+        ? [...prev.edges, { fromNodeId: previousNode.id, toNodeId: nodeId }]
+        : prev.edges;
+      return {
+        ...prev,
+        nodes: nextNodes,
+        edges: normalizeComposerEdges(nextNodes, nextEdges)
+      };
+    });
+    setChainComposerNotice(`Added ${capabilityId} to visual chain builder.`);
+  };
+
+  const buildDeriveOutputBindings = (
+    context: Record<string, unknown>,
+    targetCapabilityId: string,
+    documentTypeHint: string
+  ): Record<string, ComposerInputBinding> => {
+    const extension = inferOutputExtensionForCapability(targetCapabilityId);
+    const topicValue =
+      typeof context.topic === "string" && context.topic.trim().length > 0
+        ? context.topic.trim()
+        : "generated_document";
+    const outputDirValue =
+      typeof context.output_dir === "string" && context.output_dir.trim().length > 0
+        ? context.output_dir.trim()
+        : "documents";
+    const todayValue =
+      typeof context.today === "string" && context.today.trim().length > 0
+        ? context.today.trim()
+        : formatLocalIsoDate(new Date());
+
+    return {
+      topic: { kind: "literal", value: topicValue },
+      output_dir: { kind: "literal", value: outputDirValue },
+      document_type: { kind: "literal", value: documentTypeHint || "document" },
+      output_extension: { kind: "literal", value: extension },
+      today: { kind: "literal", value: todayValue }
+    };
+  };
+
+  const parseGuidedStarterIterations = () => {
+    const raw = Number(guidedStarterMaxIterations);
+    if (!Number.isFinite(raw)) {
+      return 3;
+    }
+    return Math.max(1, Math.min(10, Math.trunc(raw)));
+  };
+
+  const applyGuidedStarterTemplate = () => {
+    const useIterativeGenerator =
+      guidedStarterTemplate === "runbook_pipeline" || guidedStarterUseIterative;
+    const generatorCapability =
+      guidedStarterTemplate === "runbook_pipeline"
+        ? "document.runbook.generate_iterative"
+        : useIterativeGenerator
+          ? "document.spec.generate_iterative"
+          : "document.spec.generate";
+    const starterSequence =
+      [
+        generatorCapability,
+        "document.output.derive",
+        guidedStarterFormat === "pdf" ? "document.pdf.generate" : "document.docx.generate"
+      ];
+
+    const missing = starterSequence.filter((capabilityId) => !capabilityById.has(capabilityId));
+    if (missing.length > 0) {
+      setChainComposerNotice(
+        `Starter template unavailable. Missing capabilities: ${missing.join(", ")}`
+      );
+      return;
+    }
+
+    const capabilityItems = starterSequence
+      .map((id) => capabilityById.get(id))
+      .filter((item): item is CapabilityItem => Boolean(item));
+    const merged = mergeContextWithCapabilityTemplates(contextJson, capabilityItems);
+    const context = merged.invalidContext
+      ? readContextObject()
+      : (JSON.parse(merged.nextContext || "{}") as Record<string, unknown>);
+    if (useIterativeGenerator) {
+      context.strict = guidedStarterStrict;
+      context.max_iterations = parseGuidedStarterIterations();
+    }
+    if (!merged.invalidContext) {
+      setContextJson(JSON.stringify(context, null, 2));
+    }
+
+    setComposerDraft(() => {
+      const nodes: ComposerDraftNode[] = [];
+      starterSequence.forEach((capabilityId) => {
+        const previousNode = nodes.length > 0 ? nodes[nodes.length - 1] : null;
+        const nodeId = `chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const taskName = uniqueTaskName(taskNameFromCapability(capabilityId), nodes);
+        const inputBindings: Record<string, ComposerInputBinding> = {};
+        const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(capabilityId));
+
+        if (capabilityId === "document.output.derive") {
+          Object.assign(
+            inputBindings,
+            buildDeriveOutputBindings(
+              context,
+              guidedStarterFormat === "pdf" ? "document.pdf.generate" : "document.docx.generate",
+              guidedStarterTemplate === "runbook_pipeline" ? "runbook" : "document"
+            )
+          );
+        }
+        requiredInputs.forEach((field) => {
+          if (inputBindings[field]) {
+            return;
+          }
+          if (!CHAINABLE_REQUIRED_FIELDS.has(field)) {
+            return;
+          }
+          if (isContextInputPresent(context[field])) {
+            return;
+          }
+          if (!previousNode) {
+            return;
+          }
+          inputBindings[field] = {
+            kind: "step_output",
+            sourceNodeId: previousNode.id,
+            sourcePath: previousNode.outputPath || "result"
+          };
+        });
+
+        if (
+          (capabilityId === "document.docx.generate" || capabilityId === "document.pdf.generate") &&
+          !inputBindings.path
+        ) {
+          const deriveNode = [...nodes].reverse().find((node) => node.capabilityId === "document.output.derive");
+          if (deriveNode) {
+            inputBindings.path = {
+              kind: "step_output",
+              sourceNodeId: deriveNode.id,
+              sourcePath: "path"
+            };
+          }
+        }
+
+        nodes.push({
+          id: nodeId,
+          taskName,
+          capabilityId,
+          outputPath: inferCapabilityOutputPath(capabilityId),
+          inputBindings
+        });
+      });
+
+      return {
+        summary:
+          guidedStarterTemplate === "runbook_pipeline"
+            ? "Guided starter: Runbook pipeline"
+            : "Guided starter: Document pipeline",
+        nodes,
+        edges: buildSequentialComposerEdges(nodes)
+      };
+    });
+    setComposerNodePositions({});
+    setCollapsedVisualChainNodeIds(new Set());
+    setSelectedDagNodeId(null);
+    setChainComposerNotice(
+      `Guided starter applied (${guidedStarterTemplate}, ${guidedStarterFormat.toUpperCase()}, iterative=${useIterativeGenerator ? "on" : "off"}).`
+    );
+    if (!goal.trim()) {
+      setGoal(
+        guidedStarterTemplate === "runbook_pipeline"
+          ? "Generate an operational runbook and render it to a downloadable document."
+          : "Generate a practical technical document and render it to a downloadable document."
+      );
+    }
+  };
+
+  const insertDeriveOutputPathStepForNode = (nodeId: string) => {
+    const context = readContextObject();
+    setComposerDraft((prev) => {
+      const targetIndex = prev.nodes.findIndex((node) => node.id === nodeId);
+      if (targetIndex < 0) {
+        return prev;
+      }
+      const targetNode = prev.nodes[targetIndex];
+      if (targetNode.capabilityId === "document.output.derive") {
+        return prev;
+      }
+
+      const deriveNodeId = `chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const deriveNode: ComposerDraftNode = {
+        id: deriveNodeId,
+        taskName: uniqueTaskName("DeriveOutputPath", prev.nodes),
+        capabilityId: "document.output.derive",
+        outputPath: "path",
+        inputBindings: buildDeriveOutputBindings(
+          context,
+          targetNode.capabilityId,
+          targetNode.capabilityId.includes("runbook") ? "runbook" : "document"
+        )
+      };
+
+      const updatedTargetNode: ComposerDraftNode = {
+        ...targetNode,
+        inputBindings: {
+          ...targetNode.inputBindings,
+          path: {
+            kind: "step_output",
+            sourceNodeId: deriveNodeId,
+            sourcePath: "path"
+          }
+        }
+      };
+
+      const nextNodes = [
+        ...prev.nodes.slice(0, targetIndex),
+        deriveNode,
+        updatedTargetNode,
+        ...prev.nodes.slice(targetIndex + 1)
+      ];
+      const nextEdges = normalizeComposerEdges(nextNodes, [
+        ...prev.edges,
+        { fromNodeId: deriveNodeId, toNodeId: targetNode.id }
+      ]);
+
+      return {
+        ...prev,
+        nodes: nextNodes,
+        edges: nextEdges
+      };
+    });
+    setSelectedDagNodeId(nodeId);
+    setChainComposerNotice("Inserted derive-output-path step and wired target path input.");
+  };
+
+  const updateVisualChainNode = (
+    nodeId: string,
+    patch: Partial<Pick<ComposerDraftNode, "taskName" | "capabilityId" | "outputPath">>
+  ) => {
+    setVisualChainNodes((prev) => {
+      const current = prev.find((node) => node.id === nodeId);
+      if (!current) {
+        return prev;
+      }
+      return prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const nextTaskName =
+          patch.taskName !== undefined
+            ? uniqueTaskName(patch.taskName, prev, nodeId)
+            : node.taskName;
+        const nextCapabilityId = patch.capabilityId ?? node.capabilityId;
+        let nextOutputPath = patch.outputPath ?? node.outputPath;
+        if (patch.capabilityId && patch.capabilityId !== node.capabilityId && !patch.outputPath) {
+          nextOutputPath = inferCapabilityOutputPath(patch.capabilityId);
+        }
+        return {
+          ...node,
+          taskName: nextTaskName,
+          capabilityId: nextCapabilityId,
+          outputPath: nextOutputPath
+        };
+      });
+    });
+  };
+
+  const removeVisualChainNode = (nodeId: string) => {
+    setVisualChainNodes((prev) => {
+      const next = prev.filter((node) => node.id !== nodeId);
+      return next.map((node) => {
+        const nextBindings: Record<string, ComposerInputBinding> = {};
+        Object.entries(node.inputBindings).forEach(([field, binding]) => {
+          if (binding.kind === "step_output" && binding.sourceNodeId === nodeId) {
+            return;
+          }
+          nextBindings[field] = binding;
+        });
+        return { ...node, inputBindings: nextBindings };
+      });
+    });
+    setCollapsedVisualChainNodeIds((prev) => {
+      const next = new Set(prev);
+      next.delete(nodeId);
+      return next;
+    });
+    setDraggingVisualChainNodeId((prev) => (prev === nodeId ? null : prev));
+    setDragOverVisualChainNodeId((prev) => (prev === nodeId ? null : prev));
+    setChainComposerNotice("Removed chain step.");
+  };
+
+  const moveVisualChainNode = (nodeId: string, direction: -1 | 1) => {
+    setVisualChainNodes((prev) => {
+      const sourceIndex = prev.findIndex((node) => node.id === nodeId);
+      if (sourceIndex < 0) {
+        return prev;
+      }
+      const targetIndex = sourceIndex + direction;
+      if (targetIndex < 0 || targetIndex >= prev.length) {
+        return prev;
+      }
+      const reordered = [...prev];
+      const [moved] = reordered.splice(sourceIndex, 1);
+      reordered.splice(targetIndex, 0, moved);
+      return normalizeVisualChainBindings(reordered);
+    });
+    setChainComposerNotice(direction < 0 ? "Moved step up." : "Moved step down.");
+  };
+
+  const reorderVisualChainNode = (sourceNodeId: string, targetNodeId: string) => {
+    if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) {
+      return;
+    }
+    setVisualChainNodes((prev) => {
+      const sourceIndex = prev.findIndex((node) => node.id === sourceNodeId);
+      const targetIndex = prev.findIndex((node) => node.id === targetNodeId);
+      if (sourceIndex < 0 || targetIndex < 0) {
+        return prev;
+      }
+      const reordered = [...prev];
+      const [moved] = reordered.splice(sourceIndex, 1);
+      const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      reordered.splice(adjustedTargetIndex, 0, moved);
+      return normalizeVisualChainBindings(reordered);
+    });
+    setChainComposerNotice("Reordered chain step.");
+  };
+
+  const toggleVisualChainNodeCollapsed = (nodeId: string) => {
+    setCollapsedVisualChainNodeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+      return next;
+    });
+  };
+
+  const collapseAllVisualChainNodes = () => {
+    setCollapsedVisualChainNodeIds(new Set(visualChainNodes.map((node) => node.id)));
+  };
+
+  const expandAllVisualChainNodes = () => {
+    setCollapsedVisualChainNodeIds(new Set());
+  };
+
+  const setNodeDependencies = (targetNodeId: string, sourceNodeIds: string[]) => {
+    setComposerDraft((prev) => {
+      const filtered = sourceNodeIds
+        .map((id) => id.trim())
+        .filter((id) => id && id !== targetNodeId);
+      const incomingRemoved = prev.edges.filter((edge) => edge.toNodeId !== targetNodeId);
+      const incomingAdded = filtered.map((sourceNodeId) => ({
+        fromNodeId: sourceNodeId,
+        toNodeId: targetNodeId
+      }));
+      return {
+        ...prev,
+        edges: normalizeComposerEdges(prev.nodes, [...incomingRemoved, ...incomingAdded])
+      };
+    });
+  };
+
+  const resetLinearDependencies = () => {
+    setComposerDraft((prev) => ({
+      ...prev,
+      edges: buildSequentialComposerEdges(prev.nodes)
+    }));
+    setChainComposerNotice("Reset DAG edges to linear chain.");
+  };
+
+  const clearAllDependencies = () => {
+    setComposerDraft((prev) => ({ ...prev, edges: [] }));
+    setHoveredDagEdgeKey(null);
+    setChainComposerNotice("Cleared all explicit DAG edges.");
+  };
+
+  const autoBindTargetFromSource = (sourceNodeId: string, targetNodeId: string) => {
+    const sourceNode = visualChainNodes.find((node) => node.id === sourceNodeId);
+    const targetNode = visualChainNodes.find((node) => node.id === targetNodeId);
+    if (!sourceNode || !targetNode) {
+      return false;
+    }
+    const targetStatus = visualChainNodeStatusById.get(targetNodeId);
+    if (!targetStatus || targetStatus.requiredStatus.length === 0) {
+      return false;
+    }
+    const missingFields = targetStatus.requiredStatus
+      .filter((status) => status.status === "missing")
+      .map((status) => status.field);
+    const candidateField =
+      missingFields[0] || targetStatus.requiredStatus[0]?.field || "";
+    if (!candidateField) {
+      return false;
+    }
+    setVisualBindingFromSource(
+      targetNodeId,
+      candidateField,
+      sourceNodeId,
+      sourceNode.outputPath || "result"
+    );
+    setChainComposerNotice(
+      `Connected edge and mapped ${targetNode.taskName}.${candidateField} from ${sourceNode.taskName}.`
+    );
+    return true;
+  };
+
+  const quickFixNodeBindings = (nodeId: string) => {
+    const targetNode = visualChainNodes.find((node) => node.id === nodeId);
+    if (!targetNode) {
+      return;
+    }
+    const context = readContextObject();
+    const requiredFields = getCapabilityRequiredInputs(capabilityById.get(targetNode.capabilityId));
+    if (requiredFields.length === 0) {
+      setChainComposerNotice("Selected node has no required inputs.");
+      return;
+    }
+    const sourceNodeIds = composerDraftEdges
+      .filter((edge) => edge.toNodeId === nodeId)
+      .map((edge) => edge.fromNodeId);
+    const sourceNodes = sourceNodeIds
+      .map((id) => visualChainNodes.find((node) => node.id === id))
+      .filter((node): node is ComposerDraftNode => Boolean(node));
+    let updatedCount = 0;
+    requiredFields.forEach((field) => {
+      const existingBinding = targetNode.inputBindings[field];
+      if (existingBinding) {
+        return;
+      }
+      if (isContextInputPresent(context[field])) {
+        return;
+      }
+      const sourceNode = sourceNodes[sourceNodes.length - 1];
+      if (!sourceNode) {
+        return;
+      }
+      setVisualBindingFromSource(nodeId, field, sourceNode.id, sourceNode.outputPath || "result");
+      updatedCount += 1;
+    });
+    if (updatedCount > 0) {
+      setChainComposerNotice(`Quick-fixed ${updatedCount} missing input(s) for ${targetNode.taskName}.`);
+    } else {
+      setChainComposerNotice("No missing inputs could be auto-fixed for selected node.");
+    }
+  };
+
+  const autoWireNodeBindings = (nodeId: string) => {
+    const targetIndex = visualChainNodes.findIndex((node) => node.id === nodeId);
+    if (targetIndex <= 0) {
+      setChainComposerNotice("Auto-wire requires a previous step.");
+      return;
+    }
+    const targetNode = visualChainNodes[targetIndex];
+    const previousNode = visualChainNodes[targetIndex - 1];
+    if (!targetNode || !previousNode) {
+      setChainComposerNotice("Unable to auto-wire selected node.");
+      return;
+    }
+    const context = readContextObject();
+    const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(targetNode.capabilityId));
+    let updatedCount = 0;
+    requiredInputs.forEach((field) => {
+      if (!CHAINABLE_REQUIRED_FIELDS.has(field)) {
+        return;
+      }
+      if (targetNode.inputBindings[field]) {
+        return;
+      }
+      if (isContextInputPresent(context[field])) {
+        return;
+      }
+      setVisualBindingFromSource(nodeId, field, previousNode.id, previousNode.outputPath || "result");
+      updatedCount += 1;
+    });
+    if (updatedCount > 0) {
+      setChainComposerNotice(`Auto-wired ${updatedCount} input(s) from previous step.`);
+    } else {
+      setChainComposerNotice("No missing inputs were eligible for auto-wire.");
+    }
+  };
+
+  const addDagEdge = (fromNodeId: string, toNodeId: string) => {
+    if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) {
+      return;
+    }
+    setComposerDraft((prev) => ({
+      ...prev,
+      edges: normalizeComposerEdges(prev.nodes, [...prev.edges, { fromNodeId, toNodeId }])
+    }));
+    const mapped = autoBindTargetFromSource(fromNodeId, toNodeId);
+    setSelectedDagNodeId(toNodeId);
+    centerDagNodeInView(toNodeId);
+    if (!mapped) {
+      setChainComposerNotice("Connected DAG edge.");
+    }
+  };
+
+  const removeDagEdge = (fromNodeId: string, toNodeId: string) => {
+    setHoveredDagEdgeKey(null);
+    setComposerDraft((prev) => ({
+      ...prev,
+      edges: prev.edges.filter(
+        (edge) => !(edge.fromNodeId === fromNodeId && edge.toNodeId === toNodeId)
+      )
+    }));
+    setChainComposerNotice("Removed DAG edge.");
+  };
+
+  const beginDagNodeDrag = (
+    event: { clientX: number; clientY: number },
+    nodeId: string
+  ) => {
+    const canvas = dagCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const current = composerNodePositions[nodeId] || defaultDagNodePosition(0);
+    dagCanvasDragOffsetRef.current = {
+      x: event.clientX - rect.left - current.x,
+      y: event.clientY - rect.top - current.y
+    };
+    setDagCanvasDraggingNodeId(nodeId);
+  };
+
+  const beginDagConnectorDrag = (
+    event: { clientX: number; clientY: number; preventDefault: () => void },
+    sourceNodeId: string
+  ) => {
+    event.preventDefault();
+    const canvas = dagCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    setDagConnectorDrag({
+      sourceNodeId,
+      x: Math.max(0, event.clientX - rect.left),
+      y: Math.max(0, event.clientY - rect.top)
+    });
+    setDagConnectorHoverTargetNodeId(null);
+    setDagEdgeDraftSourceNodeId(sourceNodeId);
+  };
+
+  const autoLayoutDagCanvas = () => {
+    setComposerNodePositions(() => {
+      const next: Record<string, CanvasPoint> = {};
+      visualChainNodes.forEach((node, index) => {
+        next[node.id] = defaultDagNodePosition(index);
+      });
+      return next;
+    });
+    setChainComposerNotice("Auto-layout applied to DAG canvas.");
+  };
+
+  const centerDagNodeInView = (nodeId: string) => {
+    const viewport = dagCanvasViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const fallbackIndex = visualChainNodes.findIndex((node) => node.id === nodeId);
+    const position =
+      composerNodePositions[nodeId] ||
+      (fallbackIndex >= 0 ? defaultDagNodePosition(fallbackIndex) : null);
+    if (!position) {
+      return;
+    }
+    const left = Math.max(
+      0,
+      position.x - Math.max(0, viewport.clientWidth - DAG_CANVAS_NODE_WIDTH) / 2
+    );
+    const top = Math.max(
+      0,
+      position.y - Math.max(0, viewport.clientHeight - DAG_CANVAS_NODE_HEIGHT) / 2
+    );
+    viewport.scrollTo({ left, top, behavior: "smooth" });
+  };
+
+  const detectDagCycle = (nodeIds: string[], edges: ComposerDraftEdge[]) => {
+    const indegree = new Map<string, number>();
+    const outgoing = new Map<string, string[]>();
+    nodeIds.forEach((nodeId) => {
+      indegree.set(nodeId, 0);
+      outgoing.set(nodeId, []);
+    });
+    edges.forEach((edge) => {
+      if (!indegree.has(edge.fromNodeId) || !indegree.has(edge.toNodeId)) {
+        return;
+      }
+      outgoing.get(edge.fromNodeId)!.push(edge.toNodeId);
+      indegree.set(edge.toNodeId, (indegree.get(edge.toNodeId) || 0) + 1);
+    });
+    const queue: string[] = [];
+    indegree.forEach((value, key) => {
+      if (value === 0) {
+        queue.push(key);
+      }
+    });
+    let visited = 0;
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      visited += 1;
+      const neighbors = outgoing.get(current) || [];
+      neighbors.forEach((next) => {
+        const updated = (indegree.get(next) || 0) - 1;
+        indegree.set(next, updated);
+        if (updated === 0) {
+          queue.push(next);
+        }
+      });
+    }
+    return visited !== nodeIds.length;
+  };
+
+  const setVisualBindingFromSource = (
+    nodeId: string,
+    field: string,
+    sourceNodeId: string,
+    preferredPath?: string
+  ) => {
+    setVisualChainNodes((prev) => {
+      const sourceNode = prev.find((node) => node.id === sourceNodeId);
+      if (!sourceNode) {
+        return prev;
+      }
+      return prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const existing = node.inputBindings[field];
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              kind: "step_output",
+              sourceNodeId: sourceNode.id,
+              sourcePath:
+                preferredPath ||
+                (existing?.kind === "step_output" ? existing.sourcePath : "") ||
+                sourceNode.outputPath ||
+                "result"
+            }
+          }
+        };
+      });
+    });
+  };
+
+  const setVisualBindingFromPrevious = (nodeId: string, field: string) => {
+    const targetIndex = visualChainNodes.findIndex((node) => node.id === nodeId);
+    if (targetIndex <= 0) {
+      return;
+    }
+    const previousNode = visualChainNodes[targetIndex - 1];
+    if (!previousNode) {
+      return;
+    }
+    setVisualBindingFromSource(nodeId, field, previousNode.id, previousNode.outputPath || "result");
+    setChainComposerNotice(`Wired ${field} from previous step.`);
+  };
+
+  const clearVisualBinding = (nodeId: string, field: string) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const nextBindings = { ...node.inputBindings };
+        delete nextBindings[field];
+        return { ...node, inputBindings: nextBindings };
+      })
+    );
+    setChainComposerNotice(`Cleared binding for ${field}.`);
+  };
+
+  const setVisualBindingLiteral = (nodeId: string, field: string, value: string) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              kind: "literal",
+              value
+            }
+          }
+        };
+      })
+    );
+  };
+
+  const setVisualBindingContext = (nodeId: string, field: string) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              kind: "context",
+              path: field
+            }
+          }
+        };
+      })
+    );
+  };
+
+  const setVisualBindingMemory = (
+    nodeId: string,
+    field: string,
+    scope: "job" | "global" = "job"
+  ) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              kind: "memory",
+              scope,
+              name: "task_outputs"
+            }
+          }
+        };
+      })
+    );
+  };
+
+  const setVisualBindingMode = (
+    nodeId: string,
+    field: string,
+    mode: "context" | "from" | "literal" | "memory"
+  ) => {
+    if (mode === "context") {
+      setVisualBindingContext(nodeId, field);
+      setChainComposerNotice(`Using context mode for ${field}.`);
+      return;
+    }
+    if (mode === "literal") {
+      setVisualBindingLiteral(nodeId, field, "");
+      setChainComposerNotice(`Using literal mode for ${field}.`);
+      return;
+    }
+    if (mode === "memory") {
+      setVisualBindingMemory(nodeId, field, "job");
+      setChainComposerNotice(`Using memory mode for ${field}.`);
+      return;
+    }
+    const sourceNodes = visualChainNodes.filter((node) => node.id !== nodeId);
+    if (sourceNodes.length === 0) {
+      setChainComposerNotice(`No source step is available for ${field}.`);
+      return;
+    }
+    const sourceNode = sourceNodes[sourceNodes.length - 1];
+    setVisualBindingFromSource(nodeId, field, sourceNode.id, sourceNode.outputPath || "result");
+    setChainComposerNotice(`Using step output for ${field}.`);
+  };
+
+  const updateVisualBindingSourceNode = (nodeId: string, field: string, sourceNodeId: string) => {
+    const sourceNode = visualChainNodes.find((node) => node.id === sourceNodeId);
+    if (!sourceNode) {
+      return;
+    }
+    setVisualBindingFromSource(nodeId, field, sourceNodeId, sourceNode.outputPath || "result");
+    setChainComposerNotice(`Updated ${field} source step.`);
+  };
+
+  const updateVisualBindingPath = (nodeId: string, field: string, sourcePath: string) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const currentBinding = node.inputBindings[field];
+        if (!currentBinding || currentBinding.kind !== "step_output") {
+          return node;
+        }
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              ...currentBinding,
+              sourcePath
+            }
+          }
+        };
+      })
+    );
+  };
+
+  const updateVisualBindingLiteral = (nodeId: string, field: string, value: string) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const currentBinding = node.inputBindings[field];
+        if (!currentBinding || currentBinding.kind !== "literal") {
+          return node;
+        }
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              ...currentBinding,
+              value
+            }
+          }
+        };
+      })
+    );
+  };
+
+  const updateVisualBindingContextPath = (nodeId: string, field: string, path: string) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const currentBinding = node.inputBindings[field];
+        if (!currentBinding || currentBinding.kind !== "context") {
+          return node;
+        }
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              ...currentBinding,
+              path
+            }
+          }
+        };
+      })
+    );
+  };
+
+  const updateVisualBindingMemory = (
+    nodeId: string,
+    field: string,
+    patch: Partial<Pick<Extract<ComposerInputBinding, { kind: "memory" }>, "scope" | "name" | "key">>
+  ) => {
+    setVisualChainNodes((prev) =>
+      prev.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const currentBinding = node.inputBindings[field];
+        if (!currentBinding || currentBinding.kind !== "memory") {
+          return node;
+        }
+        return {
+          ...node,
+          inputBindings: {
+            ...node.inputBindings,
+            [field]: {
+              ...currentBinding,
+              ...patch
+            }
+          }
+        };
+      })
+    );
+  };
+
+  const autoWireVisualChain = () => {
+    const context = readContextObject();
+    setVisualChainNodes((prev) =>
+      prev.map((node, index) => {
+        if (index === 0) {
+          return node;
+        }
+        const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(node.capabilityId));
+        const nextBindings = { ...node.inputBindings };
+        requiredInputs.forEach((field) => {
+          if (!CHAINABLE_REQUIRED_FIELDS.has(field)) {
+            return;
+          }
+          if (nextBindings[field]) {
+            return;
+          }
+          if (isContextInputPresent(context[field])) {
+            return;
+          }
+          const sourceNode = prev[index - 1];
+          nextBindings[field] = {
+            kind: "step_output",
+            sourceNodeId: sourceNode.id,
+            sourcePath: sourceNode.outputPath || "result"
+          };
+        });
+        return { ...node, inputBindings: nextBindings };
+      })
+    );
+    setChainComposerNotice("Auto-wired missing chainable required inputs from previous steps.");
+  };
+
+  const autoFixVisualChainInputs = () => {
+    if (visualChainNodes.length === 0) {
+      setChainComposerNotice("Add at least one step before running Auto-Fix.");
+      return;
+    }
+    const context = readContextObject();
+    let autoWiredCount = 0;
+    const nextNodes = visualChainNodes.map((node, index) => {
+      if (index === 0) {
+        return node;
+      }
+      const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(node.capabilityId));
+      const nextBindings = { ...node.inputBindings };
+      requiredInputs.forEach((field) => {
+        if (!CHAINABLE_REQUIRED_FIELDS.has(field)) {
+          return;
+        }
+        if (nextBindings[field]) {
+          return;
+        }
+        if (isContextInputPresent(context[field])) {
+          return;
+        }
+        const sourceNode = visualChainNodes[index - 1];
+        if (!sourceNode) {
+          return;
+        }
+        nextBindings[field] = {
+          kind: "step_output",
+          sourceNodeId: sourceNode.id,
+          sourcePath: sourceNode.outputPath || "result"
+        };
+        autoWiredCount += 1;
+      });
+      return { ...node, inputBindings: nextBindings };
+    });
+    setVisualChainNodes(nextNodes);
+    const merged = mergeContextWithCapabilityTemplates(contextJson, requiredContextCapabilities);
+    if (merged.invalidContext) {
+      setChainComposerNotice(
+        `Auto-wired ${autoWiredCount} input(s), but Context JSON is invalid. Fix context and retry.`
+      );
+      return;
+    }
+    setContextJson(merged.nextContext);
+    setChainComposerNotice(
+      `Auto-fix complete: wired ${autoWiredCount} input(s), filled ${merged.mergedFieldCount} context field(s).`
+    );
+  };
+
+  const applyVisualChainToGoalAndContext = () => {
+    if (visualChainNodes.length === 0) {
+      setChainComposerNotice("Add at least one step in visual chain builder.");
+      return;
+    }
+    const nodeById = new Map(visualChainNodes.map((node) => [node.id, node]));
+    const rules: string[] = [];
+    const hints: Array<Record<string, unknown>> = [];
+
+    visualChainNodes.forEach((targetNode) => {
+      Object.entries(targetNode.inputBindings).forEach(([field, binding]) => {
+        if (binding.kind !== "step_output") {
+          return;
+        }
+        const sourceNode = nodeById.get(binding.sourceNodeId);
+        if (!sourceNode) {
+          return;
+        }
+        const outputSegments = binding.sourcePath
+          .split(".")
+          .map((segment) => segment.trim())
+          .filter(Boolean);
+        const reference: Record<string, unknown> = {
+          $from: [
+            "dependencies_by_name",
+            sourceNode.taskName,
+            sourceNode.capabilityId,
+            ...outputSegments
+          ]
+        };
+        if (binding.defaultValue && binding.defaultValue.trim()) {
+          try {
+            reference.$default = JSON.parse(binding.defaultValue);
+          } catch {
+            reference.$default = binding.defaultValue;
+          }
+        }
+        rules.push(
+          `For task ${targetNode.taskName}, set tool_inputs.${targetNode.capabilityId}.${field} to ${JSON.stringify(reference)}.`
+        );
+        hints.push({
+          from_task: sourceNode.taskName,
+          from_capability: sourceNode.capabilityId,
+          from_output_path: outputSegments,
+          to_task: targetNode.taskName,
+          to_capability: targetNode.capabilityId,
+          to_input_field: field,
+          reference
+        });
+      });
+    });
+
+    if (rules.length === 0) {
+      setChainComposerNotice(
+        "No chain links found. Wire at least one required input from an upstream step."
+      );
+      return;
+    }
+
+    setGoal((prev) => {
+      const trimmed = prev.trim();
+      const additions = rules.filter((rule) => !trimmed.includes(rule));
+      if (additions.length === 0) {
+        return prev;
+      }
+      return trimmed ? `${trimmed} ${additions.join(" ")}` : additions.join(" ");
+    });
+
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      const base =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {};
+      const existing = Array.isArray(base.chaining_hints)
+        ? [...(base.chaining_hints as unknown[])]
+        : [];
+      const next = { ...base, chaining_hints: [...existing, ...hints] };
+      setContextJson(JSON.stringify(next, null, 2));
+      setChainComposerNotice(
+        `Applied ${hints.length} chain link(s) to Goal and Context JSON chaining_hints.`
+      );
+    } catch {
+      setChainComposerNotice(
+        "Goal was updated, but Context JSON is invalid. Fix Context JSON before applying hints."
+      );
+    }
+  };
+
+  const runChainPreflight = async () => {
+    const localErrors: string[] = [];
+    if (visualChainNodes.length === 0) {
+      localErrors.push("No chain steps configured.");
+    }
+    const seenTaskNames = new Set<string>();
+    visualChainNodes.forEach((node, index) => {
+      const taskName = node.taskName.trim();
+      if (!taskName) {
+        localErrors.push(`Step ${index + 1}: task name is required.`);
+      } else if (seenTaskNames.has(taskName)) {
+        localErrors.push(`Duplicate task name: ${taskName}`);
+      } else {
+        seenTaskNames.add(taskName);
+      }
+      if (!capabilityById.has(node.capabilityId)) {
+        localErrors.push(
+          `Step ${index + 1} (${taskName || "unnamed"}): capability ${node.capabilityId} not found in catalog.`
+        );
+      }
+      if (!node.outputPath.trim()) {
+        localErrors.push(`Step ${index + 1} (${taskName || "unnamed"}): output path is required.`);
+      }
+    });
+
+    visualChainNodesWithStatus.forEach(({ node, requiredStatus }) => {
+      requiredStatus
+        .filter((entry) => entry.status === "missing")
+        .forEach((entry) => {
+          localErrors.push(
+            `Step ${node.taskName}: required input '${entry.field}' is missing (not in chain or context).`
+          );
+        });
+      Object.entries(node.inputBindings).forEach(([field, binding]) => {
+        if (binding.kind !== "step_output") {
+          if (binding.kind === "context" && !binding.path.trim()) {
+            localErrors.push(`Step ${node.taskName}: context path for '${field}' is empty.`);
+          }
+          if (binding.kind === "memory" && !binding.name.trim()) {
+            localErrors.push(`Step ${node.taskName}: memory name for '${field}' is required.`);
+          }
+          return;
+        }
+        if (!binding.sourcePath.trim()) {
+          localErrors.push(`Step ${node.taskName}: binding for '${field}' has empty source path.`);
+        }
+        const sourceIndex = visualChainNodes.findIndex((candidate) => candidate.id === binding.sourceNodeId);
+        if (sourceIndex < 0) {
+          localErrors.push(
+            `Step ${node.taskName}: binding for '${field}' references a removed source step.`
+          );
+        }
+      });
+    });
+
+    const nodeIds = visualChainNodes.map((node) => node.id);
+    const nodeIdSet = new Set(nodeIds);
+    const explicitEdges = normalizeComposerEdges(visualChainNodes, composerDraftEdges);
+    explicitEdges.forEach((edge) => {
+      if (!nodeIdSet.has(edge.fromNodeId) || !nodeIdSet.has(edge.toNodeId)) {
+        localErrors.push(`DAG edge '${edge.fromNodeId} -> ${edge.toNodeId}' references missing node(s).`);
+      }
+      if (edge.fromNodeId === edge.toNodeId) {
+        localErrors.push(`DAG edge '${edge.fromNodeId} -> ${edge.toNodeId}' is a self-cycle.`);
+      }
+    });
+    const implicitEdges: ComposerDraftEdge[] = [];
+    visualChainNodes.forEach((node) => {
+      Object.values(node.inputBindings).forEach((binding) => {
+        if (binding.kind === "step_output") {
+          implicitEdges.push({ fromNodeId: binding.sourceNodeId, toNodeId: node.id });
+        }
+      });
+    });
+    const combinedEdges = normalizeComposerEdges(
+      visualChainNodes,
+      [...explicitEdges, ...implicitEdges]
+    );
+    if (detectDagCycle(nodeIds, combinedEdges)) {
+      localErrors.push("DAG contains a cycle (including step-output dependencies).");
+    }
+
+    let parsedContext: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(contextJson || "{}");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        parsedContext = parsed as Record<string, unknown>;
+      } else {
+        localErrors.push("Context JSON must be an object.");
+      }
+    } catch {
+      localErrors.push("Context JSON is invalid JSON.");
+    }
+
+    let serverErrors: Record<string, string> = {};
+    let compiledPlan: PlanCreatePayload | null = null;
+    if (localErrors.length === 0) {
+      setComposerCompileLoading(true);
+      setChainPreflightLoading(true);
+      try {
+        const compilePayload = {
+          draft: {
+            summary: composerDraft.summary || "Chain composer preflight",
+            nodes: visualChainNodes.map((node) => ({
+              id: node.id,
+              taskName: node.taskName,
+              capabilityId: node.capabilityId,
+              bindings: node.inputBindings
+            })),
+            edges: composerDraftEdges
+          },
+          job_context: parsedContext
+        };
+        const compileResponse = await fetch(`${apiUrl}/composer/compile`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(compilePayload)
+        });
+        const compileBody = (await compileResponse.json()) as
+          | ComposerCompileResponse
+          | { detail?: unknown };
+        if (!compileResponse.ok) {
+          localErrors.push(
+            typeof (compileBody as { detail?: unknown }).detail === "string"
+              ? (compileBody as { detail: string }).detail
+              : `Compile request failed (${compileResponse.status}).`
+          );
+        } else {
+          const typedCompile = compileBody as ComposerCompileResponse;
+          setComposerCompileResult(typedCompile);
+          if (!typedCompile.valid) {
+            typedCompile.diagnostics.errors.forEach((diag) => {
+              serverErrors[diag.code] = diag.message;
+            });
+            serverErrors = { ...serverErrors, ...(typedCompile.preflight_errors || {}) };
+          } else {
+            compiledPlan = typedCompile.plan;
+          }
+        }
+
+        if (compiledPlan) {
+          const response = await fetch(`${apiUrl}/plans/preflight`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              plan: compiledPlan,
+              job_context: parsedContext
+            })
+          });
+          const body = (await response.json()) as PlanPreflightResponse | { detail?: unknown };
+          if (!response.ok) {
+            localErrors.push(
+              typeof (body as { detail?: unknown }).detail === "string"
+                ? (body as { detail: string }).detail
+                : `Preflight request failed (${response.status}).`
+            );
+          } else if (
+            body &&
+            typeof body === "object" &&
+            "errors" in body &&
+            body.errors &&
+            typeof body.errors === "object"
+          ) {
+            serverErrors = { ...serverErrors, ...(body.errors as Record<string, string>) };
+          }
+        } else if (Object.keys(serverErrors).length === 0 && localErrors.length === 0) {
+          localErrors.push("Compile succeeded but returned no executable plan.");
+        }
+      } catch (error) {
+        localErrors.push(error instanceof Error ? error.message : "Compile/preflight request failed.");
+      } finally {
+        setComposerCompileLoading(false);
+        setChainPreflightLoading(false);
+      }
+    } else {
+      setComposerCompileResult(null);
+    }
+
+    setChainPreflightResult({
+      valid: localErrors.length === 0 && Object.keys(serverErrors).length === 0,
+      localErrors,
+      serverErrors,
+      checkedAt: new Date().toISOString()
+    });
+
+    if (localErrors.length === 0 && Object.keys(serverErrors).length === 0) {
+      setChainComposerNotice("Compile + preflight passed. Chain is ready.");
+    } else {
+      setChainComposerNotice("Compile or preflight found issues. Review errors below.");
+    }
+  };
+
+  const visualChainNodesWithStatus = useMemo(() => {
+    const context = readContextObject();
+    return visualChainNodes.map((node, index) => {
+      const capability = capabilityById.get(node.capabilityId);
+      const schemaProperties = capabilityInputSchemaProperties(capability);
+      const required = getCapabilityRequiredInputs(capability);
+      const requiredStatus = required.map((field) => {
+        const property = schemaProperties[field];
+        const schemaType = schemaPropertyTypeLabel(property);
+        const schemaDescription =
+          property && typeof property.description === "string" ? property.description : "";
+        const binding = node.inputBindings[field];
+        if (binding?.kind === "step_output") {
+          const source = visualChainNodes.find((candidate) => candidate.id === binding.sourceNodeId);
+          return {
+            field,
+            status: "from_chain" as const,
+            detail: source ? `${source.taskName}.${binding.sourcePath}` : binding.sourcePath,
+            schemaType,
+            schemaDescription
+          };
+        }
+        if (binding?.kind === "literal" && binding.value.trim()) {
+          return {
+            field,
+            status: "provided" as const,
+            detail: "literal value",
+            schemaType,
+            schemaDescription
+          };
+        }
+        if (binding?.kind === "memory" && binding.name.trim()) {
+          return {
+            field,
+            status: "provided" as const,
+            detail: `memory:${binding.scope}/${binding.name}${binding.key ? `/${binding.key}` : ""}`,
+            schemaType,
+            schemaDescription
+          };
+        }
+        if (binding?.kind === "context" && binding.path.trim()) {
+          return {
+            field,
+            status: "from_context" as const,
+            detail: binding.path,
+            schemaType,
+            schemaDescription
+          };
+        }
+        if (isContextInputPresent(context[field])) {
+          return {
+            field,
+            status: "from_context" as const,
+            detail: "context_json",
+            schemaType,
+            schemaDescription
+          };
+        }
+        return {
+          field,
+          status: "missing" as const,
+          detail: "missing",
+          schemaType,
+          schemaDescription
+        };
+      });
+      return {
+        node,
+        index,
+        requiredStatus
+      };
+    });
+  }, [capabilityById, contextJson, visualChainNodes]);
+
+  const visualChainNodeStatusById = useMemo(() => {
+    const next = new Map<
+      string,
+      {
+        missingCount: number;
+        resolvedCount: number;
+        requiredCount: number;
+        requiredStatus: {
+          field: string;
+          status: "missing" | "from_chain" | "from_context" | "provided";
+          detail: string;
+          schemaType: string;
+          schemaDescription: string;
+        }[];
+      }
+    >();
+    visualChainNodesWithStatus.forEach(({ node, requiredStatus }) => {
+      const missingCount = requiredStatus.filter((status) => status.status === "missing").length;
+      next.set(node.id, {
+        missingCount,
+        resolvedCount: requiredStatus.length - missingCount,
+        requiredCount: requiredStatus.length,
+        requiredStatus
+      });
+    });
+    return next;
+  }, [visualChainNodesWithStatus]);
+
+  const selectedDagNodeStatus = useMemo(() => {
+    if (!selectedDagNodeId) {
+      return null;
+    }
+    return visualChainNodeStatusById.get(selectedDagNodeId) || null;
+  }, [selectedDagNodeId, visualChainNodeStatusById]);
+
+  const selectedDagNode = useMemo(
+    () => visualChainNodes.find((node) => node.id === selectedDagNodeId) || null,
+    [selectedDagNodeId, visualChainNodes]
+  );
+
+  const canInsertDeriveForSelectedNode = useMemo(() => {
+    if (!selectedDagNode) {
+      return false;
+    }
+    if (!capabilityById.has("document.output.derive")) {
+      return false;
+    }
+    if (selectedDagNode.capabilityId === "document.output.derive") {
+      return false;
+    }
+    const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(selectedDagNode.capabilityId));
+    if (!requiredInputs.includes("path")) {
+      return false;
+    }
+    const pathBinding = selectedDagNode.inputBindings.path;
+    if (pathBinding?.kind === "step_output") {
+      const sourceNode = visualChainNodes.find((node) => node.id === pathBinding.sourceNodeId);
+      if (sourceNode?.capabilityId === "document.output.derive") {
+        return false;
+      }
+    }
+    return true;
+  }, [capabilityById, selectedDagNode, visualChainNodes]);
+
+  const focusComposerValidationIssue = (issue: ComposerValidationIssue) => {
+    const nodeId = issue.nodeId;
+    if (!nodeId) {
+      setChainComposerNotice("Issue has no specific node target. Review details and fix manually.");
+      return;
+    }
+    const nodeStatus = visualChainNodeStatusById.get(nodeId);
+    const resolvedField =
+      issue.field && nodeStatus?.requiredStatus.some((entry) => entry.field === issue.field)
+        ? issue.field
+        : undefined;
+    setSelectedDagNodeId(nodeId);
+    centerDagNodeInView(nodeId);
+    setActiveComposerIssueFocus({ nodeId, field: resolvedField });
+    if (resolvedField) {
+      const refKey = `${nodeId}::${resolvedField}`;
+      window.setTimeout(() => {
+        inspectorBindingRefs.current[refKey]?.scrollIntoView({
+          behavior: "smooth",
+          block: "center"
+        });
+      }, 180);
+    }
+  };
+
+  const visualChainSummary = useMemo(() => {
+    const summary = {
+      steps: visualChainNodesWithStatus.length,
+      dagEdges: composerDraftEdges.length,
+      requiredInputs: 0,
+      missingInputs: 0,
+      contextInputs: 0,
+      chainedInputs: 0,
+      literalInputs: 0
+    };
+    visualChainNodesWithStatus.forEach(({ requiredStatus }) => {
+      summary.requiredInputs += requiredStatus.length;
+      requiredStatus.forEach((item) => {
+        if (item.status === "missing") {
+          summary.missingInputs += 1;
+          return;
+        }
+        if (item.status === "from_context") {
+          summary.contextInputs += 1;
+          return;
+        }
+        if (item.status === "from_chain") {
+          summary.chainedInputs += 1;
+          return;
+        }
+        summary.literalInputs += 1;
+      });
+    });
+    return summary;
+  }, [composerDraftEdges.length, visualChainNodesWithStatus]);
+
+  const dagCanvasNodes = useMemo(
+    () =>
+      visualChainNodes.map((node, index) => ({
+        node,
+        position: composerNodePositions[node.id] || defaultDagNodePosition(index)
+      })),
+    [composerNodePositions, visualChainNodes]
+  );
+
+  const dagCanvasNodeById = useMemo(
+    () => new Map(dagCanvasNodes.map((entry) => [entry.node.id, entry])),
+    [dagCanvasNodes]
+  );
+
+  const dagCanvasEdges = useMemo(() => {
+    return composerDraftEdges
+      .map((edge) => {
+        const fromEntry = dagCanvasNodeById.get(edge.fromNodeId);
+        const toEntry = dagCanvasNodeById.get(edge.toNodeId);
+        if (!fromEntry || !toEntry) {
+          return null;
+        }
+        const edgeKey = `${edge.fromNodeId}->${edge.toNodeId}`;
+        const startX = fromEntry.position.x + DAG_CANVAS_NODE_WIDTH;
+        const startY = fromEntry.position.y + DAG_CANVAS_NODE_HEIGHT / 2;
+        const endX = toEntry.position.x;
+        const endY = toEntry.position.y + DAG_CANVAS_NODE_HEIGHT / 2;
+        const controlX = (startX + endX) / 2;
+        const midX = controlX;
+        const midY = (startY + endY) / 2;
+        return {
+          ...edge,
+          edgeKey,
+          fromTaskName: fromEntry.node.taskName,
+          toTaskName: toEntry.node.taskName,
+          path: `M ${startX} ${startY} C ${controlX} ${startY}, ${controlX} ${endY}, ${endX} ${endY}`,
+          midX,
+          midY
+        };
+      })
+      .filter(
+        (
+          item
+        ): item is {
+          fromNodeId: string;
+          toNodeId: string;
+          edgeKey: string;
+          fromTaskName: string;
+          toTaskName: string;
+          path: string;
+          midX: number;
+          midY: number;
+        } =>
+          item !== null
+      );
+  }, [composerDraftEdges, dagCanvasNodeById]);
+
+  const dagConnectorPreview = useMemo(() => {
+    if (!dagConnectorDrag) {
+      return null;
+    }
+    const sourceEntry = dagCanvasNodeById.get(dagConnectorDrag.sourceNodeId);
+    if (!sourceEntry) {
+      return null;
+    }
+    const startX = sourceEntry.position.x + DAG_CANVAS_NODE_WIDTH;
+    const startY = sourceEntry.position.y + DAG_CANVAS_NODE_HEIGHT / 2;
+    const endX = dagConnectorDrag.x;
+    const endY = dagConnectorDrag.y;
+    const controlX = (startX + endX) / 2;
+    return {
+      sourceNodeId: dagConnectorDrag.sourceNodeId,
+      path: `M ${startX} ${startY} C ${controlX} ${startY}, ${controlX} ${endY}, ${endX} ${endY}`
+    };
+  }, [dagCanvasNodeById, dagConnectorDrag]);
+
+  const dagCanvasSurface = useMemo(() => {
+    let maxX = DAG_CANVAS_MIN_WIDTH;
+    let maxY = DAG_CANVAS_MIN_HEIGHT;
+    dagCanvasNodes.forEach((entry) => {
+      maxX = Math.max(maxX, entry.position.x + DAG_CANVAS_NODE_WIDTH + DAG_CANVAS_PADDING);
+      maxY = Math.max(maxY, entry.position.y + DAG_CANVAS_NODE_HEIGHT + DAG_CANVAS_PADDING);
+    });
+    return { width: maxX, height: maxY };
+  }, [dagCanvasNodes]);
+
+  const dagNodeAdjacency = useMemo(() => {
+    const incoming: Record<string, number> = {};
+    const outgoing: Record<string, number> = {};
+    visualChainNodes.forEach((node) => {
+      incoming[node.id] = 0;
+      outgoing[node.id] = 0;
+    });
+    composerDraftEdges.forEach((edge) => {
+      if (incoming[edge.toNodeId] !== undefined) {
+        incoming[edge.toNodeId] += 1;
+      }
+      if (outgoing[edge.fromNodeId] !== undefined) {
+        outgoing[edge.fromNodeId] += 1;
+      }
+    });
+    return { incoming, outgoing };
+  }, [composerDraftEdges, visualChainNodes]);
+
+  useEffect(() => {
+    setChainPreflightResult(null);
+    setComposerCompileResult(null);
+    setActiveComposerIssueFocus(null);
+  }, [visualChainNodes, composerDraftEdges, contextJson]);
 
   const buildChainReference = () => {
     const sourceTask = chainSourceTaskName.trim();
@@ -1542,13 +4468,27 @@ export default function Home() {
     return detectCapabilitiesInGoal(goal, catalogItems);
   }, [capabilityCatalog, goal]);
 
+  const requiredContextCapabilities = useMemo(() => {
+    const byId = new Map<string, CapabilityItem>();
+    detectedCapabilities.forEach((item) => {
+      byId.set(item.id, item);
+    });
+    visualChainNodes.forEach((node) => {
+      const item = capabilityById.get(node.capabilityId);
+      if (item) {
+        byId.set(item.id, item);
+      }
+    });
+    return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
+  }, [capabilityById, detectedCapabilities, visualChainNodes]);
+
   const missingCapabilityInputs = useMemo(() => {
     if (!parsedContextForCapabilities) {
       return [] as Array<{ capabilityId: string; field: string }>;
     }
     const missing: Array<{ capabilityId: string; field: string }> = [];
-    detectedCapabilities.forEach((item) => {
-      const required = item.required_inputs || [];
+    requiredContextCapabilities.forEach((item) => {
+      const required = getCapabilityRequiredInputs(item);
       required.forEach((field) => {
         const value = parsedContextForCapabilities[field];
         if (value === undefined || value === null) {
@@ -1561,7 +4501,49 @@ export default function Home() {
       });
     });
     return missing;
-  }, [detectedCapabilities, parsedContextForCapabilities]);
+  }, [parsedContextForCapabilities, requiredContextCapabilities]);
+
+  const composerValidationIssues = useMemo(
+    () => collectComposerValidationIssues(chainPreflightResult, composerCompileResult, visualChainNodes),
+    [chainPreflightResult, composerCompileResult, visualChainNodes]
+  );
+
+  const chainValidationRequired = visualChainNodes.length > 0;
+  const chainValidationReady =
+    !chainValidationRequired ||
+    (Boolean(chainPreflightResult?.valid) &&
+      Boolean(composerCompileResult?.valid) &&
+      !chainPreflightLoading &&
+      !composerCompileLoading &&
+      composerValidationIssues.filter((issue) => issue.severity === "error").length === 0);
+
+  const submitDisabledReason = useMemo(() => {
+    if (!goal.trim()) {
+      return "Goal is required.";
+    }
+    if (!parsedContextForCapabilities) {
+      return "Context JSON must be a valid object.";
+    }
+    if (missingCapabilityInputs.length > 0) {
+      return "Resolve missing required capability inputs.";
+    }
+    if (chainPreflightLoading || composerCompileLoading) {
+      return "Compile/preflight is still running.";
+    }
+    if (!chainValidationReady) {
+      return "Run Compile + Preflight and fix all chain issues.";
+    }
+    return null;
+  }, [
+    chainPreflightLoading,
+    chainValidationReady,
+    composerCompileLoading,
+    goal,
+    missingCapabilityInputs.length,
+    parsedContextForCapabilities
+  ]);
+
+  const isSubmitDisabled = Boolean(submitDisabledReason);
 
   useEffect(() => {
     loadJobs();
@@ -1798,6 +4780,10 @@ export default function Home() {
 
   const submitJob = async () => {
     setSubmitError(null);
+    if (submitDisabledReason) {
+      setSubmitError(submitDisabledReason);
+      return;
+    }
     if (!goal.trim()) {
       setSubmitError("Goal is required.");
       return;
@@ -1820,6 +4806,18 @@ export default function Home() {
       setSubmitError(`Missing required capability inputs in Context JSON: ${details}`);
       return;
     }
+    if (visualChainNodes.length > 0) {
+      if (chainPreflightLoading || composerCompileLoading) {
+        setSubmitError("Compile/preflight is still running. Wait for it to finish.");
+        return;
+      }
+      if (!chainPreflightResult || !chainPreflightResult.valid || !composerCompileResult?.valid) {
+        setSubmitError(
+          "Chaining Composer requires a valid compile + preflight before Submit. Run Preflight and fix errors."
+        );
+        return;
+      }
+    }
     try {
       const response = await fetch(`${apiUrl}/jobs`, {
         method: "POST",
@@ -1840,6 +4838,7 @@ export default function Home() {
       setGoal("");
       setContextJson("{}");
       setPriority(0);
+      setCapabilityInputDrafts({});
       loadJobs();
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Network error while submitting job.");
@@ -2175,6 +5174,8 @@ const openTemplateModal = (template: Template) => {
     setSelectedJobId(jobId);
     setDetailsLoading(true);
     setDetailsError(null);
+    setShowDebugger(true);
+    setDebuggerActionNotice(null);
 
     const detailsResult = await fetchJson(`${apiUrl}/jobs/${jobId}/details`);
     if (detailsResult.ok && detailsResult.data && typeof detailsResult.data === "object") {
@@ -2199,8 +5200,7 @@ const openTemplateModal = (template: Template) => {
       }
     }
 
-    await loadMemoryEntries(jobId);
-    await loadDlqEntries(jobId);
+    await Promise.all([loadMemoryEntries(jobId), loadDlqEntries(jobId), loadJobDebugger(jobId)]);
 
     setDetailsLoading(false);
   };
@@ -2269,6 +5269,28 @@ const openTemplateModal = (template: Template) => {
     setDlqLoading(false);
   };
 
+  const loadJobDebugger = async (jobId: string) => {
+    setJobDebuggerLoading(true);
+    setJobDebuggerError(null);
+    const result = await fetchJson(
+      `${apiUrl}/jobs/${encodeURIComponent(jobId)}/debugger?limit=600`
+    );
+    if (result.ok && result.data && typeof result.data === "object") {
+      setJobDebugger(result.data as JobDebuggerPayload);
+      setJobDebuggerLoading(false);
+      return;
+    }
+    setJobDebugger(null);
+    if (result.status) {
+      setJobDebuggerError(`Failed to load debugger data (${result.status}).`);
+    } else if (result.error) {
+      setJobDebuggerError(`Failed to load debugger data (${result.error}).`);
+    } else {
+      setJobDebuggerError("Failed to load debugger data.");
+    }
+    setJobDebuggerLoading(false);
+  };
+
   const filterMemoryEntries = (entries: MemoryEntry[]) => {
     const keyFilter = memoryFilters.key.trim().toLowerCase();
     const toolFilter = memoryFilters.tool.trim().toLowerCase();
@@ -2297,6 +5319,11 @@ const openTemplateModal = (template: Template) => {
     setSelectedTasks([]);
     setTaskResults({});
     setDetailsError(null);
+    setJobDebugger(null);
+    setJobDebuggerLoading(false);
+    setJobDebuggerError(null);
+    setShowDebugger(false);
+    setDebuggerActionNotice(null);
     setMemoryEntries({});
     setMemoryError(null);
     setMemoryLoading(false);
@@ -2322,6 +5349,18 @@ const openTemplateModal = (template: Template) => {
     if (response.ok) {
       loadJobs();
     }
+  };
+
+  const toggleJobGoalExpanded = (jobId: string) => {
+    setExpandedJobGoals((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) {
+        next.delete(jobId);
+      } else {
+        next.add(jobId);
+      }
+      return next;
+    });
   };
 
   const retryJob = async (jobId: string) => {
@@ -2376,6 +5415,72 @@ const openTemplateModal = (template: Template) => {
     await loadJobs();
     if (selectedJobIdRef.current === jobId) {
       await loadJobDetails(jobId);
+    }
+  };
+
+  const retryTaskFromDebugger = async (taskId: string) => {
+    const jobId = selectedJobIdRef.current;
+    if (!jobId || !taskId) {
+      return;
+    }
+    setDebuggerActionNotice(null);
+    let response: Response;
+    try {
+      response = await fetch(
+        `${apiUrl}/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}/retry`,
+        { method: "POST", headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error) {
+      setDebuggerActionNotice(
+        `Retry failed (${error instanceof Error ? error.message : "network error"}).`
+      );
+      return;
+    }
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = await response.json();
+        if (payload && typeof payload === "object" && typeof payload.detail === "string") {
+          detail = payload.detail;
+        }
+      } catch {
+        detail = "";
+      }
+      setDebuggerActionNotice(
+        detail ? `Retry failed (${response.status}): ${detail}` : `Retry failed (${response.status}).`
+      );
+      return;
+    }
+    setDebuggerActionNotice(`Retry queued for task ${taskId}.`);
+    await loadJobs();
+    if (selectedJobIdRef.current === jobId) {
+      await loadJobDetails(jobId);
+    }
+  };
+
+  const copyJsonForDebugger = async (label: string, value: unknown) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      setDebuggerActionNotice("Clipboard API is not available in this browser.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+      setDebuggerActionNotice(`Copied ${label}.`);
+    } catch {
+      setDebuggerActionNotice(`Failed to copy ${label}.`);
+    }
+  };
+
+  const copyTextForDebugger = async (label: string, value: string) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      setDebuggerActionNotice("Clipboard API is not available in this browser.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      setDebuggerActionNotice(`Copied ${label}.`);
+    } catch {
+      setDebuggerActionNotice(`Failed to copy ${label}.`);
     }
   };
 
@@ -2860,7 +5965,7 @@ const openTemplateModal = (template: Template) => {
                               {isSubgroupCollapsed ? null : (
                                 <div className="mt-2 space-y-2">
                                   {subgroup.items.map((item) => {
-                                    const required = item.required_inputs || [];
+                                    const required = getCapabilityRequiredInputs(item);
                                     const template = templateForCapability(item);
                                     const hasTemplate = Object.keys(template).length > 0;
                                     return (
@@ -2876,6 +5981,12 @@ const openTemplateModal = (template: Template) => {
                                               onClick={() => appendCapabilityToGoal(item.id)}
                                             >
                                               Add to Goal
+                                            </button>
+                                            <button
+                                              className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                              onClick={() => addCapabilityNodeToVisualChain(item.id)}
+                                            >
+                                              Add Step
                                             </button>
                                             <button
                                               className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
@@ -2899,6 +6010,17 @@ const openTemplateModal = (template: Template) => {
                                                 </span>
                                               ))}
                                             </div>
+                                            {required.includes("job") ? (
+                                              <div className="text-[11px] text-slate-500">
+                                                <code>job</code> should be an object (for example:
+                                                <code className="ml-1">instruction</code>,
+                                                <code className="ml-1">topic</code>,
+                                                <code className="ml-1">audience</code>,
+                                                <code className="ml-1">tone</code>,
+                                                <code className="ml-1">today</code>,
+                                                <code className="ml-1">output_dir</code>).
+                                              </div>
+                                            ) : null}
                                             {item.id === "github.repo.list" ? (
                                               <div className="text-[11px] text-slate-500">
                                                 Example:{" "}
@@ -2935,11 +6057,87 @@ const openTemplateModal = (template: Template) => {
               </button>
             </div>
             <div className="mt-2 text-[11px] text-slate-500">
-              Compose a <code>$from</code> reference and insert planner hints without manually writing
-              nested JSON.
+              Build a DAG visually, set explicit step dependencies, wire outputs to downstream inputs,
+              then apply the chain to Goal + Context in one step.
+            </div>
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white px-2 py-2">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                Guided Starter
+              </div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                <select
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={guidedStarterTemplate}
+                  onChange={(event) =>
+                    setGuidedStarterTemplate(event.target.value as GuidedStarterTemplateId)
+                  }
+                >
+                  {GUIDED_STARTER_TEMPLATES.map((item) => (
+                    <option key={`guided-starter-${item.id}`} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={guidedStarterFormat}
+                  onChange={(event) => setGuidedStarterFormat(event.target.value as "docx" | "pdf")}
+                >
+                  <option value="docx">DOCX output</option>
+                  <option value="pdf">PDF output</option>
+                </select>
+                <button
+                  className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                  onClick={applyGuidedStarterTemplate}
+                >
+                  Apply Starter (replace chain)
+                </button>
+              </div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900"
+                    checked={
+                      guidedStarterTemplate === "runbook_pipeline"
+                        ? true
+                        : guidedStarterUseIterative
+                    }
+                    onChange={(event) => setGuidedStarterUseIterative(event.target.checked)}
+                    disabled={guidedStarterTemplate === "runbook_pipeline"}
+                  />
+                  Iterative generation
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900"
+                    checked={guidedStarterStrict}
+                    onChange={(event) => setGuidedStarterStrict(event.target.checked)}
+                  />
+                  Strict validation
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                  <span>Max iterations</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    className="w-16 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-900"
+                    value={guidedStarterMaxIterations}
+                    onChange={(event) => setGuidedStarterMaxIterations(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="mt-2 text-[11px] text-slate-500">
+                {
+                  GUIDED_STARTER_TEMPLATES.find((item) => item.id === guidedStarterTemplate)
+                    ?.description
+                }
+              </div>
             </div>
             <datalist id="capability-id-options">
-              {availableCapabilities.map((item) => (
+              {chainCapabilityOptions.map((item) => (
                 <option key={`cap-opt-${item.id}`} value={item.id} />
               ))}
             </datalist>
@@ -2948,97 +6146,787 @@ const openTemplateModal = (template: Template) => {
                 <option key={`task-opt-${taskName}`} value={taskName} />
               ))}
             </datalist>
-            <div className="mt-3 grid gap-2">
-              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Source Task Name
-              </label>
-              <input
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-                value={chainSourceTaskName}
-                onChange={(event) => setChainSourceTaskName(event.target.value)}
-                list="task-name-options"
-                placeholder="GenerateSpec"
-              />
-              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Source Capability ID
-              </label>
-              <input
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-                value={chainSourceCapabilityId}
-                onChange={(event) => setChainSourceCapabilityId(event.target.value)}
-                list="capability-id-options"
-                placeholder="document.spec.generate"
-              />
-              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Source Output Path (dot path)
-              </label>
-              <input
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-                value={chainSourceOutputPath}
-                onChange={(event) => setChainSourceOutputPath(event.target.value)}
-                placeholder="document_spec"
-              />
-              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Target Task Name
-              </label>
-              <input
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-                value={chainTargetTaskName}
-                onChange={(event) => setChainTargetTaskName(event.target.value)}
-                list="task-name-options"
-                placeholder="RenderDocx"
-              />
-              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Target Capability ID
-              </label>
-              <input
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-                value={chainTargetCapabilityId}
-                onChange={(event) => setChainTargetCapabilityId(event.target.value)}
-                list="capability-id-options"
-                placeholder="document.docx.generate"
-              />
-              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Target Input Field
-              </label>
-              <input
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-                value={chainTargetInputField}
-                onChange={(event) => setChainTargetInputField(event.target.value)}
-                placeholder="document_spec"
-              />
-              <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Default Value (optional JSON or string)
-              </label>
-              <input
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-                value={chainDefaultValue}
-                onChange={(event) => setChainDefaultValue(event.target.value)}
-                placeholder='{"title":"Fallback"}'
-              />
-            </div>
-            <div className="mt-3">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Reference Preview
+            <div className="mt-3 space-y-2">
+              <div className="grid gap-2 sm:grid-cols-[1fr_minmax(220px,34ch)_auto_auto]">
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  placeholder="Search capabilities (id, group, description)"
+                  value={chainCapabilityQuery}
+                  onChange={(event) => setChainCapabilityQuery(event.target.value)}
+                />
+                <select
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={visualChainDraftCapability}
+                  onChange={(event) => setVisualChainDraftCapability(event.target.value)}
+                >
+                  {filteredChainCapabilityOptions.map((item) => (
+                    <option key={`chain-draft-${item.id}`} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
+                  onClick={() => addCapabilityNodeToVisualChain(visualChainDraftCapability)}
+                  disabled={!visualChainDraftCapability || filteredChainCapabilityOptions.length === 0}
+                >
+                  Add Step
+                </button>
+                <button
+                  className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
+                  onClick={recommendCapabilitiesWithLlm}
+                  disabled={llmCapabilityRecommendationLoading || chainCapabilityOptions.length === 0}
+                >
+                  {llmCapabilityRecommendationLoading ? "Recommending..." : "LLM Recommend"}
+                </button>
               </div>
-              <pre className="mt-1 max-h-32 overflow-auto rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-800">
-                {chainReference ? JSON.stringify(chainReference, null, 2) : "{\n  \"$from\": []\n}"}
-              </pre>
+              {displayedCapabilityRecommendations.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="text-slate-500">
+                    Recommended{llmCapabilityRecommendationSource ? ` (${llmCapabilityRecommendationSource})` : ""}:
+                  </span>
+                  {displayedCapabilityRecommendations.map((item) => (
+                    <button
+                      key={`cap-rec-${item.id}`}
+                      className={`rounded-full border px-2 py-0.5 ${
+                        visualChainDraftCapability === item.id
+                          ? "border-sky-300 bg-sky-50 text-sky-700"
+                          : "border-slate-300 bg-white text-slate-700"
+                      }`}
+                      onClick={() => setVisualChainDraftCapability(item.id)}
+                      title={item.reason}
+                    >
+                      {item.id}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {llmCapabilityRecommendationWarning ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                  Recommendation note: {llmCapabilityRecommendationWarning}
+                </div>
+              ) : null}
+              {filteredChainCapabilityOptions.length === 0 ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                  No capabilities matched your search.
+                </div>
+              ) : null}
             </div>
-            <div className="mt-3 grid grid-cols-1 gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
-                onClick={insertChainingHintToContext}
+                onClick={autoFixVisualChainInputs}
               >
-                Insert chaining_hints into Context
+                Auto-Fix Inputs
               </button>
               <button
                 className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
-                onClick={copyChainingReference}
+                onClick={autoWireVisualChain}
               >
-                Copy Reference JSON
+                Auto-Wire Missing
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={applyVisualChainToGoalAndContext}
+              >
+                Apply Chain to Goal + Context
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
+                onClick={runChainPreflight}
+                disabled={chainPreflightLoading}
+              >
+                {chainPreflightLoading ? "Compiling + Preflighting..." : "Compile + Preflight"}
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={collapseAllVisualChainNodes}
+                disabled={visualChainNodes.length === 0}
+              >
+                Collapse All
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={expandAllVisualChainNodes}
+                disabled={visualChainNodes.length === 0}
+              >
+                Expand All
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={resetLinearDependencies}
+                disabled={visualChainNodes.length < 2}
+              >
+                Reset Linear Edges
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={clearAllDependencies}
+                disabled={composerDraftEdges.length === 0}
+              >
+                Clear Edges
               </button>
             </div>
+            {chainCapabilityOptions.length === 0 ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                Capability catalog is unavailable. Start API port-forward and refresh to load step options.
+              </div>
+            ) : null}
+            <ComposerDagCanvas
+              visualChainNodes={visualChainNodes}
+              dagEdgeDraftSourceNodeId={dagEdgeDraftSourceNodeId}
+              setDagEdgeDraftSourceNodeId={setDagEdgeDraftSourceNodeId}
+              setDagConnectorDrag={setDagConnectorDrag}
+              setDagConnectorHoverTargetNodeId={setDagConnectorHoverTargetNodeId}
+              autoLayoutDagCanvas={autoLayoutDagCanvas}
+              dagCanvasViewportRef={dagCanvasViewportRef}
+              dagCanvasRef={dagCanvasRef}
+              dagCanvasSurface={dagCanvasSurface}
+              dagCanvasEdges={dagCanvasEdges}
+              hoveredDagEdgeKey={hoveredDagEdgeKey}
+              setHoveredDagEdgeKey={setHoveredDagEdgeKey}
+              removeDagEdge={removeDagEdge}
+              dagConnectorPreview={dagConnectorPreview}
+              dagCanvasNodes={dagCanvasNodes}
+              composerDraftEdges={composerDraftEdges}
+              dagNodeAdjacency={dagNodeAdjacency}
+              visualChainNodeStatusById={visualChainNodeStatusById as Map<
+                string,
+                { missingCount: number; requiredCount: number }
+              >}
+              selectedDagNodeId={selectedDagNodeId}
+              setSelectedDagNodeId={setSelectedDagNodeId}
+              dagConnectorDrag={dagConnectorDrag}
+              dagCanvasDraggingNodeId={dagCanvasDraggingNodeId}
+              dagConnectorHoverTargetNodeId={dagConnectorHoverTargetNodeId}
+              addDagEdge={addDagEdge}
+              beginDagNodeDrag={beginDagNodeDrag}
+              isInteractiveCanvasTarget={isInteractiveCanvasTarget}
+              beginDagConnectorDrag={beginDagConnectorDrag}
+              centerDagNodeInView={centerDagNodeInView}
+              nodeWidth={DAG_CANVAS_NODE_WIDTH}
+              nodeHeight={DAG_CANVAS_NODE_HEIGHT}
+            />
+            <ComposerStepInspector
+              selectedDagNode={selectedDagNode}
+              selectedDagNodeStatus={selectedDagNodeStatus}
+              activeComposerIssueFocus={activeComposerIssueFocus}
+              inspectorBindingRefs={inspectorBindingRefs}
+              visualChainNodes={visualChainNodes}
+              outputPathSuggestionsForNode={outputPathSuggestionsForNode}
+              autoWireNodeBindings={autoWireNodeBindings}
+              quickFixNodeBindings={quickFixNodeBindings}
+              setSelectedDagNodeId={setSelectedDagNodeId}
+              setVisualBindingMode={setVisualBindingMode}
+              clearVisualBinding={clearVisualBinding}
+              updateVisualBindingSourceNode={updateVisualBindingSourceNode}
+              updateVisualBindingPath={updateVisualBindingPath}
+              updateVisualBindingLiteral={updateVisualBindingLiteral}
+              updateVisualBindingContextPath={updateVisualBindingContextPath}
+              updateVisualBindingMemory={updateVisualBindingMemory}
+              setVisualBindingFromPrevious={setVisualBindingFromPrevious}
+              canInsertDeriveOutputPath={canInsertDeriveForSelectedNode}
+              onInsertDeriveOutputPath={insertDeriveOutputPathStepForNode}
+            />
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                Steps: <span className="font-semibold">{visualChainSummary.steps}</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                DAG edges: <span className="font-semibold">{visualChainSummary.dagEdges}</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                Required: <span className="font-semibold">{visualChainSummary.requiredInputs}</span>
+              </div>
+              <div
+                className={`rounded-lg border px-2 py-1 ${
+                  visualChainSummary.missingInputs > 0
+                    ? "border-rose-200 bg-rose-50 text-rose-700"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                Missing: <span className="font-semibold">{visualChainSummary.missingInputs}</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                From chain: <span className="font-semibold">{visualChainSummary.chainedInputs}</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                From context:{" "}
+                <span className="font-semibold">{visualChainSummary.contextInputs}</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                Literal: <span className="font-semibold">{visualChainSummary.literalInputs}</span>
+              </div>
+            </div>
+            <div
+              className={`mt-2 rounded-lg border px-2 py-1 text-[11px] ${
+                visualChainSummary.steps > 0 && visualChainSummary.missingInputs === 0
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-amber-200 bg-amber-50 text-amber-700"
+              }`}
+            >
+              {visualChainSummary.steps > 0 && visualChainSummary.missingInputs === 0
+                ? "Chain readiness: all required inputs are resolved."
+                : "Chain readiness: resolve missing required inputs before applying."}
+            </div>
+            <div className="mt-3 space-y-2">
+              {visualChainNodesWithStatus.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-[11px] text-slate-500">
+                  No chain steps yet. Click <span className="font-semibold">Add Step</span> to start.
+                </div>
+              ) : (
+                visualChainNodesWithStatus.map(({ node, index, requiredStatus }) => {
+                  const missingCount = requiredStatus.filter(
+                    (status) => status.status === "missing"
+                  ).length;
+                  const resolvedCount = requiredStatus.length - missingCount;
+                  const isCollapsed = collapsedVisualChainNodeIds.has(node.id);
+                  return (
+                    <div
+                      key={node.id}
+                      onDragOver={(event) => {
+                        if (
+                          !draggingVisualChainNodeId ||
+                          draggingVisualChainNodeId === node.id
+                        ) {
+                          return;
+                        }
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        setDragOverVisualChainNodeId(node.id);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const sourceNodeId =
+                          event.dataTransfer.getData("text/plain") || draggingVisualChainNodeId;
+                        if (sourceNodeId && sourceNodeId !== node.id) {
+                          reorderVisualChainNode(sourceNodeId, node.id);
+                        }
+                        setDraggingVisualChainNodeId(null);
+                        setDragOverVisualChainNodeId(null);
+                      }}
+                    >
+                      <div
+                        className={`rounded-lg border px-3 py-3 ${
+                          dragOverVisualChainNodeId === node.id &&
+                          draggingVisualChainNodeId &&
+                          draggingVisualChainNodeId !== node.id
+                            ? "border-sky-300 bg-sky-50/30"
+                            : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-[11px] uppercase tracking-[0.15em] text-slate-500">
+                              Step {index + 1}
+                            </div>
+                            <div className="text-xs font-semibold text-slate-800">{node.taskName}</div>
+                            <div className="text-[11px] text-slate-500">{node.capabilityId}</div>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-end gap-1">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                missingCount > 0
+                                  ? "bg-rose-100 text-rose-700"
+                                  : "bg-emerald-100 text-emerald-700"
+                              }`}
+                            >
+                              {missingCount > 0
+                                ? `${missingCount} missing`
+                                : `${resolvedCount}/${requiredStatus.length || 0} ready`}
+                            </span>
+                            <button
+                              className="cursor-grab rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-700 active:cursor-grabbing"
+                              draggable
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", node.id);
+                                setDraggingVisualChainNodeId(node.id);
+                                setDragOverVisualChainNodeId(node.id);
+                              }}
+                              onDragEnd={() => {
+                                setDraggingVisualChainNodeId(null);
+                                setDragOverVisualChainNodeId(null);
+                              }}
+                            >
+                              Drag
+                            </button>
+                            <button
+                              className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-700 disabled:opacity-40"
+                              disabled={index === 0}
+                              onClick={() => moveVisualChainNode(node.id, -1)}
+                            >
+                              Up
+                            </button>
+                            <button
+                              className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-700 disabled:opacity-40"
+                              disabled={index === visualChainNodesWithStatus.length - 1}
+                              onClick={() => moveVisualChainNode(node.id, 1)}
+                            >
+                              Down
+                            </button>
+                            <button
+                              className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-700"
+                              onClick={() => toggleVisualChainNodeCollapsed(node.id)}
+                            >
+                              {isCollapsed ? "Expand" : "Collapse"}
+                            </button>
+                            <button
+                              className="rounded-md border border-rose-200 px-2 py-1 text-[11px] text-rose-600"
+                              onClick={() => removeVisualChainNode(node.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                        {isCollapsed ? (
+                          <div className="mt-2 text-[11px] text-slate-500">
+                            {requiredStatus.length === 0
+                              ? "No required inputs."
+                              : `${resolvedCount}/${requiredStatus.length} required inputs resolved.`}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mt-2 grid gap-2">
+                              <input
+                                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                                value={node.taskName}
+                                onChange={(event) =>
+                                  updateVisualChainNode(node.id, { taskName: event.target.value })
+                                }
+                                list="task-name-options"
+                                placeholder="Task name"
+                              />
+                              <select
+                                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                                value={node.capabilityId}
+                                onChange={(event) =>
+                                  updateVisualChainNode(node.id, {
+                                    capabilityId: event.target.value
+                                  })
+                                }
+                              >
+                                {chainCapabilityOptions.map((item) => (
+                                  <option key={`chain-node-${node.id}-${item.id}`} value={item.id}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                                value={node.outputPath}
+                                onChange={(event) =>
+                                  updateVisualChainNode(node.id, {
+                                    outputPath: event.target.value
+                                  })
+                                }
+                                placeholder="Output field path (e.g., document_spec)"
+                              />
+                            </div>
+                            <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-2 py-2">
+                              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                                DAG Dependencies
+                              </div>
+                              {visualChainNodes.length <= 1 ? (
+                                <div className="mt-1 text-[11px] text-slate-500">
+                                  Add more steps to configure dependencies.
+                                </div>
+                              ) : (
+                                <div className="mt-2 grid gap-1">
+                                  {visualChainNodes
+                                    .filter((candidate) => candidate.id !== node.id)
+                                    .map((candidate) => {
+                                      const checked = composerDraftEdges.some(
+                                        (edge) =>
+                                          edge.fromNodeId === candidate.id &&
+                                          edge.toNodeId === node.id
+                                      );
+                                      return (
+                                        <label
+                                          key={`${node.id}-dep-${candidate.id}`}
+                                          className="flex items-center gap-2 text-[11px] text-slate-700"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={(event) => {
+                                              const currentDeps = composerDraftEdges
+                                                .filter((edge) => edge.toNodeId === node.id)
+                                                .map((edge) => edge.fromNodeId);
+                                              const nextDeps = event.target.checked
+                                                ? [...currentDeps, candidate.id]
+                                                : currentDeps.filter((id) => id !== candidate.id);
+                                              setNodeDependencies(node.id, nextDeps);
+                                            }}
+                                          />
+                                          <span>
+                                            {candidate.taskName} ({candidate.capabilityId})
+                                          </span>
+                                        </label>
+                                      );
+                                    })}
+                                </div>
+                              )}
+                            </div>
+                            <div className="mt-3">
+                              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                                Bindings Table
+                              </div>
+                              {requiredStatus.length === 0 ? (
+                                <div className="mt-1 text-[11px] text-slate-500">
+                                  No required inputs.
+                                </div>
+                              ) : (
+                                <div className="mt-2 space-y-2">
+                                  {requiredStatus.map((status) => {
+                                    const binding = node.inputBindings[status.field];
+                                    const bindingMode =
+                                      binding?.kind === "step_output"
+                                        ? "from"
+                                        : binding?.kind === "literal"
+                                          ? "literal"
+                                          : binding?.kind === "memory"
+                                            ? "memory"
+                                          : "context";
+                                    const sourceNodes = visualChainNodes.filter(
+                                      (candidate) => candidate.id !== node.id
+                                    );
+                                    const sourceNode =
+                                      binding?.kind === "step_output"
+                                        ? visualChainNodes.find(
+                                            (candidate) =>
+                                              candidate.id === binding.sourceNodeId
+                                          )
+                                        : undefined;
+                                    const selectedSourceNode =
+                                      sourceNode ||
+                                      (sourceNodes.length > 0
+                                        ? sourceNodes[sourceNodes.length - 1]
+                                        : undefined);
+                                    const sourcePathOptions =
+                                      outputPathSuggestionsForNode(selectedSourceNode);
+                                    const sourcePathListId = `${node.id}-${status.field}-source-path-options`;
+                                    return (
+                                      <div
+                                        key={`${node.id}-req-${status.field}`}
+                                        className="rounded-md border border-slate-200 bg-slate-50 px-2 py-2"
+                                      >
+                                        <div className="flex flex-wrap items-start justify-between gap-2">
+                                          <div className="text-[11px] font-semibold text-slate-700">
+                                            {status.field}
+                                            <span className="ml-2 rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                                              {status.schemaType}
+                                            </span>
+                                          </div>
+                                          <span
+                                            className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                              status.status === "missing"
+                                                ? "bg-rose-100 text-rose-700"
+                                                : status.status === "from_chain"
+                                                  ? "bg-sky-100 text-sky-700"
+                                                  : status.status === "from_context"
+                                                    ? "bg-emerald-100 text-emerald-700"
+                                                    : "bg-amber-100 text-amber-700"
+                                            }`}
+                                          >
+                                            {status.status}
+                                          </span>
+                                        </div>
+                                        {status.schemaDescription ? (
+                                          <div className="mt-1 text-[11px] text-slate-500">
+                                            {status.schemaDescription}
+                                          </div>
+                                        ) : null}
+                                        <div className="mt-1 text-[11px] text-slate-500">
+                                          {status.detail}
+                                        </div>
+                                        <div className="mt-2 space-y-2">
+                                          <div className="flex items-center gap-2">
+                                            <label className="text-[11px] text-slate-600">
+                                              Mode
+                                            </label>
+                                            <select
+                                              className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                              value={bindingMode}
+                                              onChange={(event) =>
+                                                setVisualBindingMode(
+                                                  node.id,
+                                                  status.field,
+                                                  event.target.value as
+                                                    | "context"
+                                                    | "from"
+                                                    | "literal"
+                                                    | "memory"
+                                                )
+                                              }
+                                            >
+                                              <option value="context">Context/Auto</option>
+                                              <option
+                                                value="from"
+                                                disabled={sourceNodes.length === 0}
+                                              >
+                                                Step output
+                                              </option>
+                                              <option value="literal">Literal</option>
+                                              <option value="memory">Memory</option>
+                                            </select>
+                                            {status.status === "missing" &&
+                                            sourceNodes.length > 0 &&
+                                            bindingMode !== "from" ? (
+                                              <button
+                                                className="rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-700"
+                                                onClick={() =>
+                                                  setVisualBindingFromPrevious(
+                                                    node.id,
+                                                    status.field
+                                                  )
+                                                }
+                                              >
+                                                Wire from previous
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                          {bindingMode === "from" &&
+                                          binding?.kind === "step_output" ? (
+                                            <div className="space-y-2">
+                                              <select
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={binding.sourceNodeId}
+                                                onChange={(event) =>
+                                                  updateVisualBindingSourceNode(
+                                                    node.id,
+                                                    status.field,
+                                                    event.target.value
+                                                  )
+                                                }
+                                              >
+                                                {sourceNodes.length === 0 ? (
+                                                  <option value="">
+                                                    No source steps available
+                                                  </option>
+                                                ) : (
+                                                  sourceNodes.map((candidateNode) => (
+                                                    <option
+                                                      key={`${node.id}-${status.field}-${candidateNode.id}`}
+                                                      value={candidateNode.id}
+                                                    >
+                                                      {candidateNode.taskName} (
+                                                      {candidateNode.capabilityId})
+                                                    </option>
+                                                  ))
+                                                )}
+                                              </select>
+                                              <input
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={binding.sourcePath}
+                                                onChange={(event) =>
+                                                  updateVisualBindingPath(
+                                                    node.id,
+                                                    status.field,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                list={sourcePathListId}
+                                                placeholder="source output path"
+                                              />
+                                              <datalist id={sourcePathListId}>
+                                                {sourcePathOptions.map((option) => (
+                                                  <option
+                                                    key={`${sourcePathListId}-${option}`}
+                                                    value={option}
+                                                  />
+                                                ))}
+                                              </datalist>
+                                              <button
+                                                className="rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-700"
+                                                onClick={() =>
+                                                  clearVisualBinding(node.id, status.field)
+                                                }
+                                              >
+                                                Clear binding
+                                              </button>
+                                            </div>
+                                          ) : null}
+                                          {bindingMode === "literal" ? (
+                                            <div className="space-y-1">
+                                              <input
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={
+                                                  binding?.kind === "literal"
+                                                    ? binding.value
+                                                    : ""
+                                                }
+                                                onChange={(event) =>
+                                                  updateVisualBindingLiteral(
+                                                    node.id,
+                                                    status.field,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                placeholder='Literal value (supports JSON like {"x":1} or true)'
+                                              />
+                                              <div className="text-[10px] text-slate-500">
+                                                JSON values are parsed automatically during
+                                                preflight/apply.
+                                              </div>
+                                            </div>
+                                          ) : null}
+                                          {bindingMode === "context" ? (
+                                            <div className="space-y-1">
+                                              <input
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={
+                                                  binding?.kind === "context"
+                                                    ? binding.path
+                                                    : status.field
+                                                }
+                                                onChange={(event) =>
+                                                  updateVisualBindingContextPath(
+                                                    node.id,
+                                                    status.field,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                placeholder="context path (e.g., job.topic)"
+                                              />
+                                            </div>
+                                          ) : null}
+                                          {bindingMode === "memory" ? (
+                                            <div className="space-y-2">
+                                              <select
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={
+                                                  binding?.kind === "memory" ? binding.scope : "job"
+                                                }
+                                                onChange={(event) =>
+                                                  updateVisualBindingMemory(node.id, status.field, {
+                                                    scope: event.target.value as "job" | "global"
+                                                  })
+                                                }
+                                              >
+                                                <option value="job">job</option>
+                                                <option value="global">global</option>
+                                              </select>
+                                              <input
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={
+                                                  binding?.kind === "memory"
+                                                    ? binding.name
+                                                    : "task_outputs"
+                                                }
+                                                onChange={(event) =>
+                                                  updateVisualBindingMemory(node.id, status.field, {
+                                                    name: event.target.value
+                                                  })
+                                                }
+                                                placeholder="memory name (e.g., task_outputs)"
+                                              />
+                                              <input
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={binding?.kind === "memory" ? binding.key || "" : ""}
+                                                onChange={(event) =>
+                                                  updateVisualBindingMemory(node.id, status.field, {
+                                                    key: event.target.value
+                                                  })
+                                                }
+                                                placeholder="optional key"
+                                              />
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      {index < visualChainNodesWithStatus.length - 1 ? (
+                        <div className="py-1 text-center text-xs text-slate-400">↓</div>
+                      ) : null}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <details className="mt-3 rounded-lg border border-slate-200 bg-white px-2 py-2">
+              <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">
+                Advanced: Manual $from composer
+              </summary>
+              <div className="mt-2 grid gap-2">
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={chainSourceTaskName}
+                  onChange={(event) => setChainSourceTaskName(event.target.value)}
+                  list="task-name-options"
+                  placeholder="Source task name"
+                />
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={chainSourceCapabilityId}
+                  onChange={(event) => setChainSourceCapabilityId(event.target.value)}
+                  list="capability-id-options"
+                  placeholder="Source capability id"
+                />
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={chainSourceOutputPath}
+                  onChange={(event) => setChainSourceOutputPath(event.target.value)}
+                  placeholder="Source output path"
+                />
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={chainTargetTaskName}
+                  onChange={(event) => setChainTargetTaskName(event.target.value)}
+                  list="task-name-options"
+                  placeholder="Target task name"
+                />
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={chainTargetCapabilityId}
+                  onChange={(event) => setChainTargetCapabilityId(event.target.value)}
+                  list="capability-id-options"
+                  placeholder="Target capability id"
+                />
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={chainTargetInputField}
+                  onChange={(event) => setChainTargetInputField(event.target.value)}
+                  placeholder="Target input field"
+                />
+                <input
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  value={chainDefaultValue}
+                  onChange={(event) => setChainDefaultValue(event.target.value)}
+                  placeholder="Optional default value"
+                />
+                <pre className="max-h-32 overflow-auto rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-[11px] text-slate-800">
+                  {chainReference ? JSON.stringify(chainReference, null, 2) : "{\n  \"$from\": []\n}"}
+                </pre>
+                <div className="grid grid-cols-1 gap-2">
+                  <button
+                    className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                    onClick={appendChainingRuleToGoal}
+                  >
+                    Add Rule to Goal
+                  </button>
+                  <button
+                    className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                    onClick={insertChainingHintToContext}
+                  >
+                    Insert chaining_hints into Context
+                  </button>
+                  <button
+                    className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                    onClick={copyChainingReference}
+                  >
+                    Copy Reference JSON
+                  </button>
+                </div>
+              </div>
+            </details>
             {chainRuleText ? (
               <div className="mt-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-700">
                 Rule preview: {chainRuleText}
@@ -3047,6 +6935,17 @@ const openTemplateModal = (template: Template) => {
             {chainComposerNotice ? (
               <div className="mt-2 text-[11px] text-slate-600">{chainComposerNotice}</div>
             ) : null}
+            {(chainPreflightResult || chainValidationRequired) && (
+              <ComposerValidationPanel
+                preflightResult={chainPreflightResult}
+                compileLoading={composerCompileLoading}
+                issues={composerValidationIssues}
+                needsValidation={chainValidationRequired}
+                onIssueClick={focusComposerValidationIssue}
+                activeIssue={activeComposerIssueFocus}
+                formatTimestamp={formatTimestamp}
+              />
+            )}
           </div>
         </div>
       </aside>
@@ -3205,15 +7104,16 @@ const openTemplateModal = (template: Template) => {
                     {composeNotice ? (
                       <div className="mt-2 text-[11px] text-slate-600">{composeNotice}</div>
                     ) : null}
-                    {detectedCapabilities.length === 0 ? (
+                    {requiredContextCapabilities.length === 0 ? (
                       <div className="mt-2 text-xs text-slate-500">
                         Mention a capability id in Goal (for example: <code>github.repo.list</code>)
-                        to see required Context JSON fields.
+                        or add steps in Chaining Composer to see required Context JSON fields.
                       </div>
                     ) : (
                       <div className="mt-2 space-y-2">
-                        {detectedCapabilities.map((item) => {
-                          const required = item.required_inputs || [];
+                        {requiredContextCapabilities.map((item) => {
+                          const required = getCapabilityRequiredInputs(item);
+                          const schemaProperties = capabilityInputSchemaProperties(item);
                           return (
                             <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                               <div className="text-xs font-semibold text-slate-800">{item.id}</div>
@@ -3225,6 +7125,8 @@ const openTemplateModal = (template: Template) => {
                                       const isMissing = missingCapabilityInputs.some(
                                         (entry) => entry.capabilityId === item.id && entry.field === field
                                       );
+                                      const property = schemaProperties[field];
+                                      const schemaType = schemaPropertyTypeLabel(property);
                                       return (
                                         <span
                                           key={`${item.id}-${field}`}
@@ -3235,7 +7137,127 @@ const openTemplateModal = (template: Template) => {
                                           }`}
                                         >
                                           {field}
+                                          <span className="ml-1 opacity-80">({schemaType})</span>
                                         </span>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="space-y-2">
+                                    {required.map((field) => {
+                                      const property = schemaProperties[field];
+                                      const schemaType = schemaPropertyTypeLabel(property);
+                                      const isMissing = missingCapabilityInputs.some(
+                                        (entry) => entry.capabilityId === item.id && entry.field === field
+                                      );
+                                      const description =
+                                        property && typeof property.description === "string"
+                                          ? property.description
+                                          : "";
+                                      const draftValue = getCapabilityInputDraftValue(
+                                        item.id,
+                                        field,
+                                        schemaType
+                                      );
+                                      const normalizedType = schemaType.toLowerCase();
+                                      const isStructured =
+                                        normalizedType.includes("object") ||
+                                        normalizedType.includes("array");
+                                      const isBoolean = normalizedType.includes("boolean");
+                                      return (
+                                        <div
+                                          key={`${item.id}-${field}-editor`}
+                                          className="rounded-md border border-slate-200 bg-slate-50 px-2 py-2"
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <div className="text-[11px] font-semibold text-slate-700">
+                                              {field}
+                                            </div>
+                                            <span
+                                              className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                                isMissing
+                                                  ? "bg-rose-100 text-rose-700"
+                                                  : "bg-emerald-100 text-emerald-700"
+                                              }`}
+                                            >
+                                              {isMissing ? "missing" : "set"}
+                                            </span>
+                                          </div>
+                                          {description ? (
+                                            <div className="mt-1 text-[11px] text-slate-500">
+                                              {description}
+                                            </div>
+                                          ) : null}
+                                          <div className="mt-2 space-y-2">
+                                            {isBoolean ? (
+                                              <select
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={draftValue}
+                                                onChange={(event) =>
+                                                  setCapabilityInputDraftValue(
+                                                    item.id,
+                                                    field,
+                                                    event.target.value
+                                                  )
+                                                }
+                                              >
+                                                <option value="">(unset)</option>
+                                                <option value="true">true</option>
+                                                <option value="false">false</option>
+                                              </select>
+                                            ) : isStructured ? (
+                                              <textarea
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                rows={3}
+                                                value={draftValue}
+                                                onChange={(event) =>
+                                                  setCapabilityInputDraftValue(
+                                                    item.id,
+                                                    field,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                placeholder={
+                                                  normalizedType.includes("array") ? "[]" : "{}"
+                                                }
+                                              />
+                                            ) : (
+                                              <input
+                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                value={draftValue}
+                                                onChange={(event) =>
+                                                  setCapabilityInputDraftValue(
+                                                    item.id,
+                                                    field,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                placeholder={schemaType}
+                                              />
+                                            )}
+                                            <div className="flex flex-wrap gap-2">
+                                              <button
+                                                className="rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-700"
+                                                onClick={() =>
+                                                  applyCapabilityInputDraft(
+                                                    item.id,
+                                                    field,
+                                                    schemaType
+                                                  )
+                                                }
+                                              >
+                                                Apply to Context
+                                              </button>
+                                              <button
+                                                className="rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-700"
+                                                onClick={() =>
+                                                  clearCapabilityInputField(item.id, field)
+                                                }
+                                              >
+                                                Clear
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </div>
                                       );
                                     })}
                                   </div>
@@ -3272,11 +7294,18 @@ const openTemplateModal = (template: Template) => {
                     </div>
                   </div>
                   <button
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-md transition hover:bg-slate-800"
+                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-md transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={submitJob}
+                    disabled={isSubmitDisabled}
+                    title={submitDisabledReason || ""}
                   >
                     Submit Job
                   </button>
+                  {submitDisabledReason ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      {submitDisabledReason}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -3321,8 +7350,18 @@ const openTemplateModal = (template: Template) => {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-slate-900 break-words">
-                      {job.goal}
+                      {expandedJobGoals.has(job.id)
+                        ? job.goal
+                        : truncate(job.goal, JOB_GOAL_PREVIEW_LENGTH)}
                     </div>
+                    {job.goal.length > JOB_GOAL_PREVIEW_LENGTH ? (
+                      <button
+                        className="mt-1 text-xs font-medium text-slate-600 transition hover:text-slate-900"
+                        onClick={() => toggleJobGoalExpanded(job.id)}
+                      >
+                        {expandedJobGoals.has(job.id) ? "Show less" : "Show more"}
+                      </button>
+                    ) : null}
                     <div className="mt-1 text-xs text-slate-500 break-words">{job.id}</div>
                     <div className="mt-1 text-xs text-slate-500">
                       Run: {formatTimestamp(job.updated_at || job.created_at)}
@@ -3466,6 +7505,307 @@ const openTemplateModal = (template: Template) => {
               ) : (
                 <div className="text-xs text-slate-600">No downloadable artifacts yet.</div>
               )}
+            </div>
+
+            <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-slate-800">Run Debugger</div>
+                  <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                    Timeline + Resolved Inputs
+                  </div>
+                </div>
+                <button
+                  className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                  onClick={() => setShowDebugger((prev) => !prev)}
+                >
+                  {showDebugger ? "Hide" : "Show"}
+                </button>
+              </div>
+              {showDebugger ? (
+                <div className="mt-3">
+                  {jobDebuggerLoading ? (
+                    <div className="text-xs text-slate-500">Loading debugger data...</div>
+                  ) : jobDebuggerError ? (
+                    <div className="text-xs text-rose-600">{jobDebuggerError}</div>
+                  ) : !jobDebugger || jobDebugger.tasks.length === 0 ? (
+                    <div className="text-xs text-slate-500">No debugger data for this job yet.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                        <span className="font-semibold text-slate-700">Generated:</span>{" "}
+                        {formatTimestamp(jobDebugger.generated_at)} •{" "}
+                        <span className="font-semibold text-slate-700">Events scanned:</span>{" "}
+                        {jobDebugger.timeline_events_scanned}
+                      </div>
+                      {debuggerActionNotice ? (
+                        <div className="text-xs text-slate-600">{debuggerActionNotice}</div>
+                      ) : null}
+                      {jobDebugger.tasks.map((entry) => {
+                        const classification = entry.error || {
+                          category: "none",
+                          code: "none",
+                          retryable: false,
+                          message: "",
+                          hint: "",
+                        };
+                        const categoryClass =
+                          classification.category === "contract"
+                            ? "bg-rose-100 text-rose-700"
+                            : classification.category === "timeout" ||
+                                classification.category === "transient"
+                              ? "bg-amber-100 text-amber-700"
+                              : classification.category === "none"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-slate-100 text-slate-700";
+                        const taskStatus = entry.task.status || "unknown";
+                        const latestResult =
+                          entry.latest_result && typeof entry.latest_result === "object"
+                            ? entry.latest_result
+                            : {};
+                        const replayPayload = {
+                          task_name: entry.task.name,
+                          capability_requests: entry.task.tool_requests || [],
+                          resolved_tool_inputs: entry.resolved_tool_inputs || {},
+                          instruction: entry.task.instruction,
+                        };
+                        const traceIds = Array.from(
+                          new Set(
+                            Array.isArray(latestResult.tool_calls)
+                              ? latestResult.tool_calls
+                                  .map((call) =>
+                                    call &&
+                                    typeof call === "object" &&
+                                    typeof (call as { trace_id?: unknown }).trace_id === "string"
+                                      ? (call as { trace_id: string }).trace_id
+                                      : ""
+                                  )
+                                  .filter((value) => value)
+                              : []
+                          )
+                        );
+                        const runIds = Array.from(
+                          new Set(
+                            (entry.timeline || [])
+                              .map((eventEntry) =>
+                                typeof eventEntry.run_id === "string" ? eventEntry.run_id : ""
+                              )
+                              .filter((value) => value)
+                          )
+                        );
+                        return (
+                          <details
+                            key={`debug-task-${entry.task.id}`}
+                            className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                          >
+                            <summary className="cursor-pointer list-none">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-slate-800">
+                                    {entry.task.name}
+                                  </span>
+                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-slate-600">
+                                    {taskStatus}
+                                  </span>
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] ${categoryClass}`}>
+                                    {classification.category}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  {entry.timeline.length} timeline events
+                                </div>
+                              </div>
+                            </summary>
+                            <div className="mt-3 space-y-3">
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-700"
+                                  onClick={() =>
+                                    copyJsonForDebugger("resolved inputs", entry.resolved_tool_inputs || {})
+                                  }
+                                >
+                                  Copy Resolved Inputs
+                                </button>
+                                <button
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-700"
+                                  onClick={() => copyJsonForDebugger("replay payload", replayPayload)}
+                                >
+                                  Copy Replay Payload
+                                </button>
+                                {taskStatus === "failed" ? (
+                                  <button
+                                    className="rounded-md border border-amber-300 px-2 py-1 text-[11px] text-amber-700"
+                                    onClick={() => retryTaskFromDebugger(entry.task.id)}
+                                  >
+                                    Retry Task
+                                  </button>
+                                ) : null}
+                              </div>
+                              {classification.message ? (
+                                <div className="rounded-md border border-rose-100 bg-rose-50 px-2 py-2 text-[11px] text-rose-700">
+                                  <div className="font-semibold">Error ({classification.code})</div>
+                                  <div className="mt-1">{classification.message}</div>
+                                  {classification.hint ? (
+                                    <div className="mt-1 text-rose-600">Hint: {classification.hint}</div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                              {Object.keys(entry.tool_inputs_validation || {}).length > 0 ? (
+                                <div className="rounded-md border border-amber-100 bg-amber-50 px-2 py-2 text-[11px] text-amber-700">
+                                  <div className="font-semibold">Input validation</div>
+                                  {Object.entries(entry.tool_inputs_validation || {}).map(([tool, message]) => (
+                                    <div key={`validation-${entry.task.id}-${tool}`} className="mt-1">
+                                      • {tool}: {message}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <div>
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  Timeline
+                                </div>
+                                {entry.timeline.length > 0 ? (
+                                  <div className="mt-2 max-h-48 space-y-1 overflow-auto rounded-md border border-slate-200 bg-white p-2 text-[11px] text-slate-700">
+                                    {entry.timeline.map((eventEntry) => (
+                                      <div key={`${entry.task.id}-${eventEntry.stream_id}`} className="rounded border border-slate-100 bg-slate-50 px-2 py-1">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <span className="font-semibold">{eventEntry.type}</span>
+                                          <span className="text-slate-500">
+                                            {formatTimestamp(eventEntry.occurred_at)}
+                                          </span>
+                                        </div>
+                                        <div className="mt-1 text-slate-500">
+                                          status={eventEntry.status || "—"} • attempts=
+                                          {eventEntry.attempts ?? "—"}/{eventEntry.max_attempts ?? "—"} •
+                                          worker={eventEntry.worker_consumer || "—"}
+                                        </div>
+                                        {eventEntry.error ? (
+                                          <div className="mt-1 text-rose-600">{eventEntry.error}</div>
+                                        ) : null}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="mt-1 text-xs text-slate-500">No timeline events.</div>
+                                )}
+                              </div>
+                              {traceIds.length > 0 ? (
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                    Trace Links
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap gap-2">
+                                    {traceIds.map((traceId) => {
+                                      const jaegerHref = buildJaegerTraceHref(traceId);
+                                      const grafanaHref = buildGrafanaLogsHref(traceId);
+                                      return (
+                                        <div
+                                          key={`trace-link-${entry.task.id}-${traceId}`}
+                                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700"
+                                        >
+                                          <div className="font-mono text-[10px] text-slate-600">
+                                            {traceId}
+                                          </div>
+                                          <div className="mt-1 flex flex-wrap gap-1">
+                                            <button
+                                              className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-700"
+                                              onClick={() => copyTextForDebugger("trace id", traceId)}
+                                            >
+                                              Copy
+                                            </button>
+                                            {jaegerHref ? (
+                                              <a
+                                                href={jaegerHref}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="rounded border border-cyan-200 bg-cyan-50 px-1.5 py-0.5 text-[10px] text-cyan-700"
+                                              >
+                                                Jaeger
+                                              </a>
+                                            ) : null}
+                                            {grafanaHref ? (
+                                              <a
+                                                href={grafanaHref}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700"
+                                              >
+                                                Grafana
+                                              </a>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+                              {runIds.length > 0 ? (
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                    Run IDs
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap gap-2">
+                                    {runIds.map((runId) => {
+                                      const grafanaHref = buildGrafanaLogsHref(runId);
+                                      return (
+                                        <div
+                                          key={`run-link-${entry.task.id}-${runId}`}
+                                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700"
+                                        >
+                                          <div className="font-mono text-[10px] text-slate-600">
+                                            {runId}
+                                          </div>
+                                          <div className="mt-1 flex flex-wrap gap-1">
+                                            <button
+                                              className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-700"
+                                              onClick={() => copyTextForDebugger("run id", runId)}
+                                            >
+                                              Copy
+                                            </button>
+                                            {grafanaHref ? (
+                                              <a
+                                                href={grafanaHref}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700"
+                                              >
+                                                Grafana
+                                              </a>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+                              <div className="grid gap-2 md:grid-cols-2">
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                    Resolved Inputs
+                                  </div>
+                                  <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-700">
+                                    {JSON.stringify(entry.resolved_tool_inputs || {}, null, 2)}
+                                  </pre>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                    Latest Result
+                                  </div>
+                                  <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-700">
+                                    {JSON.stringify(latestResult, null, 2)}
+                                  </pre>
+                                </div>
+                              </div>
+                            </div>
+                          </details>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             {selectedTasks.length === 0 ? (

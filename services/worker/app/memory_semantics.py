@@ -98,7 +98,7 @@ def stable_memory_keys(tool_name: str, payload: Mapping[str, Any]) -> list[str]:
     for field, alias in MEMORY_PREFERRED_KEYS.items():
         if field in payload:
             keys.append(alias)
-    if tool_name == "derive_output_filename" and "path" in payload:
+    if tool_name in {"derive_output_filename", "derive_output_path"} and "path" in payload:
         document_type = _normalize_document_type(payload.get("document_type"))
         if document_type == "cover_letter":
             keys.append("docx_path:cover_letter:latest")

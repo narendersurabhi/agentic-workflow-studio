@@ -579,8 +579,48 @@ capabilities:
         tool_name: workspace_copy
         arg_map: {}
         enabled: true
+  - id: memory.read
+    description: Read memory entries for pointer resolution and context hydration.
+    risk_tier: read_only
+    idempotency: read
+    group: memory
+    subgroup: retrieval
+    input_schema_ref: memory_read_capability_input
+    output_schema_ref: ""
+    tags:
+      - memory
+      - read
+      - pointer
+      - context
+    enabled: true
+    adapters:
+      - type: tool
+        server_id: local_worker
+        tool_name: memory_read
+        arg_map: {}
+        enabled: true
+  - id: memory.write
+    description: Write memory entries for reuse across tasks, jobs, and scopes.
+    risk_tier: bounded_write
+    idempotency: safe_write
+    group: memory
+    subgroup: mutation
+    input_schema_ref: memory_write_capability_input
+    output_schema_ref: ""
+    tags:
+      - memory
+      - write
+      - pointer
+      - context
+    enabled: true
+    adapters:
+      - type: tool
+        server_id: local_worker
+        tool_name: memory_write
+        arg_map: {}
+        enabled: true
   - id: document.output.derive
-    description: Derive a safe relative output path for generated document artifacts (set output_extension for pdf/md/etc.).
+    description: Derive a generic safe relative output path for generated document artifacts (set output_extension for pdf/md/etc.).
     risk_tier: read_only
     idempotency: read
     group: documents
@@ -597,11 +637,11 @@ capabilities:
     adapters:
       - type: tool
         server_id: local_worker
-        tool_name: derive_output_filename
+        tool_name: derive_output_path
         arg_map: {}
         enabled: true
   - id: document.spec.generate
-    description: Generate a DocumentSpec from job context using the LLM.
+    description: Generate a DocumentSpec from instruction/topic/audience/tone/date/output_dir using the LLM.
     risk_tier: read_only
     idempotency: read
     group: documents

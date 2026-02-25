@@ -32,9 +32,12 @@ class CoreOpsHandlers:
     artifact_copy: PayloadHandler
     workspace_copy: PayloadHandler
     artifact_move: PayloadHandler
+    derive_output_path: PayloadHandler
     derive_output_filename: PayloadHandler
     run_tests: PayloadHandler
     search_text: PayloadHandler
+    memory_read: PayloadHandler
+    memory_write: PayloadHandler
     docx_render: PayloadHandler
     sleep: PayloadHandler
     http_fetch: PayloadHandler
@@ -685,6 +688,51 @@ def register_core_ops_tools(
     registry.register(
         Tool(
             spec=ToolSpec(
+                name="derive_output_path",
+                description="Derive a generic filesystem-safe output path for generated artifacts",
+                usage_guidance=(
+                    "Use for capability-driven document rendering where naming should be generic and deterministic. "
+                    "Provide topic, output_dir, and document_type. "
+                    "Optionally provide today/date (YYYY-MM-DD). "
+                    "Optionally provide output_extension (or file_extension/extension/format); "
+                    "if omitted, document_type can be used as extension when it is a known format, "
+                    "otherwise default extension is docx."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "minLength": 1},
+                        "today": {"type": "string", "minLength": 4},
+                        "date": {"type": "string", "minLength": 4},
+                        "output_dir": {"type": "string", "minLength": 1},
+                        "document_type": {"type": "string", "minLength": 1},
+                        "output_extension": {"type": "string"},
+                        "file_extension": {"type": "string"},
+                        "extension": {"type": "string"},
+                        "format": {"type": "string"},
+                    },
+                    "required": ["topic", "output_dir", "document_type"],
+                },
+                output_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "document_type": {"type": "string"},
+                        "output_extension": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+                timeout_s=5,
+                risk_level=RiskLevel.low,
+                tool_intent=ToolIntent.io,
+            ),
+            handler=handlers.derive_output_path,
+        )
+    )
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(
                 name="derive_output_filename",
                 description="Derive a filesystem-safe output path for resumes or general documents",
                 usage_guidance=(
@@ -875,6 +923,88 @@ def register_core_ops_tools(
                 tool_intent=ToolIntent.io,
             ),
             handler=handlers.search_text,
+        )
+    )
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(
+                name="memory_read",
+                description="Read entries from memory store",
+                usage_guidance=(
+                    "Use to resolve memory pointers before downstream tool calls. "
+                    "Provide 'name' and optional filters: scope, key, job_id, user_id, project_id, limit."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "minLength": 1},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["request", "session", "user", "project", "global"],
+                        },
+                        "key": {"type": "string"},
+                        "job_id": {"type": "string"},
+                        "user_id": {"type": "string"},
+                        "project_id": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                        "include_expired": {"type": "boolean"},
+                    },
+                    "required": ["name"],
+                },
+                output_schema={
+                    "type": "object",
+                    "properties": {
+                        "entries": {"type": "array", "items": {"type": "object"}},
+                        "count": {"type": "integer"},
+                    },
+                    "required": ["entries", "count"],
+                },
+                timeout_s=10,
+                risk_level=RiskLevel.low,
+                tool_intent=ToolIntent.io,
+            ),
+            handler=handlers.memory_read,
+        )
+    )
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(
+                name="memory_write",
+                description="Write an entry to memory store",
+                usage_guidance=(
+                    "Use to persist structured outputs for reuse across tasks and jobs. "
+                    "Provide name and payload; optional scope, key, job_id, user_id, project_id, ttl_seconds, metadata."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "minLength": 1},
+                        "payload": {"type": "object"},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["request", "session", "user", "project", "global"],
+                        },
+                        "key": {"type": "string"},
+                        "job_id": {"type": "string"},
+                        "user_id": {"type": "string"},
+                        "project_id": {"type": "string"},
+                        "ttl_seconds": {"type": "integer", "minimum": 1},
+                        "metadata": {"type": "object"},
+                    },
+                    "required": ["name", "payload"],
+                },
+                output_schema={
+                    "type": "object",
+                    "properties": {"entry": {"type": "object"}},
+                    "required": ["entry"],
+                },
+                timeout_s=10,
+                risk_level=RiskLevel.medium,
+                tool_intent=ToolIntent.io,
+            ),
+            handler=handlers.memory_write,
         )
     )
 

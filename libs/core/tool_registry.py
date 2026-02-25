@@ -28,6 +28,7 @@ from libs.framework.tool_runtime import (
     classify_tool_error as _classify_tool_error,
     validate_schema as _validate_schema,
 )
+from libs.core.memory_client import MemoryClient, MemoryClientError
 from libs.tools.docx_generate_from_spec import register_docx_tools
 from libs.tools.pdf_generate_from_spec import register_pdf_tools
 from libs.tools.document_spec_validate import register_document_spec_tools
@@ -728,9 +729,12 @@ def default_registry(
             artifact_copy=_artifact_copy,
             workspace_copy=_workspace_copy,
             artifact_move=_artifact_move_to_workspace,
+            derive_output_path=_derive_output_path,
             derive_output_filename=_derive_output_filename,
             run_tests=_run_tests,
             search_text=_search_text,
+            memory_read=_memory_read,
+            memory_write=_memory_write,
             docx_render=_docx_render,
             sleep=_sleep,
             http_fetch=_http_fetch,
@@ -1160,6 +1164,122 @@ def _artifact_move_to_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"path": str(destination)}
 
 
+def _derive_output_path(payload: Dict[str, Any]) -> Dict[str, Any]:
+    def pick_str(*values: Any) -> str:
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    memory_context = _select_job_context_from_memory(payload.get("memory"))
+    nested_context = memory_context.get("context_json")
+    if not isinstance(nested_context, dict):
+        nested_context = {}
+
+    topic = pick_str(
+        payload.get("topic"),
+        memory_context.get("topic"),
+        nested_context.get("topic"),
+    )
+    date_value = pick_str(
+        payload.get("date"),
+        payload.get("today"),
+        memory_context.get("date"),
+        memory_context.get("today"),
+        nested_context.get("date"),
+        nested_context.get("today"),
+    )
+    output_dir = (
+        pick_str(
+            payload.get("output_dir"),
+            memory_context.get("output_dir"),
+            nested_context.get("output_dir"),
+        )
+        or "documents"
+    )
+    document_type = pick_str(
+        payload.get("document_type"),
+        memory_context.get("document_type"),
+        nested_context.get("document_type"),
+    )
+    extension_hint = pick_str(
+        payload.get("output_extension"),
+        payload.get("file_extension"),
+        payload.get("extension"),
+        payload.get("format"),
+        memory_context.get("output_extension"),
+        memory_context.get("file_extension"),
+        memory_context.get("extension"),
+        memory_context.get("format"),
+        nested_context.get("output_extension"),
+        nested_context.get("file_extension"),
+        nested_context.get("extension"),
+        nested_context.get("format"),
+    )
+
+    if not topic:
+        raise ToolExecutionError("Missing topic")
+    if not document_type:
+        raise ToolExecutionError("Missing document_type")
+
+    normalized_doc_type = document_type.lower().replace("-", "_")
+    known_format_types = {
+        "pdf",
+        "docx",
+        "md",
+        "markdown",
+        "txt",
+        "html",
+        "htm",
+        "json",
+        "yaml",
+        "yml",
+        "xml",
+        "csv",
+    }
+
+    def normalize_extension(raw: str) -> str:
+        value = raw.strip().lower()
+        if value.startswith("."):
+            value = value[1:]
+        if value == "markdown":
+            value = "md"
+        if not value:
+            return ""
+        if not re.fullmatch(r"[a-z0-9]{1,16}", value):
+            raise ToolExecutionError("Invalid output_extension")
+        return value
+
+    output_extension = ""
+    if extension_hint:
+        output_extension = normalize_extension(extension_hint)
+    elif normalized_doc_type in known_format_types:
+        output_extension = normalize_extension(normalized_doc_type)
+    if not output_extension:
+        output_extension = "docx"
+
+    output_dir = output_dir.strip().strip("/")
+    if not output_dir:
+        output_dir = "documents"
+    if output_dir.startswith("/") or ".." in Path(output_dir).parts:
+        raise ToolExecutionError("Invalid output_dir")
+
+    date_source = date_value or datetime.now(UTC).date().isoformat()
+    topic_slug = re.sub(r"[^a-z0-9]+", "_", topic.lower())
+    topic_slug = re.sub(r"_+", "_", topic_slug).strip("_") or "document"
+    date_slug = re.sub(r"[^0-9]+", "_", date_source)
+    date_slug = re.sub(r"_+", "_", date_slug).strip("_")
+    if not date_slug:
+        raise ToolExecutionError("Invalid date")
+
+    filename = f"{topic_slug}_{date_slug}.{output_extension}"
+    return {
+        "path": f"{output_dir}/{filename}",
+        "document_type": normalized_doc_type,
+        "output_extension": output_extension,
+    }
+
+
 def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:
     def pick_str(*values: Any) -> str:
         for value in values:
@@ -1478,6 +1598,82 @@ def _search_text(payload: Dict[str, Any]) -> Dict[str, Any]:
         except OSError:
             continue
     return {"matches": matches}
+
+
+def _memory_client() -> MemoryClient:
+    base_url = os.getenv("MEMORY_API_URL", "http://api:8000").strip() or "http://api:8000"
+    timeout_raw = os.getenv("MEMORY_API_TIMEOUT_S", "5.0").strip()
+    try:
+        timeout_s = float(timeout_raw)
+    except ValueError:
+        timeout_s = 5.0
+    timeout_s = max(0.5, min(timeout_s, 60.0))
+    return MemoryClient(base_url, timeout_s=timeout_s)
+
+
+def _memory_read(payload: Dict[str, Any]) -> Dict[str, Any]:
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ToolExecutionError("Missing name")
+    limit = payload.get("limit", 50)
+    if not isinstance(limit, int):
+        raise ToolExecutionError("limit must be an integer")
+    include_expired = bool(payload.get("include_expired", False))
+    try:
+        entries = _memory_client().read(
+            name=name.strip(),
+            scope=payload.get("scope") if isinstance(payload.get("scope"), str) else None,
+            key=payload.get("key") if isinstance(payload.get("key"), str) else None,
+            job_id=payload.get("job_id") if isinstance(payload.get("job_id"), str) else None,
+            user_id=payload.get("user_id") if isinstance(payload.get("user_id"), str) else None,
+            project_id=payload.get("project_id")
+            if isinstance(payload.get("project_id"), str)
+            else None,
+            limit=max(1, min(limit, 200)),
+            include_expired=include_expired,
+        )
+    except MemoryClientError as exc:
+        raise ToolExecutionError(f"memory_read_failed:{exc}") from exc
+    first = entries[0] if entries else None
+    output: Dict[str, Any] = {"entries": entries, "count": len(entries)}
+    if isinstance(first, dict):
+        output["entry"] = first
+        payload_obj = first.get("payload")
+        if isinstance(payload_obj, dict):
+            output["payload"] = payload_obj
+    return output
+
+
+def _memory_write(payload: Dict[str, Any]) -> Dict[str, Any]:
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ToolExecutionError("Missing name")
+    entry_payload = payload.get("payload")
+    if not isinstance(entry_payload, dict):
+        raise ToolExecutionError("payload must be an object")
+
+    request: Dict[str, Any] = {"name": name.strip(), "payload": entry_payload}
+    for field in ("scope", "key", "job_id", "user_id", "project_id"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            request[field] = value.strip()
+    ttl_seconds = payload.get("ttl_seconds")
+    if ttl_seconds is not None:
+        if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+            raise ToolExecutionError("ttl_seconds must be a positive integer")
+        request["ttl_seconds"] = ttl_seconds
+    metadata = payload.get("metadata")
+    if metadata is not None:
+        if not isinstance(metadata, dict):
+            raise ToolExecutionError("metadata must be an object")
+        request["metadata"] = metadata
+    try:
+        written = _memory_client().write(request)
+    except MemoryClientError as exc:
+        raise ToolExecutionError(f"memory_write_failed:{exc}") from exc
+    if not isinstance(written, dict):
+        raise ToolExecutionError("memory_write_failed:empty_response")
+    return {"entry": written}
 
 
 def _resolve_template_path(template_path: str, template_id: str) -> Path:

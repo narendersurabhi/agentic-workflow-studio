@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import logging
+import re
 import threading
 import time
 import uuid
@@ -21,6 +22,7 @@ from libs.core import (
     capability_registry,
     document_store,
     events,
+    intent_contract,
     logging as core_logging,
     models,
     orchestrator,
@@ -28,9 +30,9 @@ from libs.core import (
     state_machine,
     tool_registry,
 )
-from libs.core.llm_provider import MockLLMProvider
+from libs.core.llm_provider import LLMProvider, LLMProviderError, MockLLMProvider, resolve_provider
 from .database import Base, SessionLocal, engine
-from .models import JobRecord, PlanRecord, TaskRecord
+from .models import EventOutboxRecord, JobRecord, PlanRecord, TaskRecord
 from . import memory_store
 
 core_logging.configure_logging("api")
@@ -66,10 +68,21 @@ JOB_RECOVERY_ENABLED = os.getenv("JOB_RECOVERY_ENABLED", "true").lower() == "tru
 DEV_RESUME_RENDER_ENABLED = os.getenv("DEV_RESUME_RENDER_ENABLED", "false").lower() == "true"
 LLM_PROVIDER_NAME = os.getenv("LLM_PROVIDER", "").strip()
 LLM_MODEL_NAME = os.getenv("OPENAI_MODEL", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com").strip()
+OPENAI_TIMEOUT_S = float(os.getenv("OPENAI_TIMEOUT_S", "30"))
+OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "0"))
+COMPOSER_RECOMMENDER_MODEL = os.getenv("COMPOSER_RECOMMENDER_MODEL", "").strip()
+COMPOSER_RECOMMENDER_ENABLED = os.getenv("COMPOSER_RECOMMENDER_ENABLED", "true").lower() == "true"
 ORCHESTRATOR_RECOVER_PENDING = os.getenv("ORCHESTRATOR_RECOVER_PENDING", "true").lower() == "true"
 ORCHESTRATOR_RECOVER_IDLE_MS = int(os.getenv("ORCHESTRATOR_RECOVER_IDLE_MS", "60000"))
 REPLAN_MAX = int(os.getenv("REPLAN_MAX", "1"))
 TOOL_INPUT_VALIDATION_ENABLED = os.getenv("TOOL_INPUT_VALIDATION_ENABLED", "true").lower() == "true"
+EVENT_OUTBOX_ENABLED = os.getenv("EVENT_OUTBOX_ENABLED", "true").lower() == "true"
+EVENT_OUTBOX_BATCH_SIZE = int(os.getenv("EVENT_OUTBOX_BATCH_SIZE", "200"))
+EVENT_OUTBOX_POLL_S = float(os.getenv("EVENT_OUTBOX_POLL_S", "1.0"))
+EVENT_OUTBOX_REDIS_RETRIES = int(os.getenv("EVENT_OUTBOX_REDIS_RETRIES", "3"))
+EVENT_OUTBOX_REDIS_RETRY_SLEEP_S = float(os.getenv("EVENT_OUTBOX_REDIS_RETRY_SLEEP_S", "0.2"))
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 TASK_OUTPUT_KEY_PREFIX = "task_output:"
 TASK_RESULT_KEY_PREFIX = "task_result:"
@@ -81,11 +94,43 @@ _tool_spec_registry = tool_registry.default_registry(
     service_name="api",
 )
 TOOL_INPUT_SCHEMAS = {spec.name: spec.input_schema for spec in _tool_spec_registry.list_specs()}
+TOOL_INTENTS_BY_NAME = {spec.name: spec.tool_intent for spec in _tool_spec_registry.list_specs()}
+
+
+def _build_composer_recommender_provider() -> LLMProvider | None:
+    if not COMPOSER_RECOMMENDER_ENABLED:
+        return None
+    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
+    if not provider_name or provider_name == "mock":
+        return None
+    model_name = (COMPOSER_RECOMMENDER_MODEL or LLM_MODEL_NAME or "").strip()
+    if not model_name:
+        return None
+    try:
+        return resolve_provider(
+            provider_name,
+            api_key=OPENAI_API_KEY or None,
+            model=model_name,
+            base_url=OPENAI_BASE_URL or None,
+            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
+            max_retries=max(0, OPENAI_MAX_RETRIES),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "composer_recommender_provider_init_failed",
+            extra={"provider": provider_name, "model": model_name},
+        )
+        return None
+
+
+_composer_recommender_provider = _build_composer_recommender_provider()
 
 
 @app.on_event("startup")
 def _init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    if EVENT_OUTBOX_ENABLED:
+        _start_event_outbox_dispatcher()
     if ORCHESTRATOR_ENABLED:
         _start_orchestrator()
     if JOB_RECOVERY_ENABLED:
@@ -163,6 +208,135 @@ def _task_from_record(record: TaskRecord) -> models.Task:
     )
 
 
+def _publish_envelope_to_redis(stream: str, envelope_json: str) -> tuple[bool, str | None]:
+    retries = max(1, EVENT_OUTBOX_REDIS_RETRIES)
+    sleep_s = max(0.0, EVENT_OUTBOX_REDIS_RETRY_SLEEP_S)
+    for attempt in range(1, retries + 1):
+        try:
+            redis_client.xadd(stream, {"data": envelope_json})
+            return True, None
+        except redis.RedisError as exc:
+            if attempt >= retries:
+                return False, str(exc)
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+    return False, "unknown_redis_publish_error"
+
+
+def _insert_outbox_event(stream: str, event_type: str, envelope_json: str) -> str | None:
+    outbox_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    try:
+        with SessionLocal() as db:
+            db.add(
+                EventOutboxRecord(
+                    id=outbox_id,
+                    stream=stream,
+                    event_type=event_type,
+                    envelope_json=json.loads(envelope_json),
+                    attempts=0,
+                    last_error=None,
+                    created_at=now,
+                    updated_at=now,
+                    published_at=None,
+                )
+            )
+            db.commit()
+        return outbox_id
+    except Exception:
+        logger.exception("event_outbox_insert_failed", extra={"event_type": event_type, "stream": stream})
+        return None
+
+
+def _update_outbox_publish_state(
+    outbox_id: str | None, published: bool, error: str | None = None
+) -> None:
+    if not outbox_id:
+        return
+    now = datetime.utcnow()
+    try:
+        with SessionLocal() as db:
+            row = db.query(EventOutboxRecord).filter(EventOutboxRecord.id == outbox_id).first()
+            if not row:
+                return
+            row.attempts = (row.attempts or 0) + 1
+            row.updated_at = now
+            row.last_error = None if published else (error or "redis_publish_failed")
+            if published:
+                row.published_at = now
+            db.commit()
+    except Exception:
+        logger.exception(
+            "event_outbox_update_failed", extra={"outbox_id": outbox_id, "published": published}
+        )
+
+
+def _dispatch_event_outbox_once() -> int:
+    if not EVENT_OUTBOX_ENABLED:
+        return 0
+    dispatched = 0
+    try:
+        with SessionLocal() as db:
+            pending = (
+                db.query(EventOutboxRecord)
+                .filter(EventOutboxRecord.published_at.is_(None))
+                .order_by(EventOutboxRecord.created_at.asc())
+                .limit(max(1, EVENT_OUTBOX_BATCH_SIZE))
+                .all()
+            )
+            if not pending:
+                return 0
+            for row in pending:
+                envelope_json = json.dumps(row.envelope_json)
+                published, error = _publish_envelope_to_redis(row.stream, envelope_json)
+                row.attempts = (row.attempts or 0) + 1
+                row.updated_at = datetime.utcnow()
+                if published:
+                    row.published_at = row.updated_at
+                    row.last_error = None
+                    dispatched += 1
+                else:
+                    row.last_error = error or "redis_publish_failed"
+            db.commit()
+    except Exception:
+        logger.exception("event_outbox_dispatch_failed")
+    return dispatched
+
+
+def _start_event_outbox_dispatcher() -> None:
+    def _loop() -> None:
+        while True:
+            _dispatch_event_outbox_once()
+            time.sleep(max(0.1, EVENT_OUTBOX_POLL_S))
+
+    thread = threading.Thread(target=_loop, daemon=True, name="event-outbox-dispatcher")
+    thread.start()
+
+
+def _outbox_entry_payload(
+    row: EventOutboxRecord,
+    include_payload: bool = False,
+) -> dict[str, Any]:
+    envelope = row.envelope_json if isinstance(row.envelope_json, dict) else {}
+    payload: dict[str, Any] = {
+        "id": row.id,
+        "stream": row.stream,
+        "event_type": row.event_type,
+        "job_id": envelope.get("job_id"),
+        "task_id": envelope.get("task_id"),
+        "occurred_at": envelope.get("occurred_at"),
+        "correlation_id": envelope.get("correlation_id"),
+        "attempts": row.attempts or 0,
+        "last_error": row.last_error,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "published_at": row.published_at.isoformat() if row.published_at else None,
+    }
+    if include_payload:
+        payload["payload"] = envelope
+    return payload
+
+
 def _emit_event(event_type: str, payload: dict[str, Any]) -> None:
     envelope = models.EventEnvelope(
         type=event_type,
@@ -174,12 +348,30 @@ def _emit_event(event_type: str, payload: dict[str, Any]) -> None:
         payload=payload,
     )
     stream = _stream_for_event(event_type)
-    try:
-        redis_client.xadd(stream, {"data": envelope.model_dump_json()})
-    except redis.RedisError:
+    envelope_json = envelope.model_dump_json()
+    if not EVENT_OUTBOX_ENABLED:
+        published, error = _publish_envelope_to_redis(stream, envelope_json)
+        if not published:
+            logger.warning(
+                "event_emit_failed",
+                extra={"event_type": event_type, "stream": stream, "error": error or "redis_publish_failed"},
+            )
+        return
+    outbox_id = _insert_outbox_event(stream, event_type, envelope_json)
+    published, error = _publish_envelope_to_redis(stream, envelope_json)
+    if outbox_id is None and not published:
+        # Last-chance persistence when the initial outbox insert fails.
+        outbox_id = _insert_outbox_event(stream, event_type, envelope_json)
+    _update_outbox_publish_state(outbox_id, published, error)
+    if not published:
         logger.warning(
-            "event_emit_failed",
-            extra={"event_type": event_type, "stream": stream},
+            "event_emit_deferred_to_outbox",
+            extra={
+                "event_type": event_type,
+                "stream": stream,
+                "outbox_id": outbox_id,
+                "error": error or "redis_publish_failed",
+            },
         )
 
 
@@ -221,6 +413,708 @@ def _load_schema_from_ref(schema_ref: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _schema_type_label(schema: dict[str, Any]) -> str:
+    raw = schema.get("type")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    if isinstance(raw, list):
+        normalized = sorted({str(item).strip() for item in raw if str(item).strip()})
+        if normalized:
+            return "|".join(normalized)
+    if isinstance(schema.get("enum"), list):
+        return "enum"
+    if isinstance(schema.get("properties"), dict):
+        return "object"
+    if isinstance(schema.get("items"), dict):
+        return "array"
+    return "unknown"
+
+
+def _flatten_schema_fields(
+    schema: dict[str, Any] | None,
+    *,
+    max_depth: int = 8,
+) -> list[dict[str, Any]]:
+    if not isinstance(schema, dict):
+        return []
+    fields: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    def walk(node: Any, path: str, required: bool, depth: int) -> None:
+        if depth > max_depth or not isinstance(node, dict):
+            return
+        if path and path not in seen_paths:
+            fields.append(
+                {
+                    "path": path,
+                    "required": required,
+                    "type": _schema_type_label(node),
+                }
+            )
+            seen_paths.add(path)
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            required_keys = {
+                key for key in node.get("required", []) if isinstance(key, str) and key.strip()
+            }
+            for key, child in properties.items():
+                if not isinstance(key, str) or not key.strip():
+                    continue
+                child_path = f"{path}.{key}" if path else key
+                walk(child, child_path, key in required_keys, depth + 1)
+        items = node.get("items")
+        if isinstance(items, dict):
+            item_path = f"{path}[]" if path else "[]"
+            walk(items, item_path, False, depth + 1)
+
+    walk(schema, "", False, 0)
+    return fields
+
+
+def _resolve_capability_schemas(
+    spec: capability_registry.CapabilitySpec,
+    *,
+    include_schemas: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not include_schemas:
+        return None, None
+    input_schema = _load_schema_from_ref(spec.input_schema_ref) if spec.input_schema_ref else None
+    output_schema = _load_schema_from_ref(spec.output_schema_ref) if spec.output_schema_ref else None
+    if input_schema is not None and output_schema is not None:
+        return input_schema, output_schema
+    for adapter in spec.adapters:
+        if not adapter.enabled:
+            continue
+        try:
+            tool = _tool_spec_registry.get(adapter.tool_name)
+        except KeyError:
+            continue
+        if input_schema is None:
+            input_schema = dict(tool.spec.input_schema)
+        if output_schema is None:
+            output_schema = dict(tool.spec.output_schema)
+        if input_schema is not None and output_schema is not None:
+            break
+    return input_schema, output_schema
+
+
+def _coerce_context_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _coerce_composer_nodes(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    nodes: list[dict[str, str]] = []
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            continue
+        node_id = str(raw.get("id") or f"node-{index + 1}").strip()
+        capability_id = str(raw.get("capabilityId") or raw.get("capability_id") or "").strip()
+        if not capability_id:
+            continue
+        output_path = str(raw.get("outputPath") or raw.get("output_path") or "").strip()
+        nodes.append(
+            {
+                "id": node_id,
+                "capability_id": capability_id,
+                "output_path": output_path,
+            }
+        )
+    return nodes
+
+
+def _infer_capability_output_path(capability_id: str) -> str:
+    normalized = (capability_id or "").strip().lower()
+    if "output.derive" in normalized:
+        return "path"
+    if "spec.validate" in normalized:
+        return "validation_report"
+    if "spec" in normalized:
+        if "openapi" in normalized:
+            return "openapi_spec"
+        return "document_spec"
+    if "docx" in normalized or "pdf" in normalized or "render" in normalized:
+        return "path"
+    if "json.transform" in normalized:
+        return "result"
+    if "llm.text.generate" in normalized:
+        return "text"
+    return "result"
+
+
+def _collect_recommendation_capabilities(
+    *,
+    include_disabled: bool = False,
+) -> list[dict[str, Any]]:
+    registry = capability_registry.load_capability_registry()
+    items: list[dict[str, Any]] = []
+    for capability_id, spec in sorted(registry.capabilities.items()):
+        if not include_disabled and not spec.enabled:
+            continue
+        input_schema, _ = _resolve_capability_schemas(spec, include_schemas=True)
+        required_inputs: list[str] = []
+        if isinstance(input_schema, dict):
+            required = input_schema.get("required")
+            if isinstance(required, list):
+                required_inputs = [entry for entry in required if isinstance(entry, str)]
+        items.append(
+            {
+                "id": capability_id,
+                "description": spec.description or "",
+                "group": spec.group or "",
+                "subgroup": spec.subgroup or "",
+                "required_inputs": required_inputs,
+            }
+        )
+    return items
+
+
+def _is_capability_mentioned(goal_text: str, capability_id: str) -> bool:
+    goal = (goal_text or "").strip()
+    capability = (capability_id or "").strip()
+    if not goal or not capability:
+        return False
+    pattern = re.compile(rf"(^|[^A-Za-z0-9_.-]){re.escape(capability)}([^A-Za-z0-9_.-]|$)")
+    return bool(pattern.search(goal))
+
+
+def _heuristic_capability_recommendations(
+    *,
+    goal: str,
+    context: dict[str, Any],
+    capabilities: list[dict[str, Any]],
+    draft_nodes: list[dict[str, str]],
+    max_results: int = 6,
+) -> list[dict[str, Any]]:
+    max_count = max(1, min(12, int(max_results)))
+    last_node = draft_nodes[-1] if draft_nodes else None
+    existing_capability_ids = {node.get("capability_id", "") for node in draft_nodes}
+    recommendations: list[dict[str, Any]] = []
+
+    for item in capabilities:
+        capability_id = str(item.get("id") or "").strip()
+        if not capability_id:
+            continue
+        required_inputs = [
+            entry
+            for entry in item.get("required_inputs", [])
+            if isinstance(entry, str) and entry.strip()
+        ]
+        score = 0
+        reasons: list[str] = []
+
+        if _is_capability_mentioned(goal, capability_id):
+            score += 100
+            reasons.append("mentioned in goal")
+        if capability_id in existing_capability_ids:
+            score -= 6
+
+        context_covered = [
+            field
+            for field in required_inputs
+            if field in context
+            and context[field] is not None
+            and (not isinstance(context[field], str) or bool(context[field].strip()))
+        ]
+        if context_covered:
+            score += min(24, len(context_covered) * 8)
+            reasons.append(f"context covers {len(context_covered)} required input(s)")
+        if not required_inputs:
+            score += 4
+
+        if last_node:
+            last_output = (
+                (last_node.get("output_path") or "").strip()
+                or _infer_capability_output_path(last_node.get("capability_id", ""))
+            )
+            last_capability_id = (last_node.get("capability_id") or "").strip()
+            if last_output and last_output in required_inputs:
+                score += 32
+                reasons.append(f"uses previous output '{last_output}'")
+            if capability_id == "document.output.derive" and (
+                last_capability_id.startswith("document.spec.")
+                or last_capability_id.startswith("document.runbook.")
+            ):
+                score += 30
+                reasons.append("common next step after document spec generation")
+            if capability_id in {"document.docx.generate", "document.pdf.generate"} and (
+                last_capability_id == "document.output.derive"
+            ):
+                score += 36
+                reasons.append("render after derive output path")
+
+        recommendations.append(
+            {
+                "id": capability_id,
+                "score": score,
+                "reason": " • ".join(reasons) if reasons else "general match",
+                "confidence": round(max(0.05, min(0.99, (score + 20) / 140)), 3),
+            }
+        )
+
+    recommendations.sort(key=lambda entry: (-int(entry["score"]), str(entry["id"])))
+    return recommendations[:max_count]
+
+
+def _extract_json_object_from_text(text: str) -> dict[str, Any] | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        lines = [line for line in raw.splitlines() if not line.strip().startswith("```")]
+        raw = "\n".join(lines).strip()
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:  # noqa: BLE001
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    snippet = raw[start : end + 1]
+    try:
+        parsed = json.loads(snippet)
+    except Exception:  # noqa: BLE001
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _llm_capability_recommendations(
+    *,
+    goal: str,
+    context: dict[str, Any],
+    capabilities: list[dict[str, Any]],
+    draft_nodes: list[dict[str, str]],
+    max_results: int,
+    provider: LLMProvider,
+) -> list[dict[str, Any]]:
+    catalog_lines = []
+    for item in capabilities:
+        capability_id = str(item.get("id") or "").strip()
+        if not capability_id:
+            continue
+        required_inputs = [entry for entry in item.get("required_inputs", []) if isinstance(entry, str)]
+        description = str(item.get("description") or "").strip()
+        catalog_lines.append(
+            f"- {capability_id} | required={required_inputs} | description={description[:180]}"
+        )
+    draft_lines = [
+        f"- {node.get('capability_id','')} output={node.get('output_path','') or _infer_capability_output_path(node.get('capability_id',''))}"
+        for node in draft_nodes
+    ]
+    prompt = (
+        "You are recommending the next capability for a workflow composer.\n"
+        "Return ONLY JSON with this shape:\n"
+        '{ "recommendations": [ { "id": "capability.id", "reason": "short reason", "confidence": 0.0 } ] }\n'
+        f"Select up to {max_results} capability IDs from the allowed catalog. Prefer compatibility with current chain and required inputs.\n"
+        f"Goal:\n{goal}\n\n"
+        f"Context keys available:\n{sorted(context.keys())}\n\n"
+        f"Current draft chain:\n{draft_lines if draft_lines else ['(empty)']}\n\n"
+        "Allowed capability catalog:\n"
+        + "\n".join(catalog_lines)
+    )
+    content = provider.generate(prompt).content
+    parsed = _extract_json_object_from_text(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("llm_recommendation_parse_failed")
+    recs = parsed.get("recommendations")
+    if not isinstance(recs, list):
+        raise ValueError("llm_recommendation_missing_recommendations")
+
+    allowed = {str(item.get("id") or "").strip() for item in capabilities}
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in recs:
+        if not isinstance(raw, dict):
+            continue
+        capability_id = str(raw.get("id") or "").strip()
+        if not capability_id or capability_id not in allowed or capability_id in seen:
+            continue
+        seen.add(capability_id)
+        reason = str(raw.get("reason") or "").strip() or "recommended by llm"
+        confidence_raw = raw.get("confidence", 0.65)
+        try:
+            confidence = float(confidence_raw)
+        except Exception:  # noqa: BLE001
+            confidence = 0.65
+        confidence = max(0.01, min(0.99, confidence))
+        normalized.append(
+            {
+                "id": capability_id,
+                "reason": reason,
+                "confidence": round(confidence, 3),
+                "score": int(round(confidence * 100)),
+            }
+        )
+        if len(normalized) >= max_results:
+            break
+    if not normalized:
+        raise ValueError("llm_recommendation_empty")
+    return normalized
+
+
+def _split_reference_path(path: str) -> list[str]:
+    return [segment.strip() for segment in path.split(".") if segment.strip()]
+
+
+def _composer_default_task_name(capability_id: str, index: int) -> str:
+    cleaned = "".join(ch if ch.isalnum() else " " for ch in capability_id).strip()
+    if not cleaned:
+        return f"Step{index + 1}"
+    parts = [segment for segment in cleaned.split() if segment]
+    if not parts:
+        return f"Step{index + 1}"
+    return "".join(segment[:1].upper() + segment[1:] for segment in parts)
+
+
+def _build_plan_from_composer_draft(
+    draft: dict[str, Any],
+    *,
+    goal_text: str = "",
+) -> tuple[models.PlanCreate | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    diagnostics_errors: list[dict[str, Any]] = []
+    diagnostics_warnings: list[dict[str, Any]] = []
+    raw_nodes = draft.get("nodes")
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        diagnostics_errors.append(
+            {"code": "draft.nodes_missing", "message": "Composer draft must include non-empty nodes."}
+        )
+        return None, diagnostics_errors, diagnostics_warnings
+
+    registry = capability_registry.load_capability_registry()
+    canonical_nodes: list[dict[str, Any]] = []
+    node_by_id: dict[str, dict[str, Any]] = {}
+    used_task_names: set[str] = set()
+    tool_intent_values = {member.value for member in models.ToolIntent}
+
+    for index, raw_node in enumerate(raw_nodes):
+        if not isinstance(raw_node, dict):
+            diagnostics_errors.append(
+                {
+                    "code": "draft.node_invalid",
+                    "message": f"Node at index {index + 1} must be an object.",
+                }
+            )
+            continue
+        node_id = str(raw_node.get("id") or f"node-{index + 1}").strip()
+        capability_id = str(
+            raw_node.get("capabilityId") or raw_node.get("capability_id") or ""
+        ).strip()
+        task_name = str(raw_node.get("taskName") or raw_node.get("task_name") or "").strip()
+        if not capability_id:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.capability_missing",
+                    "node_id": node_id,
+                    "message": "capabilityId is required.",
+                }
+            )
+            continue
+        capability_spec = registry.get(capability_id)
+        if capability_spec is None:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.capability_unknown",
+                    "node_id": node_id,
+                    "message": f"Unknown capability: {capability_id}",
+                }
+            )
+            continue
+        if not task_name:
+            task_name = _composer_default_task_name(capability_id, index)
+            diagnostics_warnings.append(
+                {
+                    "code": "draft.task_name_defaulted",
+                    "node_id": node_id,
+                    "message": f"Task name was empty. Using '{task_name}'.",
+                }
+            )
+        deduped_task_name = task_name
+        suffix = 2
+        while deduped_task_name in used_task_names:
+            deduped_task_name = f"{task_name}_{suffix}"
+            suffix += 1
+        if deduped_task_name != task_name:
+            diagnostics_warnings.append(
+                {
+                    "code": "draft.task_name_deduped",
+                    "node_id": node_id,
+                    "message": f"Task name '{task_name}' duplicated. Using '{deduped_task_name}'.",
+                }
+            )
+        used_task_names.add(deduped_task_name)
+        bindings = raw_node.get("bindings")
+        if not isinstance(bindings, dict):
+            bindings = raw_node.get("inputBindings")
+        if not isinstance(bindings, dict):
+            bindings = {}
+        canonical = {
+            "node_id": node_id,
+            "task_name": deduped_task_name,
+            "capability_id": capability_id,
+            "capability_spec": capability_spec,
+            "bindings": dict(bindings),
+            "order": index,
+            "intent": str(raw_node.get("intent") or "").strip(),
+        }
+        canonical_nodes.append(canonical)
+        node_by_id[node_id] = canonical
+
+    if not canonical_nodes:
+        return None, diagnostics_errors, diagnostics_warnings
+
+    deps_by_node_id: dict[str, set[str]] = {node["node_id"]: set() for node in canonical_nodes}
+    raw_edges = draft.get("edges")
+    if isinstance(raw_edges, list):
+        for edge in raw_edges:
+            if not isinstance(edge, dict):
+                diagnostics_errors.append(
+                    {"code": "draft.edge_invalid", "message": "Each edge must be an object."}
+                )
+                continue
+            source_id = str(edge.get("fromNodeId") or edge.get("from") or "").strip()
+            target_id = str(edge.get("toNodeId") or edge.get("to") or "").strip()
+            if not source_id or not target_id:
+                diagnostics_errors.append(
+                    {
+                        "code": "draft.edge_endpoints_missing",
+                        "message": "Edge must include fromNodeId and toNodeId.",
+                    }
+                )
+                continue
+            if source_id not in node_by_id:
+                diagnostics_errors.append(
+                    {
+                        "code": "draft.edge_source_unknown",
+                        "message": f"Edge source not found: {source_id}",
+                    }
+                )
+                continue
+            if target_id not in node_by_id:
+                diagnostics_errors.append(
+                    {
+                        "code": "draft.edge_target_unknown",
+                        "message": f"Edge target not found: {target_id}",
+                    }
+                )
+                continue
+            if source_id == target_id:
+                diagnostics_errors.append(
+                    {"code": "draft.edge_self_cycle", "message": f"Self-cycle on node {source_id}."}
+                )
+                continue
+            deps_by_node_id[target_id].add(source_id)
+
+    tasks_payload: list[dict[str, Any]] = []
+    for node in canonical_nodes:
+        node_id = node["node_id"]
+        capability_id = node["capability_id"]
+        capability_spec = node["capability_spec"]
+        bindings = node["bindings"]
+        tool_input_payload: dict[str, Any] = {}
+
+        for field, raw_binding in bindings.items():
+            if not isinstance(field, str) or not field.strip():
+                continue
+            field_name = field.strip()
+            if not isinstance(raw_binding, dict):
+                diagnostics_errors.append(
+                    {
+                        "code": "draft.binding_invalid",
+                        "node_id": node_id,
+                        "field": field_name,
+                        "message": "Binding must be an object.",
+                    }
+                )
+                continue
+            binding_kind = str(raw_binding.get("kind") or raw_binding.get("mode") or "").strip()
+            if binding_kind == "literal":
+                tool_input_payload[field_name] = raw_binding.get("value")
+                continue
+            if binding_kind == "context":
+                raw_path = str(raw_binding.get("path") or raw_binding.get("contextPath") or "").strip()
+                segments = _split_reference_path(raw_path)
+                if not segments:
+                    diagnostics_errors.append(
+                        {
+                            "code": "draft.binding_context_path_missing",
+                            "node_id": node_id,
+                            "field": field_name,
+                            "message": "Context binding requires a non-empty path.",
+                        }
+                    )
+                    continue
+                tool_input_payload[field_name] = {"$from": ["job_context", *segments]}
+                continue
+            if binding_kind in {"step_output", "from"}:
+                source_id = str(
+                    raw_binding.get("nodeId") or raw_binding.get("sourceNodeId") or ""
+                ).strip()
+                source_path = str(raw_binding.get("path") or raw_binding.get("sourcePath") or "").strip()
+                if not source_id or source_id not in node_by_id:
+                    diagnostics_errors.append(
+                        {
+                            "code": "draft.binding_source_missing",
+                            "node_id": node_id,
+                            "field": field_name,
+                            "message": "Step-output binding references an unknown source node.",
+                        }
+                    )
+                    continue
+                path_segments = _split_reference_path(source_path)
+                if not path_segments:
+                    diagnostics_errors.append(
+                        {
+                            "code": "draft.binding_source_path_missing",
+                            "node_id": node_id,
+                            "field": field_name,
+                            "message": "Step-output binding requires source path.",
+                        }
+                    )
+                    continue
+                source_node = node_by_id[source_id]
+                deps_by_node_id[node_id].add(source_id)
+                reference: dict[str, Any] = {
+                    "$from": [
+                        "dependencies_by_name",
+                        source_node["task_name"],
+                        source_node["capability_id"],
+                        *path_segments,
+                    ]
+                }
+                if "default" in raw_binding:
+                    reference["$default"] = raw_binding.get("default")
+                elif "defaultValue" in raw_binding:
+                    raw_default = raw_binding.get("defaultValue")
+                    if isinstance(raw_default, str):
+                        trimmed_default = raw_default.strip()
+                        if trimmed_default:
+                            try:
+                                reference["$default"] = json.loads(trimmed_default)
+                            except Exception:
+                                reference["$default"] = raw_default
+                    elif raw_default is not None:
+                        reference["$default"] = raw_default
+                tool_input_payload[field_name] = reference
+                continue
+            if binding_kind == "memory":
+                name = str(raw_binding.get("name") or "").strip()
+                if not name:
+                    diagnostics_errors.append(
+                        {
+                            "code": "draft.binding_memory_name_missing",
+                            "node_id": node_id,
+                            "field": field_name,
+                            "message": "Memory binding requires name.",
+                        }
+                    )
+                    continue
+                memory_payload: dict[str, Any] = {
+                    "scope": str(raw_binding.get("scope") or "job"),
+                    "name": name,
+                }
+                key = raw_binding.get("key")
+                if isinstance(key, str) and key.strip():
+                    memory_payload["key"] = key.strip()
+                tool_input_payload[field_name] = memory_payload
+                continue
+            diagnostics_errors.append(
+                {
+                    "code": "draft.binding_kind_unknown",
+                    "node_id": node_id,
+                    "field": field_name,
+                    "message": f"Unsupported binding kind: {binding_kind or '<empty>'}",
+                }
+            )
+
+        deps = [node_by_id[dep_id]["task_name"] for dep_id in deps_by_node_id.get(node_id, set())]
+        task_payload: dict[str, Any] = {
+            "name": node["task_name"],
+            "description": capability_spec.description,
+            "instruction": f"Use capability {capability_id}.",
+            "acceptance_criteria": [f"Completed capability {capability_id}"],
+            "expected_output_schema_ref": capability_spec.output_schema_ref or "",
+            "deps": deps,
+            "tool_requests": [capability_id],
+            "tool_inputs": {capability_id: tool_input_payload},
+            "critic_required": False,
+        }
+        intent_value = node.get("intent")
+        if isinstance(intent_value, str) and intent_value in tool_intent_values:
+            task_payload["intent"] = intent_value
+        else:
+            planner_hints = (
+                capability_spec.planner_hints
+                if isinstance(capability_spec.planner_hints, dict)
+                else {}
+            )
+            hinted_intents = planner_hints.get("task_intents")
+            if isinstance(hinted_intents, list):
+                first_hint = next(
+                    (
+                        entry
+                        for entry in hinted_intents
+                        if isinstance(entry, str) and entry in tool_intent_values
+                    ),
+                    None,
+                )
+                if first_hint:
+                    task_payload["intent"] = first_hint
+            if "intent" not in task_payload:
+                inferred_intent = intent_contract.infer_task_intent_for_task_with_metadata(
+                    explicit_intent=None,
+                    description=str(task_payload.get("description") or ""),
+                    instruction=str(task_payload.get("instruction") or ""),
+                    acceptance_criteria=task_payload.get("acceptance_criteria"),
+                    goal_text=goal_text,
+                ).intent
+                if inferred_intent in tool_intent_values:
+                    task_payload["intent"] = inferred_intent
+        tasks_payload.append(task_payload)
+
+    dag_edges: list[list[str]] = []
+    for node in canonical_nodes:
+        target_task_name = node["task_name"]
+        for source_node_id in deps_by_node_id.get(node["node_id"], set()):
+            source_task_name = node_by_id[source_node_id]["task_name"]
+            dag_edges.append([source_task_name, target_task_name])
+
+    plan_payload = {
+        "planner_version": "ui_chaining_composer_v2",
+        "tasks_summary": str(
+            draft.get("summary")
+            or draft.get("tasks_summary")
+            or f"Execute composed chain with {len(tasks_payload)} step(s)."
+        ),
+        "dag_edges": dag_edges,
+        "tasks": tasks_payload,
+    }
+    plan = _parse_plan_payload(plan_payload)
+    if plan is None:
+        diagnostics_errors.append(
+            {
+                "code": "draft.plan_invalid",
+                "message": "Composer draft could not be compiled into a valid PlanCreate payload.",
+            }
+        )
+    return plan, diagnostics_errors, diagnostics_warnings
+
+
 def _plan_created_payload(plan: models.PlanCreate, job_id: str) -> dict[str, Any]:
     payload = plan.model_dump()
     payload["job_id"] = job_id
@@ -244,6 +1138,26 @@ def _start_orchestrator() -> None:
     thread.start()
 
 
+def _ensure_orchestrator_groups(
+    local_redis: redis.Redis, group: str, stream_keys: list[str]
+) -> None:
+    for stream in stream_keys:
+        try:
+            local_redis.xgroup_create(stream, group, id="0-0", mkstream=True)
+        except redis.ResponseError as exc:
+            # BUSYGROUP means the group already exists.
+            if "BUSYGROUP" not in str(exc):
+                logger.warning(
+                    "orchestrator_group_create_response_error",
+                    extra={"stream": stream, "group": group, "error": str(exc)},
+                )
+        except redis.RedisError as exc:
+            logger.warning(
+                "orchestrator_group_create_redis_error",
+                extra={"stream": stream, "group": group, "error": str(exc)},
+            )
+
+
 def _orchestrator_loop() -> None:
     consumer = str(uuid.uuid4())
     group = "api-orchestrator"
@@ -255,11 +1169,7 @@ def _orchestrator_loop() -> None:
     ]
     local_redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     last_recovery = 0.0
-    for stream in stream_keys:
-        try:
-            local_redis.xgroup_create(stream, group, id="0-0", mkstream=True)
-        except redis.ResponseError:
-            pass
+    _ensure_orchestrator_groups(local_redis, group, stream_keys)
     while True:
         try:
             now = time.time()
@@ -280,6 +1190,16 @@ def _orchestrator_loop() -> None:
                             extra={"stream": stream_name, "message_id": message_id},
                         )
                         orchestrator_handle_errors_total.labels(stream=stream_name).inc()
+        except redis.ResponseError as exc:
+            # Redis can lose groups/streams after restarts. Recreate and continue.
+            if "NOGROUP" in str(exc):
+                logger.warning("orchestrator_missing_group_recover", extra={"error": str(exc)})
+                _ensure_orchestrator_groups(local_redis, group, stream_keys)
+                time.sleep(0.2)
+                continue
+            logger.exception("orchestrator_loop_error")
+            orchestrator_loop_errors_total.inc()
+            time.sleep(1)
         except Exception:
             logger.exception("orchestrator_loop_error")
             orchestrator_loop_errors_total.inc()
@@ -363,7 +1283,8 @@ def _handle_plan_created(envelope: dict) -> None:
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
-        preflight_errors = _compile_plan_preflight(plan, job_context)
+        job_goal = job.goal if job and isinstance(job.goal, str) else ""
+        preflight_errors = _compile_plan_preflight(plan, job_context, goal_text=job_goal)
         if preflight_errors:
             if job:
                 _set_job_status(job, models.JobStatus.failed)
@@ -489,7 +1410,7 @@ def _handle_task_failed(envelope: dict) -> None:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
             return
-        if isinstance(error, str) and error.startswith("tool_intent_mismatch"):
+        if isinstance(error, str) and "tool_intent_mismatch" in error:
             replan_done = _replan_job_for_intent_mismatch(db, task.job_id)
             if replan_done:
                 return
@@ -622,6 +1543,7 @@ def _enqueue_ready_tasks(job_id: str, plan_id: str, correlation_id: str | None) 
             if job_record and isinstance(job_record.context_json, dict)
             else {}
         )
+        job_goal = job_record.goal if job_record and isinstance(job_record.goal, str) else ""
         tasks = _resolve_task_deps(task_records)
         task_map = {task.id: task for task in tasks}
         id_to_name = {record.id: record.name for record in task_records}
@@ -634,7 +1556,12 @@ def _enqueue_ready_tasks(job_id: str, plan_id: str, correlation_id: str | None) 
                     record.status = models.TaskStatus.blocked.value
                     record.updated_at = now
                     context = _build_task_context(record.id, task_map, id_to_name, job_context)
-                    payload = _task_payload_from_record(record, correlation_id, context)
+                    payload = _task_payload_from_record(
+                        record,
+                        correlation_id,
+                        context,
+                        goal_text=job_goal,
+                    )
                     events.append(("task.policy_check", payload))
                     continue
                 next_attempt = (record.attempts or 0) + 1
@@ -654,7 +1581,12 @@ def _enqueue_ready_tasks(job_id: str, plan_id: str, correlation_id: str | None) 
                 record.status = models.TaskStatus.ready.value
                 record.updated_at = now
                 context = _build_task_context(record.id, task_map, id_to_name, job_context)
-                payload = _task_payload_from_record(record, correlation_id, context)
+                payload = _task_payload_from_record(
+                    record,
+                    correlation_id,
+                    context,
+                    goal_text=job_goal,
+                )
                 if TOOL_INPUT_VALIDATION_ENABLED and payload.get("tool_inputs_validation"):
                     record.status = models.TaskStatus.failed.value
                     record.updated_at = now
@@ -673,7 +1605,11 @@ def _enqueue_ready_tasks(job_id: str, plan_id: str, correlation_id: str | None) 
 
 
 def _task_payload_from_record(
-    record: TaskRecord, correlation_id: str | None, context: dict[str, Any] | None = None
+    record: TaskRecord,
+    correlation_id: str | None,
+    context: dict[str, Any] | None = None,
+    *,
+    goal_text: str = "",
 ) -> dict[str, Any]:
     payload = {
         "task_id": record.id,
@@ -700,6 +1636,14 @@ def _task_payload_from_record(
         "updated_at": record.updated_at,
         "correlation_id": correlation_id or str(uuid.uuid4()),
     }
+    inference_payload = dict(payload)
+    if goal_text:
+        inference_payload["goal"] = goal_text
+    intent_inference = intent_contract.infer_task_intent_for_payload_with_metadata(inference_payload)
+    payload["intent_source"] = intent_inference.source
+    payload["intent_confidence"] = round(float(intent_inference.confidence), 3)
+    if not payload.get("intent"):
+        payload["intent"] = intent_inference.intent
     ctx = context or {}
     if context:
         payload["context"] = context
@@ -793,8 +1737,14 @@ def _handle_policy_decision(envelope: dict) -> None:
                     if job_record and isinstance(job_record.context_json, dict)
                     else {}
                 )
+                job_goal = job_record.goal if job_record and isinstance(job_record.goal, str) else ""
                 context = _build_task_context(task.id, task_map, id_to_name, job_context)
-                payload = _task_payload_from_record(task, correlation_id, context)
+                payload = _task_payload_from_record(
+                    task,
+                    correlation_id,
+                    context,
+                    goal_text=job_goal,
+                )
                 if TOOL_INPUT_VALIDATION_ENABLED and payload.get("tool_inputs_validation"):
                     task.status = models.TaskStatus.failed.value
                     task.updated_at = now
@@ -987,9 +1937,18 @@ def _collect_ancestor_task_names(
 
 
 def _compile_plan_preflight(
-    plan: models.PlanCreate, job_context: dict[str, Any] | None
+    plan: models.PlanCreate,
+    job_context: dict[str, Any] | None,
+    *,
+    goal_text: str = "",
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
+    capabilities: dict[str, capability_registry.CapabilitySpec] = {}
+    try:
+        if capability_registry.resolve_capability_mode() != "disabled":
+            capabilities = capability_registry.load_capability_registry().enabled_capabilities()
+    except Exception:  # noqa: BLE001
+        capabilities = {}
     tasks_by_name: dict[str, models.TaskCreate] = {}
     duplicate_names: set[str] = set()
     for task in plan.tasks:
@@ -1011,6 +1970,27 @@ def _compile_plan_preflight(
 
     for task in plan.tasks:
         dependency_names = _collect_ancestor_task_names(task, tasks_by_name)
+        task_intent = _preflight_task_intent(task, goal_text=goal_text)
+        for request_id in task.tool_requests or []:
+            tool_intent = TOOL_INTENTS_BY_NAME.get(request_id)
+            if tool_intent is not None:
+                mismatch = intent_contract.validate_tool_intent_compatibility(
+                    task_intent,
+                    tool_intent,
+                    request_id,
+                )
+                if mismatch:
+                    errors[task.name] = mismatch
+                    break
+            capability_spec = capabilities.get(request_id)
+            capability_mismatch = _preflight_capability_intent_mismatch(
+                task_intent, request_id, capability_spec
+            )
+            if capability_mismatch:
+                errors[task.name] = capability_mismatch
+                break
+        if task.name in errors:
+            continue
         context: dict[str, Any] = {"dependencies_by_name": {}, "dependencies": {}}
         for dep_name in dependency_names:
             dep_task = tasks_by_name.get(dep_name)
@@ -1106,6 +2086,82 @@ def _compile_plan_preflight(
             errors[task.name] = f"{first_tool}:{message}"
 
     return errors
+
+
+def _task_intent_inference_for_task(
+    task: models.TaskCreate,
+    *,
+    goal_text: str = "",
+) -> intent_contract.TaskIntentInference:
+    inference = intent_contract.infer_task_intent_for_task_with_metadata(
+        explicit_intent=task.intent,
+        description=task.description,
+        instruction=task.instruction,
+        acceptance_criteria=task.acceptance_criteria,
+        goal_text=goal_text,
+    )
+    inferred = inference.intent
+    source = inference.source
+    confidence = float(inference.confidence)
+    if inferred == models.ToolIntent.generate.value and not task.intent:
+        unique_tool_intents = {
+            TOOL_INTENTS_BY_NAME[request_id]
+            for request_id in (task.tool_requests or [])
+            if request_id in TOOL_INTENTS_BY_NAME
+        }
+        if len(unique_tool_intents) == 1:
+            inferred = next(iter(unique_tool_intents)).value
+            source = "tool_intent"
+            confidence = 0.9
+    return intent_contract.TaskIntentInference(
+        intent=inferred,
+        source=source,
+        confidence=max(0.0, min(1.0, confidence)),
+    )
+
+
+def _preflight_task_intent(task: models.TaskCreate, *, goal_text: str = "") -> str:
+    return _task_intent_inference_for_task(task, goal_text=goal_text).intent
+
+
+def _task_intent_summary(
+    tasks: list[models.TaskCreate],
+    *,
+    goal_text: str = "",
+) -> dict[str, dict[str, Any]]:
+    summary: dict[str, dict[str, Any]] = {}
+    for task in tasks:
+        inference = _task_intent_inference_for_task(task, goal_text=goal_text)
+        summary[task.name] = {
+            "intent": inference.intent,
+            "source": inference.source,
+            "confidence": round(float(inference.confidence), 3),
+        }
+    return summary
+
+
+def _preflight_capability_intent_mismatch(
+    task_intent: str,
+    capability_id: str,
+    capability_spec: capability_registry.CapabilitySpec | None,
+) -> str | None:
+    if capability_spec is None:
+        return None
+    hints = capability_spec.planner_hints if isinstance(capability_spec.planner_hints, dict) else {}
+    raw_allowed = hints.get("task_intents")
+    if not isinstance(raw_allowed, list) or not raw_allowed:
+        return None
+    allowed = {
+        normalized
+        for item in raw_allowed
+        for normalized in [intent_contract.normalize_task_intent(item)]
+        if normalized
+    }
+    if not allowed:
+        return None
+    if task_intent in allowed:
+        return None
+    return f"task_intent_mismatch:{capability_id}:{task_intent}:allowed={','.join(sorted(allowed))}"
 
 
 def _store_task_output(task_id: str, outputs: dict[str, Any]) -> None:
@@ -1302,6 +2358,161 @@ def _read_task_dlq(job_id: str, limit: int) -> list[models.TaskDlqEntry]:
     return entries
 
 
+_TRANSIENT_ERROR_TOKENS = (
+    "timed out",
+    "timeout",
+    "connection refused",
+    "remote end closed",
+    "session terminated",
+    "temporary",
+    "service unavailable",
+    "too many requests",
+    "rate limit",
+    "502",
+    "503",
+    "504",
+)
+
+_CONTRACT_ERROR_CODES = {
+    "contract.input_invalid",
+    "contract.output_invalid",
+    "contract.schema_not_found",
+    "contract.schema_invalid",
+    "contract.tool_not_found",
+    "contract.input_missing",
+    "contract.intent_mismatch",
+    "unknown_tool",
+    "memory_only_inputs_missing",
+    "tool_intent_mismatch",
+}
+
+
+def _classify_task_error(error: str | None) -> dict[str, Any]:
+    if not error:
+        return {
+            "category": "none",
+            "code": "none",
+            "retryable": False,
+            "message": "",
+            "hint": "",
+        }
+    normalized = error.strip().lower()
+    code = normalized.split(":", 1)[0] if normalized else "unknown"
+    if code in _CONTRACT_ERROR_CODES:
+        return {
+            "category": "contract",
+            "code": code,
+            "retryable": False,
+            "message": error,
+            "hint": "Fix capability inputs/schema or chaining references before retrying.",
+        }
+    if "timeout" in normalized or "timed out" in normalized:
+        return {
+            "category": "timeout",
+            "code": code,
+            "retryable": True,
+            "message": error,
+            "hint": "Retry is safe. If repeated, increase timeout or reduce task scope.",
+        }
+    if any(token in normalized for token in _TRANSIENT_ERROR_TOKENS):
+        return {
+            "category": "transient",
+            "code": code,
+            "retryable": True,
+            "message": error,
+            "hint": "Retry is recommended. Check dependent service health if it repeats.",
+        }
+    if "policy" in normalized:
+        return {
+            "category": "policy",
+            "code": code,
+            "retryable": False,
+            "message": error,
+            "hint": "Policy denied this action. Update policy or task intent/tool selection.",
+        }
+    return {
+        "category": "runtime",
+        "code": code,
+        "retryable": False,
+        "message": error,
+        "hint": "Inspect tool output/logs and task inputs for root cause.",
+    }
+
+
+def _extract_error_from_task_result(result: dict[str, Any]) -> str | None:
+    value = result.get("error")
+    if isinstance(value, str) and value:
+        return value
+    outputs = result.get("outputs")
+    if isinstance(outputs, dict):
+        tool_error = outputs.get("tool_error")
+        if isinstance(tool_error, dict):
+            message = tool_error.get("error")
+            if isinstance(message, str) and message:
+                return message
+    return None
+
+
+def _parse_task_stream_event(stream_id: str, record: Mapping[str, str]) -> dict[str, Any] | None:
+    raw = record.get("data")
+    if not raw:
+        return None
+    try:
+        envelope = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(envelope, dict):
+        return None
+    payload = envelope.get("payload")
+    payload_dict = payload if isinstance(payload, dict) else {}
+    task_id = envelope.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        maybe_task = payload_dict.get("task_id")
+        task_id = maybe_task if isinstance(maybe_task, str) else None
+    event_type = envelope.get("type")
+    if not isinstance(event_type, str) or not event_type:
+        return None
+    occurred_at = envelope.get("occurred_at")
+    if not isinstance(occurred_at, str):
+        occurred_at = datetime.utcnow().isoformat()
+    status = payload_dict.get("status")
+    status_text = status if isinstance(status, str) and status else event_type.replace("task.", "")
+    error = payload_dict.get("error")
+    return {
+        "stream_id": stream_id,
+        "type": event_type,
+        "occurred_at": occurred_at,
+        "job_id": envelope.get("job_id") if isinstance(envelope.get("job_id"), str) else None,
+        "task_id": task_id,
+        "status": status_text,
+        "attempts": payload_dict.get("attempts"),
+        "max_attempts": payload_dict.get("max_attempts"),
+        "worker_consumer": payload_dict.get("worker_consumer"),
+        "run_id": payload_dict.get("run_id"),
+        "error": error if isinstance(error, str) else "",
+    }
+
+
+def _read_task_events_for_job(job_id: str, limit: int) -> list[dict[str, Any]]:
+    scan_count = min(max(limit * 8, 400), 5000)
+    try:
+        rows = redis_client.xrevrange(events.TASK_STREAM, "+", "-", count=scan_count)
+    except redis.RedisError:
+        return []
+    entries: list[dict[str, Any]] = []
+    for stream_id, record in rows:
+        parsed = _parse_task_stream_event(stream_id, record)
+        if parsed is None:
+            continue
+        if parsed.get("job_id") != job_id:
+            continue
+        entries.append(parsed)
+        if len(entries) >= limit:
+            break
+    entries.reverse()
+    return entries
+
+
 @app.post("/jobs", response_model=models.Job)
 def create_job(job: models.JobCreate, db: Session = Depends(get_db)) -> models.Job:
     job_id = str(uuid.uuid4())
@@ -1384,7 +2595,10 @@ def list_jobs(db: Session = Depends(get_db)) -> List[models.Job]:
 
 
 @app.get("/capabilities")
-def list_capabilities(include_disabled: bool = Query(False)) -> dict[str, Any]:
+def list_capabilities(
+    include_disabled: bool = Query(False),
+    with_schemas: bool = Query(True),
+) -> dict[str, Any]:
     mode = capability_registry.resolve_capability_mode()
     try:
         registry = capability_registry.load_capability_registry()
@@ -1395,14 +2609,14 @@ def list_capabilities(include_disabled: bool = Query(False)) -> dict[str, Any]:
     for capability_id, spec in sorted(registry.capabilities.items()):
         if not include_disabled and not spec.enabled:
             continue
-        input_schema: dict[str, Any] | None = None
+        input_schema, output_schema = _resolve_capability_schemas(spec, include_schemas=with_schemas)
         required_inputs: list[str] = []
-        if spec.input_schema_ref:
-            input_schema = _load_schema_from_ref(spec.input_schema_ref)
-            if isinstance(input_schema, dict):
-                required = input_schema.get("required")
-                if isinstance(required, list):
-                    required_inputs = [entry for entry in required if isinstance(entry, str)]
+        if isinstance(input_schema, dict):
+            required = input_schema.get("required")
+            if isinstance(required, list):
+                required_inputs = [entry for entry in required if isinstance(entry, str)]
+        input_fields = _flatten_schema_fields(input_schema) if with_schemas else []
+        output_fields = _flatten_schema_fields(output_schema) if with_schemas else []
         items.append(
             {
                 "id": capability_id,
@@ -1414,8 +2628,13 @@ def list_capabilities(include_disabled: bool = Query(False)) -> dict[str, Any]:
                 "subgroup": spec.subgroup,
                 "tags": list(spec.tags),
                 "input_schema_ref": spec.input_schema_ref,
+                "output_schema_ref": spec.output_schema_ref,
                 "input_schema": input_schema,
+                "output_schema": output_schema,
                 "required_inputs": required_inputs,
+                "input_fields": input_fields,
+                "output_fields": output_fields,
+                "planner_hints": spec.planner_hints if isinstance(spec.planner_hints, dict) else {},
                 "adapters": [
                     {
                         "type": adapter.type,
@@ -1471,6 +2690,108 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
         tasks=[_task_from_record(task) for task in tasks],
         task_results={task.id: _load_task_result(task.id) for task in tasks},
     )
+
+
+@app.get("/jobs/{job_id}/debugger")
+def get_job_debugger(
+    job_id: str,
+    limit: int = Query(400, ge=50, le=2000),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    plan_record = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+    task_records = (
+        db.query(TaskRecord)
+        .filter(TaskRecord.job_id == job_id)
+        .order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc())
+        .all()
+    )
+    task_models = _resolve_task_deps(task_records)
+    task_map = {task.id: task for task in task_models}
+    id_to_name = {record.id: record.name for record in task_records}
+    job_context = job.context_json if isinstance(job.context_json, dict) else {}
+
+    timeline = _read_task_events_for_job(job_id, limit)
+    timeline_by_task: dict[str, list[dict[str, Any]]] = {}
+    for entry in timeline:
+        task_id = entry.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        timeline_by_task.setdefault(task_id, []).append(entry)
+
+    tasks_payload: list[dict[str, Any]] = []
+    for record in task_records:
+        context = _build_task_context(record.id, task_map, id_to_name, job_context)
+        hydrated_payload = _task_payload_from_record(
+            record,
+            correlation_id=None,
+            context=context,
+            goal_text=job.goal if isinstance(job.goal, str) else "",
+        )
+        task_result = _load_task_result(record.id)
+        timeline_entries = timeline_by_task.get(record.id, [])
+        latest_error = _extract_error_from_task_result(task_result)
+        if not latest_error:
+            for entry in reversed(timeline_entries):
+                error = entry.get("error")
+                if isinstance(error, str) and error:
+                    latest_error = error
+                    break
+        tasks_payload.append(
+            {
+                "task": _task_from_record(record).model_dump(mode="json"),
+                "resolved_tool_inputs": hydrated_payload.get("tool_inputs", {}),
+                "tool_inputs_validation": hydrated_payload.get("tool_inputs_validation", {}),
+                "tool_inputs_resolved": bool(hydrated_payload.get("tool_inputs_resolved")),
+                "context_keys": sorted(context.keys()),
+                "timeline": timeline_entries,
+                "latest_result": task_result,
+                "error": _classify_task_error(latest_error),
+            }
+        )
+
+    return {
+        "job_id": job_id,
+        "job_status": job.status,
+        "plan_id": plan_record.id if plan_record else None,
+        "generated_at": datetime.utcnow().isoformat(),
+        "timeline_events_scanned": len(timeline),
+        "tasks": tasks_payload,
+    }
+
+
+@app.get("/jobs/{job_id}/events/outbox")
+def get_job_event_outbox(
+    job_id: str,
+    pending_only: bool = Query(True),
+    limit: int = Query(100, ge=1, le=1000),
+    include_payload: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    base_query = db.query(EventOutboxRecord)
+    if pending_only:
+        base_query = base_query.filter(EventOutboxRecord.published_at.is_(None))
+    rows = (
+        base_query.order_by(EventOutboxRecord.created_at.desc())
+        .limit(max(limit * 20, limit))
+        .all()
+    )
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        envelope = row.envelope_json if isinstance(row.envelope_json, dict) else {}
+        if envelope.get("job_id") != job_id:
+            continue
+        entries.append(_outbox_entry_payload(row, include_payload=include_payload))
+        if len(entries) >= limit:
+            break
+    return {
+        "job_id": job_id,
+        "pending_only": pending_only,
+        "count": len(entries),
+        "items": entries,
+    }
 
 
 @app.get("/tasks/{task_id}", response_model=models.Task)
@@ -1866,11 +3187,185 @@ def read_task_dlq(job_id: str, limit: int = Query(25, ge=1, le=200)) -> List[mod
         raise HTTPException(status_code=503, detail=f"redis_error:{exc}") from exc
 
 
+@app.post("/plans/preflight")
+def preflight_plan(
+    payload: dict[str, Any],
+    job_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_preflight_payload")
+    raw_plan = payload.get("plan", payload)
+    if not isinstance(raw_plan, dict):
+        raise HTTPException(status_code=400, detail="invalid_preflight_plan_payload")
+    plan = _parse_plan_payload(raw_plan)
+    if plan is None:
+        raise HTTPException(status_code=400, detail="invalid_preflight_plan_payload")
+
+    provided_job_context = payload.get("job_context")
+    job_context: dict[str, Any] = (
+        provided_job_context if isinstance(provided_job_context, dict) else {}
+    )
+    if not job_context and isinstance(job_id, str) and job_id.strip():
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        if job and isinstance(job.context_json, dict):
+            job_context = job.context_json
+    goal_text = str(payload.get("goal") or "").strip()
+    if not goal_text and isinstance(job_id, str) and job_id.strip():
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        if job and isinstance(job.goal, str):
+            goal_text = job.goal
+
+    preflight_errors = _compile_plan_preflight(plan, job_context, goal_text=goal_text)
+    return {
+        "valid": not bool(preflight_errors),
+        "errors": preflight_errors,
+        "intent_inference": _task_intent_summary(plan.tasks, goal_text=goal_text),
+    }
+
+
+@app.post("/composer/compile")
+def compile_composer_draft(
+    payload: dict[str, Any],
+    job_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_composer_payload")
+    raw_draft = payload.get("draft", payload)
+    if not isinstance(raw_draft, dict):
+        raise HTTPException(status_code=400, detail="invalid_composer_draft")
+
+    job_context = _coerce_context_object(payload.get("job_context"))
+    if not job_context:
+        job_context = _coerce_context_object(
+            raw_draft.get("contextJson") if "contextJson" in raw_draft else raw_draft.get("context_json")
+        )
+    if not job_context and isinstance(job_id, str) and job_id.strip():
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        if job and isinstance(job.context_json, dict):
+            job_context = job.context_json
+    goal_text = str(payload.get("goal") or "").strip()
+    if not goal_text:
+        goal_text = str(raw_draft.get("goal") or raw_draft.get("job_goal") or "").strip()
+    if not goal_text and isinstance(job_id, str) and job_id.strip():
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        if job and isinstance(job.goal, str):
+            goal_text = job.goal
+
+    plan, diagnostics_errors, diagnostics_warnings = _build_plan_from_composer_draft(
+        raw_draft,
+        goal_text=goal_text,
+    )
+    preflight_errors: dict[str, str] = {}
+    if plan is not None:
+        preflight_errors = _compile_plan_preflight(plan, job_context, goal_text=goal_text)
+        for field, message in preflight_errors.items():
+            diagnostics_errors.append(
+                {
+                    "code": "preflight_error",
+                    "field": field,
+                    "message": message,
+                }
+            )
+
+    valid = plan is not None and not diagnostics_errors
+    return {
+        "valid": valid,
+        "diagnostics": {
+            "valid": not diagnostics_errors,
+            "errors": diagnostics_errors,
+            "warnings": diagnostics_warnings,
+        },
+        "plan": plan.model_dump() if plan is not None else None,
+        "preflight_errors": preflight_errors,
+        "intent_inference": _task_intent_summary(plan.tasks, goal_text=goal_text)
+        if plan is not None
+        else {},
+    }
+
+
+@app.post("/composer/recommend_capabilities")
+def recommend_composer_capabilities(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_recommendation_payload")
+    goal = str(payload.get("goal") or "").strip()
+    context = _coerce_context_object(payload.get("context_json") or payload.get("job_context"))
+    raw_draft = payload.get("draft", payload.get("composer_draft"))
+    draft_nodes = _coerce_composer_nodes(raw_draft.get("nodes") if isinstance(raw_draft, dict) else [])
+    include_disabled = bool(payload.get("include_disabled", False))
+    max_results_raw = payload.get("max_results", 6)
+    try:
+        max_results = max(1, min(12, int(max_results_raw)))
+    except Exception:  # noqa: BLE001
+        max_results = 6
+
+    try:
+        capabilities = _collect_recommendation_capabilities(include_disabled=include_disabled)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500, detail=f"capability_registry_load_failed:{exc}"
+        ) from exc
+    heuristic_recommendations = _heuristic_capability_recommendations(
+        goal=goal,
+        context=context,
+        capabilities=capabilities,
+        draft_nodes=draft_nodes,
+        max_results=max_results,
+    )
+
+    use_llm = bool(payload.get("use_llm", False))
+    if not use_llm:
+        return {
+            "source": "heuristic",
+            "recommendations": heuristic_recommendations,
+            "model": None,
+        }
+
+    if _composer_recommender_provider is None:
+        return {
+            "source": "heuristic",
+            "recommendations": heuristic_recommendations,
+            "model": None,
+            "warning": "llm_recommender_unavailable",
+        }
+
+    try:
+        llm_recommendations = _llm_capability_recommendations(
+            goal=goal,
+            context=context,
+            capabilities=capabilities,
+            draft_nodes=draft_nodes,
+            max_results=max_results,
+            provider=_composer_recommender_provider,
+        )
+        return {
+            "source": "llm",
+            "recommendations": llm_recommendations,
+            "model": COMPOSER_RECOMMENDER_MODEL or LLM_MODEL_NAME or None,
+        }
+    except (LLMProviderError, ValueError) as exc:
+        return {
+            "source": "llm_fallback",
+            "recommendations": heuristic_recommendations,
+            "model": COMPOSER_RECOMMENDER_MODEL or LLM_MODEL_NAME or None,
+            "warning": str(exc),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "source": "llm_fallback",
+            "recommendations": heuristic_recommendations,
+            "model": COMPOSER_RECOMMENDER_MODEL or LLM_MODEL_NAME or None,
+            "warning": f"llm_recommendation_failed:{exc}",
+        }
+
+
 @app.post("/plans", response_model=models.Plan)
 def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_db)) -> models.Plan:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
-    preflight_errors = _compile_plan_preflight(plan, job_context)
+    goal_text = job.goal if job and isinstance(job.goal, str) else ""
+    preflight_errors = _compile_plan_preflight(plan, job_context, goal_text=goal_text)
     if preflight_errors:
         raise HTTPException(
             status_code=400,

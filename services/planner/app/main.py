@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from libs.core import (
     capability_registry,
     events,
+    intent_contract,
     llm_provider,
     logging as core_logging,
     models,
@@ -185,6 +186,7 @@ def llm_plan(
     if not candidate:
         raise ValueError("Invalid plan generated: parse_failed")
     candidate = _ensure_llm_tool(candidate)
+    candidate = _ensure_task_intents(candidate, tools, goal_text=job.goal)
     candidate = _ensure_job_inputs(candidate, job, tools)
     candidate = _ensure_renderer_output_extensions(candidate)
     candidate = _apply_max_depth(candidate)
@@ -328,7 +330,7 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
         '- dag_edges must be an array of 2-element string arrays, e.g. [["A","B"],["B","C"]].\n'
         "- acceptance_criteria must be an array of strings, not a single string.\n"
         "Each task must include: name, description, instruction, acceptance_criteria, "
-        "expected_output_schema_ref, deps, tool_requests, tool_inputs, critic_required.\n"
+        "expected_output_schema_ref, intent, deps, tool_requests, tool_inputs, critic_required.\n"
         "Example:\n"
         "{\n"
         '  "planner_version": "1.0.0",\n'
@@ -341,6 +343,7 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
         '      "instruction": "...",\n'
         '      "acceptance_criteria": ["..."],\n'
         '      "expected_output_schema_ref": "schemas/example",\n'
+        '      "intent": "generate",\n'
         '      "deps": [],\n'
         '      "tool_requests": ["llm_generate"],\n'
         '      "tool_inputs": {"llm_generate": {"text": "..."}},\n'
@@ -351,6 +354,7 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
         "\n"
         "Rules:\n"
         "1) Use only tool names from the allowed list.\n"
+        "1a) Every task must set intent to one of: transform, generate, validate, render, io.\n"
         "2) deps must reference task names that appear in this plan.\n"
         "3) If a tool requires structured JSON, add a prior task to generate that JSON and set "
         "expected_output_schema_ref to that schema.\n"
@@ -396,10 +400,11 @@ def _llm_plan_repair_prompt(
         "Do not include markdown, comments, or prose.\n"
         "Required top-level fields: planner_version, tasks_summary, dag_edges, tasks.\n"
         "Each task must include: name, description, instruction, acceptance_criteria, "
-        "expected_output_schema_ref, deps, tool_requests, tool_inputs, critic_required.\n"
+        "expected_output_schema_ref, intent, deps, tool_requests, tool_inputs, critic_required.\n"
         "Rules:\n"
         "- acceptance_criteria must be string array.\n"
         "- dag_edges must be array of 2-string arrays.\n"
+        "- each task must include intent in {transform, generate, validate, render, io}.\n"
         "- Use only allowed tool names.\n"
         "- If a field is missing, add a safe default value.\n"
         f"Allowed tool names: {tool_names}\n\n"
@@ -508,6 +513,59 @@ def _ensure_llm_tool(plan: models.PlanCreate) -> models.PlanCreate:
             updated_tasks.append(task.model_copy(update={"tool_requests": ["llm_generate"]}))
         else:
             updated_tasks.append(task)
+    return plan.model_copy(update={"tasks": updated_tasks})
+
+
+def _ensure_task_intents(
+    plan: models.PlanCreate,
+    tools: List[models.ToolSpec],
+    goal_text: str = "",
+) -> models.PlanCreate:
+    logger = core_logging.get_logger("planner")
+    tool_map = {tool.name: tool for tool in tools}
+    updated_tasks: list[models.TaskCreate] = []
+    changed = False
+    for task in plan.tasks:
+        inference = intent_contract.infer_task_intent_for_task_with_metadata(
+            explicit_intent=task.intent,
+            description=task.description,
+            instruction=task.instruction,
+            acceptance_criteria=task.acceptance_criteria,
+            goal_text=goal_text,
+        )
+        inferred = inference.intent
+        intent_source = inference.source
+        intent_confidence = float(inference.confidence)
+        # If text inference falls back to generate, prefer known tool intent where unambiguous.
+        if inferred == models.ToolIntent.generate.value and not task.intent:
+            unique_tool_intents = {
+                tool_map[tool_name].tool_intent
+                for tool_name in (task.tool_requests or [])
+                if tool_name in tool_map
+            }
+            if len(unique_tool_intents) == 1:
+                inferred = next(iter(unique_tool_intents)).value
+                intent_source = "tool_intent"
+                intent_confidence = 0.9
+        try:
+            normalized = models.ToolIntent(inferred)
+        except ValueError:
+            normalized = models.ToolIntent.generate
+        logger.info(
+            "task_intent_inferred",
+            task_name=task.name,
+            task_intent=normalized.value,
+            intent_source=intent_source,
+            intent_confidence=round(max(0.0, min(1.0, intent_confidence)), 3),
+            has_explicit_intent=bool(task.intent),
+        )
+        if task.intent != normalized:
+            updated_tasks.append(task.model_copy(update={"intent": normalized}))
+            changed = True
+        else:
+            updated_tasks.append(task)
+    if not changed:
+        return plan
     return plan.model_copy(update={"tasks": updated_tasks})
 
 
@@ -674,12 +732,22 @@ def _validate_plan(
     for task in plan.tasks:
         if not task.tool_requests:
             continue
+        task_intent = _resolve_task_intent_for_validation(task, tool_map, goal_text=job.goal)
+        if not task_intent:
+            return False, f"missing_task_intent:{task.name}"
         for tool_name in task.tool_requests:
             tool = tool_map.get(tool_name)
             capability = capabilities.get(tool_name)
             if tool is None and capability is None:
                 return False, f"unknown_tool_or_capability:{tool_name}"
             if tool is None and capability is not None:
+                capability_mismatch = _capability_intent_mismatch(
+                    task_intent,
+                    capability,
+                    tool_name,
+                )
+                if capability_mismatch:
+                    return False, f"capability_intent_invalid:{tool_name}:{task.name}:{capability_mismatch}"
                 raw_tool_inputs = {}
                 if isinstance(task.tool_inputs, dict) and tool_name in task.tool_inputs:
                     entry = task.tool_inputs.get(tool_name)
@@ -731,6 +799,13 @@ def _validate_plan(
                     task_name=task.name,
                     job_id=job.id,
                 )
+            mismatch = intent_contract.validate_tool_intent_compatibility(
+                task_intent,
+                tool.tool_intent,
+                tool_name,
+            )
+            if mismatch:
+                return False, f"{mismatch}:task={task.name}"
             raw_tool_inputs = {}
             if isinstance(task.tool_inputs, dict) and tool_name in task.tool_inputs:
                 entry = task.tool_inputs.get(tool_name)
@@ -745,6 +820,52 @@ def _validate_plan(
             if message:
                 return False, f"tool_inputs_invalid:{tool_name}:{task.name}:{message}"
     return True, "ok"
+
+
+def _resolve_task_intent_for_validation(
+    task: models.TaskCreate,
+    tool_map: dict[str, models.ToolSpec],
+    goal_text: str = "",
+) -> str:
+    inference = intent_contract.infer_task_intent_for_task_with_metadata(
+        explicit_intent=task.intent,
+        description=task.description,
+        instruction=task.instruction,
+        acceptance_criteria=task.acceptance_criteria,
+        goal_text=goal_text,
+    )
+    inferred = inference.intent
+    if inferred == models.ToolIntent.generate.value and not task.intent:
+        unique_tool_intents = {
+            tool_map[tool_name].tool_intent
+            for tool_name in (task.tool_requests or [])
+            if tool_name in tool_map
+        }
+        if len(unique_tool_intents) == 1:
+            inferred = next(iter(unique_tool_intents)).value
+    return inferred
+
+
+def _capability_intent_mismatch(
+    task_intent: str,
+    capability: capability_registry.CapabilitySpec,
+    capability_id: str,
+) -> str | None:
+    hints = capability.planner_hints if isinstance(capability.planner_hints, dict) else {}
+    raw_allowed = hints.get("task_intents")
+    if not isinstance(raw_allowed, list) or not raw_allowed:
+        return None
+    allowed = {
+        normalized
+        for item in raw_allowed
+        for normalized in [intent_contract.normalize_task_intent(item)]
+        if normalized
+    }
+    if not allowed:
+        return None
+    if task_intent in allowed:
+        return None
+    return f"task_intent_mismatch:{capability_id}:{task_intent}:allowed={','.join(sorted(allowed))}"
 
 
 def _build_validation_payload(
@@ -767,7 +888,10 @@ def _build_validation_payload(
         payload.setdefault("memory", {})
     job_context = job.context_json if isinstance(job.context_json, dict) else {}
     for key in (
+        "instruction",
         "topic",
+        "audience",
+        "tone",
         "today",
         "date",
         "target_pages",
@@ -879,7 +1003,10 @@ def _build_capability_validation_payload(
             payload.setdefault(key, default_value)
     job_context = job.context_json if isinstance(job.context_json, dict) else {}
     for key in (
+        "instruction",
         "topic",
+        "audience",
+        "tone",
         "today",
         "date",
         "target_pages",

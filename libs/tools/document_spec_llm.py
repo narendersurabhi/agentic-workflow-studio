@@ -59,16 +59,36 @@ def register_document_spec_llm_tools(
                 name="llm_generate_document_spec",
                 description="Generate a DocumentSpec JSON using an LLM",
                 usage_guidance=(
-                    "Provide job context and allowed_block_types. "
-                    "Returns a document_spec object."
+                    "Provide either a full job object OR explicit fields "
+                    "(instruction, topic, audience, tone, today, output_dir), "
+                    "plus allowed_block_types. Returns a document_spec object."
                 ),
                 input_schema={
                     "type": "object",
                     "properties": {
                         "job": {"type": "object"},
+                        "instruction": {"type": "string", "minLength": 1},
+                        "topic": {"type": "string", "minLength": 1},
+                        "audience": {"type": "string", "minLength": 1},
+                        "tone": {"type": "string", "minLength": 1},
+                        "today": {"type": "string", "minLength": 4},
+                        "output_dir": {"type": "string", "minLength": 1},
                         "allowed_block_types": {"type": "array", "items": {"type": "string"}},
                     },
-                    "required": ["job", "allowed_block_types"],
+                    "required": ["allowed_block_types"],
+                    "anyOf": [
+                        {"required": ["job"]},
+                        {
+                            "required": [
+                                "instruction",
+                                "topic",
+                                "audience",
+                                "tone",
+                                "today",
+                                "output_dir",
+                            ]
+                        },
+                    ],
                 },
                 output_schema={
                     "type": "object",
@@ -169,9 +189,19 @@ def llm_generate_document_spec(
     sanitize_document_spec: SanitizeDocumentSpecFn,
 ) -> dict[str, Any]:
     job = payload.get("job")
+    if not isinstance(job, dict):
+        explicit_job: dict[str, Any] = {}
+        for key in ("instruction", "topic", "audience", "tone", "today", "output_dir"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                explicit_job[key] = value.strip()
+        if explicit_job:
+            job = explicit_job
     allowed = payload.get("allowed_block_types")
     if not isinstance(job, dict):
-        raise ToolExecutionError("job must be an object")
+        raise ToolExecutionError(
+            "Provide either job object or explicit fields: instruction, topic, audience, tone, today, output_dir"
+        )
     if not isinstance(allowed, list):
         raise ToolExecutionError("allowed_block_types must be an array")
     prompt = prompts.document_spec_prompt(job, allowed)

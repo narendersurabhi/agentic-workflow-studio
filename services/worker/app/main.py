@@ -16,6 +16,7 @@ from libs.core import (
     capability_registry,
     document_store,
     events,
+    intent_contract,
     llm_provider,
     logging as core_logging,
     mcp_gateway,
@@ -75,15 +76,6 @@ DEFAULT_ALLOWED_BLOCK_TYPES = [
     "optional_paragraph",
     "repeat",
 ]
-
-TASK_INTENTS = {
-    "transform",
-    "generate",
-    "validate",
-    "render",
-    "io",
-}
-
 
 def _parse_optional_float(value: str | None) -> float | None:
     if value is None or value == "":
@@ -269,9 +261,23 @@ def execute_task(task_payload: dict) -> models.TaskResult:
     started_at = datetime.utcnow()
     outputs = {}
     tool_error = None
-    task_intent = _infer_task_intent(task_payload)
+    task_intent_inference = _infer_task_intent_inference(task_payload)
+    task_intent = task_intent_inference.intent
     task_attempt, task_max_attempts = _task_attempt_limits(task_payload)
     artifacts: list[dict[str, Any]] = []
+    core_logging.log_event(
+        LOGGER,
+        "task_intent_inferred",
+        {
+            "run_id": run_id,
+            "job_id": job_id,
+            "task_id": task_id,
+            "task_intent": task_intent,
+            "intent_source": task_intent_inference.source,
+            "intent_confidence": round(float(task_intent_inference.confidence), 3),
+            "trace_id": trace_id,
+        },
+    )
     with core_tracing.start_span(
         "worker.execute_task",
         attributes={
@@ -281,6 +287,8 @@ def execute_task(task_payload: dict) -> models.TaskResult:
             "run.id": run_id,
             "task.tool_request_count": len(tool_requests),
             "task.intent": task_intent,
+            "task.intent_source": task_intent_inference.source,
+            "task.intent_confidence": float(task_intent_inference.confidence),
             "task.attempt": task_attempt,
             "task.max_attempts": task_max_attempts,
             "model.provider": LLM_PROVIDER,
@@ -453,6 +461,11 @@ def execute_task(task_payload: dict) -> models.TaskResult:
                             "tool_version": TOOL_VERSION,
                             "payload_keys": sorted(payload.keys()),
                             "capability_id": capability_spec.capability_id,
+                            "task_intent": task_intent,
+                            "intent_source": task_intent_inference.source,
+                            "intent_confidence": round(
+                                float(task_intent_inference.confidence), 3
+                            ),
                         },
                     )
                     call = _execute_capability_request(
@@ -672,6 +685,9 @@ def execute_task(task_payload: dict) -> models.TaskResult:
                         "policy_version": POLICY_VERSION,
                         "tool_version": TOOL_VERSION,
                         "payload_keys": sorted(payload.keys()),
+                        "task_intent": task_intent,
+                        "intent_source": task_intent_inference.source,
+                        "intent_confidence": round(float(task_intent_inference.confidence), 3),
                     },
                 )
                 call = registry.execute(
@@ -930,41 +946,37 @@ def _float_metric(value: Any) -> float:
 
 
 def _infer_task_intent(task_payload: dict) -> str:
-    for key in ("intent", "task_intent"):
-        value = task_payload.get(key)
-        if isinstance(value, str) and value in TASK_INTENTS:
-            return value
-    parts: list[str] = []
-    for key in ("description", "instruction"):
-        value = task_payload.get(key)
-        if isinstance(value, str):
-            parts.append(value)
-    criteria = task_payload.get("acceptance_criteria")
-    if isinstance(criteria, list):
-        parts.extend([item for item in criteria if isinstance(item, str)])
-    text = " ".join(parts).lower()
-    keyword_map = [
-        ("validate", ["validate", "verify", "check", "lint", "schema"]),
-        ("render", ["render", "rendering", "docx", "pdf"]),
-        (
-            "transform",
-            ["transform", "reshape", "wrap", "convert", "derive", "summarize", "repair"],
-        ),
-        ("generate", ["generate", "create", "draft", "write", "compose", "produce", "build"]),
-        ("io", ["read", "fetch", "list", "search", "load", "save", "download", "upload"]),
-    ]
-    for intent, keywords in keyword_map:
-        if any(keyword in text for keyword in keywords):
-            return intent
-    return "generate"
+    return _infer_task_intent_inference(task_payload).intent
+
+
+def _infer_task_intent_inference(task_payload: dict) -> intent_contract.TaskIntentInference:
+    explicit_intent = intent_contract.normalize_task_intent(
+        task_payload.get("intent")
+    ) or intent_contract.normalize_task_intent(task_payload.get("task_intent"))
+    source = task_payload.get("intent_source")
+    confidence = task_payload.get("intent_confidence")
+    if (
+        explicit_intent
+        and isinstance(source, str)
+        and source.strip()
+        and isinstance(confidence, (int, float))
+    ):
+        return intent_contract.TaskIntentInference(
+            intent=explicit_intent,
+            source=source.strip(),
+            confidence=max(0.0, min(1.0, float(confidence))),
+        )
+    return intent_contract.infer_task_intent_for_payload_with_metadata(task_payload)
 
 
 def _intent_mismatch(
     task_intent: str, tool_intent: models.ToolIntent, tool_name: str
 ) -> str | None:
-    if task_intent == "generate" and tool_intent == models.ToolIntent.transform:
-        return f"tool_intent_mismatch:{tool_name}:{tool_intent.value}:{task_intent}"
-    return None
+    return intent_contract.validate_tool_intent_compatibility(
+        task_intent,
+        tool_intent,
+        tool_name,
+    )
 
 
 def _load_memory_inputs(tool, task_payload: dict, trace_id: str) -> dict:

@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from libs.core import models
-from services.planner.app.main import _ensure_renderer_output_extensions, _validate_plan
+from services.planner.app.main import (
+    _ensure_renderer_output_extensions,
+    _ensure_task_intents,
+    _validate_plan,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +32,11 @@ def _job() -> models.Job:
 
 
 def _plan_with_task(
-    tool_name: str, tool_input: dict, deps: list[str] | None = None
+    tool_name: str,
+    tool_input: dict,
+    deps: list[str] | None = None,
+    *,
+    intent: models.ToolIntent | None = models.ToolIntent.generate,
 ) -> models.PlanCreate:
     return models.PlanCreate(
         planner_version="1",
@@ -41,6 +49,7 @@ def _plan_with_task(
                 instruction="instr",
                 acceptance_criteria=["ok"],
                 expected_output_schema_ref="schemas/test",
+                intent=intent,
                 deps=deps or [],
                 tool_requests=[tool_name],
                 tool_inputs={tool_name: tool_input},
@@ -51,7 +60,11 @@ def _plan_with_task(
 
 
 def _tool(
-    name: str, input_schema: dict, *, memory_reads: list[str] | None = None
+    name: str,
+    input_schema: dict,
+    *,
+    memory_reads: list[str] | None = None,
+    tool_intent: models.ToolIntent = models.ToolIntent.generate,
 ) -> models.ToolSpec:
     return models.ToolSpec(
         name=name,
@@ -59,7 +72,28 @@ def _tool(
         input_schema=input_schema,
         output_schema={"type": "object"},
         memory_reads=memory_reads or [],
+        tool_intent=tool_intent,
     )
+
+
+def test_ensure_task_intents_falls_back_to_goal_text() -> None:
+    plan = _plan_with_task(
+        "json_transform",
+        {"input": {"x": 1}},
+        intent=None,
+    )
+    updated = _ensure_task_intents(
+        plan,
+        [
+            _tool(
+                "json_transform",
+                {"type": "object"},
+                tool_intent=models.ToolIntent.transform,
+            )
+        ],
+        goal_text="Validate the transformed payload against schema rules.",
+    )
+    assert updated.tasks[0].intent == models.ToolIntent.validate
 
 
 def test_validate_plan_rejects_missing_root_required_with_anyof() -> None:
@@ -176,6 +210,26 @@ def test_validate_plan_accepts_memory_backed_contract_branch() -> None:
     assert valid, reason
 
 
+def test_validate_plan_rejects_tool_intent_mismatch() -> None:
+    plan = _plan_with_task(
+        "llm_generate",
+        {"text": "hello"},
+        intent=models.ToolIntent.io,
+    )
+    tool = _tool(
+        "llm_generate",
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+        tool_intent=models.ToolIntent.generate,
+    )
+    valid, reason = _validate_plan(plan, [tool], _job())
+    assert not valid
+    assert reason.startswith("tool_intent_mismatch:llm_generate:generate:io")
+
+
 def test_validate_plan_accepts_enabled_capability_with_valid_inputs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -218,6 +272,56 @@ def test_validate_plan_accepts_enabled_capability_with_valid_inputs(
     plan = _plan_with_task("github.repo.list", {"query": "agentic"})
     valid, reason = _validate_plan(plan, [], _job())
     assert valid, reason
+
+
+def test_validate_plan_rejects_capability_intent_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    schema_path = tmp_path / "capability_input.schema.json"
+    schema_path.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    capability_registry_path = tmp_path / "capability_registry.json"
+    capability_registry_path.write_text(
+        json.dumps(
+            {
+                "capabilities": [
+                    {
+                        "id": "github.repo.list",
+                        "description": "List repos",
+                        "enabled": True,
+                        "input_schema_ref": str(schema_path),
+                        "planner_hints": {"task_intents": ["io"]},
+                        "adapters": [
+                            {
+                                "type": "mcp",
+                                "server_id": "github_remote",
+                                "tool_name": "github_repo_list",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CAPABILITY_MODE", "enabled")
+    monkeypatch.setenv("CAPABILITY_REGISTRY_PATH", str(capability_registry_path))
+    plan = _plan_with_task(
+        "github.repo.list",
+        {"query": "agentic"},
+        intent=models.ToolIntent.generate,
+    )
+    valid, reason = _validate_plan(plan, [], _job())
+    assert not valid
+    assert reason.startswith("capability_intent_invalid:github.repo.list:task-1")
 
 
 def test_validate_plan_rejects_capability_with_missing_required_inputs(
@@ -282,7 +386,7 @@ def test_ensure_renderer_output_extensions_sets_pdf_on_derive_task(
                             {
                                 "type": "tool",
                                 "server_id": "local_worker",
-                                "tool_name": "derive_output_filename",
+                                "tool_name": "derive_output_path",
                             }
                         ],
                     },
@@ -394,7 +498,7 @@ def test_ensure_renderer_output_extensions_keeps_explicit_extension_when_aligned
                             {
                                 "type": "tool",
                                 "server_id": "local_worker",
-                                "tool_name": "derive_output_filename",
+                                "tool_name": "derive_output_path",
                             }
                         ],
                     },

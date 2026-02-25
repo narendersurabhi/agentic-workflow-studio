@@ -294,6 +294,45 @@ def test_derive_output_filename_defaults_to_today_when_missing_date() -> None:
     assert call.output_or_error["output_extension"] == "pdf"
 
 
+def test_derive_output_path_uses_generic_slug_naming() -> None:
+    registry = default_registry()
+    call = registry.execute(
+        "derive_output_path",
+        {
+            "topic": "Latency in Distributed Systems",
+            "today": "2026-02-25",
+            "output_dir": "documents",
+            "document_type": "document",
+            "output_extension": "pdf",
+        },
+        "id",
+        "trace",
+    )
+    assert call.status == "completed"
+    assert (
+        call.output_or_error["path"]
+        == "documents/latency_in_distributed_systems_2026_02_25.pdf"
+    )
+    assert call.output_or_error["output_extension"] == "pdf"
+
+
+def test_derive_output_path_rejects_invalid_output_dir() -> None:
+    registry = default_registry()
+    call = registry.execute(
+        "derive_output_path",
+        {
+            "topic": "Latency in Distributed Systems",
+            "today": "2026-02-25",
+            "output_dir": "../documents",
+            "document_type": "document",
+        },
+        "id",
+        "trace",
+    )
+    assert call.status == "failed"
+    assert "Invalid output_dir" in call.output_or_error["error"]
+
+
 def test_default_registry_loads_module_plugins(monkeypatch, tmp_path) -> None:
     plugin_path = tmp_path / "demo_plugin.py"
     plugin_path.write_text(

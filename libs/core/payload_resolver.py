@@ -93,6 +93,7 @@ def resolve_tool_payload(
             has_tool_inputs = True
     payload = _merge_payload_from_task(payload, task_payload, instruction)
     payload = _fill_payload_from_context(payload, context)
+    payload = _promote_document_job_fields(payload)
     if tool_name == "llm_generate":
         base_text = payload.get("text") or payload.get("prompt") or instruction
         if context:
@@ -161,7 +162,10 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
         # Promote common planning fields from job context so tool input validation
         # can succeed before worker-side memory hydration.
         for key in (
+            "instruction",
             "topic",
+            "audience",
+            "tone",
             "today",
             "date",
             "target_pages",
@@ -235,6 +239,27 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
     return filled
 
 
+def _promote_document_job_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    promoted = dict(payload)
+    job = promoted.get("job")
+    if not isinstance(job, dict):
+        return promoted
+    for key in (
+        "instruction",
+        "topic",
+        "audience",
+        "tone",
+        "today",
+        "output_dir",
+    ):
+        if key in promoted:
+            continue
+        value = job.get(key)
+        if isinstance(value, str) and value.strip():
+            promoted[key] = value
+    return promoted
+
+
 def normalize_reference_payload_for_validation(
     payload: dict[str, Any],
     *,
@@ -256,7 +281,10 @@ def normalize_reference_payload_for_validation(
             return [_normalize(item, key_hint) for item in value]
         return value
 
-    return _normalize(dict(payload))
+    normalized = _normalize(dict(payload))
+    if isinstance(normalized, dict):
+        normalized = _promote_document_job_fields(normalized)
+    return normalized
 
 
 def _resolve_payload_references(value: Any, context: dict[str, Any], *, strict: bool) -> Any:

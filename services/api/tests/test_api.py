@@ -13,9 +13,10 @@ os.environ["POLICY_GATE_ENABLED"] = "false"
 from services.api.app import main  # noqa: E402
 from services.api.app.database import Base, engine
 from services.api.app.database import SessionLocal
-from services.api.app.models import JobRecord, PlanRecord, TaskRecord
+from services.api.app.models import EventOutboxRecord, JobRecord, PlanRecord, TaskRecord
 from libs.core import events, models
 from libs.core import capability_registry as cap_registry
+from libs.core.llm_provider import LLMResponse
 
 
 Base.metadata.create_all(bind=engine)
@@ -33,9 +34,177 @@ def test_create_job():
     assert data["goal"] == "demo"
 
 
+def test_emit_event_persists_outbox_when_redis_is_unavailable(monkeypatch):
+    job_id = f"job-outbox-down-{uuid.uuid4()}"
+
+    class _RedisDown:
+        def xadd(self, stream, payload):
+            raise redis.RedisError("redis down")
+
+    monkeypatch.setattr(main, "redis_client", _RedisDown())
+    monkeypatch.setattr(main, "EVENT_OUTBOX_ENABLED", True)
+    with SessionLocal() as db:
+        db.query(EventOutboxRecord).delete()
+        db.commit()
+
+    main._emit_event(
+        "job.created",
+        {
+            "id": job_id,
+            "job_id": job_id,
+            "goal": "outbox fallback",
+            "context_json": {},
+            "status": models.JobStatus.queued.value,
+            "priority": 0,
+            "metadata": {},
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+    )
+
+    with SessionLocal() as db:
+        rows = db.query(EventOutboxRecord).all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.stream == events.JOB_STREAM
+        assert row.event_type == "job.created"
+        assert row.published_at is None
+        assert (row.attempts or 0) >= 1
+        assert row.last_error is not None
+
+
+def test_dispatch_event_outbox_once_publishes_pending_rows(monkeypatch):
+    outbox_id = f"outbox-{uuid.uuid4()}"
+    now = datetime.utcnow()
+    sent = []
+
+    class _RedisOk:
+        def xadd(self, stream, payload):
+            sent.append((stream, payload))
+            return "1-0"
+
+    monkeypatch.setattr(main, "redis_client", _RedisOk())
+    monkeypatch.setattr(main, "EVENT_OUTBOX_ENABLED", True)
+    with SessionLocal() as db:
+        db.query(EventOutboxRecord).delete()
+        db.add(
+            EventOutboxRecord(
+                id=outbox_id,
+                stream=events.TASK_STREAM,
+                event_type="task.ready",
+                envelope_json={
+                    "type": "task.ready",
+                    "version": "1",
+                    "occurred_at": now.isoformat(),
+                    "correlation_id": str(uuid.uuid4()),
+                    "job_id": "job-x",
+                    "task_id": "task-x",
+                    "payload": {"task_id": "task-x"},
+                },
+                attempts=0,
+                last_error=None,
+                created_at=now,
+                updated_at=now,
+                published_at=None,
+            )
+        )
+        db.commit()
+
+    dispatched = main._dispatch_event_outbox_once()
+    assert dispatched == 1
+    assert len(sent) == 1
+    assert sent[0][0] == events.TASK_STREAM
+
+    with SessionLocal() as db:
+        row = db.query(EventOutboxRecord).filter(EventOutboxRecord.id == outbox_id).first()
+        assert row is not None
+        assert row.published_at is not None
+        assert row.last_error is None
+        assert (row.attempts or 0) >= 1
+
+
 def test_event_stream():
     response = client.get("/events/stream?once=true")
     assert response.status_code == 200
+
+
+def test_job_event_outbox_filters_by_job_and_pending_state():
+    job_id = f"job-outbox-view-{uuid.uuid4()}"
+    other_job_id = f"job-outbox-other-{uuid.uuid4()}"
+    now = datetime.utcnow()
+    with SessionLocal() as db:
+        db.query(EventOutboxRecord).delete()
+        db.add(
+            EventOutboxRecord(
+                id=str(uuid.uuid4()),
+                stream=events.TASK_STREAM,
+                event_type="task.ready",
+                envelope_json={
+                    "type": "task.ready",
+                    "job_id": job_id,
+                    "task_id": "task-1",
+                    "occurred_at": now.isoformat(),
+                    "correlation_id": str(uuid.uuid4()),
+                    "payload": {"task_id": "task-1"},
+                },
+                attempts=2,
+                last_error="redis down",
+                created_at=now,
+                updated_at=now,
+                published_at=None,
+            )
+        )
+        db.add(
+            EventOutboxRecord(
+                id=str(uuid.uuid4()),
+                stream=events.TASK_STREAM,
+                event_type="task.ready",
+                envelope_json={
+                    "type": "task.ready",
+                    "job_id": other_job_id,
+                    "task_id": "task-2",
+                    "occurred_at": now.isoformat(),
+                    "correlation_id": str(uuid.uuid4()),
+                    "payload": {"task_id": "task-2"},
+                },
+                attempts=1,
+                last_error="redis down",
+                created_at=now,
+                updated_at=now,
+                published_at=None,
+            )
+        )
+        db.add(
+            EventOutboxRecord(
+                id=str(uuid.uuid4()),
+                stream=events.TASK_STREAM,
+                event_type="task.ready",
+                envelope_json={
+                    "type": "task.ready",
+                    "job_id": job_id,
+                    "task_id": "task-3",
+                    "occurred_at": now.isoformat(),
+                    "correlation_id": str(uuid.uuid4()),
+                    "payload": {"task_id": "task-3"},
+                },
+                attempts=1,
+                last_error=None,
+                created_at=now,
+                updated_at=now,
+                published_at=now,
+            )
+        )
+        db.commit()
+
+    response = client.get(f"/jobs/{job_id}/events/outbox?pending_only=true&limit=10")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["pending_only"] is True
+    assert body["count"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["job_id"] == job_id
+    assert body["items"][0]["published_at"] is None
 
 
 def test_job_details():
@@ -102,6 +271,103 @@ def test_job_details():
     assert len(data["tasks"]) == 1
     assert data["tasks"][0]["id"] == task_id
     assert task_id in data["task_results"]
+
+
+def test_job_debugger_returns_timeline_and_error_classification(monkeypatch):
+    job_id = f"job-debug-{uuid.uuid4()}"
+    plan_id = f"plan-debug-{uuid.uuid4()}"
+    task_id = f"task-debug-{uuid.uuid4()}"
+    now = datetime.utcnow()
+    with SessionLocal() as db:
+        db.add(
+            JobRecord(
+                id=job_id,
+                goal="debug",
+                context_json={"job": {"topic": "latency"}},
+                status=models.JobStatus.running.value,
+                created_at=now,
+                updated_at=now,
+                priority=0,
+                metadata_json={},
+            )
+        )
+        db.add(
+            PlanRecord(
+                id=plan_id,
+                job_id=job_id,
+                planner_version="test",
+                created_at=now,
+                tasks_summary="single debug task",
+                dag_edges=[],
+                policy_decision={},
+            )
+        )
+        db.add(
+            TaskRecord(
+                id=task_id,
+                job_id=job_id,
+                plan_id=plan_id,
+                name="GenerateSpec",
+                description="desc",
+                instruction="do it",
+                acceptance_criteria=[],
+                expected_output_schema_ref="TaskResult",
+                status=models.TaskStatus.failed.value,
+                deps=[],
+                attempts=2,
+                max_attempts=3,
+                rework_count=0,
+                max_reworks=0,
+                assigned_to=None,
+                intent=None,
+                tool_requests=["document.spec.generate"],
+                tool_inputs={"document.spec.generate": {"job": {"topic": "latency"}}},
+                created_at=now,
+                updated_at=now,
+                critic_required=1,
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr(
+        main,
+        "_load_task_result",
+        lambda _task_id: {"task_id": _task_id, "error": "contract.input_missing:job"},
+    )
+    monkeypatch.setattr(
+        main,
+        "_read_task_events_for_job",
+        lambda _job_id, _limit: [
+            {
+                "stream_id": "1-0",
+                "type": "task.started",
+                "occurred_at": now.isoformat(),
+                "job_id": _job_id,
+                "task_id": task_id,
+                "status": "running",
+                "attempts": 2,
+                "max_attempts": 3,
+                "worker_consumer": "worker-a",
+                "run_id": "run-1",
+                "error": "",
+            }
+        ],
+    )
+
+    response = client.get(f"/jobs/{job_id}/debugger")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"] == job_id
+    assert payload["job_status"] == "running"
+    assert payload["plan_id"] == plan_id
+    assert payload["timeline_events_scanned"] == 1
+    assert len(payload["tasks"]) == 1
+    task_payload = payload["tasks"][0]
+    assert task_payload["task"]["id"] == task_id
+    assert task_payload["tool_inputs_resolved"] is True
+    assert task_payload["error"]["category"] == "contract"
+    assert task_payload["error"]["retryable"] is False
+    assert len(task_payload["timeline"]) == 1
 
 
 def test_plan_created_enqueues_ready_tasks():
@@ -337,6 +603,337 @@ def test_list_capabilities_returns_required_inputs(monkeypatch):
     assert item["group"] == "github"
     assert item["subgroup"] == "repositories"
     assert item["required_inputs"] == ["query"]
+
+
+def test_composer_recommend_capabilities_heuristic(monkeypatch):
+    spec_generate = cap_registry.CapabilitySpec(
+        capability_id="document.spec.generate",
+        description="Generate a document spec",
+        risk_tier="read_only",
+        idempotency="read",
+        input_schema_ref="schema_generate",
+        output_schema_ref=None,
+        adapters=(),
+        enabled=True,
+    )
+    spec_derive = cap_registry.CapabilitySpec(
+        capability_id="document.output.derive",
+        description="Derive output path",
+        risk_tier="read_only",
+        idempotency="read",
+        input_schema_ref="schema_derive",
+        output_schema_ref=None,
+        adapters=(),
+        enabled=True,
+    )
+    registry = cap_registry.CapabilityRegistry(
+        capabilities={
+            "document.spec.generate": spec_generate,
+            "document.output.derive": spec_derive,
+        }
+    )
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    def _schema_loader(schema_ref):
+        if schema_ref == "schema_generate":
+            return {
+                "type": "object",
+                "required": ["topic"],
+                "properties": {"topic": {"type": "string"}},
+            }
+        if schema_ref == "schema_derive":
+            return {
+                "type": "object",
+                "required": ["topic"],
+                "properties": {"topic": {"type": "string"}},
+            }
+        return None
+
+    monkeypatch.setattr(main, "_load_schema_from_ref", _schema_loader)
+    response = client.post(
+        "/composer/recommend_capabilities",
+        json={
+            "goal": "Use document.output.derive for output path",
+            "context_json": {"topic": "Latency"},
+            "draft": {"nodes": [{"id": "n1", "capabilityId": "document.spec.generate"}]},
+            "use_llm": False,
+            "max_results": 3,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "heuristic"
+    assert isinstance(body["recommendations"], list)
+    assert len(body["recommendations"]) >= 1
+    assert body["recommendations"][0]["id"] == "document.output.derive"
+
+
+def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
+    spec_generate = cap_registry.CapabilitySpec(
+        capability_id="document.spec.generate",
+        description="Generate a document spec",
+        risk_tier="read_only",
+        idempotency="read",
+        input_schema_ref="schema_generate",
+        output_schema_ref=None,
+        adapters=(),
+        enabled=True,
+    )
+    spec_derive = cap_registry.CapabilitySpec(
+        capability_id="document.output.derive",
+        description="Derive output path",
+        risk_tier="read_only",
+        idempotency="read",
+        input_schema_ref="schema_derive",
+        output_schema_ref=None,
+        adapters=(),
+        enabled=True,
+    )
+    registry = cap_registry.CapabilityRegistry(
+        capabilities={
+            "document.spec.generate": spec_generate,
+            "document.output.derive": spec_derive,
+        }
+    )
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(
+        main,
+        "_load_schema_from_ref",
+        lambda _ref: {"type": "object", "required": ["topic"], "properties": {"topic": {"type": "string"}}},
+    )
+
+    class _Provider:
+        def generate(self, _prompt):
+            return LLMResponse(
+                content='{"recommendations":[{"id":"document.output.derive","reason":"next step","confidence":0.91}]}'
+            )
+
+    monkeypatch.setattr(main, "_composer_recommender_provider", _Provider())
+
+    response = client.post(
+        "/composer/recommend_capabilities",
+        json={
+            "goal": "Generate and render document",
+            "context_json": {"topic": "Latency"},
+            "draft": {"nodes": [{"id": "n1", "capabilityId": "document.spec.generate"}]},
+            "use_llm": True,
+            "max_results": 3,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "llm"
+    assert body["recommendations"][0]["id"] == "document.output.derive"
+
+
+def test_preflight_plan_endpoint_returns_valid_true_for_simple_plan():
+    payload = {
+        "plan": {
+            "planner_version": "ui_chaining_composer_v1",
+            "tasks_summary": "simple",
+            "dag_edges": [],
+            "tasks": [
+                {
+                    "name": "TransformData",
+                    "description": "transform",
+                    "instruction": "transform",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "deps": [],
+                    "tool_requests": ["json_transform"],
+                    "tool_inputs": {"json_transform": {"input": {"name": "demo"}}},
+                    "critic_required": False,
+                }
+            ],
+        },
+        "job_context": {},
+    }
+    response = client.post("/plans/preflight", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is True
+    assert body["errors"] == {}
+
+
+def test_preflight_plan_endpoint_returns_reference_error_for_broken_dependency_tool():
+    payload = {
+        "plan": {
+            "planner_version": "ui_chaining_composer_v1",
+            "tasks_summary": "broken",
+            "dag_edges": [["GenerateSpec", "ValidateSpec"]],
+            "tasks": [
+                {
+                    "name": "GenerateSpec",
+                    "description": "generate",
+                    "instruction": "generate",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "deps": [],
+                    "tool_requests": ["document.spec.generate"],
+                    "tool_inputs": {"document.spec.generate": {"job": {"topic": "demo"}}},
+                    "critic_required": False,
+                },
+                {
+                    "name": "ValidateSpec",
+                    "description": "validate",
+                    "instruction": "validate",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "deps": ["GenerateSpec"],
+                    "tool_requests": ["document.spec.validate"],
+                    "tool_inputs": {
+                        "document.spec.validate": {
+                            "document_spec": {
+                                "$from": [
+                                    "dependencies_by_name",
+                                    "GenerateSpec",
+                                    "unknown.tool",
+                                    "document_spec",
+                                ]
+                            }
+                        }
+                    },
+                    "critic_required": False,
+                },
+            ],
+        },
+        "job_context": {},
+    }
+    response = client.post("/plans/preflight", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert "ValidateSpec" in body["errors"]
+    assert "references unknown dependency tool" in body["errors"]["ValidateSpec"]
+
+
+def test_preflight_plan_endpoint_rejects_tool_intent_mismatch():
+    payload = {
+        "plan": {
+            "planner_version": "ui_chaining_composer_v1",
+            "tasks_summary": "mismatch",
+            "dag_edges": [],
+            "tasks": [
+                {
+                    "name": "IoTask",
+                    "description": "Read data",
+                    "instruction": "Fetch data only",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "intent": "io",
+                    "deps": [],
+                    "tool_requests": ["llm_generate"],
+                    "tool_inputs": {"llm_generate": {"text": "hello"}},
+                    "critic_required": False,
+                }
+            ],
+        },
+        "job_context": {},
+    }
+    response = client.post("/plans/preflight", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert "IoTask" in body["errors"]
+    assert body["errors"]["IoTask"].startswith("tool_intent_mismatch:llm_generate")
+
+
+def test_preflight_plan_endpoint_rejects_capability_intent_mismatch(monkeypatch):
+    capability = cap_registry.CapabilitySpec(
+        capability_id="github.repo.list",
+        description="List repos",
+        risk_tier="read_only",
+        idempotency="read",
+        planner_hints={"task_intents": ["io"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="mcp",
+                server_id="github_local",
+                tool_name="search_repositories",
+            ),
+        ),
+        enabled=True,
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"github.repo.list": capability})
+    monkeypatch.setattr(main.capability_registry, "resolve_capability_mode", lambda: "enabled")
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    payload = {
+        "plan": {
+            "planner_version": "ui_chaining_composer_v1",
+            "tasks_summary": "capability mismatch",
+            "dag_edges": [],
+            "tasks": [
+                {
+                    "name": "BadCapabilityIntent",
+                    "description": "Generate report",
+                    "instruction": "Generate data",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "intent": "generate",
+                    "deps": [],
+                    "tool_requests": ["github.repo.list"],
+                    "tool_inputs": {"github.repo.list": {"query": "user:octocat"}},
+                    "critic_required": False,
+                }
+            ],
+        },
+        "job_context": {},
+    }
+    response = client.post("/plans/preflight", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert "BadCapabilityIntent" in body["errors"]
+    assert body["errors"]["BadCapabilityIntent"].startswith(
+        "task_intent_mismatch:github.repo.list:generate"
+    )
+
+
+def test_preflight_task_intent_uses_goal_text_when_task_text_generic() -> None:
+    task = models.TaskCreate(
+        name="ValidateSpec",
+        description="Step one",
+        instruction="Handle this task.",
+        acceptance_criteria=["Done"],
+        expected_output_schema_ref="",
+        deps=[],
+        tool_requests=[],
+        tool_inputs={},
+        critic_required=False,
+    )
+    inferred = main._preflight_task_intent(
+        task,
+        goal_text="Validate the generated document against schema constraints.",
+    )
+    assert inferred == "validate"
+
+
+def test_build_plan_from_composer_draft_derives_intent_from_goal(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="custom.step",
+        description="Custom step",
+        risk_tier="read_only",
+        idempotency="read",
+        planner_hints={},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                tool_name="json_transform",
+            ),
+        ),
+        enabled=True,
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"custom.step": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {"nodes": [{"id": "n1", "capabilityId": "custom.step", "taskName": "CustomStep"}]},
+        goal_text="Render the final document as PDF.",
+    )
+    assert not errors
+    assert plan is not None
+    assert plan.tasks[0].intent == models.ToolIntent.render
 
 
 def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:
