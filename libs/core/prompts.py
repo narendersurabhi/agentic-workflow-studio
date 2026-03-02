@@ -258,7 +258,7 @@ def resume_tailoring_prompt(job: dict[str, Any]) -> str:
         "language while staying credible and defensible.\n\n"
         "Global constraints:\n"
         "- Output ONLY JSON (no prose, no markdown).\n"
-        "- Never invent experience. Only use skills, projects, and outcomes supported by the candidate resume.\n"
+        "- Never invent comapany names, dates, certifications, education details.\n"
         "- Prefer concrete nouns and clear engineering or business outcomes. Avoid buzzword stacking.\n"
         "- Use job description keywords naturally. Do not paste or quote the job description.\n\n"
         "- Do NOT use en-dashes or em-dashes. Use a simple hyphen '-'.\n\n"

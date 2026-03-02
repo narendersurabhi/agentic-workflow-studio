@@ -56,6 +56,7 @@ from libs.tools import resume_llm
 from libs.tools import coder_tools
 from libs.tools.github_tools import register_github_tools
 from libs.tools.openapi_iterative import register_openapi_iterative_tools
+from libs.tools.resume_analysis_tools import register_resume_analysis_tools
 
 try:  # Optional at import-time; policy service already depends on PyYAML.
     import yaml
@@ -822,6 +823,11 @@ def default_registry(
             registry,
             llm_provider,
             timeout_s=llm_iterative_timeout_s,
+        )
+        register_resume_analysis_tools(
+            registry,
+            llm_provider,
+            timeout_s=llm_timeout_s,
         )
 
     _load_module_plugins(
