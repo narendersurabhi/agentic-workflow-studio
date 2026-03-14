@@ -388,6 +388,14 @@ def _payload_has_required_input(payload_map: Mapping[str, Any], key: str) -> boo
     if key in payload_map and _value_present(payload_map.get(key), key=key):
         return True
     aliases: dict[str, tuple[str, ...]] = {
+        "input_data": (
+            "document_spec",
+            "content",
+            "text",
+            "markdown_text",
+            "json",
+            "data",
+        ),
         "path": ("output_path",),
         "output_path": ("path",),
         "date": ("today",),
@@ -466,6 +474,8 @@ def validate_intent_segment_contract(
     missing_inputs: list[str] = []
     for key in slots.get("must_have_inputs", []):
         if not isinstance(key, str) or not key:
+            continue
+        if key == "output_format" and _tool_output_format_hint(capability_id or tool_name):
             continue
         if (
             key in {"path", "output_path"}

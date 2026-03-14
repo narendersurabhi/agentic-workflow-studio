@@ -150,6 +150,30 @@ def test_validate_intent_segment_contract_checks_output_format_hint() -> None:
     assert mismatch == "output_format_mismatch:document.docx.generate:expected=pdf:got=docx"
 
 
+def test_validate_intent_segment_contract_treats_renderer_hint_as_output_format_input() -> None:
+    segment = {
+        "intent": "render",
+        "objective": "Render final DOCX",
+        "required_inputs": ["input_data", "path_or_format"],
+        "slots": {
+            "entity": "report",
+            "artifact_type": "document",
+            "output_format": "docx",
+            "risk_level": "bounded_write",
+            "must_have_inputs": ["document_spec", "output_format"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="render",
+        tool_name="docx_generate_from_spec",
+        payload={"document_spec": {"blocks": []}},
+        capability_id="document.docx.generate",
+        capability_risk_tier="bounded_write",
+    )
+    assert mismatch is None
+
+
 def test_validate_intent_segment_contract_allows_io_segment_for_transform_task() -> None:
     segment = {
         "intent": "io",
@@ -210,6 +234,31 @@ def test_validate_intent_segment_contract_allows_placeholder_document_spec_mappi
             "output_format": "docx",
             "risk_level": "read_only",
             "must_have_inputs": ["document_spec"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="validate",
+        tool_name="document_spec_validate",
+        payload={"document_spec": {}},
+        capability_id="document.spec.validate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_treats_document_spec_as_input_data() -> None:
+    segment = {
+        "intent": "validate",
+        "objective": "Validate document spec",
+        "required_inputs": ["input_data", "acceptance_criteria_or_schema"],
+        "suggested_capabilities": ["document.spec.validate"],
+        "slots": {
+            "entity": "document_spec",
+            "artifact_type": "validation_report",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["input_data"],
         },
     }
     mismatch = intent_contract.validate_intent_segment_contract(
