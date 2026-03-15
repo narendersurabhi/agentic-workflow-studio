@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 import os
 import logging
@@ -8,7 +9,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Mapping, Sequence
 
@@ -23,6 +24,7 @@ from libs.core import (
     capability_search,
     capability_registry,
     document_store,
+    execution_contracts,
     events,
     intent_contract,
     logging as core_logging,
@@ -42,12 +44,23 @@ from libs.core.llm_provider import (
 )
 from .database import Base, SessionLocal, engine
 from .models import EventOutboxRecord, JobRecord, PlanRecord, TaskRecord
-from . import intent_service, memory_store
+from . import dispatch_service, intent_service, memory_store
 
 core_logging.configure_logging("api")
 logger = logging.getLogger("api.orchestrator")
 
-app = FastAPI(title="Agentic Planner Executor API")
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    _init_db()
+    yield
+
+
+app = FastAPI(title="Agentic Planner Executor API", lifespan=_app_lifespan)
 
 cors_origins = [
     origin.strip()
@@ -267,7 +280,6 @@ def _build_intent_decompose_provider() -> LLMProvider | None:
 _intent_decompose_provider = _build_intent_decompose_provider()
 
 
-@app.on_event("startup")
 def _init_db() -> None:
     Base.metadata.create_all(bind=engine)
     if EVENT_OUTBOX_ENABLED:
@@ -814,109 +826,70 @@ def _assess_goal_intent(goal: str) -> dict[str, Any]:
     }
 
 
+def _dispatch_runtime() -> dispatch_service.ApiDispatchRuntime:
+    return dispatch_service.ApiDispatchRuntime(
+        redis_client=redis_client,
+        session_factory=SessionLocal,
+        logger=logger,
+        config=dispatch_service.ApiDispatchConfig(
+            event_outbox_enabled=EVENT_OUTBOX_ENABLED,
+            event_outbox_batch_size=EVENT_OUTBOX_BATCH_SIZE,
+            event_outbox_poll_s=EVENT_OUTBOX_POLL_S,
+            event_outbox_redis_retries=EVENT_OUTBOX_REDIS_RETRIES,
+            event_outbox_redis_retry_sleep_s=EVENT_OUTBOX_REDIS_RETRY_SLEEP_S,
+            policy_gate_enabled=POLICY_GATE_ENABLED,
+            tool_input_validation_enabled=TOOL_INPUT_VALIDATION_ENABLED,
+            tool_input_schemas=TOOL_INPUT_SCHEMAS,
+        ),
+    )
+
+
+def _dispatch_callbacks() -> dispatch_service.ApiDispatchCallbacks:
+    return dispatch_service.ApiDispatchCallbacks(
+        stream_for_event=_stream_for_event,
+        resolve_task_deps=_resolve_task_deps,
+        build_task_context=_build_task_context,
+        coerce_task_intent_profiles=_coerce_task_intent_profiles,
+        normalize_task_intent_profile_segment=_normalize_task_intent_profile_segment,
+        refresh_job_status=_refresh_job_status,
+        emit_event=_emit_event,
+    )
+
+
 def _publish_envelope_to_redis(stream: str, envelope_json: str) -> tuple[bool, str | None]:
-    retries = max(1, EVENT_OUTBOX_REDIS_RETRIES)
-    sleep_s = max(0.0, EVENT_OUTBOX_REDIS_RETRY_SLEEP_S)
-    for attempt in range(1, retries + 1):
-        try:
-            redis_client.xadd(stream, {"data": envelope_json})
-            return True, None
-        except redis.RedisError as exc:
-            if attempt >= retries:
-                return False, str(exc)
-            if sleep_s > 0:
-                time.sleep(sleep_s)
-    return False, "unknown_redis_publish_error"
+    return dispatch_service.publish_envelope_to_redis(
+        _dispatch_runtime(),
+        stream,
+        envelope_json,
+    )
 
 
 def _insert_outbox_event(stream: str, event_type: str, envelope_json: str) -> str | None:
-    outbox_id = str(uuid.uuid4())
-    now = datetime.utcnow()
-    try:
-        with SessionLocal() as db:
-            db.add(
-                EventOutboxRecord(
-                    id=outbox_id,
-                    stream=stream,
-                    event_type=event_type,
-                    envelope_json=json.loads(envelope_json),
-                    attempts=0,
-                    last_error=None,
-                    created_at=now,
-                    updated_at=now,
-                    published_at=None,
-                )
-            )
-            db.commit()
-        return outbox_id
-    except Exception:
-        logger.exception("event_outbox_insert_failed", extra={"event_type": event_type, "stream": stream})
-        return None
+    return dispatch_service.insert_outbox_event(
+        _dispatch_runtime(),
+        stream,
+        event_type,
+        envelope_json,
+    )
 
 
 def _update_outbox_publish_state(
     outbox_id: str | None, published: bool, error: str | None = None
 ) -> None:
-    if not outbox_id:
-        return
-    now = datetime.utcnow()
-    try:
-        with SessionLocal() as db:
-            row = db.query(EventOutboxRecord).filter(EventOutboxRecord.id == outbox_id).first()
-            if not row:
-                return
-            row.attempts = (row.attempts or 0) + 1
-            row.updated_at = now
-            row.last_error = None if published else (error or "redis_publish_failed")
-            if published:
-                row.published_at = now
-            db.commit()
-    except Exception:
-        logger.exception(
-            "event_outbox_update_failed", extra={"outbox_id": outbox_id, "published": published}
-        )
+    dispatch_service.update_outbox_publish_state(
+        _dispatch_runtime(),
+        outbox_id,
+        published,
+        error,
+    )
 
 
 def _dispatch_event_outbox_once() -> int:
-    if not EVENT_OUTBOX_ENABLED:
-        return 0
-    dispatched = 0
-    try:
-        with SessionLocal() as db:
-            pending = (
-                db.query(EventOutboxRecord)
-                .filter(EventOutboxRecord.published_at.is_(None))
-                .order_by(EventOutboxRecord.created_at.asc())
-                .limit(max(1, EVENT_OUTBOX_BATCH_SIZE))
-                .all()
-            )
-            if not pending:
-                return 0
-            for row in pending:
-                envelope_json = json.dumps(row.envelope_json)
-                published, error = _publish_envelope_to_redis(row.stream, envelope_json)
-                row.attempts = (row.attempts or 0) + 1
-                row.updated_at = datetime.utcnow()
-                if published:
-                    row.published_at = row.updated_at
-                    row.last_error = None
-                    dispatched += 1
-                else:
-                    row.last_error = error or "redis_publish_failed"
-            db.commit()
-    except Exception:
-        logger.exception("event_outbox_dispatch_failed")
-    return dispatched
+    return dispatch_service.dispatch_event_outbox_once(_dispatch_runtime())
 
 
 def _start_event_outbox_dispatcher() -> None:
-    def _loop() -> None:
-        while True:
-            _dispatch_event_outbox_once()
-            time.sleep(max(0.1, EVENT_OUTBOX_POLL_S))
-
-    thread = threading.Thread(target=_loop, daemon=True, name="event-outbox-dispatcher")
-    thread.start()
+    dispatch_service.start_event_outbox_dispatcher(_dispatch_runtime())
 
 
 def _outbox_entry_payload(
@@ -944,41 +917,12 @@ def _outbox_entry_payload(
 
 
 def _emit_event(event_type: str, payload: dict[str, Any]) -> None:
-    envelope = models.EventEnvelope(
-        type=event_type,
-        version="1",
-        occurred_at=datetime.utcnow(),
-        correlation_id=payload.get("correlation_id", str(uuid.uuid4())),
-        job_id=payload.get("job_id") or payload.get("id"),
-        task_id=payload.get("task_id"),
-        payload=payload,
+    dispatch_service.emit_event(
+        _dispatch_runtime(),
+        _dispatch_callbacks(),
+        event_type,
+        payload,
     )
-    stream = _stream_for_event(event_type)
-    envelope_json = envelope.model_dump_json()
-    if not EVENT_OUTBOX_ENABLED:
-        published, error = _publish_envelope_to_redis(stream, envelope_json)
-        if not published:
-            logger.warning(
-                "event_emit_failed",
-                extra={"event_type": event_type, "stream": stream, "error": error or "redis_publish_failed"},
-            )
-        return
-    outbox_id = _insert_outbox_event(stream, event_type, envelope_json)
-    published, error = _publish_envelope_to_redis(stream, envelope_json)
-    if outbox_id is None and not published:
-        # Last-chance persistence when the initial outbox insert fails.
-        outbox_id = _insert_outbox_event(stream, event_type, envelope_json)
-    _update_outbox_publish_state(outbox_id, published, error)
-    if not published:
-        logger.warning(
-            "event_emit_deferred_to_outbox",
-            extra={
-                "event_type": event_type,
-                "stream": stream,
-                "outbox_id": outbox_id,
-                "error": error or "redis_publish_failed",
-            },
-        )
 
 
 def _resolve_download_path(path: str, root_dir: str, label: str) -> str:
@@ -1278,7 +1222,7 @@ def _persist_intent_workflow_memory(
             ]
             if part
         ),
-        "captured_at": datetime.utcnow().isoformat(),
+        "captured_at": _utcnow().isoformat(),
         "intent_workflow": {
             "job_id": job.id,
             "goal": _semantic_normalize_text(job.goal, max_len=1200),
@@ -1309,7 +1253,7 @@ def _persist_intent_workflow_memory(
             ),
         )
         metadata["intent_memory_persisted"] = True
-        metadata["intent_memory_persisted_at"] = datetime.utcnow().isoformat()
+        metadata["intent_memory_persisted_at"] = _utcnow().isoformat()
         metadata["intent_memory_key"] = memory_key
         metadata["intent_memory_user_id"] = user_id
         job.metadata_json = metadata
@@ -3288,7 +3232,7 @@ def _handle_plan_created(envelope: dict) -> None:
     plan = _parse_plan_payload(payload)
     if plan is None:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
@@ -3410,7 +3354,7 @@ def _handle_plan_failed(envelope: dict) -> None:
     if not job_id:
         return
     error_message = payload.get("error")
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         if not job:
@@ -3431,7 +3375,7 @@ def _handle_task_completed(envelope: dict) -> None:
         return
     _store_task_output(task_id, payload.get("outputs", {}))
     _store_task_result(task_id, payload)
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3459,7 +3403,7 @@ def _handle_task_failed(envelope: dict) -> None:
         return
     _store_task_result(task_id, payload)
     error = payload.get("error")
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3542,7 +3486,7 @@ def _handle_task_started(envelope: dict) -> None:
     task_id = payload.get("task_id") or envelope.get("task_id")
     if not task_id:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3580,7 +3524,7 @@ def _replan_job_for_intent_mismatch(
     mismatch_payload = dict(mismatch) if isinstance(mismatch, Mapping) else {}
     if mismatch_payload:
         mismatch_payload.setdefault("attempt", count + 1)
-        mismatch_payload.setdefault("created_at", datetime.utcnow().isoformat())
+        mismatch_payload.setdefault("created_at", _utcnow().isoformat())
         metadata["intent_mismatch_recovery"] = mismatch_payload
         history = metadata.get("intent_mismatch_recovery_history")
         if not isinstance(history, list):
@@ -3589,7 +3533,7 @@ def _replan_job_for_intent_mismatch(
         metadata["intent_mismatch_recovery_history"] = history[-10:]
     job.metadata_json = metadata
     job.status = models.JobStatus.planning.value
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete(synchronize_session=False)
     db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete(synchronize_session=False)
     db.commit()
@@ -3602,7 +3546,7 @@ def _handle_task_accepted(envelope: dict) -> None:
     task_id = payload.get("task_id") or envelope.get("task_id")
     if not task_id:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3621,7 +3565,7 @@ def _handle_task_rework(envelope: dict) -> None:
     task_id = payload.get("task_id") or envelope.get("task_id")
     if not task_id:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3661,84 +3605,13 @@ def _limit_exceeded(count: int, limit: int | None) -> bool:
 
 
 def _enqueue_ready_tasks(job_id: str, plan_id: str, correlation_id: str | None) -> None:
-    now = datetime.utcnow()
-    events: list[tuple[str, dict[str, Any]]] = []
-    with SessionLocal() as db:
-        task_records = db.query(TaskRecord).filter(TaskRecord.plan_id == plan_id).all()
-        if not task_records:
-            return
-        job_record = db.query(JobRecord).filter(JobRecord.id == job_id).first()
-        job_context = (
-            job_record.context_json
-            if job_record and isinstance(job_record.context_json, dict)
-            else {}
-        )
-        job_goal = job_record.goal if job_record and isinstance(job_record.goal, str) else ""
-        task_intent_profiles = _coerce_task_intent_profiles(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
-        )
-        tasks = _resolve_task_deps(task_records)
-        task_map = {task.id: task for task in tasks}
-        id_to_name = {record.id: record.name for record in task_records}
-        ready_ids = set(orchestrator.ready_tasks(tasks))
-        if not ready_ids:
-            return
-        for record in task_records:
-            if record.id in ready_ids and record.status == models.TaskStatus.pending.value:
-                if POLICY_GATE_ENABLED:
-                    record.status = models.TaskStatus.blocked.value
-                    record.updated_at = now
-                    context = _build_task_context(record.id, task_map, id_to_name, job_context)
-                    payload = _task_payload_from_record(
-                        record,
-                        correlation_id,
-                        context,
-                        goal_text=job_goal,
-                        intent_profile=task_intent_profiles.get(record.id),
-                    )
-                    events.append(("task.policy_check", payload))
-                    continue
-                next_attempt = (record.attempts or 0) + 1
-                if _limit_exceeded(next_attempt, record.max_attempts):
-                    record.status = models.TaskStatus.failed.value
-                    record.updated_at = now
-                    events.append(
-                        (
-                            "task.failed",
-                            _task_payload_with_error(
-                                record, correlation_id, "max_attempts_exceeded"
-                            ),
-                        )
-                    )
-                    continue
-                record.attempts = next_attempt
-                record.status = models.TaskStatus.ready.value
-                record.updated_at = now
-                context = _build_task_context(record.id, task_map, id_to_name, job_context)
-                payload = _task_payload_from_record(
-                    record,
-                    correlation_id,
-                    context,
-                    goal_text=job_goal,
-                    intent_profile=task_intent_profiles.get(record.id),
-                )
-                if TOOL_INPUT_VALIDATION_ENABLED and payload.get("tool_inputs_validation"):
-                    record.status = models.TaskStatus.failed.value
-                    record.updated_at = now
-                    failed_payload = dict(payload)
-                    failed_payload["error"] = "tool_inputs_invalid"
-                    events.append(
-                        (
-                            "task.failed",
-                            failed_payload,
-                        )
-                    )
-                    continue
-                events.append(("task.ready", payload))
-        db.commit()
-    for event_type, payload in events:
-        _emit_event(event_type, payload)
-    _refresh_job_status(job_id)
+    dispatch_service.enqueue_ready_tasks(
+        job_id,
+        plan_id,
+        correlation_id,
+        runtime=_dispatch_runtime(),
+        callbacks=_dispatch_callbacks(),
+    )
 
 
 def _task_payload_from_record(
@@ -3749,97 +3622,27 @@ def _task_payload_from_record(
     goal_text: str = "",
     intent_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = {
-        "task_id": record.id,
-        "id": record.id,
-        "job_id": record.job_id,
-        "plan_id": record.plan_id,
-        "name": record.name,
-        "description": record.description,
-        "instruction": record.instruction,
-        "acceptance_criteria": record.acceptance_criteria or [],
-        "expected_output_schema_ref": record.expected_output_schema_ref,
-        "status": record.status,
-        "deps": record.deps or [],
-        "attempts": record.attempts or 0,
-        "max_attempts": record.max_attempts or 0,
-        "rework_count": record.rework_count or 0,
-        "max_reworks": record.max_reworks or 0,
-        "assigned_to": record.assigned_to,
-        "tool_requests": record.tool_requests or [],
-        "tool_inputs": record.tool_inputs or {},
-        "critic_required": bool(record.critic_required),
-        "intent": record.intent,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-        "correlation_id": correlation_id or str(uuid.uuid4()),
-    }
-    normalized_profile_segment = _normalize_task_intent_profile_segment(
-        intent_profile.get("segment") if isinstance(intent_profile, Mapping) else None
+    return dispatch_service.task_payload_from_record(
+        record,
+        correlation_id,
+        context=context,
+        goal_text=goal_text,
+        intent_profile=intent_profile,
+        config=_dispatch_runtime().config,
+        callbacks=_dispatch_callbacks(),
     )
-    if normalized_profile_segment is not None:
-        payload["intent_segment"] = normalized_profile_segment
-    profile_intent = (
-        intent_contract.normalize_task_intent(intent_profile.get("intent"))
-        if isinstance(intent_profile, Mapping)
-        else None
-    )
-    profile_source = (
-        str(intent_profile.get("source") or "").strip()
-        if isinstance(intent_profile, Mapping)
-        else ""
-    )
-    profile_confidence = None
-    if isinstance(intent_profile, Mapping):
-        raw_confidence = intent_profile.get("confidence")
-        if isinstance(raw_confidence, (int, float)):
-            profile_confidence = max(0.0, min(1.0, float(raw_confidence)))
-    if profile_intent and not payload.get("intent"):
-        payload["intent"] = profile_intent
-    if profile_intent and profile_source and profile_confidence is not None:
-        payload["intent_source"] = profile_source
-        payload["intent_confidence"] = round(profile_confidence, 3)
-    else:
-        inference_payload = dict(payload)
-        if goal_text:
-            inference_payload["goal"] = goal_text
-        intent_inference = intent_contract.infer_task_intent_for_payload_with_metadata(
-            inference_payload
-        )
-        payload["intent_source"] = intent_inference.source
-        payload["intent_confidence"] = round(float(intent_inference.confidence), 3)
-        if not payload.get("intent"):
-            payload["intent"] = intent_inference.intent
-    ctx = context or {}
-    if context:
-        payload["context"] = context
-    resolved_inputs, resolution_errors = payload_resolver.resolve_tool_inputs_with_errors(
-        payload["tool_requests"],
-        payload["instruction"],
-        ctx,
-        payload,
-        payload.get("tool_inputs", {}),
-    )
-    validation_errors: dict[str, str] = {}
-    if resolved_inputs:
-        payload["tool_inputs"] = resolved_inputs
-        payload["tool_inputs_resolved"] = True
-        validation_errors.update(
-            payload_resolver.validate_tool_inputs(resolved_inputs, TOOL_INPUT_SCHEMAS)
-        )
-    if resolution_errors:
-        validation_errors.update(resolution_errors)
-    if validation_errors:
-        payload["tool_inputs_validation"] = validation_errors
-    return payload
 
 
 def _task_payload_with_error(
     record: TaskRecord, correlation_id: str | None, error: str
 ) -> dict[str, Any]:
-    payload = _task_payload_from_record(record, correlation_id)
-    payload["error"] = error
-    return payload
+    return dispatch_service.task_payload_with_error(
+        record,
+        correlation_id,
+        error,
+        config=_dispatch_runtime().config,
+        callbacks=_dispatch_callbacks(),
+    )
 
 
 def _handle_policy_decision(envelope: dict) -> None:
@@ -3853,7 +3656,7 @@ def _handle_policy_decision(envelope: dict) -> None:
     reasons = payload.get("reasons") or []
     rewrites = payload.get("rewrites")
     correlation_id = envelope.get("correlation_id")
-    now = datetime.utcnow()
+    now = _utcnow()
     events_to_emit: list[tuple[str, dict[str, Any]]] = []
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
@@ -4810,7 +4613,7 @@ def _record_intent_confidence_outcome(job: JobRecord, status: models.JobStatus) 
         "confidence": round(bounded_confidence, 3),
         "threshold": round(threshold, 3),
         "above_threshold": above_threshold,
-        "recorded_at": datetime.utcnow().isoformat(),
+        "recorded_at": _utcnow().isoformat(),
     }
     job.metadata_json = metadata
 
@@ -4824,7 +4627,7 @@ def _refresh_job_status(job_id: str) -> None:
         if not tasks:
             return
         statuses = {task.status for task in tasks}
-        now = datetime.utcnow()
+        now = _utcnow()
         if models.TaskStatus.failed.value in statuses:
             next_status = models.JobStatus.failed
         elif statuses.issubset(
@@ -5038,7 +4841,7 @@ def _parse_task_stream_event(stream_id: str, record: Mapping[str, str]) -> dict[
         return None
     occurred_at = envelope.get("occurred_at")
     if not isinstance(occurred_at, str):
-        occurred_at = datetime.utcnow().isoformat()
+        occurred_at = _utcnow().isoformat()
     status = payload_dict.get("status")
     status_text = status if isinstance(status, str) and status else event_type.replace("task.", "")
     error = payload_dict.get("error")
@@ -5084,7 +4887,7 @@ def create_job(
     db: Session = Depends(get_db),
 ) -> models.Job:
     job_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = _utcnow()
     goal_assessment = _assess_goal_intent(job.goal)
     gate_on_create = bool(require_clarification or INTENT_CLARIFICATION_ON_CREATE)
     if gate_on_create and bool(goal_assessment.get("requires_blocking_clarification")):
@@ -5473,7 +5276,7 @@ def get_job_debugger(
         "job_id": job_id,
         "job_status": job.status,
         "plan_id": plan_record.id if plan_record else None,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": _utcnow().isoformat(),
         "timeline_events_scanned": len(timeline),
         "tasks": tasks_payload,
     }
@@ -5533,7 +5336,7 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     ):
         raise HTTPException(status_code=400, detail="Invalid state transition")
     job.status = models.JobStatus.canceled.value
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.commit()
     _emit_event("job.canceled", {"job_id": job_id, "correlation_id": str(uuid.uuid4())})
     return _job_from_record(job)
@@ -5547,7 +5350,7 @@ def resume_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     if models.JobStatus(job.status) != models.JobStatus.canceled:
         raise HTTPException(status_code=400, detail="Job is not canceled")
     _set_job_status(job, models.JobStatus.planning)
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.commit()
     plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
     if plan:
@@ -5562,7 +5365,7 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
         raise HTTPException(status_code=404, detail="Job not found")
     if models.JobStatus(job.status) not in {models.JobStatus.failed, models.JobStatus.canceled}:
         raise HTTPException(status_code=400, detail="Job is not retryable")
-    now = datetime.utcnow()
+    now = _utcnow()
     tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
     for task in tasks:
         task.status = models.TaskStatus.pending.value
@@ -5583,7 +5386,7 @@ def retry_failed_tasks(job_id: str, db: Session = Depends(get_db)) -> models.Job
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    now = datetime.utcnow()
+    now = _utcnow()
     failed_tasks = (
         db.query(TaskRecord)
         .filter(
@@ -5625,7 +5428,7 @@ def retry_task(
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status != models.TaskStatus.failed.value:
         raise HTTPException(status_code=400, detail="Task is not failed")
-    now = datetime.utcnow()
+    now = _utcnow()
     task.status = models.TaskStatus.pending.value
     task.attempts = 0
     task.rework_count = 0
@@ -5660,7 +5463,7 @@ def replan_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     metadata["replan_reason"] = "manual"
     job.metadata_json = metadata
     job.status = models.JobStatus.planning.value
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete(synchronize_session=False)
     db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete(synchronize_session=False)
     db.commit()
@@ -5845,7 +5648,7 @@ def write_semantic_memory(
         "query_text": " ".join(
             part for part in [namespace, subject, fact, " ".join(keywords), " ".join(aliases)] if part
         ),
-        "captured_at": datetime.utcnow().isoformat(),
+        "captured_at": _utcnow().isoformat(),
     }
     write_request = models.MemoryWrite(
         name="semantic_memory",
@@ -6254,7 +6057,7 @@ def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_
             },
         )
     plan_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = _utcnow()
     record = PlanRecord(
         id=plan_id,
         job_id=job_id,

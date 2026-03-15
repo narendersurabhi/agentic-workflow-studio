@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -60,6 +61,43 @@ class TaskExecutionRequest(BaseModel):
         }
 
 
+class TaskDispatchPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str = ""
+    id: str = ""
+    job_id: str = ""
+    plan_id: str = ""
+    name: str = ""
+    description: str = ""
+    instruction: str = ""
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    expected_output_schema_ref: str = ""
+    status: str = ""
+    deps: list[str] = Field(default_factory=list)
+    attempts: int = 1
+    max_attempts: int = 1
+    rework_count: int = 0
+    max_reworks: int = 0
+    assigned_to: str | None = None
+    tool_requests: list[str] = Field(default_factory=list)
+    tool_inputs: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    critic_required: bool = True
+    intent: str | None = None
+    intent_source: str | None = None
+    intent_confidence: float | None = None
+    intent_segment: workflow_contracts.IntentGraphSegment | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+    correlation_id: str = ""
+    trace_id: str = ""
+    run_id: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    tool_inputs_resolved: bool = False
+    tool_inputs_validation: dict[str, str] = Field(default_factory=dict)
+    error: str | None = None
+
+
 def build_task_execution_request(
     value: Mapping[str, Any] | TaskExecutionRequest | None,
     *,
@@ -68,7 +106,9 @@ def build_task_execution_request(
     if isinstance(value, TaskExecutionRequest):
         return value
     payload = dict(value) if isinstance(value, Mapping) else {}
-    trace_id = _string_value(payload.get("correlation_id"))
+    trace_id = _string_value(payload.get("correlation_id")) or _string_value(
+        payload.get("trace_id")
+    )
     run_id = _string_value(payload.get("run_id")) or trace_id
     request_ids = _request_ids(payload.get("tool_requests"))
     tool_inputs = _tool_inputs(payload.get("tool_inputs"))
@@ -113,21 +153,98 @@ def build_task_execution_request(
     )
 
 
+def build_task_dispatch_payload(
+    value: Mapping[str, Any] | TaskDispatchPayload | None,
+    *,
+    default_max_attempts: int = 1,
+) -> TaskDispatchPayload:
+    if isinstance(value, TaskDispatchPayload):
+        return value
+    payload = dict(value) if isinstance(value, Mapping) else {}
+    execution_request = build_task_execution_request(
+        payload,
+        default_max_attempts=default_max_attempts,
+    )
+    correlation_id = _string_value(payload.get("correlation_id")) or execution_request.trace_id
+    trace_id = _string_value(payload.get("trace_id")) or correlation_id or execution_request.trace_id
+    normalized = dict(payload)
+    normalized.update(
+        {
+            "task_id": execution_request.task_id,
+            "id": _string_value(payload.get("id")) or execution_request.task_id,
+            "job_id": execution_request.job_id,
+            "plan_id": _string_value(payload.get("plan_id")),
+            "name": _string_value(payload.get("name")),
+            "description": _string_value(payload.get("description")),
+            "instruction": execution_request.instruction,
+            "acceptance_criteria": _string_list(payload.get("acceptance_criteria")),
+            "expected_output_schema_ref": _string_value(
+                payload.get("expected_output_schema_ref")
+            ),
+            "status": _string_value(payload.get("status")),
+            "deps": _string_list(payload.get("deps")),
+            "attempts": execution_request.attempts,
+            "max_attempts": execution_request.max_attempts,
+            "rework_count": _int_or_default(payload.get("rework_count"), 0),
+            "max_reworks": _int_or_default(payload.get("max_reworks"), 0),
+            "assigned_to": _string_value(payload.get("assigned_to")) or None,
+            "tool_requests": execution_request.tool_requests,
+            "tool_inputs": execution_request.tool_inputs,
+            "critic_required": _bool_value(payload.get("critic_required"), default=True),
+            "intent": execution_request.intent,
+            "intent_source": execution_request.intent_source,
+            "intent_confidence": execution_request.intent_confidence,
+            "intent_segment": execution_request.intent_segment,
+            "context": execution_request.context,
+            "correlation_id": correlation_id,
+            "trace_id": trace_id,
+            "run_id": execution_request.run_id,
+            "created_at": _datetime_or_none(payload.get("created_at")),
+            "updated_at": _datetime_or_none(payload.get("updated_at")),
+            "tool_inputs_resolved": bool(payload.get("tool_inputs_resolved")),
+            "tool_inputs_validation": _string_dict(payload.get("tool_inputs_validation")),
+            "error": _string_value(payload.get("error")) or None,
+        }
+    )
+    return TaskDispatchPayload.model_validate(normalized)
+
+
+def dump_task_dispatch_payload(
+    value: Mapping[str, Any] | TaskDispatchPayload | None,
+    *,
+    default_max_attempts: int = 1,
+) -> dict[str, Any]:
+    payload = build_task_dispatch_payload(
+        value,
+        default_max_attempts=default_max_attempts,
+    )
+    dumped = payload.model_dump(mode="json", exclude_none=True)
+    if not dumped.get("tool_inputs_validation"):
+        dumped.pop("tool_inputs_validation", None)
+    if not dumped.get("tool_inputs_resolved"):
+        dumped.pop("tool_inputs_resolved", None)
+    return dumped
+
+
 def _string_value(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return ""
 
 
-def _request_ids(value: Any) -> list[str]:
+def _string_list(value: Any) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return []
-    request_ids: list[str] = []
+    items: list[str] = []
     for item in value:
         normalized = _string_value(item)
         if normalized:
-            request_ids.append(normalized)
-    return request_ids
+            items.append(normalized)
+    return items
+
+
+def _request_ids(value: Any) -> list[str]:
+    return _string_list(value)
 
 
 def _tool_inputs(value: Any) -> dict[str, dict[str, Any]]:
@@ -142,6 +259,18 @@ def _tool_inputs(value: Any) -> dict[str, dict[str, Any]]:
     return normalized
 
 
+def _string_dict(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        dict_key = _string_value(key)
+        dict_value = _string_value(item)
+        if dict_key and dict_value:
+            normalized[dict_key] = dict_value
+    return normalized
+
+
 def _attempt_count(value: Any) -> int:
     return max(1, _int_or_default(value, 1))
 
@@ -150,7 +279,10 @@ def _max_attempts(value: Any, default_max_attempts: int) -> int:
     fallback = max(1, default_max_attempts)
     if value is None:
         return fallback
-    return max(1, _int_or_default(value, fallback))
+    parsed = _int_or_default(value, fallback)
+    if parsed <= 0:
+        return fallback
+    return max(1, parsed)
 
 
 def _int_or_default(value: Any, default: int) -> int:
@@ -158,6 +290,20 @@ def _int_or_default(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bool_value(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return default
 
 
 def _normalized_intent(payload: Mapping[str, Any]) -> str | None:
@@ -170,6 +316,12 @@ def _intent_confidence(value: Any) -> float | None:
     if not isinstance(value, (int, float)):
         return None
     return max(0.0, min(1.0, float(value)))
+
+
+def _datetime_or_none(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    return None
 
 
 def _intent_segment(payload: Mapping[str, Any]) -> workflow_contracts.IntentGraphSegment | None:

@@ -69,3 +69,39 @@ def test_build_task_execution_request_reads_capability_bindings() -> None:
     assert binding.capability_id == "github.repo.list"
     assert binding.adapter_type == "mcp"
     assert binding.server_id == "github_local"
+
+
+def test_build_task_dispatch_payload_normalizes_and_roundtrips_execution_fields() -> None:
+    payload = execution_contracts.build_task_dispatch_payload(
+        {
+            "task_id": "task-1",
+            "job_id": "job-1",
+            "plan_id": "plan-1",
+            "correlation_id": "corr-1",
+            "instruction": "Render the final report",
+            "tool_requests": ["docx_generate_from_spec"],
+            "tool_inputs": {
+                "docx_generate_from_spec": {"path": "artifacts/report.docx"}
+            },
+            "attempts": 0,
+            "max_attempts": 0,
+            "critic_required": 0,
+            "tool_inputs_resolved": True,
+            "tool_inputs_validation": {"docx_generate_from_spec": "missing document_spec"},
+        },
+        default_max_attempts=3,
+    )
+
+    assert payload.task_id == "task-1"
+    assert payload.id == "task-1"
+    assert payload.trace_id == "corr-1"
+    assert payload.correlation_id == "corr-1"
+    assert payload.attempts == 1
+    assert payload.max_attempts == 3
+    assert payload.tool_requests == ["docx_generate_from_spec"]
+    assert payload.tool_inputs["docx_generate_from_spec"]["path"] == "artifacts/report.docx"
+    assert payload.critic_required is False
+    assert payload.tool_inputs_resolved is True
+    request = execution_contracts.build_task_execution_request(payload.model_dump(mode="json"))
+    assert request.trace_id == "corr-1"
+    assert request.tool_inputs["docx_generate_from_spec"]["path"] == "artifacts/report.docx"

@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import redis
 from fastapi.testclient import TestClient
@@ -22,6 +22,10 @@ from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 Base.metadata.create_all(bind=engine)
 
 client = TestClient(main.app)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 def test_create_job():
@@ -680,7 +684,7 @@ def test_refresh_job_status_persists_intent_outcome_memory_and_calibration():
 
 
 def test_contract_intent_mismatch_triggers_auto_replan_with_recovery_metadata():
-    now = datetime.utcnow()
+    now = _utcnow()
     job_id = str(uuid.uuid4())
     plan_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
@@ -860,8 +864,8 @@ def test_emit_event_persists_outbox_when_redis_is_unavailable(monkeypatch):
             "status": models.JobStatus.queued.value,
             "priority": 0,
             "metadata": {},
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": _utcnow().isoformat(),
+            "updated_at": _utcnow().isoformat(),
         },
     )
 
@@ -878,7 +882,7 @@ def test_emit_event_persists_outbox_when_redis_is_unavailable(monkeypatch):
 
 def test_dispatch_event_outbox_once_publishes_pending_rows(monkeypatch):
     outbox_id = f"outbox-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     sent = []
 
     class _RedisOk:
@@ -934,7 +938,7 @@ def test_event_stream():
 def test_job_event_outbox_filters_by_job_and_pending_state():
     job_id = f"job-outbox-view-{uuid.uuid4()}"
     other_job_id = f"job-outbox-other-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.query(EventOutboxRecord).delete()
         db.add(
@@ -1014,7 +1018,7 @@ def test_job_details():
     job_id = f"job-details-{uuid.uuid4()}"
     plan_id = f"plan-details-{uuid.uuid4()}"
     task_id = f"task-details-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -1080,7 +1084,7 @@ def test_job_debugger_returns_timeline_and_error_classification(monkeypatch):
     job_id = f"job-debug-{uuid.uuid4()}"
     plan_id = f"plan-debug-{uuid.uuid4()}"
     task_id = f"task-debug-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -1182,8 +1186,8 @@ def test_plan_created_enqueues_ready_tasks():
                 goal="demo",
                 context_json={},
                 status=models.JobStatus.queued.value,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=_utcnow(),
+                updated_at=_utcnow(),
                 priority=0,
                 metadata_json={},
             )
@@ -1243,7 +1247,7 @@ def test_plan_created_enqueues_ready_tasks():
 
 def test_handle_plan_failed_marks_queued_job_failed_and_exposes_details_error():
     job_id = f"job-plan-failed-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -1288,7 +1292,7 @@ def test_handle_task_started_sets_task_running_and_job_running():
     job_id = f"job-task-started-{uuid.uuid4()}"
     plan_id = f"plan-task-started-{uuid.uuid4()}"
     task_id = f"task-task-started-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -1890,7 +1894,7 @@ def test_build_plan_from_composer_draft_derives_intent_from_goal(monkeypatch) ->
 
 
 def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-ref-{uuid.uuid4()}",
         job_id="job-ref",
@@ -1928,7 +1932,7 @@ def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:
 
 
 def test_task_payload_from_record_resolves_validation_report_alias_reference() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-improve-{uuid.uuid4()}",
         job_id="job-ref",
@@ -1988,7 +1992,7 @@ def test_task_payload_from_record_resolves_validation_report_alias_reference() -
 
 
 def test_task_payload_from_record_resolves_output_path_alias_reference() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-render-{uuid.uuid4()}",
         job_id="job-ref",
@@ -2035,7 +2039,7 @@ def test_task_payload_from_record_resolves_output_path_alias_reference() -> None
 
 
 def test_task_payload_from_record_resolves_task_level_path_reference() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-render-{uuid.uuid4()}",
         job_id="job-ref",
@@ -2082,7 +2086,7 @@ def test_task_payload_from_record_resolves_task_level_path_reference() -> None:
 
 
 def test_task_payload_from_record_includes_intent_segment_profile() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-segment-{uuid.uuid4()}",
         job_id="job-ref",
@@ -2137,6 +2141,49 @@ def test_task_payload_from_record_includes_intent_segment_profile() -> None:
     assert payload["intent_confidence"] == 0.91
     assert payload["intent_segment"]["id"] == "s3"
     assert payload["intent_segment"]["slots"]["output_format"] == "pdf"
+    assert payload["trace_id"] == "corr"
+    parsed = main.execution_contracts.build_task_dispatch_payload(payload)
+    assert parsed.correlation_id == "corr"
+    assert parsed.trace_id == "corr"
+
+
+def test_task_payload_from_record_uses_typed_dispatch_contract() -> None:
+    now = _utcnow()
+    record = TaskRecord(
+        id=f"task-dispatch-{uuid.uuid4()}",
+        job_id="job-ref",
+        plan_id="plan-ref",
+        name="GenerateSpec",
+        description="Generate doc spec",
+        instruction="Generate",
+        acceptance_criteria=["done"],
+        expected_output_schema_ref="schemas/document_spec",
+        status=models.TaskStatus.ready.value,
+        deps=[],
+        attempts=0,
+        max_attempts=0,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        intent=None,
+        tool_requests=["document.spec.generate"],
+        tool_inputs={"document.spec.generate": {"job": {"topic": "latency"}}},
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+
+    payload = main._task_payload_from_record(record, correlation_id="corr", context={})
+
+    dispatch = main.execution_contracts.build_task_dispatch_payload(payload)
+    assert dispatch.task_id == record.id
+    assert dispatch.plan_id == "plan-ref"
+    assert dispatch.correlation_id == "corr"
+    assert dispatch.trace_id == "corr"
+    assert dispatch.attempts == 1
+    assert dispatch.max_attempts == 1
+    assert dispatch.tool_requests == ["document.spec.generate"]
+    assert dispatch.tool_inputs_resolved is True
 
 
 def test_plan_preflight_compiler_accepts_valid_dependency_chain() -> None:
@@ -2427,7 +2474,7 @@ def test_retry_task_from_dlq_resets_task_and_deletes_stream_entry(monkeypatch):
     job_id = f"job-retry-task-{uuid.uuid4()}"
     plan_id = f"plan-retry-task-{uuid.uuid4()}"
     task_id = f"task-retry-task-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -2516,7 +2563,7 @@ def test_retry_task_from_dlq_requires_failed_status():
     job_id = f"job-retry-task-state-{uuid.uuid4()}"
     plan_id = f"plan-retry-task-state-{uuid.uuid4()}"
     task_id = f"task-retry-task-state-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
