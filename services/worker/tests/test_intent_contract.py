@@ -1,5 +1,93 @@
-from libs.core import capability_registry, intent_contract, models
+from datetime import UTC, datetime
+
+from libs.core import capability_registry, execution_contracts, intent_contract, models
 from services.worker.app import main
+
+
+def test_execute_task_delegates_through_execution_request_boundary(monkeypatch) -> None:
+    request = execution_contracts.TaskExecutionRequest(
+        task_id="task-1",
+        source_payload={"task_id": "task-1"},
+    )
+    expected = models.TaskResult(
+        task_id="task-1",
+        status=models.TaskStatus.completed,
+        outputs={},
+        artifacts=[],
+        tool_calls=[],
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+    seen: list[execution_contracts.TaskExecutionRequest] = []
+
+    def fake_build(payload: dict, *, default_max_attempts: int) -> execution_contracts.TaskExecutionRequest:
+        assert payload == {"task_id": "task-1"}
+        assert default_max_attempts == main.WORKER_DEFAULT_MAX_ATTEMPTS
+        return request
+
+    def fake_execute(
+        built_request: execution_contracts.TaskExecutionRequest,
+    ) -> models.TaskResult:
+        seen.append(built_request)
+        return expected
+
+    monkeypatch.setattr(main.execution_contracts, "build_task_execution_request", fake_build)
+    monkeypatch.setattr(main, "execute_task_request", fake_execute)
+
+    result = main.execute_task({"task_id": "task-1"})
+
+    assert result is expected
+    assert seen == [request]
+
+
+def test_execute_task_request_delegates_to_execution_service(monkeypatch) -> None:
+    request = execution_contracts.TaskExecutionRequest(
+        task_id="task-1",
+        source_payload={"task_id": "task-1"},
+    )
+    expected = models.TaskResult(
+        task_id="task-1",
+        status=models.TaskStatus.completed,
+        outputs={},
+        artifacts=[],
+        tool_calls=[],
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+
+    monkeypatch.setattr(
+        main.tool_runtime_adapter,
+        "build_worker_tool_runtime",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        main.capability_runtime_adapter,
+        "build_worker_capability_runtime",
+        lambda **kwargs: object(),
+    )
+
+    seen: list[tuple[execution_contracts.TaskExecutionRequest, object, object]] = []
+
+    def fake_execute_task_request(
+        built_request: execution_contracts.TaskExecutionRequest,
+        *,
+        context,
+        callbacks,
+    ) -> models.TaskResult:
+        seen.append((built_request, context.tool_runtime, context.capability_runtime))
+        assert callbacks.task_intent_inference is main._task_intent_inference_for_request
+        assert callbacks.intent_segment is main._intent_segment_for_request
+        return expected
+
+    monkeypatch.setattr(main.execution_service, "execute_task_request", fake_execute_task_request)
+
+    result = main.execute_task_request(request)
+
+    assert result is expected
+    assert len(seen) == 1
+    assert seen[0][0] is request
+    assert seen[0][1] is not None
+    assert seen[0][2] is not None
 
 
 def test_infer_task_intent_uses_payload_hint() -> None:
@@ -74,7 +162,7 @@ def test_intent_segment_from_payload_prefers_direct_segment() -> None:
     assert segment["intent"] == "render"
 
 
-def test_intent_segment_contract_detects_missing_required_payload_input() -> None:
+def test_intent_segment_contract_allows_renderer_without_explicit_path() -> None:
     segment = {
         "id": "s1",
         "intent": "render",
@@ -96,7 +184,7 @@ def test_intent_segment_contract_detects_missing_required_payload_input() -> Non
         capability_id="document.pdf.generate",
         capability_risk_tier="bounded_write",
     )
-    assert mismatch == "must_have_inputs_missing:path"
+    assert mismatch is None
 
 
 def test_tool_payload_builds_github_repo_query_from_context_fields() -> None:
