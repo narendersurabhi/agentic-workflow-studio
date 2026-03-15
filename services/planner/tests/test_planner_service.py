@@ -35,10 +35,15 @@ def test_build_plan_request_adds_semantic_hints() -> None:
         build_semantic_capability_hints=lambda job, capabilities, limit: [
             {"capability_id": "demo", "score": 0.9, "goal": job.goal, "limit": limit}
         ],
-        build_llm_prompt=lambda request: request.goal,
-        build_llm_repair_prompt=lambda original, raw, request: original + raw + request.goal,
         parse_llm_plan=lambda content: models.PlanCreate.model_validate_json(content),
-        postprocess_llm_plan=lambda plan, request: plan,
+        ensure_llm_tool=lambda plan: plan,
+        ensure_task_intents=lambda plan, request: plan,
+        ensure_job_inputs=lambda plan, request: plan,
+        ensure_default_value_markers=lambda plan, request: plan,
+        ensure_renderer_required_inputs=lambda plan: plan,
+        ensure_tool_input_dependencies=lambda plan: plan,
+        ensure_renderer_output_extensions=lambda plan: plan,
+        apply_max_depth=lambda plan, max_depth: plan,
         validate_plan=lambda plan, request: (True, "ok"),
     )
 
@@ -57,17 +62,25 @@ def test_build_plan_request_adds_semantic_hints() -> None:
 def test_plan_job_uses_request_boundary_for_llm_path() -> None:
     captured: list[planner_contracts.PlanRequest] = []
 
-    def _build_prompt(request: planner_contracts.PlanRequest) -> str:
+    def _ensure_task_intents(
+        plan: models.PlanCreate,
+        request: planner_contracts.PlanRequest,
+    ) -> models.PlanCreate:
         captured.append(request)
-        return request.goal
+        return plan
 
     runtime = planner_service.PlannerServiceRuntime(
         load_capabilities=lambda: {},
         build_semantic_capability_hints=lambda job, capabilities, limit: [],
-        build_llm_prompt=_build_prompt,
-        build_llm_repair_prompt=lambda original, raw, request: original + raw,
         parse_llm_plan=lambda content: models.PlanCreate.model_validate_json(content),
-        postprocess_llm_plan=lambda plan, request: plan,
+        ensure_llm_tool=lambda plan: plan,
+        ensure_task_intents=_ensure_task_intents,
+        ensure_job_inputs=lambda plan, request: plan,
+        ensure_default_value_markers=lambda plan, request: plan,
+        ensure_renderer_required_inputs=lambda plan: plan,
+        ensure_tool_input_dependencies=lambda plan: plan,
+        ensure_renderer_output_extensions=lambda plan: plan,
+        apply_max_depth=lambda plan, max_depth: plan,
         validate_plan=lambda plan, request: (True, "ok"),
     )
 
@@ -82,3 +95,17 @@ def test_plan_job_uses_request_boundary_for_llm_path() -> None:
     assert plan.planner_version == "1.0.0"
     assert captured
     assert captured[0].job_id == "job-1"
+
+
+def test_build_llm_prompt_uses_request_contract() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="Render a DOCX",
+        job_payload={"goal": "Render a DOCX"},
+        semantic_capability_hints=[{"capability_id": "docx.generate"}],
+    )
+
+    prompt = planner_service.build_llm_prompt(request)
+
+    assert "Goal: Render a DOCX" in prompt
+    assert "docx.generate" in prompt

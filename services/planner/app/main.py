@@ -203,10 +203,15 @@ def _planner_service_runtime() -> planner_service.PlannerServiceRuntime:
             capabilities,
             limit=limit,
         ),
-        build_llm_prompt=_llm_prompt_from_request,
-        build_llm_repair_prompt=_llm_plan_repair_prompt_from_request,
         parse_llm_plan=_parse_llm_plan,
-        postprocess_llm_plan=_postprocess_llm_plan_request,
+        ensure_llm_tool=_ensure_llm_tool,
+        ensure_task_intents=_ensure_task_intents_for_request,
+        ensure_job_inputs=_ensure_job_inputs_for_request,
+        ensure_default_value_markers=_ensure_default_value_markers_for_request,
+        ensure_renderer_required_inputs=_ensure_renderer_required_inputs,
+        ensure_tool_input_dependencies=_ensure_tool_input_dependencies,
+        ensure_renderer_output_extensions=_ensure_renderer_output_extensions,
+        apply_max_depth=_apply_max_depth_limit,
         validate_plan=_validate_plan_request,
     )
 
@@ -266,150 +271,7 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
         runtime=_planner_service_runtime(),
         include_semantic_hints=True,
     )
-    return _llm_prompt_from_request(request)
-
-
-def _llm_prompt_from_request(request: planner_contracts.PlanRequest) -> str:
-    capabilities = planner_contracts.capability_map(request)
-    allowed_names = sorted({tool.name for tool in request.tools} | set(capabilities.keys()))
-    tool_names = ", ".join(allowed_names)
-    tool_catalog = [
-        {
-            "type": "tool",
-            "name": tool.name,
-            "description": tool.description,
-            "input_schema": tool.input_schema,
-            "usage_guidance": tool.usage_guidance,
-            "risk_level": tool.risk_level.value
-            if isinstance(tool.risk_level, Enum)
-            else tool.risk_level,
-            "tool_intent": tool.tool_intent.value
-            if isinstance(tool.tool_intent, Enum)
-            else tool.tool_intent,
-        }
-        for tool in request.tools
-    ]
-    capability_catalog = [
-        {
-            "type": "capability",
-            "name": capability.capability_id,
-            "description": capability.description,
-            "risk_tier": capability.risk_tier,
-            "idempotency": capability.idempotency,
-            "group": capability.group,
-            "subgroup": capability.subgroup,
-            "input_schema_ref": capability.input_schema_ref,
-            "output_schema_ref": capability.output_schema_ref,
-            "adapters": [
-                {
-                    "type": adapter.type,
-                    "server_id": adapter.server_id,
-                    "tool_name": adapter.tool_name,
-                }
-                for adapter in capability.adapters
-            ],
-        }
-        for capability in capabilities.values()
-    ]
-    combined_catalog = tool_catalog + capability_catalog
-    tool_catalog_json = json.dumps(
-        combined_catalog, ensure_ascii=False, indent=2, default=_json_fallback
-    )
-    semantic_capability_hints = request.semantic_capability_hints
-    job_json = json.dumps(request.job_payload, ensure_ascii=False, indent=2, default=_json_fallback)
-    max_depth = request.max_dependency_depth
-    depth_hint = ""
-    if max_depth:
-        depth_hint = f"Max dependency chain depth: {max_depth}.\n"
-    intent_graph_block = ""
-    intent_graph = request.goal_intent_graph
-    if intent_graph:
-        intent_graph_json = json.dumps(
-            intent_graph.model_dump(mode="json", exclude_none=True),
-            ensure_ascii=False,
-            indent=2,
-            default=_json_fallback,
-        )
-        intent_graph_block = (
-            "Goal intent decomposition graph (ordered hints for planning):\n"
-            f"{intent_graph_json}\n"
-            "Prefer preserving this segment order in tasks/dependencies.\n"
-        )
-    intent_repair_block = _intent_mismatch_recovery_block_from_request(request)
-    semantic_capability_block = ""
-    if semantic_capability_hints:
-        semantic_capability_block = (
-            "Most relevant capabilities for this goal from local semantic search:\n"
-            f"{json.dumps(semantic_capability_hints, ensure_ascii=False, indent=2, default=_json_fallback)}\n"
-            "Prefer these capabilities when they fit the goal and required inputs.\n"
-        )
-    return (
-        "You are a planner. Return ONLY valid JSON for a PlanCreate object (no prose).\n"
-        "Required top-level fields: planner_version, tasks_summary, dag_edges, tasks.\n"
-        "Schema rules:\n"
-        '- dag_edges must be an array of 2-element string arrays, e.g. [["A","B"],["B","C"]].\n'
-        "- acceptance_criteria must be an array of strings, not a single string.\n"
-        "Each task must include: name, description, instruction, acceptance_criteria, "
-        "expected_output_schema_ref, intent, deps, tool_requests, tool_inputs, critic_required.\n"
-        "Example:\n"
-        "{\n"
-        '  "planner_version": "1.0.0",\n'
-        '  "tasks_summary": "...",\n'
-        '  "dag_edges": [["TaskA","TaskB"],["TaskB","TaskC"]],\n'
-        '  "tasks": [\n'
-        "    {\n"
-        '      "name": "TaskA",\n'
-        '      "description": "...",\n'
-        '      "instruction": "...",\n'
-        '      "acceptance_criteria": ["..."],\n'
-        '      "expected_output_schema_ref": "schemas/example",\n'
-        '      "intent": "generate",\n'
-        '      "deps": [],\n'
-        '      "tool_requests": ["llm_generate"],\n'
-        '      "tool_inputs": {"llm_generate": {"text": "..."}},\n'
-        '      "critic_required": false\n'
-        "    }\n"
-        "  ]\n"
-        "}\n"
-        "\n"
-        "Rules:\n"
-        "1) Use only tool names from the allowed list.\n"
-        "1a) Every task must set intent to one of: transform, generate, validate, render, io.\n"
-        "2) deps must reference task names that appear in this plan.\n"
-        "3) If a tool requires structured JSON, add a prior task to generate that JSON and set "
-        "expected_output_schema_ref to that schema.\n"
-        "4) If a tool requires specific inputs, put them in task.tool_inputs "
-        "(a dict keyed by tool name). Do NOT embed JSON in instruction text.\n"
-        "5) Do NOT use placeholder strings like ${Task.output} in tool_inputs. "
-        "When a later task needs dependency output, either omit the field and rely on deps context "
-        "injection OR use explicit reference objects like "
-        '{"$from":"dependencies_by_name.TaskA.tool_name.field"} (or add "$default"). '
-        "You may still include other inputs like strict, allowed_block_types, or path.\n"
-        "6) Prefer the generic validation + rendering pipeline:\n"
-        "   - Generate a DocumentSpec JSON.\n"
-        "   - Validate with document_spec_validate.\n"
-        "   - Render with docx_generate_from_spec or pdf_generate_from_spec.\n"
-        "   - Do not add a separate output-path derivation task unless the path itself is needed downstream.\n"
-        "   Use specialized tools only if explicitly requested.\n"
-        "7) If unsure, use llm_generate.\n"
-        "8) Keep output compact. Do NOT copy or embed large raw text from Job JSON "
-        "(especially long context fields like job_description) into tasks, instructions, "
-        "acceptance criteria, or tool_inputs.\n"
-        "9) For tool_inputs include only minimal scalar params. Omit large/context fields "
-        "(e.g., job, memory, document_spec) "
-        "and rely on runtime dependency/context injection.\n"
-        "10) Keep each task instruction concise (one short paragraph) and keep acceptance "
-        "criteria short bullets.\n"
-        "\n"
-        f"{depth_hint}"
-        f"{intent_graph_block}"
-        f"{intent_repair_block}"
-        f"Allowed tool names: {tool_names}\n"
-        f"{semantic_capability_block}"
-        f"Tool catalog (JSON): {tool_catalog_json}\n"
-        f"Goal: {request.goal}\n"
-        f"Job (JSON): {job_json}\n"
-    )
+    return planner_service.build_llm_prompt(request)
 
 
 def _llm_plan_repair_prompt(
@@ -447,34 +309,7 @@ def _llm_plan_repair_prompt(
             for capability_id, capability in _planner_capabilities().items()
         ],
     )
-    return _llm_plan_repair_prompt_from_request(original_prompt, raw_output, request)
-
-
-def _llm_plan_repair_prompt_from_request(
-    original_prompt: str,
-    raw_output: str,
-    request: planner_contracts.PlanRequest,
-) -> str:
-    capabilities = planner_contracts.capability_map(request)
-    allowed_names = sorted({tool.name for tool in request.tools} | set(capabilities.keys()))
-    tool_names = ", ".join(allowed_names)
-    return (
-        "You are fixing a malformed planner response.\n"
-        "Return ONLY one valid JSON object for PlanCreate.\n"
-        "Do not include markdown, comments, or prose.\n"
-        "Required top-level fields: planner_version, tasks_summary, dag_edges, tasks.\n"
-        "Each task must include: name, description, instruction, acceptance_criteria, "
-        "expected_output_schema_ref, intent, deps, tool_requests, tool_inputs, critic_required.\n"
-        "Rules:\n"
-        "- acceptance_criteria must be string array.\n"
-        "- dag_edges must be array of 2-string arrays.\n"
-        "- each task must include intent in {transform, generate, validate, render, io}.\n"
-        "- Use only allowed tool names.\n"
-        "- If a field is missing, add a safe default value.\n"
-        f"Allowed tool names: {tool_names}\n\n"
-        f"Original planner prompt (for context):\n{original_prompt}\n\n"
-        f"Malformed planner output to repair:\n{raw_output}\n"
-    )
+    return planner_service.build_llm_repair_prompt(original_prompt, raw_output, request)
 
 
 def _document_spec_prompt(job: models.Job, allowed_block_types: List[str]) -> str:
@@ -588,6 +423,18 @@ def _ensure_task_intents(
     return plan.model_copy(update={"tasks": updated_tasks})
 
 
+def _ensure_task_intents_for_request(
+    plan: models.PlanCreate,
+    request: planner_contracts.PlanRequest,
+) -> models.PlanCreate:
+    return _ensure_task_intents(
+        plan,
+        request.tools,
+        goal_text=request.goal,
+        goal_intent_sequence=planner_contracts.goal_intent_sequence(request),
+    )
+
+
 def _job_goal_intent_graph(job: models.Job) -> workflow_contracts.IntentGraph | None:
     if not isinstance(job.metadata, dict):
         return None
@@ -689,13 +536,6 @@ def _job_intent_mismatch_recovery(job: models.Job) -> dict[str, Any] | None:
 
 def _job_intent_mismatch_recovery_block(job: models.Job) -> str:
     recovery = _job_intent_mismatch_recovery(job)
-    if not recovery:
-        return ""
-    return _format_intent_mismatch_recovery_block(recovery)
-
-
-def _intent_mismatch_recovery_block_from_request(request: planner_contracts.PlanRequest) -> str:
-    recovery = planner_contracts.intent_mismatch_recovery(request)
     if not recovery:
         return ""
     return _format_intent_mismatch_recovery_block(recovery)
@@ -825,25 +665,6 @@ def _ensure_default_value_markers_for_request(
     if not changed:
         return plan
     return plan.model_copy(update={"tasks": tasks})
-
-
-def _postprocess_llm_plan_request(
-    plan: models.PlanCreate,
-    request: planner_contracts.PlanRequest,
-) -> models.PlanCreate:
-    candidate = _ensure_llm_tool(plan)
-    candidate = _ensure_task_intents(
-        candidate,
-        request.tools,
-        goal_text=request.goal,
-        goal_intent_sequence=planner_contracts.goal_intent_sequence(request),
-    )
-    candidate = _ensure_job_inputs_for_request(candidate, request)
-    candidate = _ensure_default_value_markers_for_request(candidate, request)
-    candidate = _ensure_renderer_required_inputs(candidate)
-    candidate = _ensure_tool_input_dependencies(candidate)
-    candidate = _ensure_renderer_output_extensions(candidate)
-    return _apply_max_depth_limit(candidate, request.max_dependency_depth)
 
 
 def _ensure_renderer_output_extensions(plan: models.PlanCreate) -> models.PlanCreate:
