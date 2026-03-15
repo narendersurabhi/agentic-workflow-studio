@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from typing import Any, Callable
 
-from libs.core.llm_provider import LLMProvider
+from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 from libs.framework.tool_runtime import ToolExecutionError
 
 
@@ -132,7 +132,6 @@ def coding_agent_autonomous(
     *,
     post_mcp_tool_call: Callable[[str, str, dict[str, Any]], dict[str, Any]],
     write_workspace_text_file: Callable[[dict[str, Any], str], dict[str, Any]],
-    extract_json: Callable[[str], str],
 ) -> dict[str, Any]:
     goal = payload.get("goal")
     if not isinstance(goal, str) or not goal.strip():
@@ -149,13 +148,21 @@ def coding_agent_autonomous(
     max_steps = max(3, min(12, max_steps))
 
     plan_prompt = build_plan_prompt(goal, constraints, max_steps)
-    response = provider.generate(plan_prompt)
-    plan_json = extract_json(response.content)
-    if not plan_json:
-        raise ToolExecutionError("plan_json_missing")
     try:
-        plan = json.loads(plan_json)
-    except json.JSONDecodeError as exc:
+        plan = provider.generate_request_json_object(
+            LLMRequest(
+                prompt=plan_prompt,
+                metadata={
+                    "component": "tools",
+                    "tool": "coding_agent_autonomous",
+                    "operation": "plan_generation",
+                    "goal_len": len(goal),
+                    "max_steps": max_steps,
+                    "has_constraints": bool(constraints),
+                },
+            )
+        )
+    except LLMProviderError as exc:
         raise ToolExecutionError(f"plan_json_invalid:{exc}") from exc
     steps = plan.get("steps")
     if not isinstance(steps, list) or not steps:

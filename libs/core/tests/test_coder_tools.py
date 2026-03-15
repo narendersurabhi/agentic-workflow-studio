@@ -1,12 +1,15 @@
-from libs.core.llm_provider import LLMProvider, LLMResponse
+from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 from libs.framework.tool_runtime import ToolExecutionError
 from libs.tools import coder_tools
 from pathlib import Path
 
 
 class _PlanProvider(LLMProvider):
-    def generate(self, prompt: str) -> LLMResponse:
-        del prompt
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    def generate_request(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
         return LLMResponse(
             content='{"steps":[{"title":"Create app","files":["src/app.py"]}]}'
         )
@@ -49,16 +52,25 @@ def test_coding_agent_autonomous_retries_invalid_json_once() -> None:
         writes.append(payload)
         return {"path": payload["path"]}
 
+    provider = _PlanProvider()
     out = coder_tools.coding_agent_autonomous(
         {"goal": "build app", "workspace_path": "workspace", "max_steps": 1},
-        _PlanProvider(),
+        provider,
         post_mcp_tool_call=post_mcp_tool_call,
         write_workspace_text_file=write_workspace_text_file,
-        extract_json=lambda text: text,
     )
 
     assert out["steps_completed"] == 1
     assert len(calls) == 2
+    assert provider.requests
+    assert provider.requests[0].metadata == {
+        "component": "tools",
+        "tool": "coding_agent_autonomous",
+        "operation": "plan_generation",
+        "goal_len": len("build app"),
+        "max_steps": 3,
+        "has_constraints": False,
+    }
     assert "constraints" in calls[1]
     assert "STRICT JSON ONLY" in calls[1]["constraints"]
     # plan file + plan update + generated file

@@ -201,27 +201,70 @@ def _is_retryable_http_error(status_code: int) -> bool:
 
 
 def extract_json_object_text(text: str) -> str:
-    content = text.strip()
-    if content.startswith("```"):
-        parts = content.split("```")
-        if len(parts) > 1:
-            content = parts[1]
-        content = content.lstrip()
-        if content.startswith("json"):
-            content = content[4:].lstrip()
+    content = _strip_markdown_fence(text.strip())
+    content = _unwrap_json_string(content)
+    if content.startswith("{") and content.endswith("}"):
+        return content
     start = content.find("{")
     end = content.rfind("}")
     if start == -1 or end == -1 or end <= start:
         raise LLMProviderError("No JSON object found in model response")
-    return content[start : end + 1]
+    return _unwrap_json_string(content[start : end + 1])
 
 
 def parse_json_object(text: str) -> Dict[str, Any]:
-    json_text = extract_json_object_text(text)
-    try:
-        data = json.loads(json_text)
-    except json.JSONDecodeError as exc:
-        raise LLMProviderError(f"Invalid JSON returned: {exc}") from exc
-    if not isinstance(data, dict):
-        raise LLMProviderError("Top-level structured output must be a JSON object")
-    return data
+    queue = [text]
+    seen: set[str] = set()
+    while queue:
+        candidate = queue.pop(0).strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        normalized = _strip_markdown_fence(candidate)
+        normalized = _unwrap_json_string(normalized)
+        try:
+            parsed = json.loads(normalized)
+        except json.JSONDecodeError:
+            try:
+                extracted = extract_json_object_text(normalized)
+            except LLMProviderError:
+                extracted = ""
+            if extracted and extracted != normalized:
+                queue.append(extracted)
+            if '\\"' in normalized:
+                queue.append(normalized.replace('\\"', '"'))
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+            return parsed[0]
+        if isinstance(parsed, str):
+            queue.append(parsed)
+    raise LLMProviderError("Top-level structured output must be a JSON object")
+
+
+def _strip_markdown_fence(text: str) -> str:
+    if not text.startswith("```"):
+        return text
+    parts = text.split("```")
+    if len(parts) <= 1:
+        return text
+    candidate = parts[1].lstrip()
+    if candidate.startswith("json"):
+        candidate = candidate[4:].lstrip()
+    return candidate
+
+
+def _unwrap_json_string(text: str) -> str:
+    candidate = text.strip()
+    for _ in range(2):
+        if not (candidate.startswith('"') and candidate.endswith('"')):
+            break
+        try:
+            decoded = json.loads(candidate)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(decoded, str):
+            break
+        candidate = decoded.strip()
+    return candidate

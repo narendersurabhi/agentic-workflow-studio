@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.core.llm_provider import LLMProvider, LLMResponse
+from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 from libs.core.models import RiskLevel, ToolSpec
 from libs.core.tool_registry import (
     Tool,
@@ -927,3 +927,29 @@ def test_docx_generate_from_spec_auto_derives_path_when_missing(
     assert output_path.exists()
     assert output_path.suffix == ".docx"
 
+
+class _RequestOnlyProvider(LLMProvider):
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.requests: list[LLMRequest] = []
+
+    def generate_request(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        return LLMResponse(content=self.content)
+
+
+def test_llm_generate_tool_uses_request_based_provider() -> None:
+    provider = _RequestOnlyProvider("generated text")
+    registry = default_registry(llm_enabled=True, llm_provider=provider)
+
+    call = registry.execute("llm_generate", {"text": "hello world"}, "id", "trace")
+
+    assert call.status == "completed"
+    assert call.output_or_error == {"text": "generated text"}
+    assert provider.requests
+    assert provider.requests[0].metadata == {
+        "component": "tools",
+        "tool": "llm_generate",
+        "operation": "generate_text",
+        "prompt_len": len("hello world"),
+    }

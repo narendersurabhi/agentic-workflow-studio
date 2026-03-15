@@ -31,11 +31,18 @@ from libs.core import (
     payload_resolver,
     state_machine,
     tool_registry,
+    workflow_contracts,
 )
-from libs.core.llm_provider import LLMProvider, LLMProviderError, MockLLMProvider, resolve_provider
+from libs.core.llm_provider import (
+    LLMProvider,
+    LLMProviderError,
+    LLMRequest,
+    MockLLMProvider,
+    resolve_provider,
+)
 from .database import Base, SessionLocal, engine
 from .models import EventOutboxRecord, JobRecord, PlanRecord, TaskRecord
-from . import memory_store
+from . import intent_service, memory_store
 
 core_logging.configure_logging("api")
 logger = logging.getLogger("api.orchestrator")
@@ -740,17 +747,18 @@ def _slot_question(slot: str, goal: str) -> str:
 
 
 def _goal_intent_segments_from_metadata(metadata: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(metadata, Mapping):
-        return []
-    graph = metadata.get("goal_intent_graph")
-    if not isinstance(graph, Mapping):
-        return []
-    raw_segments = graph.get("segments")
-    if not isinstance(raw_segments, list):
+    graph = (
+        workflow_contracts.parse_intent_graph(metadata.get("goal_intent_graph"))
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    if graph is None:
         return []
     segments: list[dict[str, Any]] = []
-    for raw_segment in raw_segments:
-        normalized = _normalize_task_intent_profile_segment(raw_segment)
+    for raw_segment in graph.segments:
+        normalized = _normalize_task_intent_profile_segment(
+            raw_segment.model_dump(mode="json", exclude_none=True)
+        )
         if normalized is not None:
             segments.append(normalized)
     return segments
@@ -1574,31 +1582,6 @@ def _heuristic_capability_recommendations(
     return recommendations[:max_count]
 
 
-def _extract_json_object_from_text(text: str) -> dict[str, Any] | None:
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("```"):
-        lines = [line for line in raw.splitlines() if not line.strip().startswith("```")]
-        raw = "\n".join(lines).strip()
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:  # noqa: BLE001
-        pass
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    snippet = raw[start : end + 1]
-    try:
-        parsed = json.loads(snippet)
-    except Exception:  # noqa: BLE001
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
 def _coerce_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -1835,12 +1818,16 @@ def _persist_interaction_summaries_memory(
 
 
 def _attach_interaction_compaction_to_graph(
-    graph: dict[str, Any], compaction: Mapping[str, Any]
-) -> dict[str, Any]:
-    summary = graph.get("summary")
-    summary_dict = dict(summary) if isinstance(summary, dict) else {}
-    summary_dict["interaction_summary_compaction"] = dict(compaction)
-    return {**graph, "summary": summary_dict}
+    graph: workflow_contracts.IntentGraph,
+    compaction: Mapping[str, Any],
+) -> workflow_contracts.IntentGraph:
+    return graph.model_copy(
+        update={
+            "summary": graph.summary.model_copy(
+                update={"interaction_summary_compaction": dict(compaction)}
+            )
+        }
+    )
 
 
 def _interaction_summary_fact_corpus(interaction_summaries: list[dict[str, Any]]) -> list[str]:
@@ -2416,25 +2403,21 @@ def _llm_decompose_goal_intent(
         prompt += "Interaction summaries (grounding evidence):\n"
         prompt += json.dumps(interaction_summaries[:32], ensure_ascii=True)
         prompt += "\nOnly include objective_facts that are directly supported by these summaries.\n"
-    response = provider.generate(prompt)
-    raw_content: Any
-    if isinstance(response, Mapping):
-        raw_content = response
-    elif hasattr(response, "content"):
-        raw_content = getattr(response, "content")
-    else:
-        raw_content = response
-    parsed: dict[str, Any] | None = None
-    if isinstance(raw_content, dict):
-        parsed = raw_content
-    elif isinstance(raw_content, bytes):
-        parsed = _extract_json_object_from_text(raw_content.decode("utf-8", errors="ignore"))
-    elif isinstance(raw_content, str):
-        parsed = _extract_json_object_from_text(raw_content)
-    else:
-        parsed = _extract_json_object_from_text(str(raw_content))
-    if not isinstance(parsed, dict):
-        raise ValueError("llm_intent_graph_parse_failed")
+    parsed = provider.generate_request_json_object(
+        LLMRequest(
+            prompt=prompt,
+            metadata={
+                "component": "api",
+                "operation": "intent_decompose",
+                "goal_len": len(goal),
+                "capability_catalog_size": len(allowed_capability_catalog),
+                "capability_top_k": capability_top_k,
+                "workflow_hints": len(workflow_hints or []),
+                "semantic_goal_capabilities": len(semantic_goal_capabilities or []),
+                "interaction_summaries": len(interaction_summaries or []),
+            },
+        )
+    )
     return _normalize_llm_intent_graph(
         goal=goal,
         parsed=parsed,
@@ -2636,96 +2619,78 @@ def _record_intent_decompose_metrics(
             )
 
 
+def _on_intent_decompose_llm_failure(exc: Exception) -> None:
+    intent_decompose_failures_total.labels(
+        mode=INTENT_DECOMPOSE_MODE,
+        model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "none").strip() or "none",
+        error_type=type(exc).__name__,
+    ).inc()
+    logger.exception("intent_decompose_llm_failed")
+
+
 def _decompose_goal_intent(
     goal: str,
     *,
     db: Session | None = None,
     user_id: str | None = None,
     interaction_summaries: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    fallback_graph = intent_contract.decompose_goal_intent(goal)
-    if "source" not in fallback_graph:
-        fallback_graph = {**fallback_graph, "source": "heuristic"}
-    allowed_capability_catalog = _intent_catalog_capability_entries()
-    allowed_capability_ids = {
-        str(entry.get("id") or "").strip()
-        for entry in allowed_capability_catalog
-        if str(entry.get("id") or "").strip()
-    }
-    if not allowed_capability_ids:
-        allowed_capability_ids = _intent_catalog_capability_ids()
-    normalized_user_id = _semantic_normalize_text(user_id, max_len=120) or _semantic_default_user_id()
-    workflow_hints = _retrieve_intent_workflow_hints(
-        db,
-        goal=goal,
-        user_id=normalized_user_id,
-        limit=INTENT_MEMORY_RETRIEVAL_LIMIT,
+) -> workflow_contracts.IntentGraph:
+    return intent_service.decompose_goal_intent(
+        goal,
+        db=db,
+        user_id=user_id,
+        interaction_summaries=interaction_summaries,
+        config=intent_service.IntentDecomposeConfig(
+            enabled=INTENT_DECOMPOSE_ENABLED,
+            mode=INTENT_DECOMPOSE_MODE,
+            capability_top_k=INTENT_CAPABILITY_TOP_K,
+            memory_retrieval_enabled=INTENT_MEMORY_RETRIEVAL_ENABLED,
+            memory_retrieval_limit=INTENT_MEMORY_RETRIEVAL_LIMIT,
+        ),
+        runtime=intent_service.IntentDecomposeRuntime(
+            provider=_intent_decompose_provider,
+            heuristic_decompose=intent_contract.decompose_goal_intent,
+            capability_entries=_intent_catalog_capability_entries,
+            capability_ids=_intent_catalog_capability_ids,
+            normalize_user_id=lambda raw_user_id: _semantic_normalize_text(raw_user_id, max_len=120)
+            or _semantic_default_user_id(),
+            retrieve_workflow_hints=lambda session, goal_text, normalized_user_id, limit: (
+                _retrieve_intent_workflow_hints(
+                    session,
+                    goal=goal_text,
+                    user_id=normalized_user_id,
+                    limit=limit,
+                )
+            ),
+            semantic_goal_capability_hints=lambda goal_text, allowed_capability_catalog, limit: (
+                _semantic_goal_capability_hints(
+                    goal=goal_text,
+                    allowed_capability_catalog=allowed_capability_catalog,
+                    limit=limit,
+                )
+            ),
+            llm_decompose=_llm_decompose_goal_intent,
+            annotate_graph_summary_defaults=lambda graph: _annotate_graph_summary_defaults(
+                graph,
+                has_interaction_summaries=bool(interaction_summaries),
+                allowed_capability_ids={
+                    str(entry.get("id") or "").strip()
+                    for entry in _intent_catalog_capability_entries()
+                    if str(entry.get("id") or "").strip()
+                }
+                or _intent_catalog_capability_ids(),
+            ),
+            apply_supported_fact_filter=_apply_supported_fact_filter,
+            record_metrics=lambda graph, result, has_interaction_summaries: (
+                _record_intent_decompose_metrics(
+                    graph=graph,
+                    result=result,
+                    has_interaction_summaries=has_interaction_summaries,
+                )
+            ),
+            on_llm_failure=_on_intent_decompose_llm_failure,
+        ),
     )
-    semantic_goal_capabilities = _semantic_goal_capability_hints(
-        goal=goal,
-        allowed_capability_catalog=allowed_capability_catalog,
-        limit=max(4, INTENT_CAPABILITY_TOP_K * 2),
-    )
-    has_interaction_summaries = bool(interaction_summaries)
-    result = "heuristic"
-    graph = fallback_graph
-    if not INTENT_DECOMPOSE_ENABLED:
-        result = "disabled"
-    elif INTENT_DECOMPOSE_MODE == "heuristic":
-        result = "heuristic"
-    elif _intent_decompose_provider is None:
-        result = "provider_unavailable"
-    else:
-        try:
-            graph = _llm_decompose_goal_intent(
-                goal=goal,
-                provider=_intent_decompose_provider,
-                fallback_graph=fallback_graph,
-                allowed_capability_ids=allowed_capability_ids,
-                allowed_capability_catalog=allowed_capability_catalog,
-                capability_top_k=INTENT_CAPABILITY_TOP_K,
-                interaction_summaries=interaction_summaries,
-                workflow_hints=workflow_hints,
-                semantic_goal_capabilities=semantic_goal_capabilities,
-            )
-            result = "llm"
-        except (LLMProviderError, ValueError) as exc:
-            intent_decompose_failures_total.labels(
-                mode=INTENT_DECOMPOSE_MODE,
-                model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "none").strip() or "none",
-                error_type=type(exc).__name__,
-            ).inc()
-            logger.exception("intent_decompose_llm_failed")
-            graph = fallback_graph
-            result = "llm_failed_fallback"
-        except Exception as exc:  # noqa: BLE001
-            intent_decompose_failures_total.labels(
-                mode=INTENT_DECOMPOSE_MODE,
-                model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "none").strip() or "none",
-                error_type=type(exc).__name__,
-            ).inc()
-            logger.exception("intent_decompose_llm_failed")
-            graph = fallback_graph
-            result = "llm_failed_fallback"
-    graph = _annotate_graph_summary_defaults(
-        graph,
-        has_interaction_summaries=has_interaction_summaries,
-        allowed_capability_ids=allowed_capability_ids,
-    )
-    summary_raw = graph.get("summary")
-    summary = dict(summary_raw) if isinstance(summary_raw, dict) else {}
-    summary["memory_hints_used"] = len(workflow_hints)
-    summary["memory_retrieval_enabled"] = bool(INTENT_MEMORY_RETRIEVAL_ENABLED)
-    summary["semantic_capability_hints_used"] = len(semantic_goal_capabilities)
-    graph = {**graph, "summary": summary}
-    if interaction_summaries:
-        graph = _apply_supported_fact_filter(graph, interaction_summaries)
-    _record_intent_decompose_metrics(
-        graph=graph,
-        result=result,
-        has_interaction_summaries=has_interaction_summaries,
-    )
-    return graph
 
 
 def _llm_capability_recommendations(
@@ -2762,10 +2727,20 @@ def _llm_capability_recommendations(
         "Allowed capability catalog:\n"
         + "\n".join(catalog_lines)
     )
-    content = provider.generate(prompt).content
-    parsed = _extract_json_object_from_text(content)
-    if not isinstance(parsed, dict):
-        raise ValueError("llm_recommendation_parse_failed")
+    parsed = provider.generate_request_json_object(
+        LLMRequest(
+            prompt=prompt,
+            metadata={
+                "component": "api",
+                "operation": "capability_recommendations",
+                "goal_len": len(goal),
+                "context_keys": len(context),
+                "capability_count": len(capabilities),
+                "draft_node_count": len(draft_nodes),
+                "max_results": max_results,
+            },
+        )
+    )
     recs = parsed.get("recommendations")
     if not isinstance(recs, list):
         raise ValueError("llm_recommendation_missing_recommendations")
@@ -4487,14 +4462,14 @@ def _goal_intent_segments_for_preflight(
     *,
     goal_intent_graph: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    if not isinstance(goal_intent_graph, Mapping):
-        return []
-    raw_segments = goal_intent_graph.get("segments")
-    if not isinstance(raw_segments, list):
+    graph = workflow_contracts.parse_intent_graph(goal_intent_graph)
+    if graph is None:
         return []
     segments: list[dict[str, Any]] = []
-    for raw_segment in raw_segments:
-        normalized = _normalize_task_intent_profile_segment(raw_segment)
+    for raw_segment in graph.segments:
+        normalized = _normalize_task_intent_profile_segment(
+            raw_segment.model_dump(mode="json", exclude_none=True)
+        )
         if normalized is not None:
             segments.append(normalized)
     return segments
@@ -5171,7 +5146,7 @@ def create_job(
                 goal_intent_graph,
                 interaction_compaction,
             )
-        metadata["goal_intent_graph"] = goal_intent_graph
+        metadata["goal_intent_graph"] = goal_intent_graph.model_dump(mode="json", exclude_none=True)
     record = JobRecord(
         id=job_id,
         goal=job.goal,
@@ -6105,7 +6080,7 @@ def decompose_intent(
         graph = _attach_interaction_compaction_to_graph(graph, compaction)
     return {
         "goal": goal,
-        "intent_graph": graph,
+        "intent_graph": graph.model_dump(mode="json", exclude_none=True),
     }
 
 

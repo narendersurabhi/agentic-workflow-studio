@@ -176,6 +176,18 @@ def test_parse_json_object_extracts_fenced_json_object() -> None:
     assert payload == {"ok": True, "count": 2}
 
 
+def test_parse_json_object_accepts_double_encoded_json_string() -> None:
+    payload = parse_json_object('"{\\"ok\\": true, \\"count\\": 2}"')
+
+    assert payload == {"ok": True, "count": 2}
+
+
+def test_parse_json_object_accepts_singleton_list_with_object() -> None:
+    payload = parse_json_object('[{"ok": true}]')
+
+    assert payload == {"ok": True}
+
+
 def test_generate_json_object_uses_generate_compatibility_path() -> None:
     class _LegacyProvider(LLMProvider):
         def generate(self, prompt: str) -> LLMResponse:

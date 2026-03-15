@@ -22,10 +22,16 @@ from libs.core import (
     llm_provider,
     logging as core_logging,
     models,
+    planner_contracts,
     payload_resolver,
     prompts,
     tool_registry,
+    workflow_contracts,
 )
+try:
+    from . import planner_service
+except ImportError:  # pragma: no cover - compatibility for direct module loading in tests
+    from services.planner.app import planner_service
 
 core_logging.configure_logging("planner")
 
@@ -126,92 +132,33 @@ def _safe_log_value(value: object, max_len: int = 10000) -> object:
 
 @_log_entry_exit("rule_based_plan")
 def rule_based_plan(job: models.Job, tools: List[models.ToolSpec]) -> models.PlanCreate:
-    checklist_task = models.TaskCreate(
-        name="create_checklist",
-        description="Create implementation checklist",
-        instruction="Generate a detailed checklist for adding a new tool.",
-        acceptance_criteria=["Checklist has at least 5 items"],
-        expected_output_schema_ref="TaskResult",
-        intent=models.ToolIntent.generate,
-        deps=[],
-        tool_requests=[],
-        critic_required=True,
+    request = planner_contracts.build_plan_request(
+        job,
+        tools=tools,
+        capabilities={},
+        semantic_capability_hints=[],
+        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
     )
-    write_task = models.TaskCreate(
-        name="write_tools_doc",
-        description="Write tools.md artifact",
-        instruction="Write a tools.md draft file as an artifact.",
-        acceptance_criteria=["Artifact path returned"],
-        expected_output_schema_ref="TaskResult",
-        intent=models.ToolIntent.render,
-        deps=["create_checklist"],
-        tool_requests=["file_write_artifact"],
-        critic_required=True,
-    )
-    summarize_task = models.TaskCreate(
-        name="summarize_artifact",
-        description="Summarize the artifact",
-        instruction="Summarize the tools.md artifact.",
-        acceptance_criteria=["Summary provided"],
-        expected_output_schema_ref="TaskResult",
-        intent=models.ToolIntent.transform,
-        deps=["write_tools_doc"],
-        tool_requests=["text_summarize"],
-        critic_required=False,
-    )
-    return models.PlanCreate(
-        planner_version="rule_based_v1",
-        tasks_summary="Checklist, write artifact, summarize",
-        dag_edges=[
-            ["create_checklist", "write_tools_doc"],
-            ["write_tools_doc", "summarize_artifact"],
-        ],
-        tasks=[checklist_task, write_task, summarize_task],
-    )
+    return planner_service.rule_based_plan(request)
 
 
 @_log_entry_exit("llm_plan")
 def llm_plan(
     job: models.Job, tools: List[models.ToolSpec], provider: llm_provider.LLMProvider
 ) -> models.PlanCreate:
-    logger = core_logging.get_logger("planner")
-    prompt = _llm_prompt(job, tools)
-    response = provider.generate(prompt)
-    candidate = _parse_llm_plan(response.content)
-    if not candidate:
-        logger.warning("llm_plan_parse_retry", reason="initial_parse_failed")
-        repair_prompt = _llm_plan_repair_prompt(
-            original_prompt=prompt,
-            raw_output=response.content,
-            tools=tools,
-        )
-        repaired = provider.generate(repair_prompt)
-        candidate = _parse_llm_plan(repaired.content)
-    if not candidate:
-        raise ValueError("Invalid plan generated: parse_failed")
-    candidate = _ensure_llm_tool(candidate)
-    candidate = _ensure_task_intents(
-        candidate,
+    request = planner_service.build_plan_request(
+        job,
         tools,
-        goal_text=job.goal,
-        goal_intent_sequence=_job_goal_intent_sequence(job),
+        config=_planner_service_config(),
+        runtime=_planner_service_runtime(),
+        include_semantic_hints=True,
     )
-    candidate = _ensure_job_inputs(candidate, job, tools)
-    candidate = _ensure_default_value_markers(candidate, job)
-    candidate = _ensure_renderer_required_inputs(candidate)
-    candidate = _ensure_tool_input_dependencies(candidate)
-    candidate = _ensure_renderer_output_extensions(candidate)
-    candidate = _apply_max_depth(candidate)
-    logger.info("llm_plan_candidate", plan=candidate.model_dump())
-    valid, reason = _validate_plan(candidate, tools, job)
-    if not valid:
-        logger.warning("llm_plan_invalid", reason=reason)
-        raise ValueError(f"Invalid plan generated: {reason}")
-    return candidate
+    return planner_service.llm_plan(request, provider, runtime=_planner_service_runtime())
 
 
 @_log_entry_exit("plan_job")
 def plan_job(job: models.Job) -> models.PlanCreate:
+    provider: llm_provider.LLMProvider | None = None
     if PLANNER_MODE == "llm":
         provider = llm_provider.resolve_provider(
             LLM_PROVIDER,
@@ -229,9 +176,39 @@ def plan_job(job: models.Job) -> models.PlanCreate:
             llm_provider=provider,
             service_name="planner",
         )
-        return llm_plan(job, registry.list_specs(), provider)
-    registry = tool_registry.default_registry(False, service_name="planner")
-    return rule_based_plan(job, registry.list_specs())
+    else:
+        registry = tool_registry.default_registry(False, service_name="planner")
+    return planner_service.plan_job(
+        job,
+        registry.list_specs(),
+        provider=provider,
+        config=_planner_service_config(),
+        runtime=_planner_service_runtime(),
+    )
+
+
+def _planner_service_config() -> planner_service.PlannerServiceConfig:
+    return planner_service.PlannerServiceConfig(
+        mode=PLANNER_MODE,
+        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        semantic_hint_limit=10,
+    )
+
+
+def _planner_service_runtime() -> planner_service.PlannerServiceRuntime:
+    return planner_service.PlannerServiceRuntime(
+        load_capabilities=_planner_capabilities,
+        build_semantic_capability_hints=lambda job, capabilities, limit: _planner_semantic_capability_hints(
+            job,
+            capabilities,
+            limit=limit,
+        ),
+        build_llm_prompt=_llm_prompt_from_request,
+        build_llm_repair_prompt=_llm_plan_repair_prompt_from_request,
+        parse_llm_plan=_parse_llm_plan,
+        postprocess_llm_plan=_postprocess_llm_plan_request,
+        validate_plan=_validate_plan_request,
+    )
 
 
 @_log_entry_exit("_job_from_event_payload")
@@ -282,8 +259,19 @@ def _parse_datetime(value: object, fallback: datetime) -> datetime:
 
 
 def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
-    capabilities = _planner_capabilities()
-    allowed_names = sorted({tool.name for tool in tools} | set(capabilities.keys()))
+    request = planner_service.build_plan_request(
+        job,
+        tools,
+        config=_planner_service_config(),
+        runtime=_planner_service_runtime(),
+        include_semantic_hints=True,
+    )
+    return _llm_prompt_from_request(request)
+
+
+def _llm_prompt_from_request(request: planner_contracts.PlanRequest) -> str:
+    capabilities = planner_contracts.capability_map(request)
+    allowed_names = sorted({tool.name for tool in request.tools} | set(capabilities.keys()))
     tool_names = ", ".join(allowed_names)
     tool_catalog = [
         {
@@ -299,55 +287,55 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
             if isinstance(tool.tool_intent, Enum)
             else tool.tool_intent,
         }
-        for tool in tools
+        for tool in request.tools
     ]
     capability_catalog = [
         {
             "type": "capability",
-            "name": spec.capability_id,
-            "description": spec.description,
-            "risk_tier": spec.risk_tier,
-            "idempotency": spec.idempotency,
-            "group": spec.group,
-            "subgroup": spec.subgroup,
-            "input_schema_ref": spec.input_schema_ref,
-            "output_schema_ref": spec.output_schema_ref,
+            "name": capability.capability_id,
+            "description": capability.description,
+            "risk_tier": capability.risk_tier,
+            "idempotency": capability.idempotency,
+            "group": capability.group,
+            "subgroup": capability.subgroup,
+            "input_schema_ref": capability.input_schema_ref,
+            "output_schema_ref": capability.output_schema_ref,
             "adapters": [
                 {
                     "type": adapter.type,
                     "server_id": adapter.server_id,
                     "tool_name": adapter.tool_name,
                 }
-                for adapter in spec.adapters
-                if adapter.enabled
+                for adapter in capability.adapters
             ],
         }
-        for spec in capabilities.values()
+        for capability in capabilities.values()
     ]
     combined_catalog = tool_catalog + capability_catalog
     tool_catalog_json = json.dumps(
         combined_catalog, ensure_ascii=False, indent=2, default=_json_fallback
     )
-    semantic_capability_hints = _planner_semantic_capability_hints(job, capabilities, limit=10)
-    job_json = json.dumps(
-        job.model_dump(mode="json"), ensure_ascii=False, indent=2, default=_json_fallback
-    )
-    max_depth = _parse_optional_int(PLANNER_MAX_DEPTH)
+    semantic_capability_hints = request.semantic_capability_hints
+    job_json = json.dumps(request.job_payload, ensure_ascii=False, indent=2, default=_json_fallback)
+    max_depth = request.max_dependency_depth
     depth_hint = ""
     if max_depth:
         depth_hint = f"Max dependency chain depth: {max_depth}.\n"
     intent_graph_block = ""
-    intent_graph = _job_goal_intent_graph(job)
+    intent_graph = request.goal_intent_graph
     if intent_graph:
         intent_graph_json = json.dumps(
-            intent_graph, ensure_ascii=False, indent=2, default=_json_fallback
+            intent_graph.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            indent=2,
+            default=_json_fallback,
         )
         intent_graph_block = (
             "Goal intent decomposition graph (ordered hints for planning):\n"
             f"{intent_graph_json}\n"
             "Prefer preserving this segment order in tasks/dependencies.\n"
         )
-    intent_repair_block = _job_intent_mismatch_recovery_block(job)
+    intent_repair_block = _intent_mismatch_recovery_block_from_request(request)
     semantic_capability_block = ""
     if semantic_capability_hints:
         semantic_capability_block = (
@@ -419,7 +407,7 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
         f"Allowed tool names: {tool_names}\n"
         f"{semantic_capability_block}"
         f"Tool catalog (JSON): {tool_catalog_json}\n"
-        f"Goal: {job.goal}\n"
+        f"Goal: {request.goal}\n"
         f"Job (JSON): {job_json}\n"
     )
 
@@ -427,8 +415,48 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
 def _llm_plan_repair_prompt(
     *, original_prompt: str, raw_output: str, tools: List[models.ToolSpec]
 ) -> str:
-    capabilities = _planner_capabilities()
-    allowed_names = sorted({tool.name for tool in tools} | set(capabilities.keys()))
+    request = planner_contracts.PlanRequest(
+        job_id="repair",
+        goal="",
+        tools=list(tools),
+        capabilities=[
+            planner_contracts.PlanRequestCapability(
+                capability_id=capability_id,
+                description=capability.description,
+                risk_tier=capability.risk_tier,
+                idempotency=capability.idempotency,
+                group=capability.group,
+                subgroup=capability.subgroup,
+                input_schema_ref=capability.input_schema_ref,
+                output_schema_ref=capability.output_schema_ref,
+                planner_hints=(
+                    dict(capability.planner_hints)
+                    if isinstance(capability.planner_hints, dict)
+                    else {}
+                ),
+                adapters=[
+                    planner_contracts.PlanRequestCapabilityAdapter(
+                        type=adapter.type,
+                        server_id=adapter.server_id,
+                        tool_name=adapter.tool_name,
+                    )
+                    for adapter in capability.adapters
+                    if adapter.enabled
+                ],
+            )
+            for capability_id, capability in _planner_capabilities().items()
+        ],
+    )
+    return _llm_plan_repair_prompt_from_request(original_prompt, raw_output, request)
+
+
+def _llm_plan_repair_prompt_from_request(
+    original_prompt: str,
+    raw_output: str,
+    request: planner_contracts.PlanRequest,
+) -> str:
+    capabilities = planner_contracts.capability_map(request)
+    allowed_names = sorted({tool.name for tool in request.tools} | set(capabilities.keys()))
     tool_names = ", ".join(allowed_names)
     return (
         "You are fixing a malformed planner response.\n"
@@ -455,90 +483,20 @@ def _document_spec_prompt(job: models.Job, allowed_block_types: List[str]) -> st
 
 @_log_entry_exit("_parse_llm_plan")
 def _parse_llm_plan(content: str) -> models.PlanCreate | None:
-    candidates = [_extract_json(content), content.strip()]
+    try:
+        data = llm_provider.parse_json_object(content)
+    except llm_provider.LLMProviderError:
+        return None
+    candidates = []
+    inner = data.get("plan")
+    if isinstance(inner, dict):
+        candidates.append(inner)
+    candidates.append(data)
     for candidate in candidates:
-        data = _decode_json_object(candidate)
-        if not isinstance(data, dict):
-            continue
         try:
-            return models.PlanCreate.model_validate(data)
+            return models.PlanCreate.model_validate(candidate)
         except Exception:
             continue
-    return None
-
-
-@_log_entry_exit("_extract_json")
-def _extract_json(content: str) -> str:
-    text = _strip_markdown_fence(content.strip())
-    text = _unwrap_json_string(text)
-    if text.startswith("{") and text.endswith("}"):
-        return text
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return ""
-    extracted = text[start : end + 1]
-    extracted = _unwrap_json_string(extracted)
-    return extracted
-
-
-def _strip_markdown_fence(text: str) -> str:
-    if not text.startswith("```"):
-        return text
-    parts = text.split("```")
-    if len(parts) <= 1:
-        return text
-    candidate = parts[1].lstrip()
-    if candidate.startswith("json"):
-        candidate = candidate[4:].lstrip()
-    return candidate
-
-
-def _unwrap_json_string(text: str) -> str:
-    candidate = text.strip()
-    for _ in range(2):
-        if not (candidate.startswith('"') and candidate.endswith('"')):
-            break
-        try:
-            decoded = json.loads(candidate)
-        except json.JSONDecodeError:
-            break
-        if not isinstance(decoded, str):
-            break
-        candidate = decoded.strip()
-    return candidate
-
-
-def _decode_json_object(text: str) -> dict | None:
-    queue = [text]
-    seen: set[str] = set()
-    while queue:
-        candidate = queue.pop(0).strip()
-        if not candidate or candidate in seen:
-            continue
-        seen.add(candidate)
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            unwrapped = _unwrap_json_string(candidate)
-            if unwrapped and unwrapped != candidate:
-                queue.append(unwrapped)
-            if '\\"' in candidate:
-                queue.append(candidate.replace('\\"', '"'))
-            extracted = _extract_json(candidate)
-            if extracted and extracted != candidate:
-                queue.append(extracted)
-            continue
-        if isinstance(parsed, dict):
-            inner = parsed.get("plan")
-            if isinstance(inner, dict):
-                return inner
-            return parsed
-        if isinstance(parsed, list):
-            if len(parsed) == 1 and isinstance(parsed[0], dict):
-                return parsed[0]
-        if isinstance(parsed, str):
-            queue.append(parsed)
     return None
 
 
@@ -630,14 +588,11 @@ def _ensure_task_intents(
     return plan.model_copy(update={"tasks": updated_tasks})
 
 
-def _job_goal_intent_graph(job: models.Job) -> dict[str, Any] | None:
+def _job_goal_intent_graph(job: models.Job) -> workflow_contracts.IntentGraph | None:
     if not isinstance(job.metadata, dict):
         return None
-    graph = job.metadata.get("goal_intent_graph")
-    if not isinstance(graph, dict):
-        return None
-    segments = graph.get("segments")
-    if not isinstance(segments, list) or not segments:
+    graph = workflow_contracts.parse_intent_graph(job.metadata.get("goal_intent_graph"))
+    if graph is None or not graph.segments:
         return None
     return graph
 
@@ -647,10 +602,8 @@ def _job_goal_intent_sequence(job: models.Job) -> list[str]:
     if not graph:
         return []
     sequence: list[str] = []
-    for segment in graph.get("segments", []):
-        if not isinstance(segment, dict):
-            continue
-        normalized = intent_contract.normalize_task_intent(segment.get("intent"))
+    for segment in graph.segments:
+        normalized = intent_contract.normalize_task_intent(segment.intent)
         if normalized:
             sequence.append(normalized)
     return sequence
@@ -660,13 +613,9 @@ def _job_goal_intent_segments(job: models.Job) -> list[dict[str, Any]]:
     graph = _job_goal_intent_graph(job)
     if not graph:
         return []
-    segments_raw = graph.get("segments")
-    if not isinstance(segments_raw, list):
-        return []
     segments: list[dict[str, Any]] = []
-    for segment in segments_raw:
-        if isinstance(segment, dict):
-            segments.append(segment)
+    for segment in graph.segments:
+        segments.append(segment.model_dump(mode="json", exclude_none=True))
     return segments
 
 
@@ -677,10 +626,11 @@ def _select_goal_intent_segment_for_task(
     task_intent: str,
     goal_intent_segments: Sequence[dict[str, Any]],
     total_tasks: int,
+    capabilities: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not goal_intent_segments:
         return None
-    capabilities = _planner_capabilities()
+    capabilities = dict(capabilities or _planner_capabilities())
     has_suggested_capabilities = any(
         isinstance(segment.get("suggested_capabilities"), list)
         and bool(segment.get("suggested_capabilities"))
@@ -741,6 +691,17 @@ def _job_intent_mismatch_recovery_block(job: models.Job) -> str:
     recovery = _job_intent_mismatch_recovery(job)
     if not recovery:
         return ""
+    return _format_intent_mismatch_recovery_block(recovery)
+
+
+def _intent_mismatch_recovery_block_from_request(request: planner_contracts.PlanRequest) -> str:
+    recovery = planner_contracts.intent_mismatch_recovery(request)
+    if not recovery:
+        return ""
+    return _format_intent_mismatch_recovery_block(recovery)
+
+
+def _format_intent_mismatch_recovery_block(recovery: Mapping[str, Any]) -> str:
     payload = json.dumps(recovery, ensure_ascii=False, indent=2, default=_json_fallback)
     guardrails = (
         "Intent mismatch auto-repair context:\n"
@@ -757,8 +718,22 @@ def _job_intent_mismatch_recovery_block(job: models.Job) -> str:
 def _ensure_job_inputs(
     plan: models.PlanCreate, job: models.Job, tools: List[models.ToolSpec]
 ) -> models.PlanCreate:
-    tool_map = {tool.name: tool for tool in tools}
-    job_payload = job.model_dump(mode="json")
+    request = planner_contracts.build_plan_request(
+        job,
+        tools=tools,
+        capabilities={},
+        semantic_capability_hints=[],
+        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+    )
+    return _ensure_job_inputs_for_request(plan, request)
+
+
+def _ensure_job_inputs_for_request(
+    plan: models.PlanCreate,
+    request: planner_contracts.PlanRequest,
+) -> models.PlanCreate:
+    tool_map = {tool.name: tool for tool in request.tools}
+    job_payload = request.job_payload
     updated_tasks = []
     for task in plan.tasks:
         tool_inputs = dict(task.tool_inputs) if isinstance(task.tool_inputs, dict) else {}
@@ -795,7 +770,21 @@ def _ensure_job_inputs(
 
 
 def _ensure_default_value_markers(plan: models.PlanCreate, job: models.Job) -> models.PlanCreate:
-    job_context = job.context_json if isinstance(job.context_json, dict) else {}
+    request = planner_contracts.build_plan_request(
+        job,
+        tools=[],
+        capabilities={},
+        semantic_capability_hints=[],
+        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+    )
+    return _ensure_default_value_markers_for_request(plan, request)
+
+
+def _ensure_default_value_markers_for_request(
+    plan: models.PlanCreate,
+    request: planner_contracts.PlanRequest,
+) -> models.PlanCreate:
+    job_context = request.job_context if isinstance(request.job_context, dict) else {}
     if not job_context:
         return plan
     tasks = [task.model_copy(deep=True) for task in plan.tasks]
@@ -836,6 +825,25 @@ def _ensure_default_value_markers(plan: models.PlanCreate, job: models.Job) -> m
     if not changed:
         return plan
     return plan.model_copy(update={"tasks": tasks})
+
+
+def _postprocess_llm_plan_request(
+    plan: models.PlanCreate,
+    request: planner_contracts.PlanRequest,
+) -> models.PlanCreate:
+    candidate = _ensure_llm_tool(plan)
+    candidate = _ensure_task_intents(
+        candidate,
+        request.tools,
+        goal_text=request.goal,
+        goal_intent_sequence=planner_contracts.goal_intent_sequence(request),
+    )
+    candidate = _ensure_job_inputs_for_request(candidate, request)
+    candidate = _ensure_default_value_markers_for_request(candidate, request)
+    candidate = _ensure_renderer_required_inputs(candidate)
+    candidate = _ensure_tool_input_dependencies(candidate)
+    candidate = _ensure_renderer_output_extensions(candidate)
+    return _apply_max_depth_limit(candidate, request.max_dependency_depth)
 
 
 def _ensure_renderer_output_extensions(plan: models.PlanCreate) -> models.PlanCreate:
@@ -1173,14 +1181,28 @@ def _normalize_extension_hint(value: Any) -> str:
 def _validate_plan(
     plan: models.PlanCreate, tools: List[models.ToolSpec], job: models.Job
 ) -> tuple[bool, str]:
-    tool_map = {tool.name: tool for tool in tools}
-    tool_schemas = {tool.name: tool.input_schema or {} for tool in tools}
-    capabilities = _planner_capabilities()
-    goal_intent_segments = _job_goal_intent_segments(job)
+    request = planner_contracts.build_plan_request(
+        job,
+        tools=tools,
+        capabilities=_planner_capabilities(),
+        semantic_capability_hints=[],
+        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+    )
+    return _validate_plan_request(plan, request)
+
+
+def _validate_plan_request(
+    plan: models.PlanCreate,
+    request: planner_contracts.PlanRequest,
+) -> tuple[bool, str]:
+    tool_map = {tool.name: tool for tool in request.tools}
+    tool_schemas = {tool.name: tool.input_schema or {} for tool in request.tools}
+    capabilities = planner_contracts.capability_map(request)
+    goal_intent_segments = planner_contracts.goal_intent_segments(request)
     for task_index, task in enumerate(plan.tasks):
         if not task.tool_requests:
             continue
-        task_intent = _resolve_task_intent_for_validation(task, tool_map, goal_text=job.goal)
+        task_intent = _resolve_task_intent_for_validation(task, tool_map, goal_text=request.goal)
         if not task_intent:
             return False, f"missing_task_intent:{task.name}"
         goal_intent_segment = _select_goal_intent_segment_for_task(
@@ -1189,6 +1211,7 @@ def _validate_plan(
             task_intent=task_intent,
             goal_intent_segments=goal_intent_segments,
             total_tasks=len(plan.tasks),
+            capabilities=capabilities,
         )
         for tool_name in task.tool_requests:
             tool = tool_map.get(tool_name)
@@ -1201,10 +1224,17 @@ def _validate_plan(
                 raw_tool_inputs = dict(entry)
             segment_payload = raw_tool_inputs
             if tool is not None:
-                segment_payload = _build_validation_payload(task, tool, job, raw_tool_inputs)
+                segment_payload = _build_validation_payload_for_request(
+                    task,
+                    tool,
+                    request,
+                    raw_tool_inputs,
+                )
             elif capability is not None:
-                segment_payload = _build_capability_validation_payload(
-                    task, raw_tool_inputs, job
+                segment_payload = _build_capability_validation_payload_for_request(
+                    task,
+                    raw_tool_inputs,
+                    request,
                 )
             segment_contract_error = intent_contract.validate_intent_segment_contract(
                 segment=goal_intent_segment,
@@ -1233,7 +1263,7 @@ def _validate_plan(
                     capability,
                     task,
                     raw_tool_inputs,
-                    job,
+                    request,
                 )
                 if validation_error:
                     return (
@@ -1241,19 +1271,7 @@ def _validate_plan(
                         f"capability_inputs_invalid:{tool_name}:{task.name}:{validation_error}",
                     )
                 continue
-            governance_context = {
-                "job_id": job.id,
-                "job_type": job.metadata.get("job_type")
-                if isinstance(job.metadata, dict)
-                else None,
-                "tenant_id": job.metadata.get("tenant_id")
-                if isinstance(job.metadata, dict)
-                else None,
-                "org_id": job.metadata.get("org_id")
-                if isinstance(job.metadata, dict)
-                else None,
-                "job_context": job.context_json if isinstance(job.context_json, dict) else {},
-            }
+            governance_context = planner_contracts.governance_context(request)
             allow_decision = tool_registry.evaluate_tool_allowlist(
                 tool_name,
                 "planner",
@@ -1269,7 +1287,7 @@ def _validate_plan(
                     mode=allow_decision.mode,
                     reason=allow_decision.reason,
                     task_name=task.name,
-                    job_id=job.id,
+                    job_id=request.job_id,
                 )
             mismatch = intent_contract.validate_tool_intent_compatibility(
                 task_intent,
@@ -1278,7 +1296,12 @@ def _validate_plan(
             )
             if mismatch:
                 return False, f"{mismatch}:task={task.name}"
-            validation_payload = _build_validation_payload(task, tool, job, raw_tool_inputs)
+            validation_payload = _build_validation_payload_for_request(
+                task,
+                tool,
+                request,
+                raw_tool_inputs,
+            )
             validation_errors = payload_resolver.validate_tool_inputs(
                 {tool_name: validation_payload}, tool_schemas
             )
@@ -1340,6 +1363,22 @@ def _build_validation_payload(
     job: models.Job,
     raw_tool_inputs: dict,
 ) -> dict:
+    request = planner_contracts.build_plan_request(
+        job,
+        tools=[tool],
+        capabilities={},
+        semantic_capability_hints=[],
+        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+    )
+    return _build_validation_payload_for_request(task, tool, request, raw_tool_inputs)
+
+
+def _build_validation_payload_for_request(
+    task: models.TaskCreate,
+    tool: models.ToolSpec,
+    request: planner_contracts.PlanRequest,
+    raw_tool_inputs: dict,
+) -> dict:
     payload = payload_resolver.normalize_reference_payload_for_validation(
         dict(raw_tool_inputs),
         dependency_defaults=_dependency_fill_defaults(),
@@ -1349,13 +1388,13 @@ def _build_validation_payload(
         payload["instruction"] = task.instruction.strip()
     schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
     if _schema_requires_key(schema, "job"):
-        payload.setdefault("job", job.model_dump(mode="json"))
+        payload.setdefault("job", request.job_payload)
     if task.deps:
         for key, default_value in _dependency_fill_defaults().items():
             payload.setdefault(key, default_value)
     if isinstance(tool.memory_reads, list) and tool.memory_reads:
         payload.setdefault("memory", {})
-    job_context = job.context_json if isinstance(job.context_json, dict) else {}
+    job_context = request.job_context if isinstance(request.job_context, dict) else {}
     for key in (
         "instruction",
         "topic",
@@ -1505,19 +1544,30 @@ def _emit_planner_capability_selection_event(
 
 
 def _validate_capability_inputs(
-    capability: capability_registry.CapabilitySpec,
+    capability: capability_registry.CapabilitySpec | planner_contracts.PlanRequestCapability,
     task: models.TaskCreate,
     raw_tool_inputs: dict[str, Any],
-    job: models.Job,
+    job_or_request: models.Job | planner_contracts.PlanRequest,
 ) -> str | None:
+    request = (
+        job_or_request
+        if isinstance(job_or_request, planner_contracts.PlanRequest)
+        else planner_contracts.build_plan_request(
+            job_or_request,
+            tools=[],
+            capabilities={},
+            semantic_capability_hints=[],
+            max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        )
+    )
     if not capability.input_schema_ref:
         return None
     schema = _load_schema_from_ref(capability.input_schema_ref)
     if schema is None:
         return f"capability_schema_not_found:{capability.input_schema_ref}"
-    payload = _build_capability_validation_payload(task, raw_tool_inputs, job)
+    payload = _build_capability_validation_payload_for_request(task, raw_tool_inputs, request)
     if capability.capability_id == "github.repo.list":
-        job_context = job.context_json if isinstance(job.context_json, dict) else {}
+        job_context = request.job_context if isinstance(request.job_context, dict) else {}
         github_query = _synthesize_github_repo_query(
             raw_tool_inputs=raw_tool_inputs,
             payload=payload,
@@ -1586,6 +1636,21 @@ def _build_capability_validation_payload(
     raw_tool_inputs: dict[str, Any],
     job: models.Job,
 ) -> dict[str, Any]:
+    request = planner_contracts.build_plan_request(
+        job,
+        tools=[],
+        capabilities={},
+        semantic_capability_hints=[],
+        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+    )
+    return _build_capability_validation_payload_for_request(task, raw_tool_inputs, request)
+
+
+def _build_capability_validation_payload_for_request(
+    task: models.TaskCreate,
+    raw_tool_inputs: dict[str, Any],
+    request: planner_contracts.PlanRequest,
+) -> dict[str, Any]:
     payload = payload_resolver.normalize_reference_payload_for_validation(
         dict(raw_tool_inputs),
         dependency_defaults=_dependency_fill_defaults(),
@@ -1594,7 +1659,7 @@ def _build_capability_validation_payload(
     if task.deps:
         for key, default_value in _dependency_fill_defaults().items():
             payload.setdefault(key, default_value)
-    job_context = job.context_json if isinstance(job.context_json, dict) else {}
+    job_context = request.job_context if isinstance(request.job_context, dict) else {}
     for key in (
         "instruction",
         "topic",
@@ -1672,7 +1737,13 @@ def _parse_optional_int(value: str | None) -> int | None:
 
 
 def _apply_max_depth(plan: models.PlanCreate) -> models.PlanCreate:
-    max_depth = _parse_optional_int(PLANNER_MAX_DEPTH)
+    return _apply_max_depth_limit(plan, _parse_optional_int(PLANNER_MAX_DEPTH))
+
+
+def _apply_max_depth_limit(
+    plan: models.PlanCreate,
+    max_depth: int | None,
+) -> models.PlanCreate:
     if not max_depth or max_depth <= 0:
         return plan
     tasks = [task.model_copy(deep=True) for task in plan.tasks]

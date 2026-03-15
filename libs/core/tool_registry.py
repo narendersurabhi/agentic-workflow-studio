@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
-from .llm_provider import LLMProvider
+from .llm_provider import LLMProvider, LLMRequest
 from . import prompts, tracing as core_tracing
 from libs.core import mcp_gateway
 from .models import RiskLevel, ToolIntent, ToolSpec
@@ -1875,7 +1875,6 @@ def _coding_agent_autonomous(payload: Dict[str, Any], provider: LLMProvider) -> 
         provider,
         post_mcp_tool_call=_post_mcp_tool_call,
         write_workspace_text_file=_write_workspace_text_file,
-        extract_json=_extract_json,
     )
 
 
@@ -1889,7 +1888,17 @@ def _coding_agent_publish_pr(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _llm_generate(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:
     prompt = payload.get("text") or payload.get("prompt") or ""
-    response = provider.generate(prompt)
+    response = provider.generate_request(
+        LLMRequest(
+            prompt=prompt,
+            metadata={
+                "component": "tools",
+                "tool": "llm_generate",
+                "operation": "generate_text",
+                "prompt_len": len(prompt),
+            },
+        )
+    )
     return {"text": response.content}
 
 
@@ -1953,21 +1962,6 @@ def _sanitize_document_blocks(blocks: List[Any]) -> List[Dict[str, Any]]:
 def _resolve_llm_iterative_tool_timeout_s(provider: LLMProvider) -> int:
     base = _resolve_llm_timeout_s(provider)
     return min(900, max(60, base * 3))
-
-
-def _extract_json(text: str) -> str:
-    fence_match = re.search(r"```(?:json)?\s*(.+?)```", text, flags=re.DOTALL)
-    if fence_match:
-        return fence_match.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
-    start = text.find("[")
-    end = text.rfind("]")
-    if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
-    return text.strip()
 
 
 def _llm_improve_document_spec(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:

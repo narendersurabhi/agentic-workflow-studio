@@ -16,7 +16,7 @@ from services.api.app.database import SessionLocal
 from services.api.app.models import EventOutboxRecord, JobRecord, PlanRecord, TaskRecord
 from libs.core import events, models
 from libs.core import capability_registry as cap_registry
-from libs.core.llm_provider import LLMResponse
+from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 
 
 Base.metadata.create_all(bind=engine)
@@ -126,8 +126,11 @@ def test_capabilities_search_validates_limit() -> None:
 
 
 def test_intent_decompose_endpoint_uses_llm_when_enabled(monkeypatch):
-    class _Provider:
-        def generate(self, prompt: str):  # noqa: ARG002
+    requests: list[LLMRequest] = []
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            requests.append(request)
             return LLMResponse(
                 content=(
                     '{"segments":[{"id":"s1","intent":"generate","objective":"Create summary",'
@@ -151,10 +154,13 @@ def test_intent_decompose_endpoint_uses_llm_when_enabled(monkeypatch):
     assert graph["segments"][0]["source"] == "llm"
     assert graph["segments"][0]["slots"]["entity"] == "summary"
     assert graph["segments"][0]["slots"]["must_have_inputs"] == ["instruction"]
+    assert requests
+    assert requests[0].metadata is not None
+    assert requests[0].metadata["operation"] == "intent_decompose"
 
 
 def test_intent_decompose_endpoint_falls_back_to_heuristic_on_llm_failure(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(content="not-json")
 
@@ -170,7 +176,7 @@ def test_intent_decompose_endpoint_falls_back_to_heuristic_on_llm_failure(monkey
 
 
 def test_intent_decompose_endpoint_filters_unknown_llm_capabilities(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -202,7 +208,7 @@ def test_intent_decompose_endpoint_filters_unknown_llm_capabilities(monkeypatch)
 
 
 def test_intent_decompose_endpoint_normalizes_capability_id_casing(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -230,7 +236,7 @@ def test_intent_decompose_endpoint_normalizes_capability_id_casing(monkeypatch):
 
 
 def test_intent_decompose_endpoint_limits_capability_rankings_to_top_k(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -271,7 +277,7 @@ def test_intent_decompose_endpoint_validates_interaction_summaries_contract():
 
 
 def test_intent_decompose_endpoint_filters_unsupported_facts_with_summaries(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -526,7 +532,7 @@ def test_intent_decompose_uses_semantic_workflow_hints_in_llm_prompt(monkeypatch
 
     prompts: list[str] = []
 
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             prompts.append(prompt)
             return LLMResponse(
@@ -557,7 +563,7 @@ def test_intent_decompose_uses_semantic_workflow_hints_in_llm_prompt(monkeypatch
 def test_intent_decompose_uses_semantic_capability_hints_in_llm_prompt(monkeypatch):
     prompts: list[str] = []
 
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             prompts.append(prompt)
             return LLMResponse(
@@ -594,7 +600,8 @@ def test_intent_decompose_emits_capability_search_event_for_semantic_hints(monke
 
     graph = main._decompose_goal_intent("Search semantic memory for user preferences")
 
-    assert graph["summary"]["semantic_capability_hints_used"] >= 1
+    assert graph.summary.semantic_capability_hints_used is not None
+    assert graph.summary.semantic_capability_hints_used >= 1
     assert events_seen
     event_type, payload = events_seen[-1]
     assert event_type == "plan.capability_search"
@@ -1541,8 +1548,11 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
         lambda _ref: {"type": "object", "required": ["topic"], "properties": {"topic": {"type": "string"}}},
     )
 
-    class _Provider:
-        def generate(self, _prompt):
+    requests: list[LLMRequest] = []
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            requests.append(request)
             return LLMResponse(
                 content='{"recommendations":[{"id":"document.output.derive","reason":"next step","confidence":0.91}]}'
             )
@@ -1563,6 +1573,9 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
     body = response.json()
     assert body["source"] == "llm"
     assert body["recommendations"][0]["id"] == "document.output.derive"
+    assert requests
+    assert requests[0].metadata is not None
+    assert requests[0].metadata["operation"] == "capability_recommendations"
 
 
 def test_preflight_plan_endpoint_returns_valid_true_for_simple_plan():
