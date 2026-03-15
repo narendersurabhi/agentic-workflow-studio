@@ -2,55 +2,34 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from functools import wraps
-from pathlib import Path
 from time import perf_counter
 from typing import Any, List, Mapping, Sequence
 
-import redis
 from prometheus_client import start_http_server
 from pydantic import BaseModel
 
 from libs.core import (
     capability_search,
     capability_registry,
-    events,
     intent_contract,
     llm_provider,
     logging as core_logging,
     models,
     planner_contracts,
-    payload_resolver,
     prompts,
-    tool_registry,
     workflow_contracts,
 )
 try:
-    from . import planner_service
+    from . import bootstrap, planner_service, runtime_service
 except ImportError:  # pragma: no cover - compatibility for direct module loading in tests
-    from services.planner.app import planner_service
+    from services.planner.app import bootstrap, planner_service, runtime_service
 
 core_logging.configure_logging("planner")
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-PLANNER_MODE = os.getenv("PLANNER_MODE", "rule_based")
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
-OPENAI_TEMPERATURE = os.getenv("OPENAI_TEMPERATURE")
-OPENAI_MAX_OUTPUT_TOKENS = os.getenv("OPENAI_MAX_OUTPUT_TOKENS")
-PLANNER_MAX_DEPTH = os.getenv("PLANNER_MAX_DEPTH")
-OPENAI_TIMEOUT_S = os.getenv("OPENAI_TIMEOUT_S")
-OPENAI_MAX_RETRIES = os.getenv("OPENAI_MAX_RETRIES")
-SCHEMA_REGISTRY_PATH = os.getenv("SCHEMA_REGISTRY_PATH", "/app/schemas")
-METRICS_PORT = int(os.getenv("PLANNER_METRICS_PORT", "9101"))
-
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-_METRICS_SERVER_STARTED = False
+_PLANNER_BOOTSTRAP: bootstrap.PlannerBootstrap | None = None
 
 DEFAULT_ALLOWED_BLOCK_TYPES = [
     "text",
@@ -137,7 +116,7 @@ def rule_based_plan(job: models.Job, tools: List[models.ToolSpec]) -> models.Pla
         tools=tools,
         capabilities={},
         semantic_capability_hints=[],
-        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        max_dependency_depth=_planner_max_dependency_depth(),
     )
     return planner_service.rule_based_plan(request)
 
@@ -146,53 +125,58 @@ def rule_based_plan(job: models.Job, tools: List[models.ToolSpec]) -> models.Pla
 def llm_plan(
     job: models.Job, tools: List[models.ToolSpec], provider: llm_provider.LLMProvider
 ) -> models.PlanCreate:
+    config = _planner_service_config()
     request = planner_service.build_plan_request(
         job,
         tools,
-        config=_planner_service_config(),
+        config=config,
         runtime=_planner_service_runtime(),
         include_semantic_hints=True,
     )
-    return planner_service.llm_plan(request, provider, runtime=_planner_service_runtime())
+    return planner_service.llm_plan(
+        request,
+        provider,
+        config=config,
+        runtime=_planner_service_runtime(),
+    )
 
 
 @_log_entry_exit("plan_job")
 def plan_job(job: models.Job) -> models.PlanCreate:
-    provider: llm_provider.LLMProvider | None = None
-    if PLANNER_MODE == "llm":
-        provider = llm_provider.resolve_provider(
-            LLM_PROVIDER,
-            api_key=OPENAI_API_KEY,
-            model=OPENAI_MODEL,
-            base_url=OPENAI_BASE_URL,
-            temperature=_parse_optional_float(OPENAI_TEMPERATURE),
-            max_output_tokens=_parse_optional_int(OPENAI_MAX_OUTPUT_TOKENS),
-            timeout_s=_parse_optional_float(OPENAI_TIMEOUT_S),
-            max_retries=_parse_optional_int(OPENAI_MAX_RETRIES),
-        )
-        registry = tool_registry.default_registry(
-            False,
-            llm_enabled=True,
-            llm_provider=provider,
-            service_name="planner",
-        )
-    else:
-        registry = tool_registry.default_registry(False, service_name="planner")
+    execution = runtime_service.resolve_execution_context(_planner_runtime_config())
     return planner_service.plan_job(
         job,
-        registry.list_specs(),
-        provider=provider,
+        execution.tool_specs,
+        provider=execution.provider,
         config=_planner_service_config(),
         runtime=_planner_service_runtime(),
     )
 
 
+def _planner_bootstrap() -> bootstrap.PlannerBootstrap:
+    global _PLANNER_BOOTSTRAP
+    if _PLANNER_BOOTSTRAP is None:
+        _PLANNER_BOOTSTRAP = bootstrap.build_bootstrap_from_env(
+            os.environ,
+            redis_client_factory=runtime_service.build_redis_client,
+        )
+    return _PLANNER_BOOTSTRAP
+
+
 def _planner_service_config() -> planner_service.PlannerServiceConfig:
-    return planner_service.PlannerServiceConfig(
-        mode=PLANNER_MODE,
-        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
-        semantic_hint_limit=10,
-    )
+    return _planner_bootstrap().service_config
+
+
+def _planner_runtime_config() -> runtime_service.PlannerRuntimeConfig:
+    return _planner_bootstrap().runtime_config
+
+
+def _planner_max_dependency_depth() -> int | None:
+    return _planner_service_config().max_dependency_depth
+
+
+def _planner_redis_client() -> object:
+    return _planner_bootstrap().redis_client
 
 
 def _planner_service_runtime() -> planner_service.PlannerServiceRuntime:
@@ -212,7 +196,6 @@ def _planner_service_runtime() -> planner_service.PlannerServiceRuntime:
         ensure_tool_input_dependencies=_ensure_tool_input_dependencies,
         ensure_renderer_output_extensions=_ensure_renderer_output_extensions,
         apply_max_depth=_apply_max_depth_limit,
-        validate_plan=_validate_plan_request,
     )
 
 
@@ -228,7 +211,7 @@ def _job_from_event_payload(event: dict) -> models.Job | None:
         goal = data.get("goal")
         if not job_id or not goal:
             return None
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         return models.Job(
             id=job_id,
             goal=goal,
@@ -475,54 +458,14 @@ def _select_goal_intent_segment_for_task(
     total_tasks: int,
     capabilities: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if not goal_intent_segments:
-        return None
-    capabilities = dict(capabilities or _planner_capabilities())
-    has_suggested_capabilities = any(
-        isinstance(segment.get("suggested_capabilities"), list)
-        and bool(segment.get("suggested_capabilities"))
-        for segment in goal_intent_segments
+    return planner_service.select_goal_intent_segment_for_task(
+        task=task,
+        task_index=task_index,
+        task_intent=task_intent,
+        goal_intent_segments=list(goal_intent_segments),
+        total_tasks=total_tasks,
+        capabilities=capabilities or _planner_capabilities(),
     )
-    task_requests = {str(name).strip().lower() for name in (task.tool_requests or []) if str(name).strip()}
-    if task_requests:
-        for segment in goal_intent_segments:
-            suggested = segment.get("suggested_capabilities")
-            if not isinstance(suggested, list):
-                continue
-            suggested_ids = set()
-            for item in suggested:
-                capability_id = str(item).strip().lower()
-                if not capability_id:
-                    continue
-                suggested_ids.add(capability_id)
-                capability = capabilities.get(capability_id)
-                if capability is None:
-                    continue
-                for adapter in capability.adapters:
-                    tool_name = str(adapter.tool_name or "").strip().lower()
-                    if tool_name:
-                        suggested_ids.add(tool_name)
-            if suggested_ids & task_requests:
-                return segment
-    # If the intent graph already carries capability-level suggestions, avoid loose
-    # fallback matching that can bind unrelated slot requirements to a task.
-    if has_suggested_capabilities:
-        if len(goal_intent_segments) == 1:
-            only_segment = goal_intent_segments[0]
-            if intent_contract.normalize_task_intent(only_segment.get("intent")) == task_intent:
-                return only_segment
-        return None
-    for segment in goal_intent_segments:
-        if intent_contract.normalize_task_intent(segment.get("intent")) == task_intent:
-            return segment
-    # Index fallback is only safe when decomposition cardinality equals plan cardinality.
-    if (
-        not has_suggested_capabilities
-        and len(goal_intent_segments) == total_tasks
-        and task_index < len(goal_intent_segments)
-    ):
-        return goal_intent_segments[task_index]
-    return None
 
 
 def _job_intent_mismatch_recovery(job: models.Job) -> dict[str, Any] | None:
@@ -563,7 +506,7 @@ def _ensure_job_inputs(
         tools=tools,
         capabilities={},
         semantic_capability_hints=[],
-        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        max_dependency_depth=_planner_max_dependency_depth(),
     )
     return _ensure_job_inputs_for_request(plan, request)
 
@@ -615,7 +558,7 @@ def _ensure_default_value_markers(plan: models.PlanCreate, job: models.Job) -> m
         tools=[],
         capabilities={},
         semantic_capability_hints=[],
-        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        max_dependency_depth=_planner_max_dependency_depth(),
     )
     return _ensure_default_value_markers_for_request(plan, request)
 
@@ -1007,7 +950,7 @@ def _validate_plan(
         tools=tools,
         capabilities=_planner_capabilities(),
         semantic_capability_hints=[],
-        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        max_dependency_depth=_planner_max_dependency_depth(),
     )
     return _validate_plan_request(plan, request)
 
@@ -1016,120 +959,11 @@ def _validate_plan_request(
     plan: models.PlanCreate,
     request: planner_contracts.PlanRequest,
 ) -> tuple[bool, str]:
-    tool_map = {tool.name: tool for tool in request.tools}
-    tool_schemas = {tool.name: tool.input_schema or {} for tool in request.tools}
-    capabilities = planner_contracts.capability_map(request)
-    goal_intent_segments = planner_contracts.goal_intent_segments(request)
-    for task_index, task in enumerate(plan.tasks):
-        if not task.tool_requests:
-            continue
-        task_intent = _resolve_task_intent_for_validation(task, tool_map, goal_text=request.goal)
-        if not task_intent:
-            return False, f"missing_task_intent:{task.name}"
-        goal_intent_segment = _select_goal_intent_segment_for_task(
-            task=task,
-            task_index=task_index,
-            task_intent=task_intent,
-            goal_intent_segments=goal_intent_segments,
-            total_tasks=len(plan.tasks),
-            capabilities=capabilities,
-        )
-        for tool_name in task.tool_requests:
-            tool = tool_map.get(tool_name)
-            capability = capabilities.get(tool_name)
-            raw_tool_inputs = {}
-            if isinstance(task.tool_inputs, dict) and tool_name in task.tool_inputs:
-                entry = task.tool_inputs.get(tool_name)
-                if not isinstance(entry, dict):
-                    return False, f"tool_inputs_invalid:{tool_name}:{task.name}:payload_not_object"
-                raw_tool_inputs = dict(entry)
-            segment_payload = raw_tool_inputs
-            if tool is not None:
-                segment_payload = _build_validation_payload_for_request(
-                    task,
-                    tool,
-                    request,
-                    raw_tool_inputs,
-                )
-            elif capability is not None:
-                segment_payload = _build_capability_validation_payload_for_request(
-                    task,
-                    raw_tool_inputs,
-                    request,
-                )
-            segment_contract_error = intent_contract.validate_intent_segment_contract(
-                segment=goal_intent_segment,
-                task_intent=task_intent,
-                tool_name=tool_name,
-                payload=segment_payload,
-                capability_id=tool_name if capability is not None else None,
-                capability_risk_tier=capability.risk_tier if capability is not None else None,
-            )
-            if segment_contract_error:
-                return (
-                    False,
-                    f"intent_segment_invalid:{tool_name}:{task.name}:{segment_contract_error}",
-                )
-            if tool is None and capability is None:
-                return False, f"unknown_tool_or_capability:{tool_name}"
-            if tool is None and capability is not None:
-                capability_mismatch = _capability_intent_mismatch(
-                    task_intent,
-                    capability,
-                    tool_name,
-                )
-                if capability_mismatch:
-                    return False, f"capability_intent_invalid:{tool_name}:{task.name}:{capability_mismatch}"
-                validation_error = _validate_capability_inputs(
-                    capability,
-                    task,
-                    raw_tool_inputs,
-                    request,
-                )
-                if validation_error:
-                    return (
-                        False,
-                        f"capability_inputs_invalid:{tool_name}:{task.name}:{validation_error}",
-                    )
-                continue
-            governance_context = planner_contracts.governance_context(request)
-            allow_decision = tool_registry.evaluate_tool_allowlist(
-                tool_name,
-                "planner",
-                context=governance_context,
-                tool_spec=tool,
-            )
-            if not allow_decision.allowed:
-                return False, f"tool_not_allowed:{tool_name}:{allow_decision.reason}"
-            if allow_decision.violated and allow_decision.mode == "dry_run":
-                core_logging.get_logger("planner").warning(
-                    "tool_governance_violation_dry_run",
-                    tool_name=tool_name,
-                    mode=allow_decision.mode,
-                    reason=allow_decision.reason,
-                    task_name=task.name,
-                    job_id=request.job_id,
-                )
-            mismatch = intent_contract.validate_tool_intent_compatibility(
-                task_intent,
-                tool.tool_intent,
-                tool_name,
-            )
-            if mismatch:
-                return False, f"{mismatch}:task={task.name}"
-            validation_payload = _build_validation_payload_for_request(
-                task,
-                tool,
-                request,
-                raw_tool_inputs,
-            )
-            validation_errors = payload_resolver.validate_tool_inputs(
-                {tool_name: validation_payload}, tool_schemas
-            )
-            message = validation_errors.get(tool_name)
-            if message:
-                return False, f"tool_inputs_invalid:{tool_name}:{task.name}:{message}"
-    return True, "ok"
+    return planner_service.validate_plan_request(
+        plan,
+        request,
+        schema_registry_path=_planner_service_config().schema_registry_path,
+    )
 
 
 def _resolve_task_intent_for_validation(
@@ -1137,23 +971,11 @@ def _resolve_task_intent_for_validation(
     tool_map: dict[str, models.ToolSpec],
     goal_text: str = "",
 ) -> str:
-    inference = intent_contract.infer_task_intent_for_task_with_metadata(
-        explicit_intent=task.intent,
-        description=task.description,
-        instruction=task.instruction,
-        acceptance_criteria=task.acceptance_criteria,
+    return planner_service.resolve_task_intent_for_validation(
+        task,
+        tool_map,
         goal_text=goal_text,
     )
-    inferred = inference.intent
-    if inferred == models.ToolIntent.generate.value and not task.intent:
-        unique_tool_intents = {
-            tool_map[tool_name].tool_intent
-            for tool_name in (task.tool_requests or [])
-            if tool_name in tool_map
-        }
-        if len(unique_tool_intents) == 1:
-            inferred = next(iter(unique_tool_intents)).value
-    return inferred
 
 
 def _capability_intent_mismatch(
@@ -1161,21 +983,11 @@ def _capability_intent_mismatch(
     capability: capability_registry.CapabilitySpec,
     capability_id: str,
 ) -> str | None:
-    hints = capability.planner_hints if isinstance(capability.planner_hints, dict) else {}
-    raw_allowed = hints.get("task_intents")
-    if not isinstance(raw_allowed, list) or not raw_allowed:
-        return None
-    allowed = {
-        normalized
-        for item in raw_allowed
-        for normalized in [intent_contract.normalize_task_intent(item)]
-        if normalized
-    }
-    if not allowed:
-        return None
-    if task_intent in allowed:
-        return None
-    return f"task_intent_mismatch:{capability_id}:{task_intent}:allowed={','.join(sorted(allowed))}"
+    return planner_service.capability_intent_mismatch(
+        task_intent,
+        capability,
+        capability_id,
+    )
 
 
 def _build_validation_payload(
@@ -1189,7 +1001,7 @@ def _build_validation_payload(
         tools=[tool],
         capabilities={},
         semantic_capability_hints=[],
-        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        max_dependency_depth=_planner_max_dependency_depth(),
     )
     return _build_validation_payload_for_request(task, tool, request, raw_tool_inputs)
 
@@ -1200,68 +1012,16 @@ def _build_validation_payload_for_request(
     request: planner_contracts.PlanRequest,
     raw_tool_inputs: dict,
 ) -> dict:
-    payload = payload_resolver.normalize_reference_payload_for_validation(
-        dict(raw_tool_inputs),
-        dependency_defaults=_dependency_fill_defaults(),
+    return planner_service.build_validation_payload(
+        task,
+        tool,
+        request,
+        raw_tool_inputs,
     )
-    payload.setdefault("tool_inputs", dict(raw_tool_inputs))
-    if "instruction" not in payload and isinstance(task.instruction, str) and task.instruction.strip():
-        payload["instruction"] = task.instruction.strip()
-    schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
-    if _schema_requires_key(schema, "job"):
-        payload.setdefault("job", request.job_payload)
-    if task.deps:
-        for key, default_value in _dependency_fill_defaults().items():
-            payload.setdefault(key, default_value)
-    if isinstance(tool.memory_reads, list) and tool.memory_reads:
-        payload.setdefault("memory", {})
-    job_context = request.job_context if isinstance(request.job_context, dict) else {}
-    for key in (
-        "instruction",
-        "topic",
-        "audience",
-        "tone",
-        "today",
-        "date",
-        "target_pages",
-        "page_count",
-        "target_role_name",
-        "role_name",
-        "company_name",
-        "company",
-        "candidate_name",
-        "first_name",
-        "last_name",
-        "job_description",
-        "output_dir",
-        "document_type",
-    ):
-        if key in payload:
-            continue
-        value = job_context.get(key)
-        if isinstance(value, str) and value.strip():
-            payload[key] = value
-            continue
-        if isinstance(value, (int, float, bool)):
-            payload[key] = value
-    # Planner-time validation should account for deterministic runtime date defaults.
-    if "today" not in payload and "date" not in payload:
-        payload["today"] = datetime.utcnow().date().isoformat()
-    return payload
 
 
 def _dependency_fill_defaults() -> dict[str, object]:
-    return {
-        "content": "__dependency__",
-        "text": "__dependency__",
-        "prompt": "__dependency__",
-        "data": {},
-        "document_spec": {},
-        "validation_report": {},
-        "errors": [],
-        "original_spec": {},
-        "openapi_spec": {},
-    }
+    return planner_service.dependency_fill_defaults()
 
 
 def _planner_capabilities() -> dict[str, capability_registry.CapabilitySpec]:
@@ -1287,23 +1047,13 @@ def _emit_plan_event(
     correlation_id: str | None,
     payload: dict[str, Any],
 ) -> None:
-    event = models.EventEnvelope(
-        type=event_type,
-        version="1",
-        occurred_at=datetime.utcnow(),
-        correlation_id=correlation_id or str(uuid.uuid4()),
+    runtime_service.emit_plan_event(
+        _planner_redis_client(),
+        event_type,
         job_id=job_id,
+        correlation_id=correlation_id,
         payload=payload,
     )
-    try:
-        redis_client.xadd(events.PLAN_STREAM, {"data": event.model_dump_json()})
-    except Exception as exc:  # noqa: BLE001
-        core_logging.get_logger("planner").warning(
-            "plan_event_emit_failed",
-            event_type=event_type,
-            job_id=job_id,
-            error=str(exc),
-        )
 
 
 def _planner_semantic_capability_hints(
@@ -1378,29 +1128,16 @@ def _validate_capability_inputs(
             tools=[],
             capabilities={},
             semantic_capability_hints=[],
-            max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+            max_dependency_depth=_planner_max_dependency_depth(),
         )
     )
-    if not capability.input_schema_ref:
-        return None
-    schema = _load_schema_from_ref(capability.input_schema_ref)
-    if schema is None:
-        return f"capability_schema_not_found:{capability.input_schema_ref}"
-    payload = _build_capability_validation_payload_for_request(task, raw_tool_inputs, request)
-    if capability.capability_id == "github.repo.list":
-        job_context = request.job_context if isinstance(request.job_context, dict) else {}
-        github_query = _synthesize_github_repo_query(
-            raw_tool_inputs=raw_tool_inputs,
-            payload=payload,
-            job_context=job_context,
-        )
-        if github_query:
-            payload["query"] = github_query
-    errors = payload_resolver.validate_tool_inputs(
-        {capability.capability_id: payload},
-        {capability.capability_id: schema},
+    return planner_service.validate_capability_inputs(
+        capability,
+        task,
+        raw_tool_inputs,
+        request,
+        schema_registry_path=_planner_service_config().schema_registry_path,
     )
-    return errors.get(capability.capability_id)
 
 
 def _synthesize_github_repo_query(
@@ -1409,47 +1146,18 @@ def _synthesize_github_repo_query(
     payload: Mapping[str, Any] | None,
     job_context: Mapping[str, Any] | None,
 ) -> str | None:
-    def _read_str(source: Mapping[str, Any] | None, *keys: str) -> str | None:
-        if not isinstance(source, Mapping):
-            return None
-        for key in keys:
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
-
-    owner = (
-        _read_str(raw_tool_inputs, "owner", "repo_owner")
-        or _read_str(payload, "owner", "repo_owner")
-        or _read_str(job_context, "owner", "repo_owner")
-    )
-    repo = (
-        _read_str(raw_tool_inputs, "repo", "repo_name")
-        or _read_str(payload, "repo", "repo_name")
-        or _read_str(job_context, "repo", "repo_name")
-    )
-    if owner and repo:
-        return f"repo:{repo} owner:{owner}"
-    return (
-        _read_str(raw_tool_inputs, "query", "github_query")
-        or _read_str(payload, "query", "github_query")
-        or _read_str(job_context, "query", "github_query")
+    return planner_service.synthesize_github_repo_query(
+        raw_tool_inputs=raw_tool_inputs,
+        payload=payload,
+        job_context=job_context,
     )
 
 
 def _load_schema_from_ref(schema_ref: str) -> dict[str, Any] | None:
-    candidate = Path(schema_ref)
-    if not candidate.is_absolute():
-        candidate = Path(SCHEMA_REGISTRY_PATH) / (
-            schema_ref if schema_ref.endswith(".json") else f"{schema_ref}.json"
-        )
-    if not candidate.exists():
-        return None
-    try:
-        parsed = json.loads(candidate.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    return planner_service.load_schema_from_ref(
+        schema_ref,
+        schema_registry_path=_planner_service_config().schema_registry_path,
+    )
 
 
 def _build_capability_validation_payload(
@@ -1462,7 +1170,7 @@ def _build_capability_validation_payload(
         tools=[],
         capabilities={},
         semantic_capability_hints=[],
-        max_dependency_depth=_parse_optional_int(PLANNER_MAX_DEPTH),
+        max_dependency_depth=_planner_max_dependency_depth(),
     )
     return _build_capability_validation_payload_for_request(task, raw_tool_inputs, request)
 
@@ -1472,93 +1180,27 @@ def _build_capability_validation_payload_for_request(
     raw_tool_inputs: dict[str, Any],
     request: planner_contracts.PlanRequest,
 ) -> dict[str, Any]:
-    payload = payload_resolver.normalize_reference_payload_for_validation(
-        dict(raw_tool_inputs),
-        dependency_defaults=_dependency_fill_defaults(),
+    return planner_service.build_capability_validation_payload(
+        task,
+        raw_tool_inputs,
+        request,
     )
-    payload.setdefault("tool_inputs", dict(raw_tool_inputs))
-    if task.deps:
-        for key, default_value in _dependency_fill_defaults().items():
-            payload.setdefault(key, default_value)
-    job_context = request.job_context if isinstance(request.job_context, dict) else {}
-    for key in (
-        "instruction",
-        "topic",
-        "audience",
-        "tone",
-        "today",
-        "date",
-        "target_pages",
-        "page_count",
-        "target_role_name",
-        "role_name",
-        "company_name",
-        "company",
-        "candidate_name",
-        "first_name",
-        "last_name",
-        "job_description",
-        "output_dir",
-        "document_type",
-    ):
-        if key in payload:
-            continue
-        value = job_context.get(key)
-        if isinstance(value, str) and value.strip():
-            payload[key] = value
-            continue
-        if isinstance(value, (int, float, bool)):
-            payload[key] = value
-    if task.tool_requests and "github.repo.list" in task.tool_requests:
-        github_query = _synthesize_github_repo_query(
-            raw_tool_inputs=raw_tool_inputs,
-            payload=payload,
-            job_context=job_context,
-        )
-        if github_query:
-            payload["query"] = github_query
-    # Keep capability schema validation aligned with deterministic runtime date defaults.
-    if "today" not in payload and "date" not in payload:
-        payload["today"] = datetime.utcnow().date().isoformat()
-    return payload
 
 
 def _schema_requires_key(schema: dict, key: str) -> bool:
-    if not isinstance(schema, dict):
-        return False
-    required = schema.get("required")
-    if isinstance(required, list) and key in required:
-        return True
-    for keyword in ("allOf", "anyOf", "oneOf"):
-        entries = schema.get(keyword)
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if isinstance(entry, dict) and _schema_requires_key(entry, key):
-                return True
-    return False
+    return planner_service.schema_requires_key(schema, key)
 
 
 def _parse_optional_float(value: str | None) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
+    return bootstrap.parse_optional_float(value)
 
 
 def _parse_optional_int(value: str | None) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
+    return bootstrap.parse_optional_int(value)
 
 
 def _apply_max_depth(plan: models.PlanCreate) -> models.PlanCreate:
-    return _apply_max_depth_limit(plan, _parse_optional_int(PLANNER_MAX_DEPTH))
+    return _apply_max_depth_limit(plan, _planner_max_dependency_depth())
 
 
 def _apply_max_depth_limit(
@@ -1621,49 +1263,16 @@ def _task_depths(tasks: List[models.TaskCreate], limit: int) -> dict[str, int]:
 
 
 def run() -> None:
-    global _METRICS_SERVER_STARTED
-    if not _METRICS_SERVER_STARTED:
-        start_http_server(METRICS_PORT)
-        _METRICS_SERVER_STARTED = True
-    group = "planner"
-    consumer = str(uuid.uuid4())
-    try:
-        redis_client.xgroup_create(events.JOB_STREAM, group, id="0-0", mkstream=True)
-    except redis.ResponseError:
-        pass
-    while True:
-        messages = redis_client.xreadgroup(
-            group, consumer, {events.JOB_STREAM: ">"}, count=1, block=1000
-        )
-        for _, entries in messages:
-            for message_id, data in entries:
-                payload = json.loads(data["data"])
-                job = _job_from_event_payload(payload)
-                if not job:
-                    redis_client.xack(events.JOB_STREAM, group, message_id)
-                    continue
-                try:
-                    plan = plan_job(job)
-                    correlation_id = str(payload.get("correlation_id", str(uuid.uuid4())))
-                    _emit_plan_event(
-                        "plan.created",
-                        job_id=job.id,
-                        correlation_id=correlation_id,
-                        payload=plan.model_dump(),
-                    )
-                    _emit_planner_capability_selection_event(
-                        job,
-                        plan,
-                        correlation_id=correlation_id,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    _emit_plan_event(
-                        "plan.failed",
-                        job_id=job.id,
-                        correlation_id=str(payload.get("correlation_id", str(uuid.uuid4()))),
-                        payload={"job_id": job.id, "error": str(exc)},
-                    )
-                redis_client.xack(events.JOB_STREAM, group, message_id)
+    planner_bootstrap = _planner_bootstrap()
+    planner_bootstrap.ensure_metrics_started(start_http_server)
+    runtime_service.run_loop(
+        _planner_redis_client(),
+        config=_planner_runtime_config(),
+        callbacks=runtime_service.PlannerRuntimeCallbacks(
+            parse_job_event=_job_from_event_payload,
+            plan_job=plan_job,
+        ),
+    )
 
 
 if __name__ == "__main__":

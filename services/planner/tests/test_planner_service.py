@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from libs.core import llm_provider, models, planner_contracts
 from services.planner.app import planner_service
@@ -12,8 +12,8 @@ def _job() -> models.Job:
         goal="Generate a plan",
         context_json={"topic": "demo"},
         status=models.JobStatus.queued,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
         priority=0,
         metadata={},
     )
@@ -44,7 +44,6 @@ def test_build_plan_request_adds_semantic_hints() -> None:
         ensure_tool_input_dependencies=lambda plan: plan,
         ensure_renderer_output_extensions=lambda plan: plan,
         apply_max_depth=lambda plan, max_depth: plan,
-        validate_plan=lambda plan, request: (True, "ok"),
     )
 
     request = planner_service.build_plan_request(
@@ -81,7 +80,6 @@ def test_plan_job_uses_request_boundary_for_llm_path() -> None:
         ensure_tool_input_dependencies=lambda plan: plan,
         ensure_renderer_output_extensions=lambda plan: plan,
         apply_max_depth=lambda plan, max_depth: plan,
-        validate_plan=lambda plan, request: (True, "ok"),
     )
 
     plan = planner_service.plan_job(
@@ -109,3 +107,44 @@ def test_build_llm_prompt_uses_request_contract() -> None:
 
     assert "Goal: Render a DOCX" in prompt
     assert "docx.generate" in prompt
+
+
+def test_validate_plan_request_uses_service_owned_capability_rules() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="Check repo",
+        capabilities=[
+            planner_contracts.PlanRequestCapability(
+                capability_id="github.repo.list",
+                planner_hints={"task_intents": ["io"]},
+            )
+        ],
+    )
+    plan = models.PlanCreate(
+        planner_version="1.0.0",
+        tasks_summary="repo",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="CheckRepo",
+                description="Check repo",
+                instruction="Check repo existence.",
+                acceptance_criteria=["Repo checked"],
+                expected_output_schema_ref="schemas/test",
+                intent=models.ToolIntent.generate,
+                deps=[],
+                tool_requests=["github.repo.list"],
+                tool_inputs={"github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}},
+                critic_required=False,
+            )
+        ],
+    )
+
+    valid, reason = planner_service.validate_plan_request(
+        plan,
+        request,
+        schema_registry_path="schemas",
+    )
+
+    assert not valid
+    assert reason.startswith("capability_intent_invalid:github.repo.list:CheckRepo:")

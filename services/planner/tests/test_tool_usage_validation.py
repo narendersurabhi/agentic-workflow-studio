@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 
@@ -26,7 +26,7 @@ def _disable_governance(monkeypatch) -> None:
 
 
 def _job() -> models.Job:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     return models.Job(
         id="job-1",
         goal="test",
@@ -201,7 +201,7 @@ def test_ensure_default_value_markers_replaces_default_marker_with_context_value
             )
         ],
     )
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     job = models.Job(
         id="job-default-marker",
         goal="derive output path",
