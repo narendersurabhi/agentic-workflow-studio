@@ -125,7 +125,27 @@ def execute_task_request(
             "tool.version": context.config.tool_version,
         },
     ) as task_span:
-        for tool_index, tool_name in enumerate(tool_requests):
+        for tool_index, step in enumerate(request.requests):
+            request_id = step.request_id
+            binding = step.capability_binding
+            bound_capability_id = (
+                binding.capability_id if binding and binding.capability_id else None
+            )
+            native_execution_name = (
+                binding.tool_name if binding and binding.tool_name else request_id
+            )
+            capability_spec = None
+            if bound_capability_id:
+                capability_spec = context.capability_runtime.resolve_enabled_capability(
+                    bound_capability_id
+                )
+            elif binding is None:
+                capability_spec = context.capability_runtime.resolve_enabled_capability(
+                    request_id
+                )
+            execution_name = (
+                capability_spec.capability_id if capability_spec is not None else native_execution_name
+            )
             with core_tracing.start_span(
                 "worker.execute_tool",
                 attributes={
@@ -133,7 +153,8 @@ def execute_task_request(
                     "job.id": job_id,
                     "trace.id": trace_id,
                     "run.id": run_id,
-                    "tool.name": tool_name,
+                    "tool.name": execution_name,
+                    "tool.request_id": request_id,
                     "tool.sequence": tool_index + 1,
                     "task.attempt": task_attempt,
                     "task.max_attempts": task_max_attempts,
@@ -144,11 +165,11 @@ def execute_task_request(
                     "tool.version": context.config.tool_version,
                 },
             ) as tool_span:
-                capability_spec = context.capability_runtime.resolve_enabled_capability(tool_name)
                 if capability_spec is not None:
                     tool_error = _execute_capability_tool(
                         request=request,
-                        tool_name=tool_name,
+                        request_id=request_id,
+                        tool_name=capability_spec.capability_id,
                         tool_index=tool_index,
                         task_payload=task_payload,
                         run_id=run_id,
@@ -173,7 +194,8 @@ def execute_task_request(
                     continue
                 tool_error = _execute_native_tool(
                     request=request,
-                    tool_name=tool_name,
+                    request_id=request_id,
+                    tool_name=execution_name,
                     tool_index=tool_index,
                     task_payload=task_payload,
                     run_id=run_id,
@@ -246,6 +268,7 @@ def execute_task_request(
 def _execute_capability_tool(
     *,
     request: execution_contracts.TaskExecutionRequest,
+    request_id: str,
     tool_name: str,
     tool_index: int,
     task_payload: dict[str, Any],
@@ -290,7 +313,7 @@ def _execute_capability_tool(
             f"{capability_spec.capability_id}:"
             f"{capability_allow_decision.reason}"
         )
-        outputs[tool_name] = {
+        outputs[request_id] = {
             "error": tool_error,
             "error_code": "policy.capability_not_allowed",
         }
@@ -318,7 +341,7 @@ def _execute_capability_tool(
     capability_mismatch = callbacks.capability_intent_mismatch(task_intent, capability_spec)
     if capability_mismatch:
         tool_error = f"contract.intent_mismatch:{capability_mismatch}"
-        outputs[tool_name] = {
+        outputs[request_id] = {
             "error": tool_error,
             "error_code": "contract.intent_mismatch",
         }
@@ -346,7 +369,7 @@ def _execute_capability_tool(
         request.instruction,
         request.context,
         task_payload,
-        request.tool_inputs,
+        _request_tool_inputs(request, request_id, tool_name),
     )
     payload, capability_payload_error, dropped_payload_keys = (
         callbacks.enforce_capability_input_contract(
@@ -369,7 +392,7 @@ def _execute_capability_tool(
             },
         )
     if capability_payload_error:
-        outputs[tool_name] = {
+        outputs[request_id] = {
             "error": capability_payload_error,
             "error_code": "contract.input_invalid",
         }
@@ -402,7 +425,7 @@ def _execute_capability_tool(
     )
     if segment_contract_error:
         tool_error = f"contract.intent_mismatch:{segment_contract_error}"
-        outputs[tool_name] = {
+        outputs[request_id] = {
             "error": tool_error,
             "error_code": "contract.intent_mismatch",
         }
@@ -498,7 +521,7 @@ def _execute_capability_tool(
         },
     )
     tool_calls.append(call)
-    outputs[tool_name] = call.output_or_error
+    outputs[request_id] = call.output_or_error
     if call.status == "completed":
         callbacks.sync_output_artifact(call.output_or_error, task_id, tool_name, trace_id)
         if isinstance(call.output_or_error, Mapping):
@@ -515,7 +538,7 @@ def _execute_capability_tool(
     if normalized_error != tool_error:
         tool_error = normalized_error
         call.output_or_error["error"] = tool_error
-        outputs[tool_name] = call.output_or_error
+        outputs[request_id] = call.output_or_error
     core_logging.log_event(
         context.logger,
         "tool_call_failed",
@@ -541,6 +564,7 @@ def _execute_capability_tool(
 def _execute_native_tool(
     *,
     request: execution_contracts.TaskExecutionRequest,
+    request_id: str,
     tool_name: str,
     tool_index: int,
     task_payload: dict[str, Any],
@@ -564,7 +588,7 @@ def _execute_native_tool(
         tool = context.tool_runtime.get_tool(tool_name)
     except KeyError:
         tool_error = f"contract.tool_not_found:unknown_tool:{tool_name}"
-        outputs[tool_name] = {"error": tool_error}
+        outputs[request_id] = {"error": tool_error}
         core_tracing.set_span_attributes(tool_span, {"tool.error": tool_error})
         return tool_error
     governance_context = {
@@ -598,7 +622,10 @@ def _execute_native_tool(
         )
     if not allow_decision.allowed:
         tool_error = f"policy.tool_not_allowed:{tool_name}:{allow_decision.reason}"
-        outputs[tool_name] = {"error": tool_error, "error_code": "policy.tool_not_allowed"}
+        outputs[request_id] = {
+            "error": tool_error,
+            "error_code": "policy.tool_not_allowed",
+        }
         tool_calls.append(
             _failed_tool_call(
                 tool_name=tool_name,
@@ -622,7 +649,7 @@ def _execute_native_tool(
     mismatch = callbacks.intent_mismatch(task_intent, tool.spec.tool_intent, tool_name)
     if mismatch:
         tool_error = f"contract.intent_mismatch:{mismatch}"
-        outputs[tool_name] = {"error": tool_error}
+        outputs[request_id] = {"error": tool_error}
         tool_calls.append(
             _failed_tool_call(
                 tool_name=tool_name,
@@ -639,7 +666,7 @@ def _execute_native_tool(
         request.instruction,
         request.context,
         task_payload,
-        request.tool_inputs,
+        _request_tool_inputs(request, request_id, tool_name),
     )
     memory_payload = callbacks.load_memory_inputs(tool, task_payload, trace_id)
     if memory_payload:
@@ -650,7 +677,7 @@ def _execute_native_tool(
             tool_error = (
                 f"contract.input_missing:memory_only_inputs_missing:{','.join(missing)}"
             )
-            outputs[tool_name] = {"error": tool_error}
+            outputs[request_id] = {"error": tool_error}
             tool_calls.append(
                 _failed_tool_call(
                     tool_name=tool_name,
@@ -672,7 +699,7 @@ def _execute_native_tool(
     )
     if segment_contract_error:
         tool_error = f"contract.intent_mismatch:{segment_contract_error}"
-        outputs[tool_name] = {
+        outputs[request_id] = {
             "error": tool_error,
             "error_code": "contract.intent_mismatch",
         }
@@ -762,7 +789,7 @@ def _execute_native_tool(
         },
     )
     tool_calls.append(call)
-    outputs[tool_name] = call.output_or_error
+    outputs[request_id] = call.output_or_error
     if call.status == "completed":
         callbacks.sync_output_artifact(call.output_or_error, task_id, tool_name, trace_id)
         callbacks.persist_memory_outputs(tool, task_payload, call, trace_id)
@@ -780,12 +807,12 @@ def _execute_native_tool(
     if isinstance(error_code, str) and error_code and not tool_error.startswith(f"{error_code}:"):
         tool_error = f"{error_code}:{tool_error}"
         call.output_or_error["error"] = tool_error
-        outputs[tool_name] = call.output_or_error
+        outputs[request_id] = call.output_or_error
     normalized_error = _normalize_timeout_error(tool_error)
     if normalized_error != tool_error:
         tool_error = normalized_error
         call.output_or_error["error"] = tool_error
-        outputs[tool_name] = call.output_or_error
+        outputs[request_id] = call.output_or_error
     core_logging.log_event(
         context.logger,
         "tool_call_failed",
@@ -805,6 +832,18 @@ def _execute_native_tool(
         },
     )
     return tool_error
+
+
+def _request_tool_inputs(
+    request: execution_contracts.TaskExecutionRequest,
+    request_id: str,
+    tool_name: str,
+) -> dict[str, dict[str, Any]]:
+    tool_inputs = dict(request.tool_inputs)
+    request_inputs = dict(tool_inputs.get(request_id) or {})
+    if tool_name and tool_name != request_id:
+        tool_inputs[tool_name] = request_inputs
+    return tool_inputs
 
 
 def _failed_tool_call(

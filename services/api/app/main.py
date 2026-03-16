@@ -506,6 +506,11 @@ def _task_from_record(
     record: TaskRecord,
     intent_profile: Mapping[str, Any] | None = None,
 ) -> models.Task:
+    raw_tool_inputs = record.tool_inputs if isinstance(record.tool_inputs, dict) else {}
+    capability_bindings = _task_capability_bindings(
+        record.tool_requests or [],
+        raw_tool_inputs,
+    )
     source = None
     confidence = None
     if isinstance(intent_profile, Mapping):
@@ -535,10 +540,47 @@ def _task_from_record(
         max_reworks=record.max_reworks or 0,
         assigned_to=record.assigned_to,
         tool_requests=record.tool_requests or [],
-        tool_inputs=record.tool_inputs or {},
+        tool_inputs=execution_contracts.strip_execution_metadata_from_tool_inputs(raw_tool_inputs),
+        capability_bindings=capability_bindings,
         created_at=record.created_at,
         updated_at=record.updated_at,
         critic_required=bool(record.critic_required),
+    )
+
+
+def _api_enabled_capabilities() -> Mapping[str, Any]:
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception:  # noqa: BLE001
+        return {}
+    return registry.enabled_capabilities()
+
+
+def _task_capability_bindings(
+    tool_requests: list[str],
+    tool_inputs: Mapping[str, Any] | None,
+    capability_bindings: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    return execution_contracts.normalize_capability_bindings(
+        {
+            "tool_inputs": tool_inputs,
+            "capability_bindings": capability_bindings,
+        },
+        request_ids=tool_requests,
+        capabilities=_api_enabled_capabilities(),
+    )
+
+
+def _task_record_tool_inputs(
+    tool_requests: list[str],
+    tool_inputs: Mapping[str, Any] | None,
+    capability_bindings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return execution_contracts.embed_capability_bindings(
+        tool_inputs,
+        capability_bindings,
+        request_ids=tool_requests,
+        capabilities=_api_enabled_capabilities(),
     )
 
 
@@ -3309,7 +3351,11 @@ def _handle_plan_created(envelope: dict) -> None:
                 max_reworks=2,
                 assigned_to=None,
                 tool_requests=task.tool_requests,
-                tool_inputs=task.tool_inputs,
+                tool_inputs=_task_record_tool_inputs(
+                    task.tool_requests,
+                    task.tool_inputs,
+                    task.capability_bindings,
+                ),
                 created_at=now,
                 updated_at=now,
                 critic_required=1 if task.critic_required else 0,
@@ -3776,10 +3822,43 @@ def _apply_task_rewrites(task: TaskRecord, rewrites: dict[str, Any]) -> None:
         rewrites["expected_output_schema_ref"], str
     ):
         task.expected_output_schema_ref = rewrites["expected_output_schema_ref"]
+    execution_rewritten = False
+    tool_requests = list(task.tool_requests or [])
+    tool_inputs = execution_contracts.strip_execution_metadata_from_tool_inputs(
+        task.tool_inputs if isinstance(task.tool_inputs, dict) else {}
+    )
+    capability_bindings = _task_capability_bindings(
+        tool_requests,
+        task.tool_inputs if isinstance(task.tool_inputs, dict) else {},
+    )
     if "tool_requests" in rewrites and isinstance(rewrites["tool_requests"], list):
-        task.tool_requests = rewrites["tool_requests"]
+        tool_requests = rewrites["tool_requests"]
+        task.tool_requests = tool_requests
+        execution_rewritten = True
     if "tool_inputs" in rewrites and isinstance(rewrites["tool_inputs"], dict):
-        task.tool_inputs = rewrites["tool_inputs"]
+        tool_inputs = execution_contracts.strip_execution_metadata_from_tool_inputs(
+            rewrites["tool_inputs"]
+        )
+        execution_rewritten = True
+    if "capability_bindings" in rewrites and isinstance(rewrites["capability_bindings"], dict):
+        capability_bindings = _task_capability_bindings(
+            tool_requests,
+            tool_inputs,
+            rewrites["capability_bindings"],
+        )
+        execution_rewritten = True
+    elif execution_rewritten:
+        capability_bindings = _task_capability_bindings(
+            tool_requests,
+            tool_inputs,
+            capability_bindings,
+        )
+    if execution_rewritten:
+        task.tool_inputs = _task_record_tool_inputs(
+            tool_requests,
+            tool_inputs,
+            capability_bindings,
+        )
 
 
 def _resolve_task_deps(task_records: list[TaskRecord]) -> list[models.Task]:
@@ -6094,7 +6173,11 @@ def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_
             max_reworks=2,
             assigned_to=None,
             tool_requests=task.tool_requests,
-            tool_inputs=task.tool_inputs,
+            tool_inputs=_task_record_tool_inputs(
+                task.tool_requests,
+                task.tool_inputs,
+                task.capability_bindings,
+            ),
             created_at=now,
             updated_at=now,
             critic_required=1 if task.critic_required else 0,

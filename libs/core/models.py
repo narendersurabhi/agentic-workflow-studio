@@ -224,6 +224,7 @@ class Task(BaseModel):
     assigned_to: Optional[str] = None
     tool_requests: List[str]
     tool_inputs: Dict[str, Any] = Field(default_factory=dict)
+    capability_bindings: Dict[str, Any] = Field(default_factory=dict)
     tool_inputs_resolved: bool = False
     created_at: datetime
     updated_at: datetime
@@ -249,6 +250,7 @@ class TaskCreate(BaseModel):
     deps: List[str]
     tool_requests: List[str]
     tool_inputs: Dict[str, Any] = Field(default_factory=dict)
+    capability_bindings: Dict[str, Any] = Field(default_factory=dict)
     critic_required: bool = True
 
 

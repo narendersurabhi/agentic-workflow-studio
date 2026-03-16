@@ -341,9 +341,16 @@ def _candidate_reference_paths(path_spec: Any, context: dict[str, Any]) -> list[
 
 def _walk_path(root: Any, segments: list[Any]) -> Any:
     current = root
-    for segment in segments:
+    index = 0
+    while index < len(segments):
+        segment = segments[index]
         if isinstance(current, dict):
             if segment not in current:
+                dotted_value, next_index = _consume_dotted_dict_key(current, segments, index)
+                if next_index is not None:
+                    current = dotted_value
+                    index = next_index
+                    continue
                 # Backward compatibility:
                 # Some plans reference
                 # "...document_spec_validate.validation_report"
@@ -376,6 +383,7 @@ def _walk_path(root: Any, segments: list[Any]) -> Any:
                 else:
                     raise ToolInputReferenceError(f"missing key '{segment}'")
             current = current[segment]
+            index += 1
             continue
         if isinstance(current, list):
             try:
@@ -387,11 +395,27 @@ def _walk_path(root: Any, segments: list[Any]) -> Any:
             if index < 0 or index >= len(current):
                 raise ToolInputReferenceError(f"list index '{index}' out of range")
             current = current[index]
+            index += 1
             continue
         raise ToolInputReferenceError(
             f"cannot traverse segment '{segment}' on non-container value"
         )
     return current
+
+
+def _consume_dotted_dict_key(
+    current: dict[str, Any],
+    segments: list[Any],
+    start_index: int,
+) -> tuple[Any, int | None]:
+    if not isinstance(current, dict):
+        return None, None
+    max_end = len(segments)
+    for end_index in range(max_end, start_index, -1):
+        candidate = ".".join(str(part) for part in segments[start_index:end_index])
+        if candidate in current:
+            return current[candidate], end_index
+    return None, None
 
 
 def _is_validation_report_dict(value: Any) -> bool:

@@ -152,6 +152,50 @@ def test_ensure_task_intents_can_use_goal_intent_sequence() -> None:
     assert updated.tasks[1].intent == models.ToolIntent.render
 
 
+def test_ensure_job_inputs_compacts_document_generation_job_payload() -> None:
+    job = _job()
+    job.goal = "Convert markdown to DOCX"
+    job.context_json = {
+        "markdown_text": "# Heading\n\nParagraph",
+        "topic": "Demo",
+        "tone": "neutral",
+        "today": "2026-03-16",
+        "output_dir": "documents",
+        "unrelated_blob": {"huge": "payload"},
+    }
+    job.metadata = {"llm_provider": "openai"}
+
+    plan = _plan_with_task(
+        "llm_generate_document_spec",
+        {},
+    )
+    updated = _ensure_job_inputs(
+        plan,
+        job,
+        [
+            _tool(
+                "llm_generate_document_spec",
+                {
+                    "type": "object",
+                    "properties": {"job": {"type": "object"}},
+                    "required": ["job"],
+                },
+            )
+        ],
+    )
+
+    assert updated.tasks[0].tool_inputs["llm_generate_document_spec"]["job"] == {
+        "goal": "Convert markdown to DOCX",
+        "context_json": {
+            "markdown_text": "# Heading\n\nParagraph",
+            "topic": "Demo",
+            "tone": "neutral",
+            "today": "2026-03-16",
+            "output_dir": "documents",
+        },
+    }
+
+
 def test_ensure_task_intents_repairs_explicit_tool_mismatch() -> None:
     plan = _plan_with_task(
         "llm_generate",

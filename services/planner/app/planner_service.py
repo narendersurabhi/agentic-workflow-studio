@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from libs.core import (
     intent_contract,
+    job_projection,
     llm_provider,
     logging as core_logging,
     models,
@@ -46,6 +47,7 @@ class PlannerServiceRuntime:
     ensure_renderer_required_inputs: Callable[[models.PlanCreate], models.PlanCreate]
     ensure_tool_input_dependencies: Callable[[models.PlanCreate], models.PlanCreate]
     ensure_renderer_output_extensions: Callable[[models.PlanCreate], models.PlanCreate]
+    ensure_execution_bindings: Callable[[models.PlanCreate], models.PlanCreate]
     apply_max_depth: Callable[[models.PlanCreate, int | None], models.PlanCreate]
 
 
@@ -552,7 +554,14 @@ def build_validation_payload(
         payload["instruction"] = task.instruction.strip()
     schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
     if schema_requires_key(schema, "job"):
-        payload.setdefault("job", request.job_payload)
+        payload.setdefault(
+            "job",
+            job_projection.project_job_payload_for_tool(
+                tool.name,
+                request.job_payload,
+                default_goal=request.goal,
+            ),
+        )
     if task.deps:
         for key, default_value in dependency_fill_defaults().items():
             payload.setdefault(key, default_value)
@@ -759,6 +768,7 @@ def postprocess_llm_plan(
     candidate = runtime.ensure_renderer_required_inputs(candidate)
     candidate = runtime.ensure_tool_input_dependencies(candidate)
     candidate = runtime.ensure_renderer_output_extensions(candidate)
+    candidate = runtime.ensure_execution_bindings(candidate)
     return runtime.apply_max_depth(candidate, request.max_dependency_depth)
 
 

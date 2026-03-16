@@ -43,6 +43,7 @@ def test_build_plan_request_adds_semantic_hints() -> None:
         ensure_renderer_required_inputs=lambda plan: plan,
         ensure_tool_input_dependencies=lambda plan: plan,
         ensure_renderer_output_extensions=lambda plan: plan,
+        ensure_execution_bindings=lambda plan: plan,
         apply_max_depth=lambda plan, max_depth: plan,
     )
 
@@ -79,6 +80,7 @@ def test_plan_job_uses_request_boundary_for_llm_path() -> None:
         ensure_renderer_required_inputs=lambda plan: plan,
         ensure_tool_input_dependencies=lambda plan: plan,
         ensure_renderer_output_extensions=lambda plan: plan,
+        ensure_execution_bindings=lambda plan: plan,
         apply_max_depth=lambda plan, max_depth: plan,
     )
 
@@ -148,3 +150,132 @@ def test_validate_plan_request_uses_service_owned_capability_rules() -> None:
 
     assert not valid
     assert reason.startswith("capability_intent_invalid:github.repo.list:CheckRepo:")
+
+
+def test_build_validation_payload_compacts_document_generation_job_payload() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="Convert markdown to DOCX",
+        job_context={
+            "markdown_text": "# Heading\n\nParagraph",
+            "topic": "Demo",
+            "tone": "neutral",
+            "today": "2026-03-16",
+            "output_dir": "documents",
+        },
+        job_payload={
+            "goal": "Convert markdown to DOCX",
+            "status": "queued",
+            "metadata": {"llm_provider": "openai"},
+            "context_json": {
+                "markdown_text": "# Heading\n\nParagraph",
+                "topic": "Demo",
+                "tone": "neutral",
+                "today": "2026-03-16",
+                "output_dir": "documents",
+                "unrelated_blob": {"huge": "payload"},
+            },
+        },
+    )
+    task = models.TaskCreate(
+        name="Generate DocumentSpec",
+        description="Generate document spec",
+        instruction="Generate a document spec.",
+        acceptance_criteria=["Spec produced"],
+        expected_output_schema_ref="schemas/document_spec",
+        intent=models.ToolIntent.generate,
+        deps=[],
+        tool_requests=["llm_generate_document_spec"],
+        tool_inputs={"llm_generate_document_spec": {}},
+        critic_required=False,
+    )
+    tool = models.ToolSpec(
+        name="llm_generate_document_spec",
+        description="Generate a document spec",
+        input_schema={
+            "type": "object",
+            "properties": {"job": {"type": "object"}},
+            "required": ["job"],
+        },
+        output_schema={"type": "object"},
+        tool_intent=models.ToolIntent.generate,
+    )
+
+    payload = planner_service.build_validation_payload(
+        task,
+        tool,
+        request,
+        raw_tool_inputs={},
+    )
+
+    assert payload["job"] == {
+        "goal": "Convert markdown to DOCX",
+        "context_json": {
+            "markdown_text": "# Heading\n\nParagraph",
+            "topic": "Demo",
+            "tone": "neutral",
+            "today": "2026-03-16",
+            "output_dir": "documents",
+        },
+    }
+
+
+def test_postprocess_llm_plan_synthesizes_execution_bindings() -> None:
+    request = planner_contracts.PlanRequest(job_id="job-1", goal="Check repo")
+    plan = models.PlanCreate(
+        planner_version="1.0.0",
+        tasks_summary="repo",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="CheckRepo",
+                description="Check repo",
+                instruction="Check repo existence.",
+                acceptance_criteria=["Repo checked"],
+                expected_output_schema_ref="schemas/test",
+                intent=models.ToolIntent.io,
+                deps=[],
+                tool_requests=["github.repo.list"],
+                tool_inputs={"github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}},
+                critic_required=False,
+            )
+        ],
+    )
+    runtime = planner_service.PlannerServiceRuntime(
+        load_capabilities=lambda: {},
+        build_semantic_capability_hints=lambda job, capabilities, limit: [],
+        parse_llm_plan=lambda content: models.PlanCreate.model_validate_json(content),
+        ensure_llm_tool=lambda value: value,
+        ensure_task_intents=lambda value, plan_request: value,
+        ensure_job_inputs=lambda value, plan_request: value,
+        ensure_default_value_markers=lambda value, plan_request: value,
+        ensure_renderer_required_inputs=lambda value: value,
+        ensure_tool_input_dependencies=lambda value: value,
+        ensure_renderer_output_extensions=lambda value: value,
+        ensure_execution_bindings=lambda value: value.model_copy(
+            update={
+                "tasks": [
+                    task.model_copy(
+                        update={
+                            "capability_bindings": {
+                                "github.repo.list": {
+                                    "request_id": "github.repo.list",
+                                    "capability_id": "github.repo.list",
+                                    "tool_name": "github.repo.list",
+                                    "adapter_type": "mcp",
+                                }
+                            }
+                        }
+                    )
+                    for task in value.tasks
+                ]
+            }
+        ),
+        apply_max_depth=lambda value, max_depth: value,
+    )
+
+    result = planner_service.postprocess_llm_plan(plan, request, runtime=runtime)
+
+    assert result.tasks[0].capability_bindings["github.repo.list"]["capability_id"] == (
+        "github.repo.list"
+    )

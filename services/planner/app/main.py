@@ -14,7 +14,9 @@ from pydantic import BaseModel
 from libs.core import (
     capability_search,
     capability_registry,
+    execution_contracts,
     intent_contract,
+    job_projection,
     llm_provider,
     logging as core_logging,
     models,
@@ -195,6 +197,7 @@ def _planner_service_runtime() -> planner_service.PlannerServiceRuntime:
         ensure_renderer_required_inputs=_ensure_renderer_required_inputs,
         ensure_tool_input_dependencies=_ensure_tool_input_dependencies,
         ensure_renderer_output_extensions=_ensure_renderer_output_extensions,
+        ensure_execution_bindings=_ensure_execution_bindings,
         apply_max_depth=_apply_max_depth_limit,
     )
 
@@ -516,7 +519,6 @@ def _ensure_job_inputs_for_request(
     request: planner_contracts.PlanRequest,
 ) -> models.PlanCreate:
     tool_map = {tool.name: tool for tool in request.tools}
-    job_payload = request.job_payload
     updated_tasks = []
     for task in plan.tasks:
         tool_inputs = dict(task.tool_inputs) if isinstance(task.tool_inputs, dict) else {}
@@ -531,18 +533,23 @@ def _ensure_job_inputs_for_request(
             payload = tool_inputs.get(tool_name)
             payload = dict(payload) if isinstance(payload, dict) else {}
             existing_job = payload.get("job")
+            projected_job_payload = job_projection.project_job_payload_for_tool(
+                tool_name,
+                request.job_payload,
+                default_goal=request.goal,
+            )
             if isinstance(existing_job, dict):
                 # Resolve planner placeholders so downstream contract checks can inspect actual context.
                 marker_keys = {str(key) for key in existing_job.keys()}
                 if "$default" in marker_keys and bool(existing_job.get("$default")):
-                    payload["job"] = job_payload
+                    payload["job"] = projected_job_payload
                 elif marker_keys and marker_keys.issubset({"$default", "$from"}):
-                    payload["job"] = job_payload
+                    payload["job"] = projected_job_payload
                 else:
                     continue
             elif existing_job is not None:
                 continue
-            payload["job"] = job_payload
+            payload["job"] = projected_job_payload
             tool_inputs[tool_name] = payload
             changed = True
         if changed:
@@ -676,6 +683,28 @@ def _ensure_renderer_output_extensions(plan: models.PlanCreate) -> models.PlanCr
         tool_inputs[derive_request_id] = payload_dict
         updated_tasks.append(task.model_copy(update={"tool_inputs": tool_inputs}))
         changed = True
+    if not changed:
+        return plan
+    return plan.model_copy(update={"tasks": updated_tasks})
+
+
+def _ensure_execution_bindings(plan: models.PlanCreate) -> models.PlanCreate:
+    capabilities = _planner_capabilities()
+    updated_tasks: list[models.TaskCreate] = []
+    changed = False
+    for task in plan.tasks:
+        normalized_bindings = execution_contracts.normalize_capability_bindings(
+            task.capability_bindings,
+            request_ids=task.tool_requests,
+            capabilities=capabilities,
+        )
+        if normalized_bindings != (task.capability_bindings or {}):
+            updated_tasks.append(
+                task.model_copy(update={"capability_bindings": normalized_bindings})
+            )
+            changed = True
+        else:
+            updated_tasks.append(task)
     if not changed:
         return plan
     return plan.model_copy(update={"tasks": updated_tasks})

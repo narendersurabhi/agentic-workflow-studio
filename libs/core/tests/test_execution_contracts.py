@@ -105,3 +105,57 @@ def test_build_task_dispatch_payload_normalizes_and_roundtrips_execution_fields(
     request = execution_contracts.build_task_execution_request(payload.model_dump(mode="json"))
     assert request.trace_id == "corr-1"
     assert request.tool_inputs["docx_generate_from_spec"]["path"] == "artifacts/report.docx"
+
+
+def test_embed_capability_bindings_preserves_plain_tool_inputs() -> None:
+    embedded = execution_contracts.embed_capability_bindings(
+        {
+            "github.repo.list": {"owner": "narendersurabhi", "repo": "scientific-agent-lab"}
+        },
+        {
+            "github.repo.list": {
+                "request_id": "github.repo.list",
+                "capability_id": "github.repo.list",
+                "tool_name": "github.repo.list",
+                "adapter_type": "mcp",
+            }
+        },
+        request_ids=["github.repo.list"],
+    )
+
+    assert embedded["github.repo.list"]["repo"] == "scientific-agent-lab"
+    assert execution_contracts.EXECUTION_BINDINGS_KEY in embedded
+    stripped = execution_contracts.strip_execution_metadata_from_tool_inputs(embedded)
+    assert stripped == {
+        "github.repo.list": {
+            "owner": "narendersurabhi",
+            "repo": "scientific-agent-lab",
+        }
+    }
+
+
+def test_build_task_dispatch_payload_reads_embedded_capability_bindings() -> None:
+    payload = execution_contracts.build_task_dispatch_payload(
+        {
+            "task_id": "task-1",
+            "tool_requests": ["github.repo.list"],
+            "tool_inputs": execution_contracts.embed_capability_bindings(
+                {"github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}},
+                {
+                    "github.repo.list": {
+                        "request_id": "github.repo.list",
+                        "capability_id": "github.repo.list",
+                        "tool_name": "github.repo.list",
+                        "adapter_type": "mcp",
+                        "server_id": "github_local",
+                    }
+                },
+                request_ids=["github.repo.list"],
+            ),
+        }
+    )
+
+    assert payload.tool_inputs == {
+        "github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}
+    }
+    assert payload.capability_bindings["github.repo.list"].server_id == "github_local"

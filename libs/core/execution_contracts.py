@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from libs.core import intent_contract, workflow_contracts
 
+EXECUTION_BINDINGS_KEY = "__capability_bindings__"
+
 
 class CapabilityBinding(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -82,6 +84,7 @@ class TaskDispatchPayload(BaseModel):
     assigned_to: str | None = None
     tool_requests: list[str] = Field(default_factory=list)
     tool_inputs: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    capability_bindings: dict[str, CapabilityBinding] = Field(default_factory=dict)
     critic_required: bool = True
     intent: str | None = None
     intent_source: str | None = None
@@ -112,13 +115,16 @@ def build_task_execution_request(
     run_id = _string_value(payload.get("run_id")) or trace_id
     request_ids = _request_ids(payload.get("tool_requests"))
     tool_inputs = _tool_inputs(payload.get("tool_inputs"))
+    bindings = _binding_index(
+        normalize_capability_bindings(
+            payload,
+            request_ids=request_ids,
+        )
+    )
     attempts = _attempt_count(payload.get("attempts"))
     max_attempts = max(
         attempts,
         _max_attempts(payload.get("max_attempts"), default_max_attempts),
-    )
-    bindings = _binding_index(
-        payload.get("capability_bindings") or payload.get("execution_bindings")
     )
     return TaskExecutionRequest(
         task_id=_string_value(payload.get("task_id")),
@@ -165,6 +171,10 @@ def build_task_dispatch_payload(
         payload,
         default_max_attempts=default_max_attempts,
     )
+    capability_bindings = normalize_capability_bindings(
+        payload,
+        request_ids=execution_request.tool_requests,
+    )
     correlation_id = _string_value(payload.get("correlation_id")) or execution_request.trace_id
     trace_id = _string_value(payload.get("trace_id")) or correlation_id or execution_request.trace_id
     normalized = dict(payload)
@@ -190,6 +200,7 @@ def build_task_dispatch_payload(
             "assigned_to": _string_value(payload.get("assigned_to")) or None,
             "tool_requests": execution_request.tool_requests,
             "tool_inputs": execution_request.tool_inputs,
+            "capability_bindings": capability_bindings,
             "critic_required": _bool_value(payload.get("critic_required"), default=True),
             "intent": execution_request.intent,
             "intent_source": execution_request.intent_source,
@@ -223,7 +234,67 @@ def dump_task_dispatch_payload(
         dumped.pop("tool_inputs_validation", None)
     if not dumped.get("tool_inputs_resolved"):
         dumped.pop("tool_inputs_resolved", None)
+    if not dumped.get("capability_bindings"):
+        dumped.pop("capability_bindings", None)
     return dumped
+
+
+def normalize_capability_bindings(
+    value: Any,
+    *,
+    request_ids: Sequence[str] | None = None,
+    capabilities: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    normalized_request_ids = _request_ids(request_ids or [])
+    bindings = _binding_index(_raw_capability_bindings(value))
+    for request_id in normalized_request_ids:
+        if request_id in bindings:
+            continue
+        bindings[request_id] = _synthesized_binding(
+            request_id,
+            capabilities.get(request_id) if isinstance(capabilities, Mapping) else None,
+        )
+    if normalized_request_ids:
+        ordered_ids = normalized_request_ids
+    else:
+        ordered_ids = list(bindings.keys())
+    dumped: dict[str, dict[str, Any]] = {}
+    for request_id in ordered_ids:
+        binding = bindings.get(request_id)
+        if binding is None:
+            continue
+        dumped[request_id] = binding.model_dump(mode="json", exclude_none=True)
+    return dumped
+
+
+def embed_capability_bindings(
+    tool_inputs: Mapping[str, Any] | None,
+    capability_bindings: Any,
+    *,
+    request_ids: Sequence[str] | None = None,
+    capabilities: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    merged = strip_execution_metadata_from_tool_inputs(tool_inputs)
+    bindings = normalize_capability_bindings(
+        {"capability_bindings": capability_bindings},
+        request_ids=request_ids,
+        capabilities=capabilities,
+    )
+    if bindings:
+        merged[EXECUTION_BINDINGS_KEY] = bindings
+    return merged
+
+
+def strip_execution_metadata_from_tool_inputs(tool_inputs: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(tool_inputs, Mapping):
+        return {}
+    stripped: dict[str, Any] = {}
+    for key, value in tool_inputs.items():
+        normalized_key = _string_value(key)
+        if not normalized_key or normalized_key == EXECUTION_BINDINGS_KEY:
+            continue
+        stripped[normalized_key] = dict(value) if isinstance(value, Mapping) else value
+    return stripped
 
 
 def _string_value(value: Any) -> str:
@@ -253,7 +324,7 @@ def _tool_inputs(value: Any) -> dict[str, dict[str, Any]]:
     normalized: dict[str, dict[str, Any]] = {}
     for request_id, payload in value.items():
         key = _string_value(request_id)
-        if not key:
+        if not key or key == EXECUTION_BINDINGS_KEY:
             continue
         normalized[key] = dict(payload) if isinstance(payload, Mapping) else {}
     return normalized
@@ -359,6 +430,36 @@ def _binding_index(value: Any) -> dict[str, CapabilityBinding]:
     return index
 
 
+def _raw_capability_bindings(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return value
+    explicit = value.get("capability_bindings") or value.get("execution_bindings")
+    if explicit is not None:
+        return explicit
+    tool_inputs = value.get("tool_inputs")
+    if isinstance(tool_inputs, Mapping):
+        embedded = tool_inputs.get(EXECUTION_BINDINGS_KEY)
+        if embedded is not None:
+            return embedded
+    if any(
+        isinstance(binding_payload, Mapping)
+        and any(
+            key in binding_payload
+            for key in (
+                "request_id",
+                "capability_id",
+                "tool_name",
+                "adapter_type",
+                "server_id",
+                "type",
+            )
+        )
+        for binding_payload in value.values()
+    ):
+        return value
+    return None
+
+
 def _binding_from_mapping(
     value: Mapping[str, Any],
     *,
@@ -377,4 +478,28 @@ def _binding_from_mapping(
             or None
         ),
         server_id=_string_value(value.get("server_id")) or None,
+    )
+
+
+def _synthesized_binding(request_id: str, capability: Any = None) -> CapabilityBinding:
+    capability_id = _string_value(getattr(capability, "capability_id", None))
+    adapters = getattr(capability, "adapters", ()) if capability is not None else ()
+    adapter = None
+    if isinstance(adapters, Sequence):
+        for candidate in adapters:
+            if getattr(candidate, "enabled", True):
+                adapter = candidate
+                break
+    if capability_id:
+        return CapabilityBinding(
+            request_id=request_id,
+            capability_id=capability_id,
+            tool_name=_string_value(getattr(adapter, "tool_name", None)) or request_id,
+            adapter_type=_string_value(getattr(adapter, "type", None)) or "capability",
+            server_id=_string_value(getattr(adapter, "server_id", None)) or None,
+        )
+    return CapabilityBinding(
+        request_id=request_id,
+        tool_name=request_id,
+        adapter_type="tool",
     )

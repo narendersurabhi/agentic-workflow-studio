@@ -11,7 +11,14 @@ from typing import Any, Callable, Mapping
 import redis
 from sqlalchemy.orm import Session
 
-from libs.core import execution_contracts, intent_contract, models, orchestrator, payload_resolver
+from libs.core import (
+    capability_registry,
+    execution_contracts,
+    intent_contract,
+    models,
+    orchestrator,
+    payload_resolver,
+)
 from .models import EventOutboxRecord, JobRecord, TaskRecord
 
 
@@ -44,6 +51,14 @@ class ApiDispatchCallbacks:
     normalize_task_intent_profile_segment: Callable[[Any], Mapping[str, Any] | None]
     refresh_job_status: Callable[[str], None]
     emit_event: Callable[[str, dict[str, Any]], None]
+
+
+def _enabled_capabilities() -> Mapping[str, Any]:
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception:  # noqa: BLE001
+        return {}
+    return registry.enabled_capabilities()
 
 
 def publish_envelope_to_redis(
@@ -223,6 +238,12 @@ def task_payload_from_record(
     config: ApiDispatchConfig,
     callbacks: ApiDispatchCallbacks,
 ) -> dict[str, Any]:
+    raw_tool_inputs = record.tool_inputs if isinstance(record.tool_inputs, dict) else {}
+    capability_bindings = execution_contracts.normalize_capability_bindings(
+        {"tool_inputs": raw_tool_inputs},
+        request_ids=record.tool_requests or [],
+        capabilities=_enabled_capabilities(),
+    )
     payload: dict[str, Any] = {
         "task_id": record.id,
         "id": record.id,
@@ -241,7 +262,10 @@ def task_payload_from_record(
         "max_reworks": record.max_reworks or 0,
         "assigned_to": record.assigned_to,
         "tool_requests": record.tool_requests or [],
-        "tool_inputs": record.tool_inputs or {},
+        "tool_inputs": execution_contracts.strip_execution_metadata_from_tool_inputs(
+            raw_tool_inputs
+        ),
+        "capability_bindings": capability_bindings,
         "critic_required": bool(record.critic_required),
         "intent": record.intent,
         "created_at": record.created_at,

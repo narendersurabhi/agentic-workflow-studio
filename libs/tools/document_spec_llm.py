@@ -4,6 +4,7 @@ import json
 from typing import Any, Callable
 
 from libs.core import prompts
+from libs.core.job_projection import compact_document_job_payload
 from libs.core.llm_provider import LLMProvider, LLMProviderError
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolExecutionError
@@ -216,19 +217,8 @@ def llm_generate_document_spec(
 def _compact_document_spec_job(
     job: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-
-    for key in ("instruction", "topic", "audience", "tone", "today", "output_dir"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            compact[key] = value.strip()
-
-    if "instruction" not in compact:
-        value = job.get("instruction")
-        if isinstance(value, str) and value.strip():
-            compact["instruction"] = value.strip()
-
-    context_json = job.get("context_json")
+    compact = compact_document_job_payload(job)
+    context_json = compact.get("context_json")
     if isinstance(context_json, dict):
         markdown_text = context_json.get("markdown_text")
         if isinstance(markdown_text, str) and markdown_text.strip():
@@ -240,17 +230,11 @@ def _compact_document_spec_job(
             if isinstance(value, str) and value.strip():
                 compact[key] = value.strip()
 
-    for key in ("topic", "audience", "tone", "today", "output_dir"):
-        if key in compact:
-            continue
-        value = job.get(key)
+    for key in ("instruction", "topic", "audience", "tone", "today", "output_dir"):
+        value = payload.get(key)
         if isinstance(value, str) and value.strip():
             compact[key] = value.strip()
-
-    if compact.get("markdown_text"):
-        return compact
-
-    return job
+    return compact
 
 
 def llm_improve_document_spec(

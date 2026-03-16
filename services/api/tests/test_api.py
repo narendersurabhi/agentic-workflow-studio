@@ -1245,6 +1245,69 @@ def test_plan_created_enqueues_ready_tasks():
     assert any(event_type == "task.ready" for event_type, _ in events)
 
 
+def test_handle_plan_created_persists_embedded_capability_bindings() -> None:
+    job_id = f"job-test-bindings-{uuid.uuid4()}"
+    now = _utcnow()
+    with SessionLocal() as db:
+        db.add(
+            JobRecord(
+                id=job_id,
+                goal="check repo",
+                context_json={},
+                status=models.JobStatus.queued.value,
+                created_at=now,
+                updated_at=now,
+                priority=0,
+                metadata_json={},
+            )
+        )
+        db.commit()
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="check repo",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="CheckRepo",
+                description="Check repo",
+                instruction="Check repo",
+                acceptance_criteria=["checked"],
+                expected_output_schema_ref="TaskResult",
+                deps=[],
+                tool_requests=["github.repo.list"],
+                tool_inputs={"github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}},
+                capability_bindings={
+                    "github.repo.list": {
+                        "request_id": "github.repo.list",
+                        "capability_id": "github.repo.list",
+                        "tool_name": "github.repo.list",
+                        "adapter_type": "mcp",
+                    }
+                },
+                critic_required=False,
+            )
+        ],
+    )
+    envelope = {
+        "type": "plan.created",
+        "payload": {"job_id": job_id, **plan.model_dump(mode="json")},
+        "job_id": job_id,
+        "correlation_id": "corr",
+    }
+
+    main._handle_plan_created(envelope)
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).one()
+        assert task.tool_inputs["github.repo.list"]["repo"] == "demo"
+        assert (
+            task.tool_inputs[main.execution_contracts.EXECUTION_BINDINGS_KEY]["github.repo.list"][
+                "capability_id"
+            ]
+            == "github.repo.list"
+        )
+
+
 def test_handle_plan_failed_marks_queued_job_failed_and_exposes_details_error():
     job_id = f"job-plan-failed-{uuid.uuid4()}"
     now = _utcnow()
@@ -1991,6 +2054,55 @@ def test_task_payload_from_record_resolves_validation_report_alias_reference() -
     assert resolved["validation_report"]["valid"] is True
 
 
+def test_task_payload_from_record_resolves_dotted_request_id_reference() -> None:
+    now = _utcnow()
+    record = TaskRecord(
+        id=f"task-validate-{uuid.uuid4()}",
+        job_id="job-ref",
+        plan_id="plan-ref",
+        name="Validate DocumentSpec",
+        description="Validate doc spec",
+        instruction="Validate",
+        acceptance_criteria=["validated"],
+        expected_output_schema_ref="schemas/validation_report",
+        status=models.TaskStatus.ready.value,
+        deps=["Generate DocumentSpec"],
+        attempts=0,
+        max_attempts=3,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        intent="validate",
+        tool_requests=["document_spec_validate"],
+        tool_inputs={
+            "document_spec_validate": {
+                "strict": True,
+                "document_spec": {
+                    "$from": "dependencies_by_name.Generate DocumentSpec.document.spec.generate.document_spec"
+                },
+            }
+        },
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+    context = {
+        "dependencies_by_name": {
+            "Generate DocumentSpec": {
+                "document.spec.generate": {
+                    "document_spec": {"blocks": [{"type": "paragraph", "text": "hello"}]}
+                }
+            }
+        },
+        "dependencies": {},
+    }
+
+    payload = main._task_payload_from_record(record, correlation_id="corr", context=context)
+    assert "tool_inputs_validation" not in payload
+    resolved = payload["tool_inputs"]["document_spec_validate"]
+    assert resolved["document_spec"]["blocks"][0]["text"] == "hello"
+
+
 def test_task_payload_from_record_resolves_output_path_alias_reference() -> None:
     now = _utcnow()
     record = TaskRecord(
@@ -2167,7 +2279,18 @@ def test_task_payload_from_record_uses_typed_dispatch_contract() -> None:
         assigned_to=None,
         intent=None,
         tool_requests=["document.spec.generate"],
-        tool_inputs={"document.spec.generate": {"job": {"topic": "latency"}}},
+        tool_inputs=main.execution_contracts.embed_capability_bindings(
+            {"document.spec.generate": {"job": {"topic": "latency"}}},
+            {
+                "document.spec.generate": {
+                    "request_id": "document.spec.generate",
+                    "capability_id": "document.spec.generate",
+                    "tool_name": "document.spec.generate",
+                    "adapter_type": "capability",
+                }
+            },
+            request_ids=["document.spec.generate"],
+        ),
         created_at=now,
         updated_at=now,
         critic_required=0,
@@ -2183,6 +2306,10 @@ def test_task_payload_from_record_uses_typed_dispatch_contract() -> None:
     assert dispatch.attempts == 1
     assert dispatch.max_attempts == 1
     assert dispatch.tool_requests == ["document.spec.generate"]
+    assert main.execution_contracts.EXECUTION_BINDINGS_KEY not in payload["tool_inputs"]
+    assert dispatch.capability_bindings["document.spec.generate"].capability_id == (
+        "document.spec.generate"
+    )
     assert dispatch.tool_inputs_resolved is True
 
 
