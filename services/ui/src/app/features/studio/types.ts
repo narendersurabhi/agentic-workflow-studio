@@ -120,6 +120,15 @@ export type CanvasPoint = {
   y: number;
 };
 
+export type StudioPersistedWorkflowDraft = {
+  summary?: string;
+  goal?: string;
+  contextJsonText?: string;
+  nodePositions?: Record<string, CanvasPoint>;
+  nodes?: ComposerDraftNode[];
+  edges?: ComposerDraftEdge[];
+};
+
 export type ComposerCompileDiagnostic = {
   code: string;
   message: string;
@@ -157,7 +166,7 @@ export type WorkflowDefinition = {
   title: string;
   goal: string;
   context_json: Record<string, unknown>;
-  draft: Record<string, unknown>;
+  draft: StudioPersistedWorkflowDraft;
   user_id?: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
@@ -171,7 +180,7 @@ export type WorkflowVersion = {
   title: string;
   goal: string;
   context_json: Record<string, unknown>;
-  draft: Record<string, unknown>;
+  draft: StudioPersistedWorkflowDraft;
   compiled_plan: Record<string, unknown>;
   user_id?: string | null;
   metadata: Record<string, unknown>;

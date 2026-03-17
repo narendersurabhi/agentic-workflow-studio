@@ -11,6 +11,7 @@ import ScreenHeader, {
 import StudioCapabilityPalette from "./StudioCapabilityPalette";
 import StudioCompilePanel from "./StudioCompilePanel";
 import StudioNodeInspector from "./StudioNodeInspector";
+import StudioWorkflowLibrary from "./StudioWorkflowLibrary";
 import type {
   CanvasPoint,
   CapabilityCatalog,
@@ -21,6 +22,7 @@ import type {
   ComposerDraftNode,
   ComposerInputBinding,
   ComposerIssueFocus,
+  StudioPersistedWorkflowDraft,
   StudioControlCase,
   StudioControlConfig,
   StudioControlKind,
@@ -135,6 +137,249 @@ const initialContextJson = () =>
     2
   );
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const normalizeCanvasPointMap = (value: unknown): Record<string, CanvasPoint> => {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const next: Record<string, CanvasPoint> = {};
+  Object.entries(value).forEach(([key, rawPoint]) => {
+    if (!isRecord(rawPoint)) {
+      return;
+    }
+    const x = typeof rawPoint.x === "number" ? rawPoint.x : Number(rawPoint.x);
+    const y = typeof rawPoint.y === "number" ? rawPoint.y : Number(rawPoint.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      next[key] = { x, y };
+    }
+  });
+  return next;
+};
+
+const normalizeInputBinding = (value: unknown): ComposerInputBinding | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value.kind === "step_output") {
+    return {
+      kind: "step_output",
+      sourceNodeId: typeof value.sourceNodeId === "string" ? value.sourceNodeId : "",
+      sourcePath: typeof value.sourcePath === "string" ? value.sourcePath : "",
+      ...(typeof value.defaultValue === "string" ? { defaultValue: value.defaultValue } : {}),
+    };
+  }
+  if (value.kind === "literal") {
+    return {
+      kind: "literal",
+      value: typeof value.value === "string" ? value.value : "",
+    };
+  }
+  if (value.kind === "context") {
+    return {
+      kind: "context",
+      path: typeof value.path === "string" ? value.path : "",
+    };
+  }
+  if (value.kind === "memory") {
+    return {
+      kind: "memory",
+      scope: value.scope === "user" || value.scope === "global" ? value.scope : "job",
+      name: typeof value.name === "string" ? value.name : "",
+      ...(typeof value.key === "string" ? { key: value.key } : {}),
+    };
+  }
+  return null;
+};
+
+const normalizeInputBindings = (value: unknown): Record<string, ComposerInputBinding> => {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const next: Record<string, ComposerInputBinding> = {};
+  Object.entries(value).forEach(([field, rawBinding]) => {
+    const binding = normalizeInputBinding(rawBinding);
+    if (binding) {
+      next[field] = binding;
+    }
+  });
+  return next;
+};
+
+const normalizeControlKind = (value: unknown): StudioControlKind | null => {
+  if (value === "if" || value === "if_else" || value === "switch" || value === "parallel") {
+    return value;
+  }
+  return null;
+};
+
+const normalizeControlCases = (value: unknown): StudioControlCase[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.reduce<StudioControlCase[]>((cases, rawCase, index) => {
+    if (!isRecord(rawCase)) {
+      return cases;
+    }
+    cases.push({
+      id:
+        typeof rawCase.id === "string" && rawCase.id.trim()
+          ? rawCase.id
+          : `restored-case-${index + 1}`,
+      label: typeof rawCase.label === "string" ? rawCase.label : "",
+      match: typeof rawCase.match === "string" ? rawCase.match : "",
+    });
+    return cases;
+  }, []);
+};
+
+const normalizeControlConfig = (
+  kind: StudioControlKind | null,
+  value: unknown
+): StudioControlConfig | null => {
+  if (!kind) {
+    return null;
+  }
+  const fallback = defaultControlConfig(kind);
+  if (!isRecord(value)) {
+    return fallback;
+  }
+  return {
+    ...fallback,
+    ...(typeof value.expression === "string" ? { expression: value.expression } : {}),
+    ...(typeof value.trueLabel === "string" ? { trueLabel: value.trueLabel } : {}),
+    ...(typeof value.falseLabel === "string" ? { falseLabel: value.falseLabel } : {}),
+    ...(value.parallelMode === "fan_in" || value.parallelMode === "fan_out"
+      ? { parallelMode: value.parallelMode }
+      : {}),
+    ...(Array.isArray(value.switchCases)
+      ? { switchCases: normalizeControlCases(value.switchCases) }
+      : {}),
+  };
+};
+
+const normalizeNodeOutputs = (value: unknown): ComposerDraftNode["outputs"] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.reduce<ComposerDraftNode["outputs"]>((outputs, rawOutput, index) => {
+    if (!isRecord(rawOutput)) {
+      return outputs;
+    }
+    outputs.push({
+      id:
+        typeof rawOutput.id === "string" && rawOutput.id.trim()
+          ? rawOutput.id
+          : `restored-output-${index + 1}`,
+      name: typeof rawOutput.name === "string" ? rawOutput.name : "",
+      path: typeof rawOutput.path === "string" ? rawOutput.path : "",
+      description: typeof rawOutput.description === "string" ? rawOutput.description : "",
+    });
+    return outputs;
+  }, []);
+};
+
+const normalizeNodeVariables = (value: unknown): ComposerDraftNode["variables"] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.reduce<ComposerDraftNode["variables"]>((variables, rawVariable, index) => {
+    if (!isRecord(rawVariable)) {
+      return variables;
+    }
+    variables.push({
+      id:
+        typeof rawVariable.id === "string" && rawVariable.id.trim()
+          ? rawVariable.id
+          : `restored-variable-${index + 1}`,
+      key: typeof rawVariable.key === "string" ? rawVariable.key : "",
+      value: typeof rawVariable.value === "string" ? rawVariable.value : "",
+      description: typeof rawVariable.description === "string" ? rawVariable.description : "",
+    });
+    return variables;
+  }, []);
+};
+
+const normalizePersistedNodes = (value: unknown): ComposerDraftNode[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.reduce<ComposerDraftNode[]>((nodes, rawNode, index) => {
+    if (!isRecord(rawNode)) {
+      return nodes;
+    }
+    const nodeKind = rawNode.nodeKind === "control" ? "control" : "capability";
+    const controlKind = nodeKind === "control" ? normalizeControlKind(rawNode.controlKind) : null;
+    nodes.push({
+      id:
+        typeof rawNode.id === "string" && rawNode.id.trim()
+          ? rawNode.id
+          : `restored-node-${index + 1}`,
+      taskName:
+        typeof rawNode.taskName === "string" && rawNode.taskName.trim()
+          ? rawNode.taskName
+          : `Restored Step ${index + 1}`,
+      capabilityId:
+        typeof rawNode.capabilityId === "string" && rawNode.capabilityId.trim()
+          ? rawNode.capabilityId
+          : "unknown.capability",
+      outputPath: typeof rawNode.outputPath === "string" ? rawNode.outputPath : "result",
+      nodeKind,
+      controlKind,
+      controlConfig: normalizeControlConfig(controlKind, rawNode.controlConfig),
+      inputBindings: normalizeInputBindings(rawNode.inputBindings),
+      outputs: normalizeNodeOutputs(rawNode.outputs),
+      variables: normalizeNodeVariables(rawNode.variables),
+    });
+    return nodes;
+  }, []);
+};
+
+const normalizePersistedEdges = (value: unknown): ComposerDraftEdge[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.reduce<ComposerDraftEdge[]>((edges, rawEdge) => {
+    if (!isRecord(rawEdge)) {
+      return edges;
+    }
+    if (typeof rawEdge.fromNodeId !== "string" || typeof rawEdge.toNodeId !== "string") {
+      return edges;
+    }
+    edges.push({
+      fromNodeId: rawEdge.fromNodeId,
+      toNodeId: rawEdge.toNodeId,
+      ...(typeof rawEdge.branchLabel === "string" ? { branchLabel: rawEdge.branchLabel } : {}),
+    });
+    return edges;
+  }, []);
+};
+
+const restorePersistedWorkflowDraft = (
+  draft: StudioPersistedWorkflowDraft | null | undefined,
+  fallbackGoal: string,
+  fallbackContext: Record<string, unknown>
+) => {
+  const nodes = normalizePersistedNodes(draft?.nodes);
+  return {
+    goal: typeof draft?.goal === "string" ? draft.goal : fallbackGoal,
+    contextJsonText:
+      typeof draft?.contextJsonText === "string"
+        ? draft.contextJsonText
+        : JSON.stringify(fallbackContext, null, 2),
+    nodePositions: normalizeCanvasPointMap(draft?.nodePositions),
+    composerDraft: {
+      summary:
+        typeof draft?.summary === "string" && draft.summary.trim()
+          ? draft.summary
+          : fallbackGoal || "Workflow Studio draft",
+      nodes,
+      edges: normalizeComposerEdges(nodes, normalizePersistedEdges(draft?.edges)),
+    },
+  };
+};
+
 export default function WorkflowStudio() {
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState(initialContextJson);
@@ -153,6 +398,13 @@ export default function WorkflowStudio() {
   const [composerCompileResult, setComposerCompileResult] = useState<ComposerCompileResponse | null>(null);
   const [savedWorkflowDefinition, setSavedWorkflowDefinition] = useState<WorkflowDefinition | null>(null);
   const [publishedWorkflowVersion, setPublishedWorkflowVersion] = useState<WorkflowVersion | null>(null);
+  const [loadedWorkflowVersionId, setLoadedWorkflowVersionId] = useState<string | null>(null);
+  const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([]);
+  const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] = useState(true);
+  const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<string | null>(null);
+  const [workflowVersions, setWorkflowVersions] = useState<WorkflowVersion[]>([]);
+  const [workflowVersionsLoading, setWorkflowVersionsLoading] = useState(false);
+  const [workflowVersionsError, setWorkflowVersionsError] = useState<string | null>(null);
   const [workflowActionLoading, setWorkflowActionLoading] = useState<
     "save" | "publish" | "run" | null
   >(null);
@@ -213,6 +465,8 @@ export default function WorkflowStudio() {
     () => collectContextPathSuggestions(contextState.context),
     [contextState.context]
   );
+  const activeWorkflowDefinitionId = savedWorkflowDefinition?.id || null;
+  const activeWorkflowVersionId = loadedWorkflowVersionId || publishedWorkflowVersion?.id || null;
 
   useEffect(() => {
     let cancelled = false;
@@ -248,6 +502,85 @@ export default function WorkflowStudio() {
       cancelled = true;
     };
   }, []);
+
+  const refreshWorkflowDefinitions = async (nextUserId?: string) => {
+    setWorkflowDefinitionsLoading(true);
+    setWorkflowDefinitionsError(null);
+    try {
+      const params = new URLSearchParams();
+      const normalizedUserId = (nextUserId ?? workspaceUserId).trim();
+      if (normalizedUserId) {
+        params.set("user_id", normalizedUserId);
+      }
+      const response = await fetch(
+        `${apiUrl}/workflows/definitions${params.size > 0 ? `?${params.toString()}` : ""}`
+      );
+      const body = (await response.json()) as WorkflowDefinition[] | { detail?: unknown };
+      if (!response.ok) {
+        const detail = (body as { detail?: unknown }).detail;
+        throw new Error(
+          typeof detail === "string"
+            ? detail
+            : `Workflow library request failed (${response.status}).`
+        );
+      }
+      setWorkflowDefinitions(Array.isArray(body) ? body : []);
+    } catch (error) {
+      setWorkflowDefinitionsError(
+        error instanceof Error ? error.message : "Failed to load saved workflows."
+      );
+      setWorkflowDefinitions([]);
+    } finally {
+      setWorkflowDefinitionsLoading(false);
+    }
+  };
+
+  const refreshWorkflowVersions = async (definitionId: string) => {
+    if (!definitionId.trim()) {
+      setWorkflowVersions([]);
+      setWorkflowVersionsError(null);
+      setWorkflowVersionsLoading(false);
+      return;
+    }
+    setWorkflowVersionsLoading(true);
+    setWorkflowVersionsError(null);
+    try {
+      const response = await fetch(
+        `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/versions`
+      );
+      const body = (await response.json()) as WorkflowVersion[] | { detail?: unknown };
+      if (!response.ok) {
+        const detail = (body as { detail?: unknown }).detail;
+        throw new Error(
+          typeof detail === "string"
+            ? detail
+            : `Workflow version history request failed (${response.status}).`
+        );
+      }
+      setWorkflowVersions(Array.isArray(body) ? body : []);
+    } catch (error) {
+      setWorkflowVersionsError(
+        error instanceof Error ? error.message : "Failed to load workflow versions."
+      );
+      setWorkflowVersions([]);
+    } finally {
+      setWorkflowVersionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshWorkflowDefinitions();
+  }, [workspaceUserId]);
+
+  useEffect(() => {
+    if (!activeWorkflowDefinitionId) {
+      setWorkflowVersions([]);
+      setWorkflowVersionsError(null);
+      setWorkflowVersionsLoading(false);
+      return;
+    }
+    void refreshWorkflowVersions(activeWorkflowDefinitionId);
+  }, [activeWorkflowDefinitionId]);
 
   const availableCapabilities = useMemo(() => {
     const items = capabilityCatalog?.items || [];
@@ -1770,6 +2103,92 @@ export default function WorkflowStudio() {
     [composerDraft.summary, composerDraftEdges, composerNodePositions, contextJson, goal, visualChainNodes]
   );
 
+  const resetStudioTransientState = () => {
+    setSelectedDagNodeId(null);
+    setChainPreflightResult(null);
+    setComposerCompileResult(null);
+    setActiveComposerIssueFocus(null);
+    setHoveredDagEdgeKey(null);
+    setDagEdgeDraftSourceNodeId(null);
+    setDagConnectorDrag(null);
+    setDagCanvasDraggingNodeId(null);
+    setDagConnectorHoverTargetNodeId(null);
+  };
+
+  const startFreshStudioDraft = () => {
+    setGoal("");
+    setContextJson(initialContextJson());
+    setComposerDraft(initialStudioDraft());
+    setComposerNodePositions({});
+    setSavedWorkflowDefinition(null);
+    setPublishedWorkflowVersion(null);
+    setLoadedWorkflowVersionId(null);
+    setWorkflowVersions([]);
+    resetStudioTransientState();
+    setStudioNotice("Started a fresh studio draft.");
+  };
+
+  const restoreWorkflowDefinition = (definition: WorkflowDefinition) => {
+    const restored = restorePersistedWorkflowDraft(
+      definition.draft,
+      definition.goal,
+      definition.context_json
+    );
+    setGoal(restored.goal);
+    setContextJson(restored.contextJsonText);
+    setComposerDraft(restored.composerDraft);
+    setComposerNodePositions(restored.nodePositions);
+    setSavedWorkflowDefinition(definition);
+    setPublishedWorkflowVersion(null);
+    setLoadedWorkflowVersionId(null);
+    resetStudioTransientState();
+    setStudioNotice(`Opened saved draft ${definition.title}.`);
+  };
+
+  const restoreWorkflowVersion = async (version: WorkflowVersion) => {
+    let definition = savedWorkflowDefinition;
+    if (!definition || definition.id !== version.definition_id) {
+      definition =
+        workflowDefinitions.find((item) => item.id === version.definition_id) || null;
+    }
+    if (!definition) {
+      try {
+        const response = await fetch(
+          `${apiUrl}/workflows/definitions/${encodeURIComponent(version.definition_id)}`
+        );
+        const body = (await response.json()) as WorkflowDefinition | { detail?: unknown };
+        if (!response.ok) {
+          const detail = (body as { detail?: unknown }).detail;
+          throw new Error(
+            typeof detail === "string"
+              ? detail
+              : `Workflow definition request failed (${response.status}).`
+          );
+        }
+        definition = body as WorkflowDefinition;
+      } catch (error) {
+        setStudioNotice(
+          error instanceof Error ? error.message : "Failed to load workflow definition."
+        );
+        return;
+      }
+    }
+    const restored = restorePersistedWorkflowDraft(
+      version.draft,
+      version.goal || definition.goal,
+      version.context_json
+    );
+    setGoal(restored.goal);
+    setContextJson(restored.contextJsonText);
+    setComposerDraft(restored.composerDraft);
+    setComposerNodePositions(restored.nodePositions);
+    setSavedWorkflowDefinition(definition);
+    setPublishedWorkflowVersion(version);
+    setLoadedWorkflowVersionId(version.id);
+    resetStudioTransientState();
+    setStudioNotice(`Restored workflow version v${version.version_number}.`);
+  };
+
   const saveWorkflowDefinition = async () => {
     if (contextState.invalid) {
       setStudioNotice("Workflow drafts can only be saved when Context JSON is valid.");
@@ -1804,6 +2223,7 @@ export default function WorkflowStudio() {
       }
       const definition = body as WorkflowDefinition;
       setSavedWorkflowDefinition(definition);
+      void refreshWorkflowDefinitions();
       setStudioNotice(`Saved draft ${definition.title}.`);
       return definition;
     } catch (error) {
@@ -1838,6 +2258,9 @@ export default function WorkflowStudio() {
       }
       const version = body as WorkflowVersion;
       setPublishedWorkflowVersion(version);
+      setLoadedWorkflowVersionId(version.id);
+      void refreshWorkflowDefinitions();
+      void refreshWorkflowVersions(definition.id);
       setStudioNotice(`Published workflow version v${version.version_number}.`);
       return version;
     } catch (error) {
@@ -1885,10 +2308,6 @@ export default function WorkflowStudio() {
     () => collectComposerValidationIssues(chainPreflightResult, composerCompileResult, visualChainNodes),
     [chainPreflightResult, composerCompileResult, visualChainNodes]
   );
-
-  useEffect(() => {
-    setPublishedWorkflowVersion(null);
-  }, [persistedWorkflowDraft, workspaceUserId]);
 
   const runChainPreflight = async () => {
     const localErrors: string[] = [];
@@ -2214,18 +2633,7 @@ export default function WorkflowStudio() {
           <>
             <button
               className={screenHeaderSecondaryActionClassName}
-              onClick={() => {
-                setGoal("");
-                setContextJson(initialContextJson());
-                setComposerDraft(initialStudioDraft());
-                setComposerNodePositions({});
-                setSelectedDagNodeId(null);
-                setChainPreflightResult(null);
-                setComposerCompileResult(null);
-                setSavedWorkflowDefinition(null);
-                setPublishedWorkflowVersion(null);
-                setStudioNotice("Started a fresh studio draft.");
-              }}
+              onClick={startFreshStudioDraft}
             >
               New Draft
             </button>
@@ -2464,6 +2872,27 @@ export default function WorkflowStudio() {
         </div>
 
         <div className="space-y-6">
+          <StudioWorkflowLibrary
+            workflowDefinitions={workflowDefinitions}
+            workflowDefinitionsLoading={workflowDefinitionsLoading}
+            workflowDefinitionsError={workflowDefinitionsError}
+            workflowVersions={workflowVersions}
+            workflowVersionsLoading={workflowVersionsLoading}
+            workflowVersionsError={workflowVersionsError}
+            activeWorkflowDefinitionId={activeWorkflowDefinitionId}
+            activeWorkflowVersionId={activeWorkflowVersionId}
+            onRefresh={() => {
+              void refreshWorkflowDefinitions();
+              if (activeWorkflowDefinitionId) {
+                void refreshWorkflowVersions(activeWorkflowDefinitionId);
+              }
+            }}
+            onOpenDefinition={restoreWorkflowDefinition}
+            onOpenVersion={(version) => {
+              void restoreWorkflowVersion(version);
+            }}
+          />
+
           <StudioNodeInspector
             selectedDagNode={selectedDagNode}
             selectedDagNodeStatus={selectedDagNodeStatus}
