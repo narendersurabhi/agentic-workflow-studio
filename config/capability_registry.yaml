@@ -681,7 +681,7 @@ capabilities:
         arg_map: {}
         enabled: true
   - id: document.spec.generate
-    description: Generate a DocumentSpec from instruction/topic/audience/tone/date/output_dir using the LLM.
+    description: Generate a DocumentSpec from instruction/topic/audience/tone using the LLM.
     risk_tier: read_only
     idempotency: read
     group: documents
@@ -698,6 +698,27 @@ capabilities:
       - type: tool
         server_id: local_worker
         tool_name: llm_generate_document_spec
+        arg_map: {}
+        enabled: true
+  - id: document.spec.generate_from_markdown
+    description: Transform source markdown content into a DocumentSpec using the LLM.
+    risk_tier: read_only
+    idempotency: read
+    group: documents
+    subgroup: generation
+    input_schema_ref: document_spec_generate_from_markdown_capability_input
+    output_schema_ref: ""
+    tags:
+      - documents
+      - spec
+      - generation
+      - markdown
+      - llm
+    enabled: true
+    adapters:
+      - type: tool
+        server_id: local_worker
+        tool_name: llm_generate_document_spec_from_markdown
         arg_map: {}
         enabled: true
   - id: document.spec.improve

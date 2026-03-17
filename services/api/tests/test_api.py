@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import redis
 from fastapi.testclient import TestClient
@@ -16,12 +16,16 @@ from services.api.app.database import SessionLocal
 from services.api.app.models import EventOutboxRecord, JobRecord, PlanRecord, TaskRecord
 from libs.core import events, models
 from libs.core import capability_registry as cap_registry
-from libs.core.llm_provider import LLMResponse
+from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 
 
 Base.metadata.create_all(bind=engine)
 
 client = TestClient(main.app)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 def test_create_job():
@@ -66,9 +70,71 @@ def test_intent_decompose_endpoint_returns_graph():
     assert "must_have_inputs" in graph["segments"][0]["slots"]
 
 
+def test_capabilities_search_returns_ranked_matches() -> None:
+    response = client.post(
+        "/capabilities/search",
+        json={"query": "render a pdf report from a document spec", "intent": "render", "limit": 5},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["query"] == "render a pdf report from a document spec"
+    assert body["intent"] == "render"
+    assert len(body["items"]) >= 1
+    ids = [item["id"] for item in body["items"]]
+    assert "document.pdf.generate" in ids
+    first = body["items"][0]
+    assert isinstance(first["score"], float)
+    assert isinstance(first["reason"], str) and first["reason"]
+
+
+def test_capabilities_search_emits_capability_search_event(monkeypatch) -> None:
+    events_seen = []
+    monkeypatch.setattr(
+        main,
+        "_emit_event",
+        lambda event_type, payload: events_seen.append((event_type, payload)),
+    )
+
+    response = client.post(
+        "/capabilities/search",
+        json={
+            "query": "render a pdf report from a document spec",
+            "intent": "render",
+            "limit": 5,
+            "request_source": "composer",
+            "correlation_id": "corr-search-1",
+            "job_id": "job-search-1",
+        },
+    )
+    assert response.status_code == 200
+    assert events_seen
+    event_type, payload = events_seen[-1]
+    assert event_type == "plan.capability_search"
+    assert payload["request_source"] == "composer"
+    assert payload["correlation_id"] == "corr-search-1"
+    assert payload["job_id"] == "job-search-1"
+    assert payload["result_count"] >= 1
+    assert any(item["id"] == "document.pdf.generate" for item in payload["results"])
+
+
+def test_capabilities_search_requires_query() -> None:
+    response = client.post("/capabilities/search", json={"query": ""})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "query_required"
+
+
+def test_capabilities_search_validates_limit() -> None:
+    response = client.post("/capabilities/search", json={"query": "pdf", "limit": 0})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "limit_out_of_range"
+
+
 def test_intent_decompose_endpoint_uses_llm_when_enabled(monkeypatch):
-    class _Provider:
-        def generate(self, prompt: str):  # noqa: ARG002
+    requests: list[LLMRequest] = []
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            requests.append(request)
             return LLMResponse(
                 content=(
                     '{"segments":[{"id":"s1","intent":"generate","objective":"Create summary",'
@@ -92,10 +158,13 @@ def test_intent_decompose_endpoint_uses_llm_when_enabled(monkeypatch):
     assert graph["segments"][0]["source"] == "llm"
     assert graph["segments"][0]["slots"]["entity"] == "summary"
     assert graph["segments"][0]["slots"]["must_have_inputs"] == ["instruction"]
+    assert requests
+    assert requests[0].metadata is not None
+    assert requests[0].metadata["operation"] == "intent_decompose"
 
 
 def test_intent_decompose_endpoint_falls_back_to_heuristic_on_llm_failure(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(content="not-json")
 
@@ -111,7 +180,7 @@ def test_intent_decompose_endpoint_falls_back_to_heuristic_on_llm_failure(monkey
 
 
 def test_intent_decompose_endpoint_filters_unknown_llm_capabilities(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -143,7 +212,7 @@ def test_intent_decompose_endpoint_filters_unknown_llm_capabilities(monkeypatch)
 
 
 def test_intent_decompose_endpoint_normalizes_capability_id_casing(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -171,7 +240,7 @@ def test_intent_decompose_endpoint_normalizes_capability_id_casing(monkeypatch):
 
 
 def test_intent_decompose_endpoint_limits_capability_rankings_to_top_k(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -212,7 +281,7 @@ def test_intent_decompose_endpoint_validates_interaction_summaries_contract():
 
 
 def test_intent_decompose_endpoint_filters_unsupported_facts_with_summaries(monkeypatch):
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             return LLMResponse(
                 content=(
@@ -401,6 +470,57 @@ def test_create_plan_persists_task_intent_profiles_and_surfaces_on_tasks():
     assert isinstance(tasks[0]["intent_confidence"], (int, float))
 
 
+def test_memory_specs_endpoint_lists_user_scoped_specs() -> None:
+    response = client.get("/memory/specs")
+    assert response.status_code == 200
+    specs = response.json()
+    names = {entry["name"] for entry in specs}
+    assert "user_profile" in names
+    assert "semantic_memory" in names
+
+
+def test_delete_user_memory_entry() -> None:
+    write_response = client.post(
+        "/memory/write",
+        json={
+            "name": "user_profile",
+            "scope": "user",
+            "user_id": "demo-user",
+            "key": "preferences",
+            "payload": {"theme": "light"},
+            "metadata": {"source": "test"},
+        },
+    )
+    assert write_response.status_code == 200
+
+    delete_response = client.delete(
+        "/memory/delete",
+        params={
+            "name": "user_profile",
+            "scope": "user",
+            "user_id": "demo-user",
+            "key": "preferences",
+        },
+    )
+    assert delete_response.status_code == 200
+    deleted = delete_response.json()
+    assert deleted["name"] == "user_profile"
+    assert deleted["user_id"] == "demo-user"
+    assert deleted["key"] == "preferences"
+
+    read_response = client.get(
+        "/memory/read",
+        params={
+            "name": "user_profile",
+            "scope": "user",
+            "user_id": "demo-user",
+            "key": "preferences",
+        },
+    )
+    assert read_response.status_code == 200
+    assert read_response.json() == []
+
+
 def test_create_job_persists_goal_intent_graph():
     response = client.post(
         "/jobs",
@@ -467,7 +587,7 @@ def test_intent_decompose_uses_semantic_workflow_hints_in_llm_prompt(monkeypatch
 
     prompts: list[str] = []
 
-    class _Provider:
+    class _Provider(LLMProvider):
         def generate(self, prompt: str):  # noqa: ARG002
             prompts.append(prompt)
             return LLMResponse(
@@ -493,6 +613,56 @@ def test_intent_decompose_uses_semantic_workflow_hints_in_llm_prompt(monkeypatch
     assert graph["summary"]["memory_hints_used"] >= 1
     assert prompts
     assert "Similar successful workflow hints from semantic memory" in prompts[0]
+
+
+def test_intent_decompose_uses_semantic_capability_hints_in_llm_prompt(monkeypatch):
+    prompts: list[str] = []
+
+    class _Provider(LLMProvider):
+        def generate(self, prompt: str):  # noqa: ARG002
+            prompts.append(prompt)
+            return LLMResponse(
+                content=(
+                    '{"segments":[{"id":"s1","intent":"render","objective":"Render pdf report",'
+                    '"confidence":0.9,"depends_on":[],"required_inputs":["document_spec","path"],'
+                    '"suggested_capabilities":["document.pdf.generate"]}]}'
+                )
+            )
+
+    monkeypatch.setattr(main, "INTENT_DECOMPOSE_ENABLED", True)
+    monkeypatch.setattr(main, "INTENT_DECOMPOSE_MODE", "llm")
+    monkeypatch.setattr(main, "_intent_decompose_provider", _Provider())
+
+    response = client.post(
+        "/intent/decompose",
+        json={"goal": "Render a PDF report from a document spec"},
+    )
+    assert response.status_code == 200
+    graph = response.json()["intent_graph"]
+    assert graph["summary"]["semantic_capability_hints_used"] >= 1
+    assert prompts
+    assert "Most relevant capabilities for this goal from local semantic search" in prompts[0]
+    assert "document.pdf.generate" in prompts[0]
+
+
+def test_intent_decompose_emits_capability_search_event_for_semantic_hints(monkeypatch):
+    events_seen = []
+    monkeypatch.setattr(
+        main,
+        "_emit_event",
+        lambda event_type, payload: events_seen.append((event_type, payload)),
+    )
+
+    graph = main._decompose_goal_intent("Search semantic memory for user preferences")
+
+    assert graph.summary.semantic_capability_hints_used is not None
+    assert graph.summary.semantic_capability_hints_used >= 1
+    assert events_seen
+    event_type, payload = events_seen[-1]
+    assert event_type == "plan.capability_search"
+    assert payload["request_source"] == "intent_decompose"
+    assert payload["query"] == "Search semantic memory for user preferences"
+    assert payload["result_count"] >= 1
 
 
 def test_refresh_job_status_persists_intent_outcome_memory_and_calibration():
@@ -565,7 +735,7 @@ def test_refresh_job_status_persists_intent_outcome_memory_and_calibration():
 
 
 def test_contract_intent_mismatch_triggers_auto_replan_with_recovery_metadata():
-    now = datetime.utcnow()
+    now = _utcnow()
     job_id = str(uuid.uuid4())
     plan_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
@@ -745,8 +915,8 @@ def test_emit_event_persists_outbox_when_redis_is_unavailable(monkeypatch):
             "status": models.JobStatus.queued.value,
             "priority": 0,
             "metadata": {},
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": _utcnow().isoformat(),
+            "updated_at": _utcnow().isoformat(),
         },
     )
 
@@ -763,7 +933,7 @@ def test_emit_event_persists_outbox_when_redis_is_unavailable(monkeypatch):
 
 def test_dispatch_event_outbox_once_publishes_pending_rows(monkeypatch):
     outbox_id = f"outbox-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     sent = []
 
     class _RedisOk:
@@ -819,7 +989,7 @@ def test_event_stream():
 def test_job_event_outbox_filters_by_job_and_pending_state():
     job_id = f"job-outbox-view-{uuid.uuid4()}"
     other_job_id = f"job-outbox-other-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.query(EventOutboxRecord).delete()
         db.add(
@@ -899,7 +1069,7 @@ def test_job_details():
     job_id = f"job-details-{uuid.uuid4()}"
     plan_id = f"plan-details-{uuid.uuid4()}"
     task_id = f"task-details-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -965,7 +1135,7 @@ def test_job_debugger_returns_timeline_and_error_classification(monkeypatch):
     job_id = f"job-debug-{uuid.uuid4()}"
     plan_id = f"plan-debug-{uuid.uuid4()}"
     task_id = f"task-debug-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -1067,8 +1237,8 @@ def test_plan_created_enqueues_ready_tasks():
                 goal="demo",
                 context_json={},
                 status=models.JobStatus.queued.value,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=_utcnow(),
+                updated_at=_utcnow(),
                 priority=0,
                 metadata_json={},
             )
@@ -1126,9 +1296,72 @@ def test_plan_created_enqueues_ready_tasks():
     assert any(event_type == "task.ready" for event_type, _ in events)
 
 
+def test_handle_plan_created_persists_embedded_capability_bindings() -> None:
+    job_id = f"job-test-bindings-{uuid.uuid4()}"
+    now = _utcnow()
+    with SessionLocal() as db:
+        db.add(
+            JobRecord(
+                id=job_id,
+                goal="check repo",
+                context_json={},
+                status=models.JobStatus.queued.value,
+                created_at=now,
+                updated_at=now,
+                priority=0,
+                metadata_json={},
+            )
+        )
+        db.commit()
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="check repo",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="CheckRepo",
+                description="Check repo",
+                instruction="Check repo",
+                acceptance_criteria=["checked"],
+                expected_output_schema_ref="TaskResult",
+                deps=[],
+                tool_requests=["github.repo.list"],
+                tool_inputs={"github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}},
+                capability_bindings={
+                    "github.repo.list": {
+                        "request_id": "github.repo.list",
+                        "capability_id": "github.repo.list",
+                        "tool_name": "github.repo.list",
+                        "adapter_type": "mcp",
+                    }
+                },
+                critic_required=False,
+            )
+        ],
+    )
+    envelope = {
+        "type": "plan.created",
+        "payload": {"job_id": job_id, **plan.model_dump(mode="json")},
+        "job_id": job_id,
+        "correlation_id": "corr",
+    }
+
+    main._handle_plan_created(envelope)
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).one()
+        assert task.tool_inputs["github.repo.list"]["repo"] == "demo"
+        assert (
+            task.tool_inputs[main.execution_contracts.EXECUTION_BINDINGS_KEY]["github.repo.list"][
+                "capability_id"
+            ]
+            == "github.repo.list"
+        )
+
+
 def test_handle_plan_failed_marks_queued_job_failed_and_exposes_details_error():
     job_id = f"job-plan-failed-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -1173,7 +1406,7 @@ def test_handle_task_started_sets_task_running_and_job_running():
     job_id = f"job-task-started-{uuid.uuid4()}"
     plan_id = f"plan-task-started-{uuid.uuid4()}"
     task_id = f"task-task-started-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -1433,8 +1666,11 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
         lambda _ref: {"type": "object", "required": ["topic"], "properties": {"topic": {"type": "string"}}},
     )
 
-    class _Provider:
-        def generate(self, _prompt):
+    requests: list[LLMRequest] = []
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            requests.append(request)
             return LLMResponse(
                 content='{"recommendations":[{"id":"document.output.derive","reason":"next step","confidence":0.91}]}'
             )
@@ -1455,6 +1691,9 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
     body = response.json()
     assert body["source"] == "llm"
     assert body["recommendations"][0]["id"] == "document.output.derive"
+    assert requests
+    assert requests[0].metadata is not None
+    assert requests[0].metadata["operation"] == "capability_recommendations"
 
 
 def test_preflight_plan_endpoint_returns_valid_true_for_simple_plan():
@@ -1673,6 +1912,54 @@ def test_preflight_plan_endpoint_returns_intent_segment_slot_diagnostics() -> No
     assert diagnostics[0]["field"] == "GenerateText"
 
 
+def test_preflight_plan_endpoint_accepts_intent_segment_tool_inputs_requirement() -> None:
+    payload = {
+        "plan": {
+            "planner_version": "ui_chaining_composer_v1",
+            "tasks_summary": "segment contract",
+            "dag_edges": [],
+            "tasks": [
+                {
+                    "name": "ImplementRepository",
+                    "description": "Implement repository changes",
+                    "instruction": "Use codegen.autonomous to implement the goal.",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "intent": "generate",
+                    "deps": [],
+                    "tool_requests": ["llm_generate"],
+                    "tool_inputs": {"llm_generate": {"text": "implement it"}},
+                    "critic_required": False,
+                }
+            ],
+        },
+        "goal_intent_graph": {
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "generate",
+                    "objective": "Implement repository",
+                    "required_inputs": ["instruction"],
+                    "suggested_capabilities": ["llm.text.generate"],
+                    "slots": {
+                        "entity": "repository",
+                        "artifact_type": "code",
+                        "output_format": "txt",
+                        "risk_level": "read_only",
+                        "must_have_inputs": ["tool_inputs"],
+                    },
+                }
+            ]
+        },
+        "job_context": {},
+    }
+    response = client.post("/plans/preflight", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is True
+    assert body["errors"] == {}
+
+
 def test_preflight_task_intent_uses_goal_text_when_task_text_generic() -> None:
     task = models.TaskCreate(
         name="ValidateSpec",
@@ -1720,8 +2007,367 @@ def test_build_plan_from_composer_draft_derives_intent_from_goal(monkeypatch) ->
     assert plan.tasks[0].intent == models.ToolIntent.render
 
 
+def test_build_plan_from_composer_draft_flags_control_flow_nodes() -> None:
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "taskName": "ApprovalGate",
+                    "nodeKind": "control",
+                    "controlKind": "if_else",
+                    "capabilityId": "studio.control.if_else",
+                    "controlConfig": {"expression": "context.approved == true"},
+                }
+            ]
+        }
+    )
+
+    assert plan is None
+    codes = {entry["code"] for entry in errors}
+    assert "draft.control_if_else_true_branch_missing" in codes
+    assert "draft.control_if_else_false_branch_missing" in codes
+
+
+def test_build_plan_from_composer_draft_validates_switch_control_cases() -> None:
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "taskName": "RouteByStatus",
+                    "nodeKind": "control",
+                    "controlKind": "switch",
+                    "capabilityId": "studio.control.switch",
+                    "controlConfig": {
+                        "expression": "context.status",
+                        "switchCases": [{"id": "c1", "label": "", "match": ""}],
+                    },
+                }
+            ]
+        }
+    )
+
+    assert plan is None
+    codes = {entry["code"] for entry in errors}
+    assert "draft.control_switch_case_label_missing" in codes
+    assert "draft.control_switch_case_match_missing" in codes
+
+
+def test_build_plan_from_composer_draft_lowers_if_control_to_execution_gate(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {
+                    "id": "source",
+                    "capabilityId": "json_transform",
+                    "taskName": "LoadData",
+                },
+                {
+                    "id": "gate",
+                    "taskName": "OnlyIfApproved",
+                    "nodeKind": "control",
+                    "controlKind": "if",
+                    "capabilityId": "studio.control.if",
+                    "controlConfig": {"expression": "context.approved == true"},
+                },
+                {
+                    "id": "target",
+                    "capabilityId": "json_transform",
+                    "taskName": "TransformData",
+                },
+            ],
+            "edges": [
+                {"fromNodeId": "source", "toNodeId": "gate"},
+                {"fromNodeId": "gate", "toNodeId": "target"},
+            ],
+        }
+    )
+
+    assert errors == []
+    assert plan is not None
+    assert [task.name for task in plan.tasks] == ["LoadData", "TransformData"]
+    assert plan.tasks[1].deps == ["LoadData"]
+    assert plan.tasks[1].tool_inputs[main.execution_contracts.EXECUTION_GATE_KEY] == {
+        "json_transform": {"expression": "context.approved == true"}
+    }
+
+
+def test_build_plan_from_composer_draft_lowers_if_else_to_branch_gates(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {"id": "source", "capabilityId": "json_transform", "taskName": "LoadData"},
+                {
+                    "id": "gate",
+                    "taskName": "ApprovalBranch",
+                    "nodeKind": "control",
+                    "controlKind": "if_else",
+                    "capabilityId": "studio.control.if_else",
+                    "controlConfig": {
+                        "expression": "context.approved == true",
+                        "trueLabel": "approved",
+                        "falseLabel": "rejected",
+                    },
+                },
+                {"id": "true-node", "capabilityId": "json_transform", "taskName": "ApprovedPath"},
+                {"id": "false-node", "capabilityId": "json_transform", "taskName": "RejectedPath"},
+                {"id": "join-node", "capabilityId": "json_transform", "taskName": "JoinedPath"},
+            ],
+            "edges": [
+                {"fromNodeId": "source", "toNodeId": "gate"},
+                {"fromNodeId": "gate", "toNodeId": "true-node", "branchLabel": "approved"},
+                {"fromNodeId": "gate", "toNodeId": "false-node", "branchLabel": "rejected"},
+                {"fromNodeId": "true-node", "toNodeId": "join-node"},
+                {"fromNodeId": "false-node", "toNodeId": "join-node"},
+            ],
+        }
+    )
+
+    assert errors == []
+    assert plan is not None
+    task_by_name = {task.name: task for task in plan.tasks}
+    assert task_by_name["ApprovedPath"].tool_inputs[main.execution_contracts.EXECUTION_GATE_KEY] == {
+        "json_transform": {"expression": "context.approved == true"}
+    }
+    assert task_by_name["RejectedPath"].tool_inputs[main.execution_contracts.EXECUTION_GATE_KEY] == {
+        "json_transform": {"expression": "context.approved == true", "negate": True}
+    }
+    assert main.execution_contracts.EXECUTION_GATE_KEY not in task_by_name["JoinedPath"].tool_inputs
+
+
+def test_build_plan_from_composer_draft_requires_if_else_branch_labels(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {
+                    "id": "gate",
+                    "taskName": "ApprovalBranch",
+                    "nodeKind": "control",
+                    "controlKind": "if_else",
+                    "capabilityId": "studio.control.if_else",
+                    "controlConfig": {
+                        "expression": "context.approved == true",
+                    },
+                },
+                {"id": "target", "capabilityId": "json_transform", "taskName": "TargetPath"},
+            ],
+            "edges": [
+                {"fromNodeId": "gate", "toNodeId": "target"},
+            ],
+        }
+    )
+
+    assert plan is None
+    codes = {entry["code"] for entry in errors}
+    assert "draft.control_if_else_true_branch_missing" in codes
+    assert "draft.control_if_else_false_branch_missing" in codes
+
+
+def test_build_plan_from_composer_draft_lowers_parallel_fan_out(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {"id": "source", "capabilityId": "json_transform", "taskName": "LoadData"},
+                {
+                    "id": "parallel",
+                    "taskName": "FanOut",
+                    "nodeKind": "control",
+                    "controlKind": "parallel",
+                    "capabilityId": "studio.control.parallel",
+                    "controlConfig": {"parallelMode": "fan_out"},
+                },
+                {"id": "left", "capabilityId": "json_transform", "taskName": "LeftBranch"},
+                {"id": "right", "capabilityId": "json_transform", "taskName": "RightBranch"},
+            ],
+            "edges": [
+                {"fromNodeId": "source", "toNodeId": "parallel"},
+                {"fromNodeId": "parallel", "toNodeId": "left"},
+                {"fromNodeId": "parallel", "toNodeId": "right"},
+            ],
+        }
+    )
+
+    assert errors == []
+    assert plan is not None
+    task_by_name = {task.name: task for task in plan.tasks}
+    assert task_by_name["LeftBranch"].deps == ["LoadData"]
+    assert task_by_name["RightBranch"].deps == ["LoadData"]
+
+
+def test_build_plan_from_composer_draft_lowers_parallel_fan_in(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {"id": "left", "capabilityId": "json_transform", "taskName": "LeftBranch"},
+                {"id": "right", "capabilityId": "json_transform", "taskName": "RightBranch"},
+                {
+                    "id": "parallel",
+                    "taskName": "JoinBranches",
+                    "nodeKind": "control",
+                    "controlKind": "parallel",
+                    "capabilityId": "studio.control.parallel",
+                    "controlConfig": {"parallelMode": "fan_in"},
+                },
+                {"id": "target", "capabilityId": "json_transform", "taskName": "AfterJoin"},
+            ],
+            "edges": [
+                {"fromNodeId": "left", "toNodeId": "parallel"},
+                {"fromNodeId": "right", "toNodeId": "parallel"},
+                {"fromNodeId": "parallel", "toNodeId": "target"},
+            ],
+        }
+    )
+
+    assert errors == []
+    assert plan is not None
+    task_by_name = {task.name: task for task in plan.tasks}
+    assert task_by_name["AfterJoin"].deps == ["LeftBranch", "RightBranch"]
+
+
+def test_build_plan_from_composer_draft_requires_parallel_fan_in_sources(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {"id": "left", "capabilityId": "json_transform", "taskName": "LeftBranch"},
+                {
+                    "id": "parallel",
+                    "taskName": "JoinBranches",
+                    "nodeKind": "control",
+                    "controlKind": "parallel",
+                    "capabilityId": "studio.control.parallel",
+                    "controlConfig": {"parallelMode": "fan_in"},
+                },
+                {"id": "target", "capabilityId": "json_transform", "taskName": "AfterJoin"},
+            ],
+            "edges": [
+                {"fromNodeId": "left", "toNodeId": "parallel"},
+                {"fromNodeId": "parallel", "toNodeId": "target"},
+            ],
+        }
+    )
+
+    assert plan is None
+    codes = {entry["code"] for entry in errors}
+    assert "draft.control_parallel_fan_in_sources_missing" in codes
+
+
 def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-ref-{uuid.uuid4()}",
         job_id="job-ref",
@@ -1759,7 +2405,7 @@ def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:
 
 
 def test_task_payload_from_record_resolves_validation_report_alias_reference() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-improve-{uuid.uuid4()}",
         job_id="job-ref",
@@ -1818,8 +2464,57 @@ def test_task_payload_from_record_resolves_validation_report_alias_reference() -
     assert resolved["validation_report"]["valid"] is True
 
 
+def test_task_payload_from_record_resolves_dotted_request_id_reference() -> None:
+    now = _utcnow()
+    record = TaskRecord(
+        id=f"task-validate-{uuid.uuid4()}",
+        job_id="job-ref",
+        plan_id="plan-ref",
+        name="Validate DocumentSpec",
+        description="Validate doc spec",
+        instruction="Validate",
+        acceptance_criteria=["validated"],
+        expected_output_schema_ref="schemas/validation_report",
+        status=models.TaskStatus.ready.value,
+        deps=["Generate DocumentSpec"],
+        attempts=0,
+        max_attempts=3,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        intent="validate",
+        tool_requests=["document_spec_validate"],
+        tool_inputs={
+            "document_spec_validate": {
+                "strict": True,
+                "document_spec": {
+                    "$from": "dependencies_by_name.Generate DocumentSpec.document.spec.generate.document_spec"
+                },
+            }
+        },
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+    context = {
+        "dependencies_by_name": {
+            "Generate DocumentSpec": {
+                "document.spec.generate": {
+                    "document_spec": {"blocks": [{"type": "paragraph", "text": "hello"}]}
+                }
+            }
+        },
+        "dependencies": {},
+    }
+
+    payload = main._task_payload_from_record(record, correlation_id="corr", context=context)
+    assert "tool_inputs_validation" not in payload
+    resolved = payload["tool_inputs"]["document_spec_validate"]
+    assert resolved["document_spec"]["blocks"][0]["text"] == "hello"
+
+
 def test_task_payload_from_record_resolves_output_path_alias_reference() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-render-{uuid.uuid4()}",
         job_id="job-ref",
@@ -1866,7 +2561,7 @@ def test_task_payload_from_record_resolves_output_path_alias_reference() -> None
 
 
 def test_task_payload_from_record_resolves_task_level_path_reference() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-render-{uuid.uuid4()}",
         job_id="job-ref",
@@ -1913,7 +2608,7 @@ def test_task_payload_from_record_resolves_task_level_path_reference() -> None:
 
 
 def test_task_payload_from_record_includes_intent_segment_profile() -> None:
-    now = datetime.utcnow()
+    now = _utcnow()
     record = TaskRecord(
         id=f"task-segment-{uuid.uuid4()}",
         job_id="job-ref",
@@ -1968,6 +2663,64 @@ def test_task_payload_from_record_includes_intent_segment_profile() -> None:
     assert payload["intent_confidence"] == 0.91
     assert payload["intent_segment"]["id"] == "s3"
     assert payload["intent_segment"]["slots"]["output_format"] == "pdf"
+    assert payload["trace_id"] == "corr"
+    parsed = main.execution_contracts.build_task_dispatch_payload(payload)
+    assert parsed.correlation_id == "corr"
+    assert parsed.trace_id == "corr"
+
+
+def test_task_payload_from_record_uses_typed_dispatch_contract() -> None:
+    now = _utcnow()
+    record = TaskRecord(
+        id=f"task-dispatch-{uuid.uuid4()}",
+        job_id="job-ref",
+        plan_id="plan-ref",
+        name="GenerateSpec",
+        description="Generate doc spec",
+        instruction="Generate",
+        acceptance_criteria=["done"],
+        expected_output_schema_ref="schemas/document_spec",
+        status=models.TaskStatus.ready.value,
+        deps=[],
+        attempts=0,
+        max_attempts=0,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        intent=None,
+        tool_requests=["document.spec.generate"],
+        tool_inputs=main.execution_contracts.embed_capability_bindings(
+            {"document.spec.generate": {"job": {"topic": "latency"}}},
+            {
+                "document.spec.generate": {
+                    "request_id": "document.spec.generate",
+                    "capability_id": "document.spec.generate",
+                    "tool_name": "document.spec.generate",
+                    "adapter_type": "capability",
+                }
+            },
+            request_ids=["document.spec.generate"],
+        ),
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+
+    payload = main._task_payload_from_record(record, correlation_id="corr", context={})
+
+    dispatch = main.execution_contracts.build_task_dispatch_payload(payload)
+    assert dispatch.task_id == record.id
+    assert dispatch.plan_id == "plan-ref"
+    assert dispatch.correlation_id == "corr"
+    assert dispatch.trace_id == "corr"
+    assert dispatch.attempts == 1
+    assert dispatch.max_attempts == 1
+    assert dispatch.tool_requests == ["document.spec.generate"]
+    assert main.execution_contracts.EXECUTION_BINDINGS_KEY not in payload["tool_inputs"]
+    assert dispatch.capability_bindings["document.spec.generate"].capability_id == (
+        "document.spec.generate"
+    )
+    assert dispatch.tool_inputs_resolved is True
 
 
 def test_plan_preflight_compiler_accepts_valid_dependency_chain() -> None:
@@ -2047,6 +2800,48 @@ def test_plan_preflight_compiler_flags_broken_reference_path() -> None:
     assert "input reference resolution failed" in errors["ReuseJson"]
 
 
+def test_plan_preflight_accepts_reference_path_with_dotted_tool_name() -> None:
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="github repo ref",
+        dag_edges=[["Verify repository exists", "Decide whether to proceed"]],
+        tasks=[
+            models.TaskCreate(
+                name="Verify repository exists",
+                description="Verify repository exists",
+                instruction="Check repo",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/github_repo_list_result",
+                intent=models.ToolIntent.validate,
+                deps=[],
+                tool_requests=["github.repo.list"],
+                tool_inputs={"github.repo.list": {"query": "repo:demo owner:octocat"}},
+                critic_required=False,
+            ),
+            models.TaskCreate(
+                name="Decide whether to proceed",
+                description="Decide whether to proceed",
+                instruction="Use repository check output",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/validation_report",
+                intent=models.ToolIntent.validate,
+                deps=["Verify repository exists"],
+                tool_requests=["json_transform"],
+                tool_inputs={
+                    "json_transform": {
+                        "input": {
+                            "$from": "dependencies_by_name.Verify repository exists.github.repo.list"
+                        }
+                    }
+                },
+                critic_required=False,
+            ),
+        ],
+    )
+    errors = main._compile_plan_preflight(plan, job_context={})
+    assert errors == {}
+
+
 def test_plan_preflight_ignores_non_matching_intent_segments_when_suggested_capabilities_present() -> None:
     plan = models.PlanCreate(
         planner_version="test",
@@ -2096,11 +2891,127 @@ def test_plan_preflight_ignores_non_matching_intent_segments_when_suggested_capa
     assert errors == {}
 
 
+def test_plan_preflight_uses_task_instruction_for_intent_segment_contract() -> None:
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="abort if missing",
+        dag_edges=[["VerifyRepoExists", "AbortIfRepoMissing"]],
+        tasks=[
+            models.TaskCreate(
+                name="VerifyRepoExists",
+                description="Verify repository exists",
+                instruction="Call github.repo.list to verify the repository exists.",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/github_repo_list_result",
+                intent=models.ToolIntent.validate,
+                deps=[],
+                tool_requests=["github.repo.list"],
+                tool_inputs={
+                    "github.repo.list": {
+                        "query": "repo:scientific-agent-lab owner:narendersurabhhi"
+                    }
+                },
+                critic_required=False,
+            ),
+            models.TaskCreate(
+                name="AbortIfRepoMissing",
+                description="Stop if repository missing",
+                instruction=(
+                    "Inspect the VerifyRepoExists output; if the repository is not found, "
+                    "mark the plan aborted and stop execution."
+                ),
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/validation_report",
+                intent=models.ToolIntent.generate,
+                deps=["VerifyRepoExists"],
+                tool_requests=["llm_generate"],
+                tool_inputs={},
+                critic_required=True,
+            ),
+        ],
+    )
+    goal_intent_graph = {
+        "segments": [
+            {
+                "id": "s1",
+                "intent": "generate",
+                "objective": "Stop if repository missing",
+                "required_inputs": ["instruction"],
+                "suggested_capabilities": ["llm.text.generate"],
+                "slots": {
+                    "entity": "repository",
+                    "artifact_type": "validation_report",
+                    "output_format": "txt",
+                    "risk_level": "read_only",
+                    "must_have_inputs": ["instruction"],
+                },
+            }
+        ]
+    }
+
+    errors = main._compile_plan_preflight(
+        plan,
+        job_context={},
+        goal_intent_graph=goal_intent_graph,
+    )
+    assert errors == {}
+
+
+def test_plan_preflight_uses_synthesized_github_query_for_intent_segment_contract() -> None:
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="repo check",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="CheckRepoExists",
+                description="Verify repository exists",
+                instruction="Call github.repo.list to verify the repository exists.",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/github_repo_list_result",
+                intent=models.ToolIntent.validate,
+                deps=[],
+                tool_requests=["github.repo.list"],
+                tool_inputs={"github.repo.list": {}},
+                critic_required=False,
+            )
+        ],
+    )
+    goal_intent_graph = {
+        "segments": [
+            {
+                "id": "s1",
+                "intent": "validate",
+                "objective": "Verify repository exists",
+                "required_inputs": ["query"],
+                "suggested_capabilities": ["github.repo.list"],
+                "slots": {
+                    "entity": "repository",
+                    "artifact_type": "validation_report",
+                    "output_format": None,
+                    "risk_level": "read_only",
+                    "must_have_inputs": ["query"],
+                },
+            }
+        ]
+    }
+
+    errors = main._compile_plan_preflight(
+        plan,
+        job_context={
+            "repo_owner": "narendersurabhi",
+            "repo_name": "scientific-agent-lab",
+        },
+        goal_intent_graph=goal_intent_graph,
+    )
+    assert errors == {}
+
+
 def test_retry_task_from_dlq_resets_task_and_deletes_stream_entry(monkeypatch):
     job_id = f"job-retry-task-{uuid.uuid4()}"
     plan_id = f"plan-retry-task-{uuid.uuid4()}"
     task_id = f"task-retry-task-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(
@@ -2189,7 +3100,7 @@ def test_retry_task_from_dlq_requires_failed_status():
     job_id = f"job-retry-task-state-{uuid.uuid4()}"
     plan_id = f"plan-retry-task-state-{uuid.uuid4()}"
     task_id = f"task-retry-task-state-{uuid.uuid4()}"
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         db.add(
             JobRecord(

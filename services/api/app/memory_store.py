@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 import uuid
 from typing import Optional
 
@@ -20,7 +20,7 @@ def write_memory(db: Session, request: models.MemoryWrite) -> models.MemoryEntry
         raise ValueError("scope_mismatch")
     _validate_scope_requirements(scope, request.job_id, request.user_id, request.project_id)
     ttl_seconds = request.ttl_seconds if request.ttl_seconds is not None else spec.ttl_seconds
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     expires_at = now + timedelta(seconds=ttl_seconds) if ttl_seconds else None
 
     record = _find_existing(
@@ -82,11 +82,47 @@ def read_memory(db: Session, query: models.MemoryQuery) -> list[models.MemoryEnt
     if query.project_id:
         q = q.filter(MemoryRecord.project_id == query.project_id)
     if not query.include_expired:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         q = q.filter((MemoryRecord.expires_at.is_(None)) | (MemoryRecord.expires_at > now))
     limit = max(1, min(query.limit or 50, 200))
     records = q.order_by(MemoryRecord.updated_at.desc()).limit(limit).all()
     return [_to_entry(record) for record in records]
+
+
+def list_memory_specs() -> list[models.MemorySpec]:
+    return MEMORY_REGISTRY.list()
+
+
+def delete_memory(
+    db: Session,
+    *,
+    name: str,
+    scope: models.MemoryScope | None = None,
+    key: str | None = None,
+    job_id: str | None = None,
+    user_id: str | None = None,
+    project_id: str | None = None,
+) -> models.MemoryEntry:
+    spec = _resolve_spec(name)
+    resolved_scope = scope or spec.scope
+    if scope and scope != spec.scope:
+        raise ValueError("scope_mismatch")
+    _validate_scope_requirements(resolved_scope, job_id, user_id, project_id)
+    record = _find_existing(
+        db=db,
+        name=spec.name,
+        scope=resolved_scope,
+        key=key,
+        job_id=job_id,
+        user_id=user_id,
+        project_id=project_id,
+    )
+    if record is None:
+        raise KeyError("memory_not_found")
+    entry = _to_entry(record)
+    db.delete(record)
+    db.commit()
+    return entry
 
 
 def _resolve_spec(name: str) -> models.MemorySpec:

@@ -71,7 +71,15 @@ def test_decompose_goal_intent_handles_empty_goal() -> None:
     assert graph["summary"]["schema_version"] == "intent_v2"
 
 
-def test_validate_intent_segment_contract_requires_must_have_inputs() -> None:
+def test_decompose_goal_intent_render_segment_does_not_insert_derive_step() -> None:
+    graph = intent_contract.decompose_goal_intent("Render a PDF status report.")
+    segments = graph["segments"]
+    assert len(segments) == 1
+    assert segments[0]["intent"] == "render"
+    assert segments[0]["suggested_capabilities"] == ["document.pdf.generate"]
+
+
+def test_validate_intent_segment_contract_allows_renderer_without_explicit_path() -> None:
     segment = {
         "intent": "render",
         "objective": "Render final PDF",
@@ -92,7 +100,7 @@ def test_validate_intent_segment_contract_requires_must_have_inputs() -> None:
         capability_id="document.pdf.generate",
         capability_risk_tier="bounded_write",
     )
-    assert mismatch == "must_have_inputs_missing:path"
+    assert mismatch is None
 
 
 def test_validate_intent_segment_contract_accepts_output_path_for_path_requirement() -> None:
@@ -142,6 +150,30 @@ def test_validate_intent_segment_contract_checks_output_format_hint() -> None:
     assert mismatch == "output_format_mismatch:document.docx.generate:expected=pdf:got=docx"
 
 
+def test_validate_intent_segment_contract_treats_renderer_hint_as_output_format_input() -> None:
+    segment = {
+        "intent": "render",
+        "objective": "Render final DOCX",
+        "required_inputs": ["input_data", "path_or_format"],
+        "slots": {
+            "entity": "report",
+            "artifact_type": "document",
+            "output_format": "docx",
+            "risk_level": "bounded_write",
+            "must_have_inputs": ["document_spec", "output_format"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="render",
+        tool_name="docx_generate_from_spec",
+        payload={"document_spec": {"blocks": []}},
+        capability_id="document.docx.generate",
+        capability_risk_tier="bounded_write",
+    )
+    assert mismatch is None
+
+
 def test_validate_intent_segment_contract_allows_io_segment_for_transform_task() -> None:
     segment = {
         "intent": "io",
@@ -187,6 +219,261 @@ def test_validate_intent_segment_contract_allows_io_segment_for_validate_task() 
         tool_name="document_spec_validate",
         payload={"document_spec": {"blocks": []}},
         capability_id="document.spec.validate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_allows_placeholder_document_spec_mapping() -> None:
+    segment = {
+        "intent": "validate",
+        "objective": "Validate document spec",
+        "slots": {
+            "entity": "artifact",
+            "artifact_type": "document",
+            "output_format": "docx",
+            "risk_level": "read_only",
+            "must_have_inputs": ["document_spec"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="validate",
+        tool_name="document_spec_validate",
+        payload={"document_spec": {}},
+        capability_id="document.spec.validate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_treats_document_spec_as_input_data() -> None:
+    segment = {
+        "intent": "validate",
+        "objective": "Validate document spec",
+        "required_inputs": ["input_data", "acceptance_criteria_or_schema"],
+        "suggested_capabilities": ["document.spec.validate"],
+        "slots": {
+            "entity": "document_spec",
+            "artifact_type": "validation_report",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["input_data"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="validate",
+        tool_name="document_spec_validate",
+        payload={"document_spec": {}},
+        capability_id="document.spec.validate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_allows_derive_output_without_document_spec() -> None:
+    segment = {
+        "intent": "transform",
+        "objective": "Derive output path",
+        "slots": {
+            "entity": "artifact",
+            "artifact_type": "document",
+            "output_format": "docx",
+            "risk_level": "read_only",
+            "must_have_inputs": ["document_spec", "output_extension"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="transform",
+        tool_name="derive_output_path",
+        payload={"topic": "active inference", "output_dir": "documents", "output_extension": "docx"},
+        capability_id="document.output.derive",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_accepts_filename_aliases_from_payload() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Generate document spec",
+        "slots": {
+            "entity": "document",
+            "artifact_type": "document_spec",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["filename"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="llm_generate_document_spec",
+        payload={"output_path": "documents/platform_engineer_resume.docx"},
+        capability_id="document.spec.generate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_accepts_title_alias_from_explicit_payload() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Generate document spec",
+        "slots": {
+            "entity": "document",
+            "artifact_type": "document_spec",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["title"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="llm_generate_document_spec",
+        payload={"target_role_name": "Platform Engineer"},
+        capability_id="document.spec.generate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_does_not_accept_generate_title_from_job_context() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Generate document spec",
+        "slots": {
+            "entity": "document",
+            "artifact_type": "document_spec",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["title"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="llm_generate_document_spec",
+        payload={"job": {"context_json": {"target_role_name": "Platform Engineer"}}},
+        capability_id="document.spec.generate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch == "must_have_inputs_missing:title"
+
+
+def test_validate_intent_segment_contract_accepts_target_repo_alias_from_query() -> None:
+    segment = {
+        "intent": "io",
+        "objective": "Verify repository exists on GitHub",
+        "slots": {
+            "entity": "repository",
+            "artifact_type": "content",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["target_repo"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="io",
+        tool_name="github.repo.list",
+        payload={"query": "repo:owner/demo owner:owner"},
+        capability_id="github.repo.list",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_accepts_repo_full_name_from_owner_and_repo() -> None:
+    segment = {
+        "intent": "io",
+        "objective": "Verify repository accessibility",
+        "slots": {
+            "entity": "repository",
+            "artifact_type": "validation_report",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["repo_full_name"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="io",
+        tool_name="github.repo.list",
+        payload={"owner": "narendersurabhi", "repo": "scientific-agent-lab"},
+        capability_id="github.repo.list",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_accepts_repo_full_name_from_query() -> None:
+    segment = {
+        "intent": "io",
+        "objective": "Verify repository accessibility",
+        "slots": {
+            "entity": "repository",
+            "artifact_type": "validation_report",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["repo_full_name"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="io",
+        tool_name="github.repo.list",
+        payload={"query": "repo:scientific-agent-lab owner:narendersurabhi"},
+        capability_id="github.repo.list",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_accepts_title_alias_from_topic() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Generate document spec",
+        "slots": {
+            "entity": "document",
+            "artifact_type": "document_spec",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["title"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="llm_generate_document_spec",
+        payload={"topic": "active inference"},
+        capability_id="document.spec.generate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_accepts_length_with_instruction() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Generate document spec",
+        "slots": {
+            "entity": "document",
+            "artifact_type": "document_spec",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["length"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="llm_generate_document_spec",
+        payload={"instruction": "Generate a concise one-page resume style document spec."},
+        capability_id="document.spec.generate",
         capability_risk_tier="read_only",
     )
     assert mismatch is None

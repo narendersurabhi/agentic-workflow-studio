@@ -93,7 +93,7 @@ def resolve_tool_payload(
             has_tool_inputs = True
     payload = _merge_payload_from_task(payload, task_payload, instruction)
     payload = _fill_payload_from_context(payload, context)
-    payload = _promote_document_job_fields(payload)
+    payload = _promote_document_job_fields(payload, tool_name=tool_name)
     if tool_name == "llm_generate":
         base_text = payload.get("text") or payload.get("prompt") or instruction
         if context:
@@ -163,6 +163,7 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
         # can succeed before worker-side memory hydration.
         for key in (
             "instruction",
+            "markdown_text",
             "topic",
             "audience",
             "tone",
@@ -217,7 +218,11 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
     return filled
 
 
-def _promote_document_job_fields(payload: dict[str, Any]) -> dict[str, Any]:
+def _promote_document_job_fields(
+    payload: dict[str, Any], *, tool_name: str | None = None
+) -> dict[str, Any]:
+    if tool_name == "llm_generate_document_spec":
+        return dict(payload)
     promoted = dict(payload)
     job = promoted.get("job")
     if not isinstance(job, dict):
@@ -341,9 +346,16 @@ def _candidate_reference_paths(path_spec: Any, context: dict[str, Any]) -> list[
 
 def _walk_path(root: Any, segments: list[Any]) -> Any:
     current = root
-    for segment in segments:
+    index = 0
+    while index < len(segments):
+        segment = segments[index]
         if isinstance(current, dict):
             if segment not in current:
+                dotted_value, next_index = _consume_dotted_dict_key(current, segments, index)
+                if next_index is not None:
+                    current = dotted_value
+                    index = next_index
+                    continue
                 # Backward compatibility:
                 # Some plans reference
                 # "...document_spec_validate.validation_report"
@@ -376,6 +388,7 @@ def _walk_path(root: Any, segments: list[Any]) -> Any:
                 else:
                     raise ToolInputReferenceError(f"missing key '{segment}'")
             current = current[segment]
+            index += 1
             continue
         if isinstance(current, list):
             try:
@@ -387,11 +400,27 @@ def _walk_path(root: Any, segments: list[Any]) -> Any:
             if index < 0 or index >= len(current):
                 raise ToolInputReferenceError(f"list index '{index}' out of range")
             current = current[index]
+            index += 1
             continue
         raise ToolInputReferenceError(
             f"cannot traverse segment '{segment}' on non-container value"
         )
     return current
+
+
+def _consume_dotted_dict_key(
+    current: dict[str, Any],
+    segments: list[Any],
+    start_index: int,
+) -> tuple[Any, int | None]:
+    if not isinstance(current, dict):
+        return None, None
+    max_end = len(segments)
+    for end_index in range(max_end, start_index, -1):
+        candidate = ".".join(str(part) for part in segments[start_index:end_index])
+        if candidate in current:
+            return current[candidate], end_index
+    return None, None
 
 
 def _is_validation_report_dict(value: Any) -> bool:
