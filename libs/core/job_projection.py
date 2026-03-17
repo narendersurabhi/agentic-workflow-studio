@@ -41,8 +41,6 @@ _DOCUMENT_GENERATION_INPUT_KEYS = (
     "topic",
     "audience",
     "tone",
-    "today",
-    "output_dir",
     "document_type",
     "target_role_name",
     "role_name",

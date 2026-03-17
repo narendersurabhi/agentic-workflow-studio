@@ -6392,6 +6392,39 @@ def read_memory(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/memory/specs", response_model=List[models.MemorySpec])
+def list_memory_specs() -> List[models.MemorySpec]:
+    return memory_store.list_memory_specs()
+
+
+@app.delete("/memory/delete", response_model=models.MemoryEntry)
+def delete_memory(
+    name: str = Query(...),
+    scope: models.MemoryScope | None = Query(None),
+    key: str | None = Query(None),
+    job_id: str | None = Query(None),
+    user_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> models.MemoryEntry:
+    try:
+        return memory_store.delete_memory(
+            db,
+            name=name,
+            scope=scope,
+            key=key,
+            job_id=job_id,
+            user_id=user_id,
+            project_id=project_id,
+        )
+    except KeyError as exc:
+        detail = str(exc)
+        status_code = 404 if "memory_not_found" in detail or "unknown_memory" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/memory/semantic/write")
 def write_semantic_memory(
     payload: dict[str, Any],

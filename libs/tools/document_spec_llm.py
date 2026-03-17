@@ -29,8 +29,6 @@ _DOCUMENT_SPEC_REQUIRED_INPUTS = (
     "topic",
     "audience",
     "tone",
-    "today",
-    "output_dir",
 )
 
 _DOCUMENT_SPEC_MARKDOWN_REQUIRED_INPUTS = ("markdown_text",)
@@ -126,7 +124,7 @@ def register_document_spec_llm_tools(
                 description="Generate a DocumentSpec JSON using an LLM",
                 usage_guidance=(
                     "Provide explicit fields "
-                    "(instruction, topic, audience, tone, today, output_dir), "
+                    "(instruction, topic, audience, tone), "
                     "plus optional allowed_block_types. Returns a document_spec object."
                 ),
                 input_schema={
@@ -136,8 +134,6 @@ def register_document_spec_llm_tools(
                         "topic": {"type": "string", "minLength": 1},
                         "audience": {"type": "string", "minLength": 1},
                         "tone": {"type": "string", "minLength": 1},
-                        "today": {"type": "string", "minLength": 4},
-                        "output_dir": {"type": "string", "minLength": 1},
                         "allowed_block_types": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": list(_DOCUMENT_SPEC_REQUIRED_INPUTS),
@@ -238,7 +234,7 @@ def llm_generate_document_spec(
     if "job" in payload:
         raise ToolExecutionError(
             "job is not supported for llm_generate_document_spec; "
-            "provide explicit fields: instruction, topic, audience, tone, today, output_dir"
+            "provide explicit fields: instruction, topic, audience, tone"
         )
     allowed = _resolve_allowed_block_types(payload.get("allowed_block_types"))
     explicit_inputs = _compact_document_spec_inputs(payload)

@@ -158,8 +158,6 @@ def test_ensure_job_inputs_projects_explicit_document_generation_fields() -> Non
     job.context_json = {
         "topic": "Demo",
         "tone": "neutral",
-        "today": "2026-03-16",
-        "output_dir": "documents",
         "unrelated_blob": {"huge": "payload"},
     }
     job.metadata = {"llm_provider": "openai"}
@@ -180,10 +178,8 @@ def test_ensure_job_inputs_projects_explicit_document_generation_fields() -> Non
                         "instruction": {"type": "string"},
                         "topic": {"type": "string"},
                         "tone": {"type": "string"},
-                        "today": {"type": "string"},
-                        "output_dir": {"type": "string"},
                     },
-                    "required": ["instruction", "topic", "tone", "today", "output_dir"],
+                    "required": ["instruction", "topic", "tone"],
                 },
             )
         ],
@@ -193,8 +189,6 @@ def test_ensure_job_inputs_projects_explicit_document_generation_fields() -> Non
         "instruction": "Convert markdown to DOCX",
         "topic": "Demo",
         "tone": "neutral",
-        "today": "2026-03-16",
-        "output_dir": "documents",
     }
 
 

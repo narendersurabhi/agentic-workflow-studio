@@ -74,8 +74,6 @@ def test_project_document_generation_inputs_flattens_job_payload_into_explicit_f
         "topic": "markdown to docx",
         "audience": "general",
         "tone": "practical",
-        "today": "2026-03-16",
-        "output_dir": "documents",
         "target_role_name": "Platform Engineer",
     }
 

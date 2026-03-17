@@ -470,6 +470,57 @@ def test_create_plan_persists_task_intent_profiles_and_surfaces_on_tasks():
     assert isinstance(tasks[0]["intent_confidence"], (int, float))
 
 
+def test_memory_specs_endpoint_lists_user_scoped_specs() -> None:
+    response = client.get("/memory/specs")
+    assert response.status_code == 200
+    specs = response.json()
+    names = {entry["name"] for entry in specs}
+    assert "user_profile" in names
+    assert "semantic_memory" in names
+
+
+def test_delete_user_memory_entry() -> None:
+    write_response = client.post(
+        "/memory/write",
+        json={
+            "name": "user_profile",
+            "scope": "user",
+            "user_id": "demo-user",
+            "key": "preferences",
+            "payload": {"theme": "light"},
+            "metadata": {"source": "test"},
+        },
+    )
+    assert write_response.status_code == 200
+
+    delete_response = client.delete(
+        "/memory/delete",
+        params={
+            "name": "user_profile",
+            "scope": "user",
+            "user_id": "demo-user",
+            "key": "preferences",
+        },
+    )
+    assert delete_response.status_code == 200
+    deleted = delete_response.json()
+    assert deleted["name"] == "user_profile"
+    assert deleted["user_id"] == "demo-user"
+    assert deleted["key"] == "preferences"
+
+    read_response = client.get(
+        "/memory/read",
+        params={
+            "name": "user_profile",
+            "scope": "user",
+            "user_id": "demo-user",
+            "key": "preferences",
+        },
+    )
+    assert read_response.status_code == 200
+    assert read_response.json() == []
+
+
 def test_create_job_persists_goal_intent_graph():
     response = client.post(
         "/jobs",

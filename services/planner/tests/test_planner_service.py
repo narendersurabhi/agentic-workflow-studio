@@ -160,8 +160,6 @@ def test_build_validation_payload_projects_explicit_document_generation_fields()
             "topic": "Demo",
             "audience": "General",
             "tone": "neutral",
-            "today": "2026-03-16",
-            "output_dir": "documents",
         },
         job_payload={
             "goal": "Convert markdown to DOCX",
@@ -171,8 +169,6 @@ def test_build_validation_payload_projects_explicit_document_generation_fields()
                 "markdown_text": "# Heading\n\nParagraph",
                 "topic": "Demo",
                 "tone": "neutral",
-                "today": "2026-03-16",
-                "output_dir": "documents",
                 "unrelated_blob": {"huge": "payload"},
             },
         },
@@ -199,10 +195,8 @@ def test_build_validation_payload_projects_explicit_document_generation_fields()
                 "topic": {"type": "string"},
                 "audience": {"type": "string"},
                 "tone": {"type": "string"},
-                "today": {"type": "string"},
-                "output_dir": {"type": "string"},
             },
-            "required": ["instruction", "topic", "audience", "tone", "today", "output_dir"],
+            "required": ["instruction", "topic", "audience", "tone"],
         },
         output_schema={"type": "object"},
         tool_intent=models.ToolIntent.generate,
@@ -219,8 +213,6 @@ def test_build_validation_payload_projects_explicit_document_generation_fields()
     assert payload["topic"] == "Demo"
     assert payload["audience"] == "General"
     assert payload["tone"] == "neutral"
-    assert payload["today"] == "2026-03-16"
-    assert payload["output_dir"] == "documents"
 
 
 def test_build_validation_payload_projects_markdown_document_generation_fields() -> None:

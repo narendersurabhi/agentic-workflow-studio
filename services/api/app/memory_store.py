@@ -89,6 +89,42 @@ def read_memory(db: Session, query: models.MemoryQuery) -> list[models.MemoryEnt
     return [_to_entry(record) for record in records]
 
 
+def list_memory_specs() -> list[models.MemorySpec]:
+    return MEMORY_REGISTRY.list()
+
+
+def delete_memory(
+    db: Session,
+    *,
+    name: str,
+    scope: models.MemoryScope | None = None,
+    key: str | None = None,
+    job_id: str | None = None,
+    user_id: str | None = None,
+    project_id: str | None = None,
+) -> models.MemoryEntry:
+    spec = _resolve_spec(name)
+    resolved_scope = scope or spec.scope
+    if scope and scope != spec.scope:
+        raise ValueError("scope_mismatch")
+    _validate_scope_requirements(resolved_scope, job_id, user_id, project_id)
+    record = _find_existing(
+        db=db,
+        name=spec.name,
+        scope=resolved_scope,
+        key=key,
+        job_id=job_id,
+        user_id=user_id,
+        project_id=project_id,
+    )
+    if record is None:
+        raise KeyError("memory_not_found")
+    entry = _to_entry(record)
+    db.delete(record)
+    db.commit()
+    return entry
+
+
 def _resolve_spec(name: str) -> models.MemorySpec:
     if not MEMORY_REGISTRY.has(name):
         raise KeyError(f"unknown_memory:{name}")

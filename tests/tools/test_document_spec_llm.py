@@ -44,8 +44,6 @@ def test_project_document_generation_inputs_excludes_markdown_source() -> None:
         "topic": "markdown to docx",
         "audience": "general",
         "tone": "practical",
-        "today": "2026-03-14",
-        "output_dir": "documents",
     }
 
 
@@ -120,8 +118,6 @@ def test_llm_generate_document_spec_uses_explicit_fields_only() -> None:
             "topic": "Quarterly report",
             "audience": "executives",
             "tone": "neutral",
-            "today": "2026-03-16",
-            "output_dir": "documents",
         },
         _ProviderStub(),
         sanitize_document_spec=lambda value: value,

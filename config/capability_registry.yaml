@@ -681,7 +681,7 @@ capabilities:
         arg_map: {}
         enabled: true
   - id: document.spec.generate
-    description: Generate a DocumentSpec from instruction/topic/audience/tone/date/output_dir using the LLM.
+    description: Generate a DocumentSpec from instruction/topic/audience/tone using the LLM.
     risk_tier: read_only
     idempotency: read
     group: documents

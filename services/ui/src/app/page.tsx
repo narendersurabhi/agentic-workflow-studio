@@ -1,8 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, memo, useEffect, useMemo, useRef, useState } from "react";
 import ComposerDagCanvas from "./components/composer/ComposerDagCanvas";
+import ScreenHeader, {
+  screenHeaderPrimaryActionClassName,
+  screenHeaderSecondaryActionClassName
+} from "./components/ScreenHeader";
 import ComposerStepInspector from "./components/composer/ComposerStepInspector";
 import ComposerValidationPanel from "./components/composer/ComposerValidationPanel";
 
@@ -1976,7 +1981,16 @@ const buildDagLayout = (tasks: Task[]): DagLayout => {
   };
 };
 
-export default function Home() {
+type WorkspaceScreen = "home" | "compose" | "chat";
+
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const screenParam = searchParams.get("screen");
+  const initialScreen: WorkspaceScreen =
+    screenParam === "compose" || screenParam === "chat" ? screenParam : "home";
+  const showWelcomeScreen = initialScreen === "home";
+  const showComposeScreen = initialScreen === "compose";
+  const showChatScreen = initialScreen === "chat";
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState("{}");
   const [showRawContextPreview, setShowRawContextPreview] = useState(false);
@@ -6532,6 +6546,74 @@ const openTemplateModal = (template: Template) => {
     }
   };
 
+  if (showWelcomeScreen) {
+    return (
+      <main className="relative">
+        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
+        <div className="pointer-events-none absolute top-48 -left-16 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl animate-float-soft" />
+        <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+          <ScreenHeader
+            eyebrow="Agentic Planner Executor"
+            title="Welcome"
+            description="Choose the surface you want to work in. Compose, Chat, and Workflow Studio now open as dedicated screens."
+            activeScreen="home"
+          >
+            <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-4">
+                <Link
+                  href="/compose"
+                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-200">Compose</div>
+                  <h2 className="mt-4 font-display text-2xl text-white">Build a job from structured inputs.</h2>
+                  <p className="mt-3 text-sm text-slate-200">
+                    Fill in goal, context, templates, and intent details before submitting a workflow.
+                  </p>
+                  <div className="mt-6 text-sm font-semibold text-white">Open Compose</div>
+                </Link>
+                <Link
+                  href="/chat"
+                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-200">Chat</div>
+                  <h2 className="mt-4 font-display text-2xl text-white">Talk to the operator.</h2>
+                  <p className="mt-3 text-sm text-slate-200">
+                    Stay conversational until a tool call or workflow is actually needed.
+                  </p>
+                  <div className="mt-6 text-sm font-semibold text-white">Open Chat</div>
+                </Link>
+                <Link
+                  href="/studio"
+                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-200">
+                    Workflow Studio
+                  </div>
+                  <h2 className="mt-4 font-display text-2xl text-white">Author DAGs visually.</h2>
+                  <p className="mt-3 text-sm text-slate-200">
+                    Build explicit flow graphs with capabilities, control nodes, and compile preview.
+                  </p>
+                  <div className="mt-6 text-sm font-semibold text-white">Open Studio</div>
+                </Link>
+                <Link
+                  href="/memory"
+                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-fuchsia-200">
+                    Memory
+                  </div>
+                  <h2 className="mt-4 font-display text-2xl text-white">Manage global user memory.</h2>
+                  <p className="mt-3 text-sm text-slate-200">
+                    Inspect and edit user-scoped memory entries like profile data and semantic facts.
+                  </p>
+                  <div className="mt-6 text-sm font-semibold text-white">Open Memory</div>
+                </Link>
+            </div>
+          </ScreenHeader>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
       <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
@@ -8099,34 +8181,50 @@ const openTemplateModal = (template: Template) => {
           marginRight: isDesktop && capabilitySidebarOpen ? sidebarLayout.right : 0
         }}
       >
-
-        <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-8 text-white shadow-2xl animate-fade-up">
-          <div className="pointer-events-none absolute -right-24 -top-20 h-64 w-64 rounded-full bg-emerald-400/20 blur-3xl animate-float-soft" />
-          <div className="pointer-events-none absolute -bottom-16 left-10 h-52 w-52 rounded-full bg-sky-300/30 blur-3xl animate-float-soft" />
-          <div className="relative">
-            <div className="flex flex-wrap items-end justify-between gap-4">
-              <div>
-                <h1 className="font-display text-3xl tracking-tight md:text-4xl">
-                  Agentic Planner Executor
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm text-slate-200">
-                  Craft a goal, drop in context, and let the system orchestrate the plan. Save your
-                  favorite prompt setups as templates for instant reuse.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <Link
-                  href="/studio"
-                  className="rounded-full border border-white/30 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-900 transition hover:bg-slate-100"
+        <ScreenHeader
+          eyebrow="Agentic Planner Executor"
+          title={showComposeScreen ? "Compose Workflow Jobs" : "Chat Operator"}
+          description={
+            showComposeScreen
+              ? "Craft a goal, attach context, validate the chain, and submit a workflow without leaving the screen."
+              : "Stay conversational until the operator needs a tool call or workflow, then track the resulting jobs in the same workspace."
+          }
+          activeScreen={showComposeScreen ? "compose" : "chat"}
+          actions={
+            <>
+              {showComposeScreen ? (
+                <>
+                  <button
+                    className={screenHeaderSecondaryActionClassName}
+                    onClick={() => analyzeIntentGraph(goal)}
+                    disabled={!goal.trim() || intentGraphLoading}
+                  >
+                    {intentGraphLoading ? "Analyzing..." : "Analyze Intent"}
+                  </button>
+                  <button
+                    className={screenHeaderPrimaryActionClassName}
+                    onClick={submitJob}
+                    disabled={isSubmitDisabled}
+                    title={submitDisabledReason || ""}
+                  >
+                    {jobSubmitLoading ? "Submitting..." : "Submit Job"}
+                  </button>
+                </>
+              ) : null}
+              {showChatScreen ? (
+                <button
+                  className={screenHeaderSecondaryActionClassName}
+                  onClick={resetChatSession}
+                  disabled={chatLoading}
                 >
-                  Workflow Studio
-                </Link>
-                <div className="rounded-full border border-white/30 bg-white/10 px-4 py-2 text-xs uppercase tracking-[0.25em] text-slate-200">
-                  Compose
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                  New Chat
+                </button>
+              ) : null}
+            </>
+          }
+        >
+            <div className={`mt-6 grid gap-6 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
+              {showComposeScreen ? (
               <div className="rounded-2xl bg-white/95 p-6 text-slate-900 shadow-lg ring-1 ring-white/30">
                 <div className="flex items-center justify-between">
                   <h2 className="font-display text-xl">Compose Job</h2>
@@ -8798,21 +8896,14 @@ const openTemplateModal = (template: Template) => {
                   ) : null}
                 </div>
               </div>
+              ) : null}
+              {showChatScreen ? (
               <div className="rounded-2xl bg-slate-950/90 p-6 text-white shadow-lg ring-1 ring-white/10">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="font-display text-xl">Chat Operator</h2>
-                    <p className="mt-1 text-xs text-slate-300">
-                      Chat submits normal jobs through the existing planner and worker pipeline.
-                    </p>
-                  </div>
-                  <button
-                    className="rounded-full border border-white/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/40 disabled:opacity-40"
-                    onClick={resetChatSession}
-                    disabled={chatLoading}
-                  >
-                    New chat
-                  </button>
+                <div>
+                  <h2 className="font-display text-xl">Chat Operator</h2>
+                  <p className="mt-1 text-xs text-slate-300">
+                    Chat submits normal jobs through the existing planner and worker pipeline.
+                  </p>
                 </div>
                 <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
                   <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
@@ -8919,9 +9010,9 @@ const openTemplateModal = (template: Template) => {
                   </div>
                 </div>
               </div>
+              ) : null}
             </div>
-          </div>
-        </section>
+        </ScreenHeader>
         <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm animate-fade-up-delayed">
         <div className="flex items-center justify-between gap-4">
           <div>
@@ -10249,5 +10340,13 @@ const openTemplateModal = (template: Template) => {
       </section>
       </div>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-slate-50" />}>
+      <HomeContent />
+    </Suspense>
   );
 }

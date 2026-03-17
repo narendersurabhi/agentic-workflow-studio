@@ -456,29 +456,6 @@ def test_validate_intent_segment_contract_accepts_title_alias_from_topic() -> No
     assert mismatch is None
 
 
-def test_validate_intent_segment_contract_accepts_date_alias_from_today() -> None:
-    segment = {
-        "intent": "generate",
-        "objective": "Generate document spec",
-        "slots": {
-            "entity": "document",
-            "artifact_type": "document_spec",
-            "output_format": None,
-            "risk_level": "read_only",
-            "must_have_inputs": ["date"],
-        },
-    }
-    mismatch = intent_contract.validate_intent_segment_contract(
-        segment=segment,
-        task_intent="generate",
-        tool_name="llm_generate_document_spec",
-        payload={"today": "2026-03-08"},
-        capability_id="document.spec.generate",
-        capability_risk_tier="read_only",
-    )
-    assert mismatch is None
-
-
 def test_validate_intent_segment_contract_accepts_length_with_instruction() -> None:
     segment = {
         "intent": "generate",

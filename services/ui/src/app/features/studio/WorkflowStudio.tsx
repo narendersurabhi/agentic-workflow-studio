@@ -1,10 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import ComposerDagCanvas from "../../components/composer/ComposerDagCanvas";
 import ComposerValidationPanel from "../../components/composer/ComposerValidationPanel";
+import ScreenHeader, {
+  screenHeaderPrimaryActionClassName,
+  screenHeaderSecondaryActionClassName
+} from "../../components/ScreenHeader";
 import StudioCapabilityPalette from "./StudioCapabilityPalette";
 import StudioCompilePanel from "./StudioCompilePanel";
 import StudioNodeInspector from "./StudioNodeInspector";
@@ -2021,32 +2024,15 @@ export default function WorkflowStudio() {
 
   return (
     <div className="space-y-6">
-      <section className="relative overflow-hidden rounded-[36px] bg-gradient-to-br from-stone-950 via-slate-900 to-sky-950 px-8 py-8 text-white shadow-2xl">
-        <div className="pointer-events-none absolute -left-14 top-8 h-44 w-44 rounded-full bg-amber-300/20 blur-3xl" />
-        <div className="pointer-events-none absolute -right-12 bottom-0 h-56 w-56 rounded-full bg-sky-400/25 blur-3xl" />
-        <div className="relative flex flex-wrap items-start justify-between gap-6">
-          <div className="max-w-3xl">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-200">
-              Workflow Studio
-            </div>
-            <h1 className="mt-2 font-display text-4xl tracking-tight md:text-5xl">
-              Design DAGs before you run them.
-            </h1>
-            <p className="mt-3 text-sm leading-6 text-slate-200 md:text-base">
-              This surface is the first dedicated studio route: capability palette on the left,
-              graph canvas in the middle, step inspector and compile preview on the right. It compiles
-              through the existing composer and plan preflight endpoints instead of inventing a second runtime.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/"
-              className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
-            >
-              Back to Compose
-            </Link>
+      <ScreenHeader
+        eyebrow="Workflow Studio"
+        title="Design DAGs before you run them."
+        description="Build visual workflows with a capability palette on the left, graph canvas in the middle, and node inspector plus compile preview on the right."
+        activeScreen="studio"
+        actions={
+          <>
             <button
-              className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
+              className={screenHeaderSecondaryActionClassName}
               onClick={() => {
                 setGoal("");
                 setContextJson(initialContextJson());
@@ -2061,15 +2047,15 @@ export default function WorkflowStudio() {
               New Draft
             </button>
             <button
-              className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
+              className={screenHeaderPrimaryActionClassName}
               onClick={runChainPreflight}
               disabled={composerCompileLoading || chainPreflightLoading}
             >
               {composerCompileLoading || chainPreflightLoading ? "Compiling..." : "Compile Preview"}
             </button>
-          </div>
-        </div>
-      </section>
+          </>
+        }
+      />
 
       {studioNotice ? (
         <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
