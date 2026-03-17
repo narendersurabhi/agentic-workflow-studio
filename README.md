@@ -170,13 +170,14 @@ OPENAI_API_KEY=<your-key>
 OPENAI_MODEL=<your-model>
 ```
 
-Optional but commonly needed for GitHub capabilities:
+Optional for Kubernetes or custom local setups that enable GitHub capabilities:
 
 ```bash
 GITHUB_CLASSIC_TOKEN=<your-token>
 ```
 
 Docker Compose runs the planner and worker in OpenAI-backed LLM mode, so these credentials are required for a functional local stack.
+GitHub capabilities are not part of the default Docker Compose workflow because the Compose stack does not include `github-mcp`.
 
 2. Start the stack.
 
@@ -212,7 +213,7 @@ These Make targets now run through `uv`, so you do not need to preinstall `pytes
   - `NEXT_PUBLIC_API_URL`
 - Typical secrets:
   - `OPENAI_API_KEY`
-  - `GITHUB_CLASSIC_TOKEN` or `GITHUB_TOKEN`
+  - `GITHUB_CLASSIC_TOKEN` preferred, with fallback to `GITHUB_TOKEN`
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
 
