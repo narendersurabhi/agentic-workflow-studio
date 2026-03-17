@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 
@@ -26,7 +26,7 @@ def _disable_governance(monkeypatch) -> None:
 
 
 def _job() -> models.Job:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     return models.Job(
         id="job-1",
         goal="test",
@@ -152,6 +152,88 @@ def test_ensure_task_intents_can_use_goal_intent_sequence() -> None:
     assert updated.tasks[1].intent == models.ToolIntent.render
 
 
+def test_ensure_job_inputs_projects_explicit_document_generation_fields() -> None:
+    job = _job()
+    job.goal = "Convert markdown to DOCX"
+    job.context_json = {
+        "topic": "Demo",
+        "tone": "neutral",
+        "unrelated_blob": {"huge": "payload"},
+    }
+    job.metadata = {"llm_provider": "openai"}
+
+    plan = _plan_with_task(
+        "llm_generate_document_spec",
+        {},
+    )
+    updated = _ensure_job_inputs(
+        plan,
+        job,
+        [
+            _tool(
+                "llm_generate_document_spec",
+                {
+                    "type": "object",
+                    "properties": {
+                        "instruction": {"type": "string"},
+                        "topic": {"type": "string"},
+                        "tone": {"type": "string"},
+                    },
+                    "required": ["instruction", "topic", "tone"],
+                },
+            )
+        ],
+    )
+
+    assert updated.tasks[0].tool_inputs["llm_generate_document_spec"] == {
+        "instruction": "Convert markdown to DOCX",
+        "topic": "Demo",
+        "tone": "neutral",
+    }
+
+
+def test_ensure_job_inputs_projects_markdown_document_generation_fields() -> None:
+    job = _job()
+    job.goal = "Convert markdown to DOCX"
+    job.context_json = {
+        "markdown_text": "# Heading\n\nParagraph",
+        "topic": "Demo",
+        "tone": "neutral",
+        "today": "2026-03-16",
+        "output_dir": "documents",
+    }
+
+    plan = _plan_with_task("llm_generate_document_spec_from_markdown", {})
+    updated = _ensure_job_inputs(
+        plan,
+        job,
+        [
+            _tool(
+                "llm_generate_document_spec_from_markdown",
+                {
+                    "type": "object",
+                    "properties": {
+                        "markdown_text": {"type": "string"},
+                        "topic": {"type": "string"},
+                        "tone": {"type": "string"},
+                        "today": {"type": "string"},
+                        "output_dir": {"type": "string"},
+                    },
+                    "required": ["markdown_text"],
+                },
+            )
+        ],
+    )
+
+    assert updated.tasks[0].tool_inputs["llm_generate_document_spec_from_markdown"] == {
+        "markdown_text": "# Heading\n\nParagraph",
+        "topic": "Demo",
+        "tone": "neutral",
+        "today": "2026-03-16",
+        "output_dir": "documents",
+    }
+
+
 def test_ensure_task_intents_repairs_explicit_tool_mismatch() -> None:
     plan = _plan_with_task(
         "llm_generate",
@@ -201,7 +283,7 @@ def test_ensure_default_value_markers_replaces_default_marker_with_context_value
             )
         ],
     )
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     job = models.Job(
         id="job-default-marker",
         goal="derive output path",
@@ -613,6 +695,7 @@ def test_validate_plan_rejects_missing_intent_segment_must_have_inputs() -> None
         {},
         intent=models.ToolIntent.generate,
     )
+    plan.tasks[0].instruction = ""
     tool = _tool("llm_generate", {"type": "object"})
     job = _job_with_goal_intent_segment(
         {
@@ -633,6 +716,47 @@ def test_validate_plan_rejects_missing_intent_segment_must_have_inputs() -> None
     valid, reason = _validate_plan(plan, [tool], job)
     assert not valid
     assert reason.startswith("intent_segment_invalid:llm_generate:task-1:must_have_inputs_missing:instruction")
+
+
+def test_validate_plan_uses_task_instruction_for_llm_generate_intent_contract() -> None:
+    plan = models.PlanCreate(
+        planner_version="1",
+        tasks_summary="stop branch",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="StopIfRepoMissing",
+                description="Decide whether to proceed",
+                instruction="If repo is missing, stop and explain why; otherwise proceed.",
+                acceptance_criteria=["Produce a proceed or stop signal"],
+                expected_output_schema_ref="schemas/validation_report",
+                intent=models.ToolIntent.generate,
+                deps=[],
+                tool_requests=["llm_generate"],
+                tool_inputs={},
+                critic_required=False,
+            )
+        ],
+    )
+    tool = _tool("llm_generate", {"type": "object"})
+    job = _job_with_goal_intent_segment(
+        {
+            "id": "s1",
+            "intent": "generate",
+            "objective": "Decide whether to proceed based on repository existence",
+            "required_inputs": ["instruction"],
+            "suggested_capabilities": ["llm.text.generate"],
+            "slots": {
+                "entity": "validation_report",
+                "artifact_type": "content",
+                "output_format": "txt",
+                "risk_level": "read_only",
+                "must_have_inputs": ["instruction"],
+            },
+        }
+    )
+    valid, reason = _validate_plan(plan, [tool], job)
+    assert valid, reason
 
 
 def test_validate_plan_accepts_capability_when_segment_requires_tool_inputs(
@@ -843,6 +967,124 @@ def test_validate_plan_rejects_capability_with_missing_required_inputs(
     valid, reason = _validate_plan(plan, [], _job())
     assert not valid
     assert reason.startswith("capability_inputs_invalid:github.repo.list:task-1:")
+
+
+def test_validate_plan_builds_github_repo_query_from_explicit_owner_and_repo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    schema_path = tmp_path / "capability_input.schema.json"
+    schema_path.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    capability_registry_path = tmp_path / "capability_registry.json"
+    capability_registry_path.write_text(
+        json.dumps(
+            {
+                "capabilities": [
+                    {
+                        "id": "github.repo.list",
+                        "description": "List repos",
+                        "enabled": True,
+                        "input_schema_ref": str(schema_path),
+                        "adapters": [
+                            {
+                                "type": "mcp",
+                                "server_id": "github_remote",
+                                "tool_name": "github_repo_list",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CAPABILITY_MODE", "enabled")
+    monkeypatch.setenv("CAPABILITY_REGISTRY_PATH", str(capability_registry_path))
+    job = _job()
+    job.context_json = {
+        "repo_owner": "narendersurabhi",
+        "repo_name": "scientific-agent-lab",
+    }
+    plan = _plan_with_task("github.repo.list", {})
+    valid, reason = _validate_plan(plan, [], job)
+    assert valid, reason
+
+
+def test_validate_plan_uses_synthesized_github_query_for_intent_segment_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    schema_path = tmp_path / "capability_input.schema.json"
+    schema_path.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    capability_registry_path = tmp_path / "capability_registry.json"
+    capability_registry_path.write_text(
+        json.dumps(
+            {
+                "capabilities": [
+                    {
+                        "id": "github.repo.list",
+                        "description": "List repos",
+                        "enabled": True,
+                        "input_schema_ref": str(schema_path),
+                        "adapters": [
+                            {
+                                "type": "mcp",
+                                "server_id": "github_remote",
+                                "tool_name": "github_repo_list",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CAPABILITY_MODE", "enabled")
+    monkeypatch.setenv("CAPABILITY_REGISTRY_PATH", str(capability_registry_path))
+    plan = _plan_with_task("github.repo.list", {}, intent=models.ToolIntent.validate)
+    job = _job()
+    job.context_json = {
+        "repo_owner": "narendersurabhi",
+        "repo_name": "scientific-agent-lab",
+    }
+    job.metadata = {
+        "goal_intent_graph": {
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "validate",
+                    "objective": "Verify repository exists",
+                    "required_inputs": ["query"],
+                    "suggested_capabilities": ["github.repo.list"],
+                    "slots": {
+                        "entity": "repository",
+                        "artifact_type": "validation_report",
+                        "output_format": None,
+                        "risk_level": "read_only",
+                        "must_have_inputs": ["query"],
+                    },
+                }
+            ]
+        }
+    }
+    valid, reason = _validate_plan(plan, [], job)
+    assert valid, reason
 
 
 def test_validate_plan_rejects_capability_risk_above_intent_segment_threshold(

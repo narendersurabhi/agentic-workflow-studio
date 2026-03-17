@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from libs.core import models
+from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 
 
 def _load_planner_module():
@@ -82,21 +83,16 @@ def test_parse_llm_plan_accepts_plan_wrapped_object() -> None:
     assert parsed.tasks_summary == "sample"
 
 
-class _FakeLLMResponse:
-    def __init__(self, content: str) -> None:
-        self.content = content
-
-
-class _FakeProvider:
+class _FakeProvider(LLMProvider):
     def __init__(self, outputs: list[str]) -> None:
         self._outputs = list(outputs)
-        self.calls = 0
+        self.requests: list[LLMRequest] = []
 
-    def generate(self, _prompt: str) -> _FakeLLMResponse:
-        self.calls += 1
+    def generate_request(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
         if not self._outputs:
             raise RuntimeError("no_more_outputs")
-        return _FakeLLMResponse(self._outputs.pop(0))
+        return LLMResponse(self._outputs.pop(0))
 
 
 def test_llm_plan_retries_with_repair_prompt_when_initial_parse_fails() -> None:
@@ -131,4 +127,18 @@ def test_llm_plan_retries_with_repair_prompt_when_initial_parse_fails() -> None:
     parsed = planner_main.llm_plan(job, tools, provider)
 
     assert parsed.tasks_summary == "sample"
-    assert provider.calls == 2
+    assert len(provider.requests) == 2
+    assert provider.requests[0].metadata == {
+        "component": "planner",
+        "operation": "plan_generation",
+        "job_id": "job-1",
+        "goal_len": len(job.goal),
+        "tool_count": 1,
+    }
+    assert provider.requests[1].metadata == {
+        "component": "planner",
+        "operation": "plan_generation_repair",
+        "job_id": "job-1",
+        "goal_len": len(job.goal),
+        "tool_count": 1,
+    }

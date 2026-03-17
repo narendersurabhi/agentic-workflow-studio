@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.core.llm_provider import LLMProvider, LLMResponse
+from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 from libs.core.models import RiskLevel, ToolSpec
 from libs.core.tool_registry import (
     Tool,
@@ -380,6 +380,25 @@ def test_default_registry_applies_service_specific_allowlist(monkeypatch) -> Non
     registry = default_registry(service_name="worker")
     specs = {spec.name for spec in registry.list_specs()}
     assert specs == {"math_eval"}
+
+
+def test_default_registry_api_includes_chat_direct_read_tools(monkeypatch) -> None:
+    monkeypatch.delenv("ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+    monkeypatch.delenv("API_ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("API_DISABLED_TOOLS", raising=False)
+    monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "true")
+    monkeypatch.setenv("TOOL_GOVERNANCE_MODE", "enforce")
+    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_KEY", None)
+    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_VALUE", None)
+
+    registry = default_registry(service_name="api")
+    specs = {spec.name for spec in registry.list_specs()}
+
+    assert "workspace_list_files" in specs
+    assert "workspace_read_text" in specs
+    assert "memory_read" in specs
+    assert "memory_semantic_search" in specs
 
 
 def test_evaluate_tool_allowlist_uses_governance_config_enforce(monkeypatch, tmp_path) -> None:
@@ -927,3 +946,29 @@ def test_docx_generate_from_spec_auto_derives_path_when_missing(
     assert output_path.exists()
     assert output_path.suffix == ".docx"
 
+
+class _RequestOnlyProvider(LLMProvider):
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.requests: list[LLMRequest] = []
+
+    def generate_request(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        return LLMResponse(content=self.content)
+
+
+def test_llm_generate_tool_uses_request_based_provider() -> None:
+    provider = _RequestOnlyProvider("generated text")
+    registry = default_registry(llm_enabled=True, llm_provider=provider)
+
+    call = registry.execute("llm_generate", {"text": "hello world"}, "id", "trace")
+
+    assert call.status == "completed"
+    assert call.output_or_error == {"text": "generated text"}
+    assert provider.requests
+    assert provider.requests[0].metadata == {
+        "component": "tools",
+        "tool": "llm_generate",
+        "operation": "generate_text",
+        "prompt_len": len("hello world"),
+    }

@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -16,6 +16,10 @@ from libs.core import models  # noqa: E402
 
 
 Base.metadata.create_all(bind=engine)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class _RedisStub:
@@ -65,8 +69,8 @@ def test_handle_plan_created_uses_plan_id_after_commit(monkeypatch: pytest.Monke
                 goal="demo",
                 context_json={},
                 status=models.JobStatus.queued.value,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=_utcnow(),
+                updated_at=_utcnow(),
                 priority=0,
                 metadata_json={},
             )

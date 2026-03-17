@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from libs.core import models
 from services.planner.app.main import rule_based_plan
@@ -10,8 +10,8 @@ def test_rule_based_plan_schema():
         goal="demo",
         context_json={},
         status=models.JobStatus.queued,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
         priority=1,
         metadata={},
     )

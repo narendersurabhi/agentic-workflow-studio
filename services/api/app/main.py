@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 import os
 import logging
@@ -8,7 +9,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Mapping, Sequence
 
@@ -22,7 +23,9 @@ from sqlalchemy.orm import Session
 from libs.core import (
     capability_search,
     capability_registry,
+    chat_contracts,
     document_store,
+    execution_contracts,
     events,
     intent_contract,
     logging as core_logging,
@@ -30,17 +33,40 @@ from libs.core import (
     orchestrator,
     payload_resolver,
     state_machine,
-    tool_registry,
+    tool_bootstrap,
+    workflow_contracts,
 )
-from libs.core.llm_provider import LLMProvider, LLMProviderError, MockLLMProvider, resolve_provider
+from libs.core.llm_provider import (
+    LLMProvider,
+    LLMProviderError,
+    LLMRequest,
+    MockLLMProvider,
+    resolve_provider,
+)
 from .database import Base, SessionLocal, engine
-from .models import EventOutboxRecord, JobRecord, PlanRecord, TaskRecord
-from . import memory_store
+from .models import (
+    EventOutboxRecord,
+    JobRecord,
+    PlanRecord,
+    TaskRecord,
+)
+from . import chat_execution_service, chat_service, dispatch_service, intent_service, memory_store
 
 core_logging.configure_logging("api")
 logger = logging.getLogger("api.orchestrator")
 
-app = FastAPI(title="Agentic Planner Executor API")
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    _init_db()
+    yield
+
+
+app = FastAPI(title="Agentic Planner Executor API", lifespan=_app_lifespan)
 
 cors_origins = [
     origin.strip()
@@ -156,6 +182,17 @@ INTENT_MEMORY_RETRIEVAL_ENABLED = (
 INTENT_MEMORY_RETRIEVAL_LIMIT = max(
     1, min(10, int(os.getenv("INTENT_MEMORY_RETRIEVAL_LIMIT", "3")))
 )
+CHAT_DIRECT_EXECUTION_ENABLED = (
+    os.getenv("CHAT_DIRECT_EXECUTION_ENABLED", "true").lower() == "true"
+)
+CHAT_DIRECT_CAPABILITIES = {
+    entry.strip()
+    for entry in os.getenv(
+        "CHAT_DIRECT_CAPABILITIES",
+        ",".join(sorted(chat_execution_service.DEFAULT_CHAT_DIRECT_CAPABILITIES)),
+    ).split(",")
+    if entry.strip()
+}
 INTENT_MEMORY_PERSIST_ENABLED = (
     os.getenv("INTENT_MEMORY_PERSIST_ENABLED", "true").lower() == "true"
 )
@@ -190,7 +227,7 @@ redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 TASK_OUTPUT_KEY_PREFIX = "task_output:"
 TASK_RESULT_KEY_PREFIX = "task_result:"
 
-_tool_spec_registry = tool_registry.default_registry(
+_tool_spec_registry = tool_bootstrap.build_default_registry(
     http_fetch_enabled=False,
     llm_enabled=True,
     llm_provider=MockLLMProvider(),
@@ -260,7 +297,51 @@ def _build_intent_decompose_provider() -> LLMProvider | None:
 _intent_decompose_provider = _build_intent_decompose_provider()
 
 
-@app.on_event("startup")
+def _build_chat_router_provider() -> LLMProvider | None:
+    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
+    if not provider_name or provider_name == "mock":
+        return None
+    model_name = (LLM_MODEL_NAME or "").strip()
+    if not model_name:
+        return None
+    try:
+        return resolve_provider(
+            provider_name,
+            api_key=OPENAI_API_KEY or None,
+            model=model_name,
+            base_url=OPENAI_BASE_URL or None,
+            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
+            max_retries=max(0, OPENAI_MAX_RETRIES),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "chat_router_provider_init_failed",
+            extra={"provider": provider_name, "model": model_name},
+        )
+        return None
+
+
+_chat_router_provider = _build_chat_router_provider()
+
+
+def _build_chat_direct_executor() -> chat_execution_service.ChatDirectExecutor | None:
+    if not CHAT_DIRECT_EXECUTION_ENABLED:
+        return None
+    try:
+        return chat_execution_service.build_chat_direct_executor(
+            service_name="api",
+            allowed_capabilities=CHAT_DIRECT_CAPABILITIES,
+            llm_enabled=False,
+            llm_provider_instance=None,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("chat_direct_executor_init_failed")
+        return None
+
+
+_chat_direct_executor = _build_chat_direct_executor()
+
+
 def _init_db() -> None:
     Base.metadata.create_all(bind=engine)
     if EVENT_OUTBOX_ENABLED:
@@ -487,6 +568,11 @@ def _task_from_record(
     record: TaskRecord,
     intent_profile: Mapping[str, Any] | None = None,
 ) -> models.Task:
+    raw_tool_inputs = record.tool_inputs if isinstance(record.tool_inputs, dict) else {}
+    capability_bindings = _task_capability_bindings(
+        record.tool_requests or [],
+        raw_tool_inputs,
+    )
     source = None
     confidence = None
     if isinstance(intent_profile, Mapping):
@@ -516,10 +602,64 @@ def _task_from_record(
         max_reworks=record.max_reworks or 0,
         assigned_to=record.assigned_to,
         tool_requests=record.tool_requests or [],
-        tool_inputs=record.tool_inputs or {},
+        tool_inputs=execution_contracts.strip_execution_metadata_from_tool_inputs(raw_tool_inputs),
+        capability_bindings=capability_bindings,
         created_at=record.created_at,
         updated_at=record.updated_at,
         critic_required=bool(record.critic_required),
+    )
+
+
+def _api_enabled_capabilities() -> Mapping[str, Any]:
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception:  # noqa: BLE001
+        return {}
+    return registry.enabled_capabilities()
+
+
+def _task_capability_bindings(
+    tool_requests: list[str],
+    tool_inputs: Mapping[str, Any] | None,
+    capability_bindings: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    return execution_contracts.normalize_capability_bindings(
+        {
+            "tool_inputs": tool_inputs,
+            "capability_bindings": capability_bindings,
+        },
+        request_ids=tool_requests,
+        capabilities=_api_enabled_capabilities(),
+    )
+
+
+def _task_record_tool_inputs(
+    tool_requests: list[str],
+    tool_inputs: Mapping[str, Any] | None,
+    capability_bindings: Mapping[str, Any] | None = None,
+    execution_gate: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_execution_gate = execution_contracts.normalize_execution_gates(
+        {"tool_inputs": tool_inputs},
+        request_ids=tool_requests,
+    )
+    if isinstance(execution_gate, Mapping):
+        normalized_execution_gate.update(
+            execution_contracts.normalize_execution_gates(
+                {"execution_gates": execution_gate},
+                request_ids=tool_requests,
+            )
+        )
+    embedded = execution_contracts.embed_capability_bindings(
+        tool_inputs,
+        capability_bindings,
+        request_ids=tool_requests,
+        capabilities=_api_enabled_capabilities(),
+    )
+    return execution_contracts.embed_execution_gate(
+        embedded,
+        normalized_execution_gate,
+        request_ids=tool_requests,
     )
 
 
@@ -605,310 +745,530 @@ def _threshold_bucket(value: float) -> str:
 
 
 def _infer_goal_risk_level(goal: str, intent: str) -> str:
-    lowered = str(goal or "").lower()
-    high_risk_tokens = (
-        "delete",
-        "destroy",
-        "remove",
-        "drop",
-        "shutdown",
-        "infra",
-        "prod",
-        "production",
-        "payment",
-        "billing",
-        "credential",
-        "secret",
+    return intent_service.assess_goal_intent(
+        goal,
+        config=_goal_intent_assess_config(),
+        runtime=intent_service.GoalIntentRuntime(
+            infer_task_intent=lambda _goal: type(
+                "_GoalIntentInference",
+                (),
+                {"intent": intent, "source": "main_wrapper", "confidence": 1.0},
+            )(),
+        ),
+    ).risk_level or "read_only"
+
+
+def _goal_intent_assess_config() -> intent_service.GoalIntentConfig:
+    return intent_service.GoalIntentConfig(
+        min_confidence=INTENT_MIN_CONFIDENCE,
+        min_confidence_by_intent=dict(INTENT_MIN_CONFIDENCE_BY_INTENT),
+        min_confidence_by_risk=dict(INTENT_MIN_CONFIDENCE_BY_RISK),
+        clarification_blocking_slots=set(INTENT_CLARIFICATION_BLOCKING_SLOTS),
     )
-    if any(token in lowered for token in high_risk_tokens):
-        return "high_risk_write"
-    bounded_tokens = (
-        "create",
-        "update",
-        "write",
-        "publish",
-        "push",
-        "commit",
-        "open pr",
-        "pull request",
-        "render",
-        "generate",
-    )
-    if intent in {"render", "transform", "generate"} and any(
-        token in lowered for token in bounded_tokens
-    ):
-        return "bounded_write"
-    if intent == "io" and any(token in lowered for token in ("write", "upload", "save", "push")):
-        return "bounded_write"
-    return "read_only"
+
+
+def _record_goal_intent_assessment_metrics(
+    profile: workflow_contracts.GoalIntentProfile,
+) -> None:
+    needs_clarification = bool(profile.needs_clarification)
+    intent_assessments_total.labels(
+        needs_clarification=str(needs_clarification).lower()
+    ).inc()
+    intent_threshold_evaluations_total.labels(
+        intent=profile.intent or "generate",
+        risk_level=profile.risk_level or "read_only",
+        needs_clarification=str(needs_clarification).lower(),
+        threshold_bucket=_threshold_bucket(float(profile.threshold or 0.0)),
+    ).inc()
+    if profile.requires_blocking_clarification:
+        intent_clarification_required_total.inc()
 
 
 def _resolve_intent_confidence_threshold(intent: str, risk_level: str) -> float:
-    base = max(0.0, min(1.0, float(INTENT_MIN_CONFIDENCE)))
-    intent_override = INTENT_MIN_CONFIDENCE_BY_INTENT.get(intent)
-    risk_override = INTENT_MIN_CONFIDENCE_BY_RISK.get(risk_level)
-    candidates = [base]
-    if isinstance(intent_override, float):
-        candidates.append(intent_override)
-    if isinstance(risk_override, float):
-        candidates.append(risk_override)
-    return round(max(candidates), 3)
+    return intent_service.resolve_intent_confidence_threshold(
+        intent,
+        risk_level,
+        config=_goal_intent_assess_config(),
+    )
 
 
 def _extract_goal_slot_signals(goal: str, intent: str, risk_level: str) -> dict[str, Any]:
-    lowered = str(goal or "").lower()
-    output_format = ""
-    for token, normalized in (
-        ("pdf", "pdf"),
-        ("docx", "docx"),
-        ("markdown", "md"),
-        (".md", "md"),
-        ("json", "json"),
-        ("csv", "csv"),
-        ("xlsx", "xlsx"),
-        ("excel", "xlsx"),
-        ("html", "html"),
-        ("text", "txt"),
-        ("txt", "txt"),
-    ):
-        if token in lowered:
-            output_format = normalized
-            break
-    target_system = ""
-    target_candidates = (
-        "github",
-        "gitlab",
-        "jira",
-        "slack",
-        "notion",
-        "confluence",
-        "filesystem",
-        "workspace",
-        "artifacts",
-        "gmail",
+    profile = intent_service.assess_goal_intent(
+        goal,
+        config=_goal_intent_assess_config(),
+        runtime=intent_service.GoalIntentRuntime(
+            infer_task_intent=lambda _goal: type(
+                "_GoalIntentInference",
+                (),
+                {"intent": intent, "source": "main_wrapper", "confidence": 1.0},
+            )(),
+        ),
     )
-    for token in target_candidates:
-        if token in lowered:
-            target_system = token
-            break
-    safety_constraints = ""
-    if any(
-        token in lowered
-        for token in (
-            "read only",
-            "read-only",
-            "no write",
-            "without write",
-            "do not delete",
-            "safe mode",
-            "dry run",
-        )
-    ):
-        safety_constraints = "present"
-    return {
-        "intent_action": intent or "",
-        "output_format": output_format,
-        "target_system": target_system,
-        "safety_constraints": safety_constraints,
-        "risk_level": risk_level,
-    }
+    return dict(profile.slot_values)
 
 
 def _blocking_clarification_slots(intent: str, risk_level: str) -> list[str]:
-    slots: list[str] = []
-    if "intent_action" in INTENT_CLARIFICATION_BLOCKING_SLOTS:
-        slots.append("intent_action")
-    if intent in {"render", "generate"} and "output_format" in INTENT_CLARIFICATION_BLOCKING_SLOTS:
-        slots.append("output_format")
-    if intent == "io" and "target_system" in INTENT_CLARIFICATION_BLOCKING_SLOTS:
-        slots.append("target_system")
-    if risk_level == "high_risk_write" and "safety_constraints" in INTENT_CLARIFICATION_BLOCKING_SLOTS:
-        slots.append("safety_constraints")
-    return slots
+    return intent_service.blocking_clarification_slots(
+        intent,
+        risk_level,
+        config=_goal_intent_assess_config(),
+    )
 
 
 def _slot_question(slot: str, goal: str) -> str:
-    if slot == "intent_action":
-        return "What should the system do first (generate, transform, validate, render, or io)?"
-    if slot == "output_format":
-        return "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?"
-    if slot == "target_system":
-        return "Which target system should this use (for example GitHub, Jira, Slack, filesystem)?"
-    if slot == "safety_constraints":
-        return "What safety constraints must be enforced (for example read-only, no deletes, dry-run)?"
-    return f"Provide clarification for slot '{slot}' for goal: '{goal[:120]}'."
+    return intent_service.slot_question(slot, goal)
+
+
+def _looks_like_conversational_turn(content: str) -> bool:
+    lowered = str(content or "").strip().lower()
+    if not lowered:
+        return True
+    casual_phrases = (
+        "hi",
+        "hello",
+        "hey",
+        "help",
+        "thanks",
+        "thank you",
+        "how are you",
+        "what can you do",
+        "can you help me understand",
+        "why ",
+        "what is ",
+        "what are ",
+        "how does ",
+        "how do ",
+        "can you explain",
+        "explain ",
+    )
+    workflow_tokens = (
+        "create ",
+        "build ",
+        "generate ",
+        "render ",
+        "deploy ",
+        "port forward",
+        "open pull request",
+        "open pr",
+        "check repo",
+        "list repos",
+        "write file",
+        "update file",
+        "make a workflow",
+        "create a workflow",
+        "submit a job",
+        "run ",
+    )
+    if any(token in lowered for token in workflow_tokens):
+        return False
+    if lowered.endswith("?"):
+        return True
+    return any(lowered.startswith(phrase) or lowered == phrase for phrase in casual_phrases)
+
+
+def _fallback_chat_response(content: str) -> str:
+    lowered = str(content or "").strip().lower()
+    if lowered in {"hi", "hello", "hey"}:
+        return "I can chat, answer questions, and create workflows when execution is needed."
+    if lowered in {"thanks", "thank you"}:
+        return "You can keep chatting here, or ask me to create a workflow when you want work executed."
+    return (
+        "I can answer questions directly here, and when you want work executed I can turn that into "
+        "a workflow and submit a job."
+    )
 
 
 def _goal_intent_segments_from_metadata(metadata: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(metadata, Mapping):
-        return []
-    graph = metadata.get("goal_intent_graph")
-    if not isinstance(graph, Mapping):
-        return []
-    raw_segments = graph.get("segments")
-    if not isinstance(raw_segments, list):
+    graph = (
+        workflow_contracts.parse_intent_graph(metadata.get("goal_intent_graph"))
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    if graph is None:
         return []
     segments: list[dict[str, Any]] = []
-    for raw_segment in raw_segments:
-        normalized = _normalize_task_intent_profile_segment(raw_segment)
+    for raw_segment in graph.segments:
+        normalized = _normalize_task_intent_profile_segment(
+            raw_segment.model_dump(mode="json", exclude_none=True)
+        )
         if normalized is not None:
             segments.append(normalized)
     return segments
 
 
-def _assess_goal_intent(goal: str) -> dict[str, Any]:
-    inference = intent_contract.infer_task_intent_from_goal_with_metadata(goal)
-    intent = inference.intent
-    risk_level = _infer_goal_risk_level(goal, intent)
+def _assess_goal_intent(goal: str) -> workflow_contracts.GoalIntentProfile:
+    return intent_service.assess_goal_intent(
+        goal,
+        config=_goal_intent_assess_config(),
+        runtime=intent_service.GoalIntentRuntime(
+            infer_task_intent=intent_contract.infer_task_intent_from_goal_with_metadata,
+            record_metrics=_record_goal_intent_assessment_metrics,
+        ),
+    )
+
+
+def _route_chat_turn(
+    *,
+    content: str,
+    candidate_goal: str,
+    session_metadata: Mapping[str, Any] | None,
+    merged_context: Mapping[str, Any] | None,
+    messages: Sequence[chat_contracts.ChatMessage] | None,
+) -> dict[str, Any]:
+    fallback = _fallback_chat_turn_route(
+        content=content,
+        candidate_goal=candidate_goal,
+        session_metadata=session_metadata,
+    )
+    if _chat_router_provider is None:
+        return fallback
+    pending_clarification = bool(
+        isinstance(session_metadata, Mapping) and session_metadata.get("pending_clarification")
+    )
+    try:
+        prompt = _build_chat_router_prompt(
+            content=content,
+            candidate_goal=candidate_goal,
+            pending_clarification=pending_clarification,
+            merged_context=merged_context,
+            messages=messages,
+        )
+        parsed = _chat_router_provider.generate_request_json_object(
+            LLMRequest(
+                prompt=prompt,
+                system_prompt=(
+                    "You route chat turns for an agent platform. "
+                    "Return JSON only. "
+                    "Use route='respond' for normal conversation or explanation when no tools/workflow are needed. "
+                    "Use route='tool_call' only for a single safe read-only capability from the allowed catalog. "
+                    "Use route='submit_job' only when the user wants the system to perform work, create artifacts, inspect systems, or run automation. "
+                    "Use route='ask_clarification' only when workflow execution is needed but essential details are missing. "
+                    "Never choose tool_call for writes, multi-step work, or anything outside the allowed direct catalog."
+                ),
+                metadata={
+                    "component": "chat_router",
+                    "pending_clarification": str(pending_clarification).lower(),
+                },
+            )
+        )
+        return _normalize_chat_route(
+            parsed,
+            content=content,
+            candidate_goal=candidate_goal,
+            fallback=fallback,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("chat_router_failed")
+        return fallback
+
+
+def _fallback_chat_turn_route(
+    *,
+    content: str,
+    candidate_goal: str,
+    session_metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    pending_clarification = bool(
+        isinstance(session_metadata, Mapping) and session_metadata.get("pending_clarification")
+    )
+    assessment = _assess_goal_intent(candidate_goal)
+    assessment_json = workflow_contracts.dump_goal_intent_profile(assessment) or {}
+    if pending_clarification or not _looks_like_conversational_turn(content):
+        if bool(assessment.requires_blocking_clarification):
+            questions = [
+                str(question).strip()
+                for question in assessment.questions
+                if isinstance(question, str) and question.strip()
+            ]
+            return {
+                "type": "ask_clarification",
+                "assistant_content": "\n".join(questions) if questions else "What should I do next?",
+                "clarification_questions": questions,
+                "goal_intent_profile": assessment_json,
+            }
+        return {
+            "type": "submit_job",
+            "assistant_content": "",
+            "clarification_questions": [],
+            "goal_intent_profile": assessment_json,
+        }
+    return {
+        "type": "respond",
+        "assistant_content": _fallback_chat_response(content),
+        "clarification_questions": [],
+        "goal_intent_profile": assessment_json,
+    }
+
+
+def _build_chat_router_prompt(
+    *,
+    content: str,
+    candidate_goal: str,
+    pending_clarification: bool,
+    merged_context: Mapping[str, Any] | None,
+    messages: Sequence[chat_contracts.ChatMessage] | None,
+) -> str:
+    recent_messages: list[dict[str, str]] = []
+    for message in list(messages or [])[-6:]:
+        recent_messages.append(
+            {
+                "role": str(message.role),
+                "content": str(message.content or "")[:500],
+            }
+        )
+    direct_capabilities = [
+        {
+            "id": capability_id,
+            "description": _chat_direct_capability_description(capability_id),
+        }
+        for capability_id in sorted(CHAT_DIRECT_CAPABILITIES)
+    ]
+    payload = {
+        "current_user_message": content,
+        "candidate_goal": candidate_goal,
+        "pending_clarification": pending_clarification,
+        "context_json": dict(merged_context or {}),
+        "recent_messages": recent_messages,
+        "direct_capabilities": direct_capabilities,
+        "response_schema": {
+            "route": "respond | tool_call | ask_clarification | submit_job",
+            "assistant_response": "string",
+            "intent": "generate | transform | validate | render | io | other",
+            "risk_level": "read_only | bounded_write | high_risk_write",
+            "confidence": "0..1",
+            "output_format": "string",
+            "target_system": "string",
+            "safety_constraints": "string",
+            "capability_id": "string",
+            "arguments": {"any": "json object"},
+            "clarification_questions": ["string"],
+        },
+    }
+    return (
+        "Decide whether this turn should stay conversational or become a workflow request.\n"
+        "Rules:\n"
+        "- respond: answer normally, no workflow/job needed.\n"
+        "- tool_call: perform exactly one safe read-only capability from direct_capabilities.\n"
+        "- ask_clarification: workflow is needed, but essential details are missing.\n"
+        "- submit_job: workflow/job should be created now.\n"
+        "- If pending_clarification is true, treat the user message as an attempt to complete an existing workflow request.\n"
+        "- Ask for safety constraints only when a high-risk write workflow is actually being requested.\n"
+        "- Use tool_call only when one direct capability is sufficient and no durable workflow is needed.\n"
+        "- Return JSON only.\n\n"
+        f"{json.dumps(payload, ensure_ascii=True)}"
+    )
+
+
+def _normalize_chat_route(
+    parsed: Mapping[str, Any],
+    *,
+    content: str,
+    candidate_goal: str,
+    fallback: Mapping[str, Any],
+) -> dict[str, Any]:
+    heuristic = _assess_goal_intent(candidate_goal)
+    route = str(parsed.get("route") or parsed.get("type") or "").strip().lower()
+    if route not in {"respond", "tool_call", "ask_clarification", "submit_job"}:
+        route = str(fallback.get("type") or "respond")
+    if route == "respond" and not _looks_like_conversational_turn(content):
+        route = str(fallback.get("type") or "respond")
+    capability_id = str(parsed.get("capability_id") or "").strip()
+    if route == "tool_call" and capability_id not in CHAT_DIRECT_CAPABILITIES:
+        route = str(fallback.get("type") or "respond")
+        capability_id = ""
+    arguments = dict(parsed.get("arguments")) if isinstance(parsed.get("arguments"), Mapping) else {}
+
+    intent = str(parsed.get("intent") or heuristic.intent or "").strip().lower()
+    if intent not in {"generate", "transform", "validate", "render", "io"}:
+        intent = str(heuristic.intent or "")
+    risk_level = str(parsed.get("risk_level") or heuristic.risk_level or "").strip().lower()
+    if risk_level not in {"read_only", "bounded_write", "high_risk_write"}:
+        risk_level = str(heuristic.risk_level or "read_only")
+    confidence_raw = parsed.get("confidence")
+    confidence = float(heuristic.confidence or 0.0)
+    if isinstance(confidence_raw, (int, float)):
+        confidence = max(0.0, min(1.0, float(confidence_raw)))
     threshold = _resolve_intent_confidence_threshold(intent, risk_level)
-    confidence = round(float(inference.confidence), 3)
-    slot_values = _extract_goal_slot_signals(goal, intent, risk_level)
+
+    slot_values = dict(heuristic.slot_values or {})
+    for key in ("output_format", "target_system", "safety_constraints"):
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            slot_values[key] = value.strip()
+    slot_values["intent_action"] = intent
+    slot_values["risk_level"] = risk_level
+
     blocking_slots = _blocking_clarification_slots(intent, risk_level)
     missing_slots = [
         slot_name
         for slot_name in blocking_slots
         if not str(slot_values.get(slot_name) or "").strip()
     ]
+    parsed_missing_slots = parsed.get("missing_slots")
+    if isinstance(parsed_missing_slots, list):
+        for slot_name in parsed_missing_slots:
+            normalized = str(slot_name).strip()
+            if normalized and normalized in blocking_slots and normalized not in missing_slots:
+                missing_slots.append(normalized)
     low_confidence = confidence < threshold
-    # Low-confidence intent inference is treated as missing intent_action for slot-filling.
-    if low_confidence and "intent_action" in blocking_slots and "intent_action" not in missing_slots:
+    if route != "respond" and low_confidence and "intent_action" in blocking_slots and "intent_action" not in missing_slots:
         missing_slots.append("intent_action")
-    requires_blocking_clarification = bool(missing_slots)
-    needs_clarification = bool(missing_slots)
-    intent_assessments_total.labels(
-        needs_clarification=str(bool(needs_clarification)).lower()
-    ).inc()
-    intent_threshold_evaluations_total.labels(
-        intent=intent,
-        risk_level=risk_level,
-        needs_clarification=str(bool(needs_clarification)).lower(),
-        threshold_bucket=_threshold_bucket(threshold),
-    ).inc()
-    if requires_blocking_clarification:
-        intent_clarification_required_total.inc()
-    questions: list[str] = []
-    for slot_name in missing_slots:
-        questions.append(_slot_question(slot_name, goal))
-    return {
+    if route == "tool_call" and (missing_slots or risk_level != "read_only"):
+        route = str(fallback.get("type") or "respond")
+    if route == "submit_job" and missing_slots:
+        route = "ask_clarification"
+    clarification_questions = [
+        str(question).strip()
+        for question in parsed.get("clarification_questions", [])
+        if isinstance(question, str) and question.strip()
+    ]
+    if route == "ask_clarification" and not clarification_questions:
+        clarification_questions = [_slot_question(slot_name, candidate_goal) for slot_name in missing_slots]
+    assistant_response = str(parsed.get("assistant_response") or "").strip()
+    if route == "respond" and not assistant_response:
+        assistant_response = _fallback_chat_response(content)
+    if route in {"respond", "tool_call"}:
+        blocking_slots = []
+        missing_slots = []
+        clarification_questions = []
+    assessment = {
         "intent": intent,
-        "source": inference.source,
-        "confidence": confidence,
+        "source": "llm_chat_router",
+        "confidence": round(confidence, 3),
         "risk_level": risk_level,
         "threshold": threshold,
         "low_confidence": low_confidence,
-        "needs_clarification": needs_clarification,
-        "requires_blocking_clarification": requires_blocking_clarification,
-        "questions": questions,
+        "needs_clarification": bool(missing_slots),
+        "requires_blocking_clarification": bool(missing_slots),
+        "questions": clarification_questions,
         "blocking_slots": blocking_slots,
         "missing_slots": missing_slots,
         "slot_values": slot_values,
-        "clarification_mode": "targeted_slot_filling",
+        "clarification_mode": "llm_targeted_slot_filling",
+    }
+    return {
+        "type": route,
+        "assistant_content": assistant_response,
+        "capability_id": capability_id,
+        "arguments": arguments,
+        "clarification_questions": clarification_questions,
+        "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(assessment) or {},
     }
 
 
+def _chat_direct_capability_description(capability_id: str) -> str:
+    descriptions = {
+        "github.repo.list": "List repositories for a user/org or search repositories.",
+        "github.user.me": "Return the authenticated GitHub user profile.",
+        "github.issue.search": "Search GitHub issues or pull requests.",
+        "github.user.search": "Search GitHub users.",
+        "github.branch.list": "List branches for a GitHub repository.",
+        "filesystem.artifacts.list": "List files under the shared artifacts directory.",
+        "filesystem.artifacts.read_text": "Read a text file from the shared artifacts directory.",
+        "filesystem.artifacts.search_text": "Search text within files in the shared artifacts directory.",
+        "filesystem.workspace.list": "List files under the shared workspace directory.",
+        "filesystem.workspace.read_text": "Read a text file from the shared workspace directory.",
+        "memory.read": "Read structured memory entries by name/key/job/user/project.",
+        "memory.semantic.search": "Search semantic memory for related facts.",
+    }
+    return descriptions.get(capability_id, capability_id)
+
+
+def _dispatch_runtime() -> dispatch_service.ApiDispatchRuntime:
+    return dispatch_service.ApiDispatchRuntime(
+        redis_client=redis_client,
+        session_factory=SessionLocal,
+        logger=logger,
+        config=dispatch_service.ApiDispatchConfig(
+            event_outbox_enabled=EVENT_OUTBOX_ENABLED,
+            event_outbox_batch_size=EVENT_OUTBOX_BATCH_SIZE,
+            event_outbox_poll_s=EVENT_OUTBOX_POLL_S,
+            event_outbox_redis_retries=EVENT_OUTBOX_REDIS_RETRIES,
+            event_outbox_redis_retry_sleep_s=EVENT_OUTBOX_REDIS_RETRY_SLEEP_S,
+            policy_gate_enabled=POLICY_GATE_ENABLED,
+            tool_input_validation_enabled=TOOL_INPUT_VALIDATION_ENABLED,
+            tool_input_schemas=TOOL_INPUT_SCHEMAS,
+        ),
+    )
+
+
+def _chat_runtime() -> chat_service.ChatServiceRuntime:
+    return chat_service.ChatServiceRuntime(
+        route_turn=_route_chat_turn,
+        execute_direct_capability=_execute_chat_direct_capability,
+        create_job=_create_job_internal,
+        utcnow=_utcnow,
+        make_id=lambda: str(uuid.uuid4()),
+    )
+
+
+def _execute_chat_direct_capability(
+    *,
+    capability_id: str,
+    arguments: dict[str, Any],
+    trace_id: str,
+) -> dict[str, Any]:
+    if _chat_direct_executor is None:
+        raise RuntimeError("chat_direct_execution_disabled")
+    result = _chat_direct_executor.execute_capability(
+        capability_id=capability_id,
+        arguments=arguments,
+        trace_id=trace_id,
+    )
+    return {
+        "capability_id": result.capability_id,
+        "tool_name": result.tool_name,
+        "output": result.output,
+        "assistant_response": result.assistant_response,
+    }
+
+
+def _dispatch_callbacks() -> dispatch_service.ApiDispatchCallbacks:
+    return dispatch_service.ApiDispatchCallbacks(
+        stream_for_event=_stream_for_event,
+        resolve_task_deps=_resolve_task_deps,
+        build_task_context=_build_task_context,
+        coerce_task_intent_profiles=_coerce_task_intent_profiles,
+        normalize_task_intent_profile_segment=_normalize_task_intent_profile_segment,
+        refresh_job_status=_refresh_job_status,
+        emit_event=_emit_event,
+    )
+
+
 def _publish_envelope_to_redis(stream: str, envelope_json: str) -> tuple[bool, str | None]:
-    retries = max(1, EVENT_OUTBOX_REDIS_RETRIES)
-    sleep_s = max(0.0, EVENT_OUTBOX_REDIS_RETRY_SLEEP_S)
-    for attempt in range(1, retries + 1):
-        try:
-            redis_client.xadd(stream, {"data": envelope_json})
-            return True, None
-        except redis.RedisError as exc:
-            if attempt >= retries:
-                return False, str(exc)
-            if sleep_s > 0:
-                time.sleep(sleep_s)
-    return False, "unknown_redis_publish_error"
+    return dispatch_service.publish_envelope_to_redis(
+        _dispatch_runtime(),
+        stream,
+        envelope_json,
+    )
 
 
 def _insert_outbox_event(stream: str, event_type: str, envelope_json: str) -> str | None:
-    outbox_id = str(uuid.uuid4())
-    now = datetime.utcnow()
-    try:
-        with SessionLocal() as db:
-            db.add(
-                EventOutboxRecord(
-                    id=outbox_id,
-                    stream=stream,
-                    event_type=event_type,
-                    envelope_json=json.loads(envelope_json),
-                    attempts=0,
-                    last_error=None,
-                    created_at=now,
-                    updated_at=now,
-                    published_at=None,
-                )
-            )
-            db.commit()
-        return outbox_id
-    except Exception:
-        logger.exception("event_outbox_insert_failed", extra={"event_type": event_type, "stream": stream})
-        return None
+    return dispatch_service.insert_outbox_event(
+        _dispatch_runtime(),
+        stream,
+        event_type,
+        envelope_json,
+    )
 
 
 def _update_outbox_publish_state(
     outbox_id: str | None, published: bool, error: str | None = None
 ) -> None:
-    if not outbox_id:
-        return
-    now = datetime.utcnow()
-    try:
-        with SessionLocal() as db:
-            row = db.query(EventOutboxRecord).filter(EventOutboxRecord.id == outbox_id).first()
-            if not row:
-                return
-            row.attempts = (row.attempts or 0) + 1
-            row.updated_at = now
-            row.last_error = None if published else (error or "redis_publish_failed")
-            if published:
-                row.published_at = now
-            db.commit()
-    except Exception:
-        logger.exception(
-            "event_outbox_update_failed", extra={"outbox_id": outbox_id, "published": published}
-        )
+    dispatch_service.update_outbox_publish_state(
+        _dispatch_runtime(),
+        outbox_id,
+        published,
+        error,
+    )
 
 
 def _dispatch_event_outbox_once() -> int:
-    if not EVENT_OUTBOX_ENABLED:
-        return 0
-    dispatched = 0
-    try:
-        with SessionLocal() as db:
-            pending = (
-                db.query(EventOutboxRecord)
-                .filter(EventOutboxRecord.published_at.is_(None))
-                .order_by(EventOutboxRecord.created_at.asc())
-                .limit(max(1, EVENT_OUTBOX_BATCH_SIZE))
-                .all()
-            )
-            if not pending:
-                return 0
-            for row in pending:
-                envelope_json = json.dumps(row.envelope_json)
-                published, error = _publish_envelope_to_redis(row.stream, envelope_json)
-                row.attempts = (row.attempts or 0) + 1
-                row.updated_at = datetime.utcnow()
-                if published:
-                    row.published_at = row.updated_at
-                    row.last_error = None
-                    dispatched += 1
-                else:
-                    row.last_error = error or "redis_publish_failed"
-            db.commit()
-    except Exception:
-        logger.exception("event_outbox_dispatch_failed")
-    return dispatched
+    return dispatch_service.dispatch_event_outbox_once(_dispatch_runtime())
 
 
 def _start_event_outbox_dispatcher() -> None:
-    def _loop() -> None:
-        while True:
-            _dispatch_event_outbox_once()
-            time.sleep(max(0.1, EVENT_OUTBOX_POLL_S))
-
-    thread = threading.Thread(target=_loop, daemon=True, name="event-outbox-dispatcher")
-    thread.start()
+    dispatch_service.start_event_outbox_dispatcher(_dispatch_runtime())
 
 
 def _outbox_entry_payload(
@@ -936,41 +1296,12 @@ def _outbox_entry_payload(
 
 
 def _emit_event(event_type: str, payload: dict[str, Any]) -> None:
-    envelope = models.EventEnvelope(
-        type=event_type,
-        version="1",
-        occurred_at=datetime.utcnow(),
-        correlation_id=payload.get("correlation_id", str(uuid.uuid4())),
-        job_id=payload.get("job_id") or payload.get("id"),
-        task_id=payload.get("task_id"),
-        payload=payload,
+    dispatch_service.emit_event(
+        _dispatch_runtime(),
+        _dispatch_callbacks(),
+        event_type,
+        payload,
     )
-    stream = _stream_for_event(event_type)
-    envelope_json = envelope.model_dump_json()
-    if not EVENT_OUTBOX_ENABLED:
-        published, error = _publish_envelope_to_redis(stream, envelope_json)
-        if not published:
-            logger.warning(
-                "event_emit_failed",
-                extra={"event_type": event_type, "stream": stream, "error": error or "redis_publish_failed"},
-            )
-        return
-    outbox_id = _insert_outbox_event(stream, event_type, envelope_json)
-    published, error = _publish_envelope_to_redis(stream, envelope_json)
-    if outbox_id is None and not published:
-        # Last-chance persistence when the initial outbox insert fails.
-        outbox_id = _insert_outbox_event(stream, event_type, envelope_json)
-    _update_outbox_publish_state(outbox_id, published, error)
-    if not published:
-        logger.warning(
-            "event_emit_deferred_to_outbox",
-            extra={
-                "event_type": event_type,
-                "stream": stream,
-                "outbox_id": outbox_id,
-                "error": error or "redis_publish_failed",
-            },
-        )
 
 
 def _resolve_download_path(path: str, root_dir: str, label: str) -> str:
@@ -1270,7 +1601,7 @@ def _persist_intent_workflow_memory(
             ]
             if part
         ),
-        "captured_at": datetime.utcnow().isoformat(),
+        "captured_at": _utcnow().isoformat(),
         "intent_workflow": {
             "job_id": job.id,
             "goal": _semantic_normalize_text(job.goal, max_len=1200),
@@ -1301,7 +1632,7 @@ def _persist_intent_workflow_memory(
             ),
         )
         metadata["intent_memory_persisted"] = True
-        metadata["intent_memory_persisted_at"] = datetime.utcnow().isoformat()
+        metadata["intent_memory_persisted_at"] = _utcnow().isoformat()
         metadata["intent_memory_key"] = memory_key
         metadata["intent_memory_user_id"] = user_id
         job.metadata_json = metadata
@@ -1574,31 +1905,6 @@ def _heuristic_capability_recommendations(
     return recommendations[:max_count]
 
 
-def _extract_json_object_from_text(text: str) -> dict[str, Any] | None:
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("```"):
-        lines = [line for line in raw.splitlines() if not line.strip().startswith("```")]
-        raw = "\n".join(lines).strip()
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:  # noqa: BLE001
-        pass
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    snippet = raw[start : end + 1]
-    try:
-        parsed = json.loads(snippet)
-    except Exception:  # noqa: BLE001
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
 def _coerce_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -1835,12 +2141,16 @@ def _persist_interaction_summaries_memory(
 
 
 def _attach_interaction_compaction_to_graph(
-    graph: dict[str, Any], compaction: Mapping[str, Any]
-) -> dict[str, Any]:
-    summary = graph.get("summary")
-    summary_dict = dict(summary) if isinstance(summary, dict) else {}
-    summary_dict["interaction_summary_compaction"] = dict(compaction)
-    return {**graph, "summary": summary_dict}
+    graph: workflow_contracts.IntentGraph,
+    compaction: Mapping[str, Any],
+) -> workflow_contracts.IntentGraph:
+    return graph.model_copy(
+        update={
+            "summary": graph.summary.model_copy(
+                update={"interaction_summary_compaction": dict(compaction)}
+            )
+        }
+    )
 
 
 def _interaction_summary_fact_corpus(interaction_summaries: list[dict[str, Any]]) -> list[str]:
@@ -2416,25 +2726,21 @@ def _llm_decompose_goal_intent(
         prompt += "Interaction summaries (grounding evidence):\n"
         prompt += json.dumps(interaction_summaries[:32], ensure_ascii=True)
         prompt += "\nOnly include objective_facts that are directly supported by these summaries.\n"
-    response = provider.generate(prompt)
-    raw_content: Any
-    if isinstance(response, Mapping):
-        raw_content = response
-    elif hasattr(response, "content"):
-        raw_content = getattr(response, "content")
-    else:
-        raw_content = response
-    parsed: dict[str, Any] | None = None
-    if isinstance(raw_content, dict):
-        parsed = raw_content
-    elif isinstance(raw_content, bytes):
-        parsed = _extract_json_object_from_text(raw_content.decode("utf-8", errors="ignore"))
-    elif isinstance(raw_content, str):
-        parsed = _extract_json_object_from_text(raw_content)
-    else:
-        parsed = _extract_json_object_from_text(str(raw_content))
-    if not isinstance(parsed, dict):
-        raise ValueError("llm_intent_graph_parse_failed")
+    parsed = provider.generate_request_json_object(
+        LLMRequest(
+            prompt=prompt,
+            metadata={
+                "component": "api",
+                "operation": "intent_decompose",
+                "goal_len": len(goal),
+                "capability_catalog_size": len(allowed_capability_catalog),
+                "capability_top_k": capability_top_k,
+                "workflow_hints": len(workflow_hints or []),
+                "semantic_goal_capabilities": len(semantic_goal_capabilities or []),
+                "interaction_summaries": len(interaction_summaries or []),
+            },
+        )
+    )
     return _normalize_llm_intent_graph(
         goal=goal,
         parsed=parsed,
@@ -2636,96 +2942,78 @@ def _record_intent_decompose_metrics(
             )
 
 
+def _on_intent_decompose_llm_failure(exc: Exception) -> None:
+    intent_decompose_failures_total.labels(
+        mode=INTENT_DECOMPOSE_MODE,
+        model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "none").strip() or "none",
+        error_type=type(exc).__name__,
+    ).inc()
+    logger.exception("intent_decompose_llm_failed")
+
+
 def _decompose_goal_intent(
     goal: str,
     *,
     db: Session | None = None,
     user_id: str | None = None,
     interaction_summaries: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    fallback_graph = intent_contract.decompose_goal_intent(goal)
-    if "source" not in fallback_graph:
-        fallback_graph = {**fallback_graph, "source": "heuristic"}
-    allowed_capability_catalog = _intent_catalog_capability_entries()
-    allowed_capability_ids = {
-        str(entry.get("id") or "").strip()
-        for entry in allowed_capability_catalog
-        if str(entry.get("id") or "").strip()
-    }
-    if not allowed_capability_ids:
-        allowed_capability_ids = _intent_catalog_capability_ids()
-    normalized_user_id = _semantic_normalize_text(user_id, max_len=120) or _semantic_default_user_id()
-    workflow_hints = _retrieve_intent_workflow_hints(
-        db,
-        goal=goal,
-        user_id=normalized_user_id,
-        limit=INTENT_MEMORY_RETRIEVAL_LIMIT,
+) -> workflow_contracts.IntentGraph:
+    return intent_service.decompose_goal_intent(
+        goal,
+        db=db,
+        user_id=user_id,
+        interaction_summaries=interaction_summaries,
+        config=intent_service.IntentDecomposeConfig(
+            enabled=INTENT_DECOMPOSE_ENABLED,
+            mode=INTENT_DECOMPOSE_MODE,
+            capability_top_k=INTENT_CAPABILITY_TOP_K,
+            memory_retrieval_enabled=INTENT_MEMORY_RETRIEVAL_ENABLED,
+            memory_retrieval_limit=INTENT_MEMORY_RETRIEVAL_LIMIT,
+        ),
+        runtime=intent_service.IntentDecomposeRuntime(
+            provider=_intent_decompose_provider,
+            heuristic_decompose=intent_contract.decompose_goal_intent,
+            capability_entries=_intent_catalog_capability_entries,
+            capability_ids=_intent_catalog_capability_ids,
+            normalize_user_id=lambda raw_user_id: _semantic_normalize_text(raw_user_id, max_len=120)
+            or _semantic_default_user_id(),
+            retrieve_workflow_hints=lambda session, goal_text, normalized_user_id, limit: (
+                _retrieve_intent_workflow_hints(
+                    session,
+                    goal=goal_text,
+                    user_id=normalized_user_id,
+                    limit=limit,
+                )
+            ),
+            semantic_goal_capability_hints=lambda goal_text, allowed_capability_catalog, limit: (
+                _semantic_goal_capability_hints(
+                    goal=goal_text,
+                    allowed_capability_catalog=allowed_capability_catalog,
+                    limit=limit,
+                )
+            ),
+            llm_decompose=_llm_decompose_goal_intent,
+            annotate_graph_summary_defaults=lambda graph: _annotate_graph_summary_defaults(
+                graph,
+                has_interaction_summaries=bool(interaction_summaries),
+                allowed_capability_ids={
+                    str(entry.get("id") or "").strip()
+                    for entry in _intent_catalog_capability_entries()
+                    if str(entry.get("id") or "").strip()
+                }
+                or _intent_catalog_capability_ids(),
+            ),
+            apply_supported_fact_filter=_apply_supported_fact_filter,
+            record_metrics=lambda graph, result, has_interaction_summaries: (
+                _record_intent_decompose_metrics(
+                    graph=graph,
+                    result=result,
+                    has_interaction_summaries=has_interaction_summaries,
+                )
+            ),
+            on_llm_failure=_on_intent_decompose_llm_failure,
+        ),
     )
-    semantic_goal_capabilities = _semantic_goal_capability_hints(
-        goal=goal,
-        allowed_capability_catalog=allowed_capability_catalog,
-        limit=max(4, INTENT_CAPABILITY_TOP_K * 2),
-    )
-    has_interaction_summaries = bool(interaction_summaries)
-    result = "heuristic"
-    graph = fallback_graph
-    if not INTENT_DECOMPOSE_ENABLED:
-        result = "disabled"
-    elif INTENT_DECOMPOSE_MODE == "heuristic":
-        result = "heuristic"
-    elif _intent_decompose_provider is None:
-        result = "provider_unavailable"
-    else:
-        try:
-            graph = _llm_decompose_goal_intent(
-                goal=goal,
-                provider=_intent_decompose_provider,
-                fallback_graph=fallback_graph,
-                allowed_capability_ids=allowed_capability_ids,
-                allowed_capability_catalog=allowed_capability_catalog,
-                capability_top_k=INTENT_CAPABILITY_TOP_K,
-                interaction_summaries=interaction_summaries,
-                workflow_hints=workflow_hints,
-                semantic_goal_capabilities=semantic_goal_capabilities,
-            )
-            result = "llm"
-        except (LLMProviderError, ValueError) as exc:
-            intent_decompose_failures_total.labels(
-                mode=INTENT_DECOMPOSE_MODE,
-                model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "none").strip() or "none",
-                error_type=type(exc).__name__,
-            ).inc()
-            logger.exception("intent_decompose_llm_failed")
-            graph = fallback_graph
-            result = "llm_failed_fallback"
-        except Exception as exc:  # noqa: BLE001
-            intent_decompose_failures_total.labels(
-                mode=INTENT_DECOMPOSE_MODE,
-                model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "none").strip() or "none",
-                error_type=type(exc).__name__,
-            ).inc()
-            logger.exception("intent_decompose_llm_failed")
-            graph = fallback_graph
-            result = "llm_failed_fallback"
-    graph = _annotate_graph_summary_defaults(
-        graph,
-        has_interaction_summaries=has_interaction_summaries,
-        allowed_capability_ids=allowed_capability_ids,
-    )
-    summary_raw = graph.get("summary")
-    summary = dict(summary_raw) if isinstance(summary_raw, dict) else {}
-    summary["memory_hints_used"] = len(workflow_hints)
-    summary["memory_retrieval_enabled"] = bool(INTENT_MEMORY_RETRIEVAL_ENABLED)
-    summary["semantic_capability_hints_used"] = len(semantic_goal_capabilities)
-    graph = {**graph, "summary": summary}
-    if interaction_summaries:
-        graph = _apply_supported_fact_filter(graph, interaction_summaries)
-    _record_intent_decompose_metrics(
-        graph=graph,
-        result=result,
-        has_interaction_summaries=has_interaction_summaries,
-    )
-    return graph
 
 
 def _llm_capability_recommendations(
@@ -2762,10 +3050,20 @@ def _llm_capability_recommendations(
         "Allowed capability catalog:\n"
         + "\n".join(catalog_lines)
     )
-    content = provider.generate(prompt).content
-    parsed = _extract_json_object_from_text(content)
-    if not isinstance(parsed, dict):
-        raise ValueError("llm_recommendation_parse_failed")
+    parsed = provider.generate_request_json_object(
+        LLMRequest(
+            prompt=prompt,
+            metadata={
+                "component": "api",
+                "operation": "capability_recommendations",
+                "goal_len": len(goal),
+                "context_keys": len(context),
+                "capability_count": len(capabilities),
+                "draft_node_count": len(draft_nodes),
+                "max_results": max_results,
+            },
+        )
+    )
     recs = parsed.get("recommendations")
     if not isinstance(recs, list):
         raise ValueError("llm_recommendation_missing_recommendations")
@@ -2816,6 +3114,156 @@ def _composer_default_task_name(capability_id: str, index: int) -> str:
     return "".join(segment[:1].upper() + segment[1:] for segment in parts)
 
 
+_COMPOSER_CONTROL_KINDS = {"if", "if_else", "switch", "parallel"}
+
+
+def _composer_control_kind(raw_node: Mapping[str, Any]) -> str:
+    control_kind = str(raw_node.get("controlKind") or raw_node.get("control_kind") or "").strip().lower()
+    if control_kind in _COMPOSER_CONTROL_KINDS:
+        return control_kind
+    capability_id = str(raw_node.get("capabilityId") or raw_node.get("capability_id") or "").strip().lower()
+    if capability_id.startswith("studio.control."):
+        suffix = capability_id.rsplit(".", 1)[-1].strip()
+        if suffix in _COMPOSER_CONTROL_KINDS:
+            return suffix
+    return ""
+
+
+def _composer_is_control_node(raw_node: Mapping[str, Any]) -> bool:
+    node_kind = str(raw_node.get("nodeKind") or raw_node.get("node_kind") or "").strip().lower()
+    return node_kind == "control" or bool(_composer_control_kind(raw_node))
+
+
+def _composer_control_config(raw_node: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = raw_node.get("controlConfig")
+    if not isinstance(value, Mapping):
+        value = raw_node.get("control_config")
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _validate_composer_control_node(
+    *,
+    node_id: str,
+    task_name: str,
+    control_kind: str,
+    control_config: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    expression = str(control_config.get("expression") or "").strip()
+    parallel_mode = str(control_config.get("parallelMode") or control_config.get("parallel_mode") or "fan_out").strip().lower()
+    if control_kind in {"if", "if_else", "switch"} and not expression:
+        diagnostics.append(
+            {
+                "code": "draft.control_expression_missing",
+                "node_id": node_id,
+                "field": "expression",
+                "message": "Control-flow node requires a non-empty expression.",
+            }
+        )
+    if control_kind in {"if", "if_else"} and expression and not _composer_if_expression_supported(expression):
+        diagnostics.append(
+            {
+                "code": "draft.control_expression_unsupported",
+                "node_id": node_id,
+                "field": "expression",
+                "message": "Conditional control-flow currently supports only context-based expressions.",
+            }
+        )
+    if control_kind == "parallel" and parallel_mode not in {"fan_out", "fan_in"}:
+        diagnostics.append(
+            {
+                "code": "draft.control_parallel_mode_invalid",
+                "node_id": node_id,
+                "field": "parallelMode",
+                "message": "Parallel control-flow node requires parallelMode of fan_out or fan_in.",
+            }
+        )
+    if control_kind == "switch":
+        diagnostics.append(
+            {
+                "code": "draft.control_flow_unsupported",
+                "node_id": node_id,
+                "message": (
+                    f"Control-flow node '{task_name or control_kind}' ({control_kind}) is not compiled into plans yet."
+                ),
+            }
+        )
+    if control_kind == "switch":
+        raw_cases = control_config.get("switchCases")
+        if not isinstance(raw_cases, list):
+            raw_cases = control_config.get("switch_cases")
+        cases = raw_cases if isinstance(raw_cases, list) else []
+        if not cases:
+            diagnostics.append(
+                {
+                    "code": "draft.control_switch_cases_missing",
+                    "node_id": node_id,
+                    "field": "switchCases",
+                    "message": "Switch control-flow node requires at least one case.",
+                }
+            )
+        seen_labels: set[str] = set()
+        for index, raw_case in enumerate(cases):
+            if not isinstance(raw_case, Mapping):
+                diagnostics.append(
+                    {
+                        "code": "draft.control_switch_case_invalid",
+                        "node_id": node_id,
+                        "field": f"switchCases[{index}]",
+                        "message": "Switch case must be an object.",
+                    }
+                )
+                continue
+            label = str(raw_case.get("label") or "").strip()
+            match = str(raw_case.get("match") or "").strip()
+            if not label:
+                diagnostics.append(
+                    {
+                        "code": "draft.control_switch_case_label_missing",
+                        "node_id": node_id,
+                        "field": f"switchCases[{index}].label",
+                        "message": "Switch case label is required.",
+                    }
+                )
+            elif label in seen_labels:
+                diagnostics.append(
+                    {
+                        "code": "draft.control_switch_case_label_duplicate",
+                        "node_id": node_id,
+                        "field": f"switchCases[{index}].label",
+                        "message": f"Duplicate switch case label '{label}'.",
+                    }
+                )
+            else:
+                seen_labels.add(label)
+            if not match:
+                diagnostics.append(
+                    {
+                        "code": "draft.control_switch_case_match_missing",
+                        "node_id": node_id,
+                        "field": f"switchCases[{index}].match",
+                        "message": "Switch case match value is required.",
+                    }
+                )
+    return diagnostics
+
+
+def _composer_if_expression_supported(expression: str) -> bool:
+    normalized = expression.strip()
+    if not normalized:
+        return False
+    if normalized.startswith("context."):
+        return True
+    if "==" in normalized or "!=" in normalized:
+        left, right = normalized.split("==" if "==" in normalized else "!=", 1)
+        left = left.strip()
+        right = right.strip()
+        return left.startswith("context.") and bool(right)
+    return False
+
+
 def _build_plan_from_composer_draft(
     draft: dict[str, Any],
     *,
@@ -2835,6 +3283,7 @@ def _build_plan_from_composer_draft(
     node_by_id: dict[str, dict[str, Any]] = {}
     used_task_names: set[str] = set()
     tool_intent_values = {member.value for member in models.ToolIntent}
+    has_unsupported_control_nodes = False
 
     for index, raw_node in enumerate(raw_nodes):
         if not isinstance(raw_node, dict):
@@ -2850,17 +3299,36 @@ def _build_plan_from_composer_draft(
             raw_node.get("capabilityId") or raw_node.get("capability_id") or ""
         ).strip()
         task_name = str(raw_node.get("taskName") or raw_node.get("task_name") or "").strip()
+        is_control_node = _composer_is_control_node(raw_node)
+        control_kind = _composer_control_kind(raw_node)
+        control_config = _composer_control_config(raw_node)
         if not capability_id:
             diagnostics_errors.append(
                 {
-                    "code": "draft.capability_missing",
+                    "code": "draft.capability_missing" if not is_control_node else "draft.control_kind_missing",
                     "node_id": node_id,
-                    "message": "capabilityId is required.",
+                    "message": "capabilityId is required." if not is_control_node else "Control node is missing control kind/capabilityId.",
                 }
             )
             continue
-        capability_spec = registry.get(capability_id)
-        if capability_spec is None:
+        capability_spec = None
+        if is_control_node:
+            parallel_mode = str(control_config.get("parallelMode") or control_config.get("parallel_mode") or "fan_out").strip().lower()
+            if control_kind not in {"if", "if_else"} and not (
+                control_kind == "parallel" and parallel_mode in {"fan_out", "fan_in"}
+            ):
+                has_unsupported_control_nodes = True
+            diagnostics_errors.extend(
+                _validate_composer_control_node(
+                    node_id=node_id,
+                    task_name=task_name or capability_id,
+                    control_kind=control_kind,
+                    control_config=control_config,
+                )
+            )
+        else:
+            capability_spec = registry.get(capability_id)
+        if not is_control_node and capability_spec is None:
             diagnostics_errors.append(
                 {
                     "code": "draft.capability_unknown",
@@ -2905,6 +3373,9 @@ def _build_plan_from_composer_draft(
             "bindings": dict(bindings),
             "order": index,
             "intent": str(raw_node.get("intent") or "").strip(),
+            "is_control": is_control_node,
+            "control_kind": control_kind,
+            "control_config": dict(control_config),
         }
         canonical_nodes.append(canonical)
         node_by_id[node_id] = canonical
@@ -2954,8 +3425,163 @@ def _build_plan_from_composer_draft(
                 continue
             deps_by_node_id[target_id].add(source_id)
 
+    children_by_node_id: dict[str, set[str]] = {node["node_id"]: set() for node in canonical_nodes}
+    edge_branch_labels: dict[tuple[str, str], str] = {}
+    for target_id, source_ids in deps_by_node_id.items():
+        for source_id in source_ids:
+            if source_id in children_by_node_id:
+                children_by_node_id[source_id].add(target_id)
+    if isinstance(raw_edges, list):
+        for edge in raw_edges:
+            if not isinstance(edge, dict):
+                continue
+            source_id = str(edge.get("fromNodeId") or edge.get("from") or "").strip()
+            target_id = str(edge.get("toNodeId") or edge.get("to") or "").strip()
+            branch_label = str(edge.get("branchLabel") or edge.get("branch_label") or "").strip()
+            if source_id and target_id and branch_label:
+                edge_branch_labels[(source_id, target_id)] = branch_label
+
+    for node in canonical_nodes:
+        if not node.get("is_control") or node.get("control_kind") != "parallel":
+            continue
+        parallel_mode = str(
+            node.get("control_config", {}).get("parallelMode")
+            or node.get("control_config", {}).get("parallel_mode")
+            or "fan_out"
+        ).strip().lower()
+        outgoing_count = len(children_by_node_id.get(node["node_id"], set()))
+        incoming_count = len(deps_by_node_id.get(node["node_id"], set()))
+        if parallel_mode == "fan_out" and outgoing_count < 2:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.control_parallel_fan_out_targets_missing",
+                    "node_id": node["node_id"],
+                    "field": "edges",
+                    "message": "Parallel fan_out control node requires at least two outgoing edges.",
+                }
+            )
+        if parallel_mode == "fan_in" and incoming_count < 2:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.control_parallel_fan_in_sources_missing",
+                    "node_id": node["node_id"],
+                    "field": "edges",
+                    "message": "Parallel fan_in control node requires at least two incoming edges.",
+                }
+            )
+        if parallel_mode == "fan_in" and outgoing_count < 1:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.control_parallel_fan_in_target_missing",
+                    "node_id": node["node_id"],
+                    "field": "edges",
+                    "message": "Parallel fan_in control node requires at least one outgoing edge.",
+                }
+            )
+
+    def _resolve_non_control_deps(node_id: str, seen: set[str] | None = None) -> set[str]:
+        resolved: set[str] = set()
+        for source_id in deps_by_node_id.get(node_id, set()):
+            if source_id == node_id:
+                continue
+            source_node = node_by_id.get(source_id)
+            if source_node is None:
+                continue
+            if not source_node.get("is_control"):
+                resolved.add(source_id)
+                continue
+            next_seen = set(seen or set())
+            if source_id in next_seen:
+                continue
+            next_seen.add(source_id)
+            resolved.update(_resolve_non_control_deps(source_id, next_seen))
+        return resolved
+
+    for node in canonical_nodes:
+        node["execution_gate"] = None
+    for node in canonical_nodes:
+        if not node.get("is_control") or node.get("control_kind") != "if":
+            continue
+        expression = str(node.get("control_config", {}).get("expression") or "").strip()
+        if not expression or not _composer_if_expression_supported(expression):
+            continue
+        queue = list(children_by_node_id.get(node["node_id"], set()))
+        visited: set[str] = set()
+        while queue:
+            candidate_id = queue.pop(0)
+            if candidate_id in visited:
+                continue
+            visited.add(candidate_id)
+            candidate = node_by_id.get(candidate_id)
+            if candidate is None:
+                continue
+            if not candidate.get("is_control"):
+                candidate["execution_gate"] = {"expression": expression}
+            queue.extend(children_by_node_id.get(candidate_id, set()))
+
+    for node in canonical_nodes:
+        if not node.get("is_control") or node.get("control_kind") != "if_else":
+            continue
+        expression = str(node.get("control_config", {}).get("expression") or "").strip()
+        if not expression or not _composer_if_expression_supported(expression):
+            continue
+        config = node.get("control_config", {})
+        true_label = str(config.get("trueLabel") or "true").strip().lower()
+        false_label = str(config.get("falseLabel") or "false").strip().lower()
+        outgoing = sorted(children_by_node_id.get(node["node_id"], set()))
+        true_roots: set[str] = set()
+        false_roots: set[str] = set()
+        for target_id in outgoing:
+            branch_label = edge_branch_labels.get((node["node_id"], target_id), "").strip().lower()
+            if branch_label == true_label:
+                true_roots.add(target_id)
+            elif branch_label == false_label:
+                false_roots.add(target_id)
+        if not true_roots:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.control_if_else_true_branch_missing",
+                    "node_id": node["node_id"],
+                    "field": "edges",
+                    "message": "If / Else control node requires an outgoing edge labeled for the true branch.",
+                }
+            )
+        if not false_roots:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.control_if_else_false_branch_missing",
+                    "node_id": node["node_id"],
+                    "field": "edges",
+                    "message": "If / Else control node requires an outgoing edge labeled for the false branch.",
+                }
+            )
+
+        def _descendants(roots: set[str]) -> set[str]:
+            seen: set[str] = set()
+            queue = list(roots)
+            while queue:
+                candidate_id = queue.pop(0)
+                if candidate_id in seen:
+                    continue
+                seen.add(candidate_id)
+                queue.extend(sorted(children_by_node_id.get(candidate_id, set())))
+            return seen
+
+        true_descendants = _descendants(true_roots)
+        false_descendants = _descendants(false_roots)
+        for candidate_id in sorted(true_descendants - false_descendants):
+            candidate = node_by_id.get(candidate_id)
+            if candidate is not None and not candidate.get("is_control"):
+                candidate["execution_gate"] = {"expression": expression}
+        for candidate_id in sorted(false_descendants - true_descendants):
+            candidate = node_by_id.get(candidate_id)
+            if candidate is not None and not candidate.get("is_control"):
+                candidate["execution_gate"] = {"expression": expression, "negate": True}
+
     tasks_payload: list[dict[str, Any]] = []
     for node in canonical_nodes:
+        if node.get("is_control"):
+            continue
         node_id = node["node_id"]
         capability_id = node["capability_id"]
         capability_spec = node["capability_spec"]
@@ -3076,7 +3702,15 @@ def _build_plan_from_composer_draft(
                 }
             )
 
-        deps = [node_by_id[dep_id]["task_name"] for dep_id in deps_by_node_id.get(node_id, set())]
+        deps = [
+            node_by_id[dep_id]["task_name"]
+            for dep_id in sorted(_resolve_non_control_deps(node_id))
+        ]
+        embedded_tool_inputs = execution_contracts.embed_execution_gate(
+            {capability_id: tool_input_payload},
+            node.get("execution_gate"),
+            request_ids=[capability_id],
+        )
         task_payload: dict[str, Any] = {
             "name": node["task_name"],
             "description": capability_spec.description,
@@ -3085,7 +3719,7 @@ def _build_plan_from_composer_draft(
             "expected_output_schema_ref": capability_spec.output_schema_ref or "",
             "deps": deps,
             "tool_requests": [capability_id],
-            "tool_inputs": {capability_id: tool_input_payload},
+            "tool_inputs": embedded_tool_inputs,
             "critic_required": False,
         }
         intent_value = node.get("intent")
@@ -3123,10 +3757,15 @@ def _build_plan_from_composer_draft(
 
     dag_edges: list[list[str]] = []
     for node in canonical_nodes:
+        if node.get("is_control"):
+            continue
         target_task_name = node["task_name"]
-        for source_node_id in deps_by_node_id.get(node["node_id"], set()):
+        for source_node_id in sorted(_resolve_non_control_deps(node["node_id"])):
             source_task_name = node_by_id[source_node_id]["task_name"]
             dag_edges.append([source_task_name, target_task_name])
+
+    if diagnostics_errors or has_unsupported_control_nodes:
+        return None, diagnostics_errors, diagnostics_warnings
 
     plan_payload = {
         "planner_version": "ui_chaining_composer_v2",
@@ -3313,7 +3952,7 @@ def _handle_plan_created(envelope: dict) -> None:
     plan = _parse_plan_payload(payload)
     if plan is None:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
@@ -3390,7 +4029,11 @@ def _handle_plan_created(envelope: dict) -> None:
                 max_reworks=2,
                 assigned_to=None,
                 tool_requests=task.tool_requests,
-                tool_inputs=task.tool_inputs,
+                tool_inputs=_task_record_tool_inputs(
+                    task.tool_requests,
+                    task.tool_inputs,
+                    task.capability_bindings,
+                ),
                 created_at=now,
                 updated_at=now,
                 critic_required=1 if task.critic_required else 0,
@@ -3435,7 +4078,7 @@ def _handle_plan_failed(envelope: dict) -> None:
     if not job_id:
         return
     error_message = payload.get("error")
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         if not job:
@@ -3456,7 +4099,7 @@ def _handle_task_completed(envelope: dict) -> None:
         return
     _store_task_output(task_id, payload.get("outputs", {}))
     _store_task_result(task_id, payload)
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3484,7 +4127,7 @@ def _handle_task_failed(envelope: dict) -> None:
         return
     _store_task_result(task_id, payload)
     error = payload.get("error")
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3567,7 +4210,7 @@ def _handle_task_started(envelope: dict) -> None:
     task_id = payload.get("task_id") or envelope.get("task_id")
     if not task_id:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3605,7 +4248,7 @@ def _replan_job_for_intent_mismatch(
     mismatch_payload = dict(mismatch) if isinstance(mismatch, Mapping) else {}
     if mismatch_payload:
         mismatch_payload.setdefault("attempt", count + 1)
-        mismatch_payload.setdefault("created_at", datetime.utcnow().isoformat())
+        mismatch_payload.setdefault("created_at", _utcnow().isoformat())
         metadata["intent_mismatch_recovery"] = mismatch_payload
         history = metadata.get("intent_mismatch_recovery_history")
         if not isinstance(history, list):
@@ -3614,7 +4257,7 @@ def _replan_job_for_intent_mismatch(
         metadata["intent_mismatch_recovery_history"] = history[-10:]
     job.metadata_json = metadata
     job.status = models.JobStatus.planning.value
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete(synchronize_session=False)
     db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete(synchronize_session=False)
     db.commit()
@@ -3627,7 +4270,7 @@ def _handle_task_accepted(envelope: dict) -> None:
     task_id = payload.get("task_id") or envelope.get("task_id")
     if not task_id:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3646,7 +4289,7 @@ def _handle_task_rework(envelope: dict) -> None:
     task_id = payload.get("task_id") or envelope.get("task_id")
     if not task_id:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -3686,84 +4329,13 @@ def _limit_exceeded(count: int, limit: int | None) -> bool:
 
 
 def _enqueue_ready_tasks(job_id: str, plan_id: str, correlation_id: str | None) -> None:
-    now = datetime.utcnow()
-    events: list[tuple[str, dict[str, Any]]] = []
-    with SessionLocal() as db:
-        task_records = db.query(TaskRecord).filter(TaskRecord.plan_id == plan_id).all()
-        if not task_records:
-            return
-        job_record = db.query(JobRecord).filter(JobRecord.id == job_id).first()
-        job_context = (
-            job_record.context_json
-            if job_record and isinstance(job_record.context_json, dict)
-            else {}
-        )
-        job_goal = job_record.goal if job_record and isinstance(job_record.goal, str) else ""
-        task_intent_profiles = _coerce_task_intent_profiles(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
-        )
-        tasks = _resolve_task_deps(task_records)
-        task_map = {task.id: task for task in tasks}
-        id_to_name = {record.id: record.name for record in task_records}
-        ready_ids = set(orchestrator.ready_tasks(tasks))
-        if not ready_ids:
-            return
-        for record in task_records:
-            if record.id in ready_ids and record.status == models.TaskStatus.pending.value:
-                if POLICY_GATE_ENABLED:
-                    record.status = models.TaskStatus.blocked.value
-                    record.updated_at = now
-                    context = _build_task_context(record.id, task_map, id_to_name, job_context)
-                    payload = _task_payload_from_record(
-                        record,
-                        correlation_id,
-                        context,
-                        goal_text=job_goal,
-                        intent_profile=task_intent_profiles.get(record.id),
-                    )
-                    events.append(("task.policy_check", payload))
-                    continue
-                next_attempt = (record.attempts or 0) + 1
-                if _limit_exceeded(next_attempt, record.max_attempts):
-                    record.status = models.TaskStatus.failed.value
-                    record.updated_at = now
-                    events.append(
-                        (
-                            "task.failed",
-                            _task_payload_with_error(
-                                record, correlation_id, "max_attempts_exceeded"
-                            ),
-                        )
-                    )
-                    continue
-                record.attempts = next_attempt
-                record.status = models.TaskStatus.ready.value
-                record.updated_at = now
-                context = _build_task_context(record.id, task_map, id_to_name, job_context)
-                payload = _task_payload_from_record(
-                    record,
-                    correlation_id,
-                    context,
-                    goal_text=job_goal,
-                    intent_profile=task_intent_profiles.get(record.id),
-                )
-                if TOOL_INPUT_VALIDATION_ENABLED and payload.get("tool_inputs_validation"):
-                    record.status = models.TaskStatus.failed.value
-                    record.updated_at = now
-                    failed_payload = dict(payload)
-                    failed_payload["error"] = "tool_inputs_invalid"
-                    events.append(
-                        (
-                            "task.failed",
-                            failed_payload,
-                        )
-                    )
-                    continue
-                events.append(("task.ready", payload))
-        db.commit()
-    for event_type, payload in events:
-        _emit_event(event_type, payload)
-    _refresh_job_status(job_id)
+    dispatch_service.enqueue_ready_tasks(
+        job_id,
+        plan_id,
+        correlation_id,
+        runtime=_dispatch_runtime(),
+        callbacks=_dispatch_callbacks(),
+    )
 
 
 def _task_payload_from_record(
@@ -3774,97 +4346,27 @@ def _task_payload_from_record(
     goal_text: str = "",
     intent_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = {
-        "task_id": record.id,
-        "id": record.id,
-        "job_id": record.job_id,
-        "plan_id": record.plan_id,
-        "name": record.name,
-        "description": record.description,
-        "instruction": record.instruction,
-        "acceptance_criteria": record.acceptance_criteria or [],
-        "expected_output_schema_ref": record.expected_output_schema_ref,
-        "status": record.status,
-        "deps": record.deps or [],
-        "attempts": record.attempts or 0,
-        "max_attempts": record.max_attempts or 0,
-        "rework_count": record.rework_count or 0,
-        "max_reworks": record.max_reworks or 0,
-        "assigned_to": record.assigned_to,
-        "tool_requests": record.tool_requests or [],
-        "tool_inputs": record.tool_inputs or {},
-        "critic_required": bool(record.critic_required),
-        "intent": record.intent,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-        "correlation_id": correlation_id or str(uuid.uuid4()),
-    }
-    normalized_profile_segment = _normalize_task_intent_profile_segment(
-        intent_profile.get("segment") if isinstance(intent_profile, Mapping) else None
+    return dispatch_service.task_payload_from_record(
+        record,
+        correlation_id,
+        context=context,
+        goal_text=goal_text,
+        intent_profile=intent_profile,
+        config=_dispatch_runtime().config,
+        callbacks=_dispatch_callbacks(),
     )
-    if normalized_profile_segment is not None:
-        payload["intent_segment"] = normalized_profile_segment
-    profile_intent = (
-        intent_contract.normalize_task_intent(intent_profile.get("intent"))
-        if isinstance(intent_profile, Mapping)
-        else None
-    )
-    profile_source = (
-        str(intent_profile.get("source") or "").strip()
-        if isinstance(intent_profile, Mapping)
-        else ""
-    )
-    profile_confidence = None
-    if isinstance(intent_profile, Mapping):
-        raw_confidence = intent_profile.get("confidence")
-        if isinstance(raw_confidence, (int, float)):
-            profile_confidence = max(0.0, min(1.0, float(raw_confidence)))
-    if profile_intent and not payload.get("intent"):
-        payload["intent"] = profile_intent
-    if profile_intent and profile_source and profile_confidence is not None:
-        payload["intent_source"] = profile_source
-        payload["intent_confidence"] = round(profile_confidence, 3)
-    else:
-        inference_payload = dict(payload)
-        if goal_text:
-            inference_payload["goal"] = goal_text
-        intent_inference = intent_contract.infer_task_intent_for_payload_with_metadata(
-            inference_payload
-        )
-        payload["intent_source"] = intent_inference.source
-        payload["intent_confidence"] = round(float(intent_inference.confidence), 3)
-        if not payload.get("intent"):
-            payload["intent"] = intent_inference.intent
-    ctx = context or {}
-    if context:
-        payload["context"] = context
-    resolved_inputs, resolution_errors = payload_resolver.resolve_tool_inputs_with_errors(
-        payload["tool_requests"],
-        payload["instruction"],
-        ctx,
-        payload,
-        payload.get("tool_inputs", {}),
-    )
-    validation_errors: dict[str, str] = {}
-    if resolved_inputs:
-        payload["tool_inputs"] = resolved_inputs
-        payload["tool_inputs_resolved"] = True
-        validation_errors.update(
-            payload_resolver.validate_tool_inputs(resolved_inputs, TOOL_INPUT_SCHEMAS)
-        )
-    if resolution_errors:
-        validation_errors.update(resolution_errors)
-    if validation_errors:
-        payload["tool_inputs_validation"] = validation_errors
-    return payload
 
 
 def _task_payload_with_error(
     record: TaskRecord, correlation_id: str | None, error: str
 ) -> dict[str, Any]:
-    payload = _task_payload_from_record(record, correlation_id)
-    payload["error"] = error
-    return payload
+    return dispatch_service.task_payload_with_error(
+        record,
+        correlation_id,
+        error,
+        config=_dispatch_runtime().config,
+        callbacks=_dispatch_callbacks(),
+    )
 
 
 def _handle_policy_decision(envelope: dict) -> None:
@@ -3878,7 +4380,7 @@ def _handle_policy_decision(envelope: dict) -> None:
     reasons = payload.get("reasons") or []
     rewrites = payload.get("rewrites")
     correlation_id = envelope.get("correlation_id")
-    now = datetime.utcnow()
+    now = _utcnow()
     events_to_emit: list[tuple[str, dict[str, Any]]] = []
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
@@ -3998,10 +4500,43 @@ def _apply_task_rewrites(task: TaskRecord, rewrites: dict[str, Any]) -> None:
         rewrites["expected_output_schema_ref"], str
     ):
         task.expected_output_schema_ref = rewrites["expected_output_schema_ref"]
+    execution_rewritten = False
+    tool_requests = list(task.tool_requests or [])
+    tool_inputs = execution_contracts.strip_execution_metadata_from_tool_inputs(
+        task.tool_inputs if isinstance(task.tool_inputs, dict) else {}
+    )
+    capability_bindings = _task_capability_bindings(
+        tool_requests,
+        task.tool_inputs if isinstance(task.tool_inputs, dict) else {},
+    )
     if "tool_requests" in rewrites and isinstance(rewrites["tool_requests"], list):
-        task.tool_requests = rewrites["tool_requests"]
+        tool_requests = rewrites["tool_requests"]
+        task.tool_requests = tool_requests
+        execution_rewritten = True
     if "tool_inputs" in rewrites and isinstance(rewrites["tool_inputs"], dict):
-        task.tool_inputs = rewrites["tool_inputs"]
+        tool_inputs = execution_contracts.strip_execution_metadata_from_tool_inputs(
+            rewrites["tool_inputs"]
+        )
+        execution_rewritten = True
+    if "capability_bindings" in rewrites and isinstance(rewrites["capability_bindings"], dict):
+        capability_bindings = _task_capability_bindings(
+            tool_requests,
+            tool_inputs,
+            rewrites["capability_bindings"],
+        )
+        execution_rewritten = True
+    elif execution_rewritten:
+        capability_bindings = _task_capability_bindings(
+            tool_requests,
+            tool_inputs,
+            capability_bindings,
+        )
+    if execution_rewritten:
+        task.tool_inputs = _task_record_tool_inputs(
+            tool_requests,
+            tool_inputs,
+            capability_bindings,
+        )
 
 
 def _resolve_task_deps(task_records: list[TaskRecord]) -> list[models.Task]:
@@ -4096,6 +4631,106 @@ def _collect_reference_paths(value: Any) -> list[list[str]]:
 
     _walk(value)
     return refs
+
+
+def _normalize_preflight_reference_payload(
+    value: Any,
+    *,
+    dependency_names: set[str],
+    tasks_by_name: Mapping[str, models.TaskCreate],
+) -> Any:
+    if isinstance(value, dict):
+        normalized = dict(value)
+        from_path = normalized.get("$from")
+        if isinstance(from_path, str) and from_path.strip():
+            raw = from_path.strip()
+            body = raw[2:] if raw.startswith("$.") else raw
+            if body.startswith("/"):
+                parts = [part.replace("~1", "/").replace("~0", "~") for part in body.split("/")[1:]]
+            else:
+                parts = [segment for segment in body.split(".") if segment]
+            canonical = _canonicalize_preflight_reference_path(
+                parts,
+                dependency_names=dependency_names,
+                tasks_by_name=tasks_by_name,
+            )
+            if canonical:
+                escaped = [segment.replace("~", "~0").replace("/", "~1") for segment in canonical]
+                normalized["$from"] = "/" + "/".join(escaped)
+        for key, child in list(normalized.items()):
+            if key == "$from":
+                continue
+            normalized[key] = _normalize_preflight_reference_payload(
+                child,
+                dependency_names=dependency_names,
+                tasks_by_name=tasks_by_name,
+            )
+        return normalized
+    if isinstance(value, list):
+        return [
+            _normalize_preflight_reference_payload(
+                child,
+                dependency_names=dependency_names,
+                tasks_by_name=tasks_by_name,
+            )
+            for child in value
+        ]
+    return value
+
+
+def _canonicalize_preflight_reference_path(
+    path: list[str],
+    *,
+    dependency_names: set[str],
+    tasks_by_name: Mapping[str, models.TaskCreate],
+) -> list[str]:
+    if len(path) < 3:
+        return path
+
+    if path[0] in {"dependencies_by_name", "dependencies"}:
+        root = path[0]
+        remaining = path[1:]
+    else:
+        root = ""
+        remaining = path
+
+    dep_name: str | None = None
+    dep_consumed = 0
+    for end in range(len(remaining), 0, -1):
+        candidate = ".".join(remaining[:end]).strip()
+        if candidate in dependency_names:
+            dep_name = candidate
+            dep_consumed = end
+            break
+    if not dep_name:
+        return path
+
+    dep_task = tasks_by_name.get(dep_name)
+    if dep_task is None:
+        return path
+
+    tail = remaining[dep_consumed:]
+    if not tail:
+        normalized = [dep_name]
+        return [root, *normalized] if root else normalized
+
+    tool_requests = [str(item).strip() for item in (dep_task.tool_requests or []) if str(item).strip()]
+    tool_name: str | None = None
+    tool_consumed = 0
+    for end in range(len(tail), 0, -1):
+        candidate = ".".join(tail[:end]).strip()
+        if candidate in tool_requests:
+            tool_name = candidate
+            tool_consumed = end
+            break
+
+    normalized = [dep_name]
+    if tool_name:
+        normalized.append(tool_name)
+        normalized.extend(tail[tool_consumed:])
+    else:
+        normalized.extend(tail)
+    return [root, *normalized] if root else normalized
 
 
 def _build_preflight_dependency_output(task: models.TaskCreate) -> dict[str, Any]:
@@ -4210,20 +4845,30 @@ def _compile_plan_preflight(
         if isinstance(job_context, dict) and job_context:
             context["job_context"] = job_context
 
+        normalized_tool_inputs = _normalize_preflight_reference_payload(
+            task.tool_inputs or {},
+            dependency_names=dependency_names,
+            tasks_by_name=tasks_by_name,
+        )
         task_payload = {
             "name": task.name,
             "instruction": task.instruction,
             "tool_requests": list(task.tool_requests or []),
-            "tool_inputs": task.tool_inputs or {},
+            "tool_inputs": normalized_tool_inputs,
         }
 
         # Seed exact $from paths with typed placeholders to reduce false negatives
         # when dependency outputs are not available yet.
-        references = _collect_reference_paths(task.tool_inputs or {})
+        references = _collect_reference_paths(normalized_tool_inputs)
         reference_error: str | None = None
         for path in references:
             if not path:
                 continue
+            path = _canonicalize_preflight_reference_path(
+                path,
+                dependency_names=dependency_names,
+                tasks_by_name=tasks_by_name,
+            )
             if path[0] in {"dependencies_by_name", "dependencies", "job_context"}:
                 root_key = path[0]
                 if root_key == "job_context":
@@ -4303,6 +4948,20 @@ def _compile_plan_preflight(
             )
             segment_payload = dict(resolved_payload)
             segment_payload.setdefault("tool_inputs", task_payload.get("tool_inputs", {}))
+            if (
+                "instruction" not in segment_payload
+                and isinstance(task.instruction, str)
+                and task.instruction.strip()
+            ):
+                segment_payload["instruction"] = task.instruction.strip()
+            if request_id == "github.repo.list":
+                github_query = _synthesize_preflight_github_repo_query(
+                    task_payload=task_payload,
+                    segment_payload=segment_payload,
+                    job_context=context.get("job_context"),
+                )
+                if github_query:
+                    segment_payload["query"] = github_query
             capability_spec = capabilities.get(request_id)
             segment_contract_error = intent_contract.validate_intent_segment_contract(
                 segment=goal_intent_segment,
@@ -4363,14 +5022,14 @@ def _goal_intent_segments_for_preflight(
     *,
     goal_intent_graph: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    if not isinstance(goal_intent_graph, Mapping):
-        return []
-    raw_segments = goal_intent_graph.get("segments")
-    if not isinstance(raw_segments, list):
+    graph = workflow_contracts.parse_intent_graph(goal_intent_graph)
+    if graph is None:
         return []
     segments: list[dict[str, Any]] = []
-    for raw_segment in raw_segments:
-        normalized = _normalize_task_intent_profile_segment(raw_segment)
+    for raw_segment in graph.segments:
+        normalized = _normalize_task_intent_profile_segment(
+            raw_segment.model_dump(mode="json", exclude_none=True)
+        )
         if normalized is not None:
             segments.append(normalized)
     return segments
@@ -4558,6 +5217,47 @@ def _preflight_capability_intent_mismatch(
     return f"task_intent_mismatch:{capability_id}:{task_intent}:allowed={','.join(sorted(allowed))}"
 
 
+def _synthesize_preflight_github_repo_query(
+    *,
+    task_payload: Mapping[str, Any] | None,
+    segment_payload: Mapping[str, Any] | None,
+    job_context: Mapping[str, Any] | None,
+) -> str | None:
+    def _read_str(source: Mapping[str, Any] | None, *keys: str) -> str | None:
+        if not isinstance(source, Mapping):
+            return None
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    raw_tool_inputs = None
+    if isinstance(task_payload, Mapping):
+        tool_inputs = task_payload.get("tool_inputs")
+        if isinstance(tool_inputs, Mapping):
+            entry = tool_inputs.get("github.repo.list")
+            if isinstance(entry, Mapping):
+                raw_tool_inputs = entry
+    owner = (
+        _read_str(raw_tool_inputs, "owner", "repo_owner")
+        or _read_str(segment_payload, "owner", "repo_owner")
+        or _read_str(job_context, "owner", "repo_owner")
+    )
+    repo = (
+        _read_str(raw_tool_inputs, "repo", "repo_name")
+        or _read_str(segment_payload, "repo", "repo_name")
+        or _read_str(job_context, "repo", "repo_name")
+    )
+    if owner and repo:
+        return f"repo:{repo} owner:{owner}"
+    return (
+        _read_str(raw_tool_inputs, "query", "github_query")
+        or _read_str(segment_payload, "query", "github_query")
+        or _read_str(job_context, "query", "github_query")
+    )
+
+
 def _store_task_output(task_id: str, outputs: dict[str, Any]) -> None:
     try:
         redis_client.set(f"{TASK_OUTPUT_KEY_PREFIX}{task_id}", json.dumps(outputs))
@@ -4670,7 +5370,7 @@ def _record_intent_confidence_outcome(job: JobRecord, status: models.JobStatus) 
         "confidence": round(bounded_confidence, 3),
         "threshold": round(threshold, 3),
         "above_threshold": above_threshold,
-        "recorded_at": datetime.utcnow().isoformat(),
+        "recorded_at": _utcnow().isoformat(),
     }
     job.metadata_json = metadata
 
@@ -4684,7 +5384,7 @@ def _refresh_job_status(job_id: str) -> None:
         if not tasks:
             return
         statuses = {task.status for task in tasks}
-        now = datetime.utcnow()
+        now = _utcnow()
         if models.TaskStatus.failed.value in statuses:
             next_status = models.JobStatus.failed
         elif statuses.issubset(
@@ -4898,7 +5598,7 @@ def _parse_task_stream_event(stream_id: str, record: Mapping[str, str]) -> dict[
         return None
     occurred_at = envelope.get("occurred_at")
     if not isinstance(occurred_at, str):
-        occurred_at = datetime.utcnow().isoformat()
+        occurred_at = _utcnow().isoformat()
     status = payload_dict.get("status")
     status_text = status if isinstance(status, str) and status else event_type.replace("task.", "")
     error = payload_dict.get("error")
@@ -4937,22 +5637,64 @@ def _read_task_events_for_job(job_id: str, limit: int) -> list[dict[str, Any]]:
     return entries
 
 
-@app.post("/jobs", response_model=models.Job)
-def create_job(
-    job: models.JobCreate,
-    require_clarification: bool = Query(False),
+@app.post("/chat/sessions", response_model=chat_contracts.ChatSession)
+def create_chat_session(
+    request: chat_contracts.ChatSessionCreate,
     db: Session = Depends(get_db),
+) -> chat_contracts.ChatSession:
+    return chat_service.create_session(db, request, runtime=_chat_runtime())
+
+
+@app.get("/chat/sessions/{session_id}", response_model=chat_contracts.ChatSession)
+def get_chat_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+) -> chat_contracts.ChatSession:
+    session = chat_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="chat_session_not_found")
+    return session
+
+
+@app.post(
+    "/chat/sessions/{session_id}/messages",
+    response_model=chat_contracts.ChatTurnResponse,
+)
+def create_chat_message(
+    session_id: str,
+    request: chat_contracts.ChatTurnRequest,
+    db: Session = Depends(get_db),
+) -> chat_contracts.ChatTurnResponse:
+    try:
+        return chat_service.handle_turn(
+            db,
+            session_id,
+            request,
+            runtime=_chat_runtime(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="chat_session_not_found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _create_job_internal(
+    job: models.JobCreate,
+    db: Session,
+    *,
+    require_clarification: bool = False,
 ) -> models.Job:
     job_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = _utcnow()
     goal_assessment = _assess_goal_intent(job.goal)
+    goal_assessment_json = workflow_contracts.dump_goal_intent_profile(goal_assessment) or {}
     gate_on_create = bool(require_clarification or INTENT_CLARIFICATION_ON_CREATE)
-    if gate_on_create and bool(goal_assessment.get("requires_blocking_clarification")):
+    if gate_on_create and bool(goal_assessment.requires_blocking_clarification):
         raise HTTPException(
             status_code=422,
             detail={
                 "error": "intent_clarification_required",
-                "goal_intent_profile": goal_assessment,
+                "goal_intent_profile": goal_assessment_json,
             },
         )
     context_json_for_job = (
@@ -4993,7 +5735,7 @@ def create_job(
         context_json_for_job if isinstance(context_json_for_job, Mapping) else None
     )
     metadata["semantic_user_id"] = semantic_user_id
-    metadata["goal_intent_profile"] = goal_assessment
+    metadata["goal_intent_profile"] = goal_assessment_json
     if INTENT_DECOMPOSE_ENABLED:
         goal_intent_graph = _decompose_goal_intent(
             job.goal,
@@ -5006,7 +5748,7 @@ def create_job(
                 goal_intent_graph,
                 interaction_compaction,
             )
-        metadata["goal_intent_graph"] = goal_intent_graph
+        metadata["goal_intent_graph"] = goal_intent_graph.model_dump(mode="json", exclude_none=True)
     record = JobRecord(
         id=job_id,
         goal=job.goal,
@@ -5045,6 +5787,15 @@ def create_job(
         _seed_task_output_memory(db, job_id, context_json_for_job)
     _emit_event("job.created", _job_from_record(record).model_dump())
     return _job_from_record(record)
+
+
+@app.post("/jobs", response_model=models.Job)
+def create_job(
+    job: models.JobCreate,
+    require_clarification: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> models.Job:
+    return _create_job_internal(job, db, require_clarification=require_clarification)
 
 
 def _seed_task_output_memory(db: Session, job_id: str, context_json: Dict[str, Any]) -> None:
@@ -5333,7 +6084,7 @@ def get_job_debugger(
         "job_id": job_id,
         "job_status": job.status,
         "plan_id": plan_record.id if plan_record else None,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": _utcnow().isoformat(),
         "timeline_events_scanned": len(timeline),
         "tasks": tasks_payload,
     }
@@ -5393,7 +6144,7 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     ):
         raise HTTPException(status_code=400, detail="Invalid state transition")
     job.status = models.JobStatus.canceled.value
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.commit()
     _emit_event("job.canceled", {"job_id": job_id, "correlation_id": str(uuid.uuid4())})
     return _job_from_record(job)
@@ -5407,7 +6158,7 @@ def resume_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     if models.JobStatus(job.status) != models.JobStatus.canceled:
         raise HTTPException(status_code=400, detail="Job is not canceled")
     _set_job_status(job, models.JobStatus.planning)
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.commit()
     plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
     if plan:
@@ -5422,7 +6173,7 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
         raise HTTPException(status_code=404, detail="Job not found")
     if models.JobStatus(job.status) not in {models.JobStatus.failed, models.JobStatus.canceled}:
         raise HTTPException(status_code=400, detail="Job is not retryable")
-    now = datetime.utcnow()
+    now = _utcnow()
     tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
     for task in tasks:
         task.status = models.TaskStatus.pending.value
@@ -5443,7 +6194,7 @@ def retry_failed_tasks(job_id: str, db: Session = Depends(get_db)) -> models.Job
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    now = datetime.utcnow()
+    now = _utcnow()
     failed_tasks = (
         db.query(TaskRecord)
         .filter(
@@ -5485,7 +6236,7 @@ def retry_task(
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status != models.TaskStatus.failed.value:
         raise HTTPException(status_code=400, detail="Task is not failed")
-    now = datetime.utcnow()
+    now = _utcnow()
     task.status = models.TaskStatus.pending.value
     task.attempts = 0
     task.rework_count = 0
@@ -5520,7 +6271,7 @@ def replan_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     metadata["replan_reason"] = "manual"
     job.metadata_json = metadata
     job.status = models.JobStatus.planning.value
-    job.updated_at = datetime.utcnow()
+    job.updated_at = _utcnow()
     db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete(synchronize_session=False)
     db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete(synchronize_session=False)
     db.commit()
@@ -5641,6 +6392,39 @@ def read_memory(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/memory/specs", response_model=List[models.MemorySpec])
+def list_memory_specs() -> List[models.MemorySpec]:
+    return memory_store.list_memory_specs()
+
+
+@app.delete("/memory/delete", response_model=models.MemoryEntry)
+def delete_memory(
+    name: str = Query(...),
+    scope: models.MemoryScope | None = Query(None),
+    key: str | None = Query(None),
+    job_id: str | None = Query(None),
+    user_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> models.MemoryEntry:
+    try:
+        return memory_store.delete_memory(
+            db,
+            name=name,
+            scope=scope,
+            key=key,
+            job_id=job_id,
+            user_id=user_id,
+            project_id=project_id,
+        )
+    except KeyError as exc:
+        detail = str(exc)
+        status_code = 404 if "memory_not_found" in detail or "unknown_memory" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/memory/semantic/write")
 def write_semantic_memory(
     payload: dict[str, Any],
@@ -5705,7 +6489,7 @@ def write_semantic_memory(
         "query_text": " ".join(
             part for part in [namespace, subject, fact, " ".join(keywords), " ".join(aliases)] if part
         ),
-        "captured_at": datetime.utcnow().isoformat(),
+        "captured_at": _utcnow().isoformat(),
     }
     write_request = models.MemoryWrite(
         name="semantic_memory",
@@ -5904,7 +6688,7 @@ def clarify_intent(payload: dict[str, Any]) -> dict[str, Any]:
     assessment = _assess_goal_intent(goal)
     return {
         "goal": goal,
-        "assessment": assessment,
+        "assessment": workflow_contracts.dump_goal_intent_profile(assessment) or {},
     }
 
 
@@ -5940,7 +6724,7 @@ def decompose_intent(
         graph = _attach_interaction_compaction_to_graph(graph, compaction)
     return {
         "goal": goal,
-        "intent_graph": graph,
+        "intent_graph": graph.model_dump(mode="json", exclude_none=True),
     }
 
 
@@ -6114,7 +6898,7 @@ def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_
             },
         )
     plan_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = _utcnow()
     record = PlanRecord(
         id=plan_id,
         job_id=job_id,
@@ -6151,7 +6935,11 @@ def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_
             max_reworks=2,
             assigned_to=None,
             tool_requests=task.tool_requests,
-            tool_inputs=task.tool_inputs,
+            tool_inputs=_task_record_tool_inputs(
+                task.tool_requests,
+                task.tool_inputs,
+                task.capability_bindings,
+            ),
             created_at=now,
             updated_at=now,
             critic_required=1 if task.critic_required else 0,

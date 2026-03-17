@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Callable
 
 from libs.core import prompts
-from libs.core.llm_provider import LLMProvider
+from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolExecutionError
 from libs.tools.document_spec_validate import _document_spec_validate
@@ -363,14 +362,21 @@ def _llm_generate_runbook_document_spec(
     if not isinstance(job, dict):
         raise ToolExecutionError("job must be an object")
     prompt = prompts.runbook_document_spec_prompt(job, allowed)
-    response = provider.generate(prompt)
-    json_text = _extract_json(response.content)
-    if not json_text:
-        raise ToolExecutionError("Failed to extract JSON from LLM response")
     try:
-        document_spec = json.loads(json_text)
-    except json.JSONDecodeError as exc:
-        raise ToolExecutionError(f"Invalid JSON returned: {exc}") from exc
+        document_spec = provider.generate_request_json_object(
+            LLMRequest(
+                prompt=prompt,
+                metadata={
+                    "component": "tools",
+                    "tool": "llm_iterative_improve_runbook_spec",
+                    "operation": "generate_runbook_document_spec",
+                    "job_keys": len(job),
+                    "allowed_block_types": len(allowed),
+                },
+            )
+        )
+    except LLMProviderError as exc:
+        raise ToolExecutionError(str(exc)) from exc
     if not isinstance(document_spec, dict):
         raise ToolExecutionError("DocumentSpec must be an object")
     return {"document_spec": sanitize_document_spec(document_spec)}
@@ -397,14 +403,24 @@ def _llm_improve_runbook_document_spec(
     prompt = prompts.runbook_document_spec_improve_prompt(
         document_spec, validation_report, job=job, allowed_block_types=allowed
     )
-    response = provider.generate(prompt)
-    json_text = _extract_json(response.content)
-    if not json_text:
-        raise ToolExecutionError("Failed to extract JSON from LLM response")
     try:
-        improved_spec = json.loads(json_text)
-    except json.JSONDecodeError as exc:
-        raise ToolExecutionError(f"Invalid JSON returned: {exc}") from exc
+        improved_spec = provider.generate_request_json_object(
+            LLMRequest(
+                prompt=prompt,
+                metadata={
+                    "component": "tools",
+                    "tool": "llm_iterative_improve_runbook_spec",
+                    "operation": "improve_runbook_document_spec",
+                    "document_spec_keys": len(document_spec),
+                    "validation_error_count": len(validation_report.get("errors", []))
+                    if isinstance(validation_report.get("errors"), list)
+                    else 0,
+                    "allowed_block_types": len(allowed) if isinstance(allowed, list) else 0,
+                },
+            )
+        )
+    except LLMProviderError as exc:
+        raise ToolExecutionError(str(exc)) from exc
     if not isinstance(improved_spec, dict):
         raise ToolExecutionError("Improved DocumentSpec must be an object")
     return {"document_spec": sanitize_document_spec(improved_spec)}
@@ -429,32 +445,6 @@ def _filter_document_spec_validation_report(
     filtered = dict(report)
     filtered["warnings"] = filtered_warnings
     return filtered
-
-
-def _extract_json(text: str) -> str:
-    content = text.strip()
-    if content.startswith("```"):
-        parts = content.split("```")
-        if len(parts) > 1:
-            content = parts[1]
-        content = content.lstrip()
-        if content.startswith("json"):
-            content = content[4:].lstrip()
-    first_obj = content.find("{")
-    first_arr = content.find("[")
-    if first_obj == -1 and first_arr == -1:
-        return ""
-    if first_arr == -1 or (first_obj != -1 and first_obj < first_arr):
-        start = first_obj
-        end = content.rfind("}")
-    else:
-        start = first_arr
-        end = content.rfind("]")
-    if start == -1 or end == -1 or end <= start:
-        return ""
-    return content[start : end + 1]
-
-
 def _resolve_allowed_block_types(raw: Any) -> list[str]:
     if raw is None:
         return list(_DEFAULT_ALLOWED_BLOCK_TYPES)
