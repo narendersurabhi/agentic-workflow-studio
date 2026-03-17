@@ -55,7 +55,7 @@ export type ComposerInputBinding =
     }
   | {
       kind: "memory";
-      scope: "job" | "global";
+      scope: "job" | "user" | "global";
       name: string;
       key?: string;
     };
@@ -150,6 +150,47 @@ export type ChainPreflightResult = {
     slot_fields?: string[];
   }[];
   checkedAt: string;
+};
+
+export type WorkflowDefinition = {
+  id: string;
+  title: string;
+  goal: string;
+  context_json: Record<string, unknown>;
+  draft: Record<string, unknown>;
+  user_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkflowVersion = {
+  id: string;
+  definition_id: string;
+  version_number: number;
+  title: string;
+  goal: string;
+  context_json: Record<string, unknown>;
+  draft: Record<string, unknown>;
+  compiled_plan: Record<string, unknown>;
+  user_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type WorkflowRunResult = {
+  workflow_definition: WorkflowDefinition;
+  workflow_version: WorkflowVersion;
+  job: {
+    id: string;
+    goal: string;
+    status: string;
+  };
+  plan: {
+    id: string;
+    job_id: string;
+    planner_version: string;
+  };
 };
 
 export type ComposerValidationIssue = {

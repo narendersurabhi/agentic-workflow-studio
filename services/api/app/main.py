@@ -49,6 +49,8 @@ from .models import (
     JobRecord,
     PlanRecord,
     TaskRecord,
+    WorkflowDefinitionRecord,
+    WorkflowVersionRecord,
 )
 from . import chat_execution_service, chat_service, dispatch_service, intent_service, memory_store
 
@@ -499,6 +501,38 @@ def _plan_from_record(record: PlanRecord) -> models.Plan:
         tasks_summary=record.tasks_summary,
         dag_edges=record.dag_edges or [],
         policy_decision=record.policy_decision or None,
+    )
+
+
+def _workflow_definition_from_record(
+    record: WorkflowDefinitionRecord,
+) -> models.WorkflowDefinition:
+    return models.WorkflowDefinition(
+        id=record.id,
+        title=record.title,
+        goal=record.goal or "",
+        context_json=record.context_json or {},
+        draft=record.draft_json or {},
+        user_id=record.user_id,
+        metadata=record.metadata_json or {},
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _workflow_version_from_record(record: WorkflowVersionRecord) -> models.WorkflowVersion:
+    return models.WorkflowVersion(
+        id=record.id,
+        definition_id=record.definition_id,
+        version_number=record.version_number,
+        title=record.title,
+        goal=record.goal or "",
+        context_json=record.context_json or {},
+        draft=record.draft_json or {},
+        compiled_plan=record.compiled_plan_json or {},
+        user_id=record.user_id,
+        metadata=record.metadata_json or {},
+        created_at=record.created_at,
     )
 
 
@@ -3268,6 +3302,7 @@ def _build_plan_from_composer_draft(
     draft: dict[str, Any],
     *,
     goal_text: str = "",
+    job_context: Mapping[str, Any] | None = None,
 ) -> tuple[models.PlanCreate | None, list[dict[str, Any]], list[dict[str, Any]]]:
     diagnostics_errors: list[dict[str, Any]] = []
     diagnostics_warnings: list[dict[str, Any]] = []
@@ -3684,13 +3719,22 @@ def _build_plan_from_composer_draft(
                         }
                     )
                     continue
+                memory_scope = str(raw_binding.get("scope") or "job").strip() or "job"
                 memory_payload: dict[str, Any] = {
-                    "scope": str(raw_binding.get("scope") or "job"),
+                    "scope": memory_scope,
                     "name": name,
                 }
                 key = raw_binding.get("key")
                 if isinstance(key, str) and key.strip():
                     memory_payload["key"] = key.strip()
+                explicit_user_id = _semantic_normalize_text(
+                    raw_binding.get("userId") or raw_binding.get("user_id"),
+                    max_len=120,
+                )
+                if explicit_user_id:
+                    memory_payload["user_id"] = explicit_user_id
+                elif memory_scope == "user":
+                    memory_payload["user_id"] = _semantic_user_id_from_context(job_context)
                 tool_input_payload[field_name] = memory_payload
                 continue
             diagnostics_errors.append(
@@ -5683,6 +5727,8 @@ def _create_job_internal(
     db: Session,
     *,
     require_clarification: bool = False,
+    emit_job_created_event: bool = True,
+    metadata_overrides: Mapping[str, Any] | None = None,
 ) -> models.Job:
     job_id = str(uuid.uuid4())
     now = _utcnow()
@@ -5749,6 +5795,8 @@ def _create_job_internal(
                 interaction_compaction,
             )
         metadata["goal_intent_graph"] = goal_intent_graph.model_dump(mode="json", exclude_none=True)
+    if isinstance(metadata_overrides, Mapping):
+        metadata.update(dict(metadata_overrides))
     record = JobRecord(
         id=job_id,
         goal=job.goal,
@@ -5785,7 +5833,8 @@ def _create_job_internal(
         except (KeyError, ValueError):
             pass
         _seed_task_output_memory(db, job_id, context_json_for_job)
-    _emit_event("job.created", _job_from_record(record).model_dump())
+    if emit_job_created_event:
+        _emit_event("job.created", _job_from_record(record).model_dump())
     return _job_from_record(record)
 
 
@@ -6728,6 +6777,285 @@ def decompose_intent(
     }
 
 
+def _workflow_title_fallback(goal: str, title: str) -> str:
+    candidate = str(title or "").strip() or str(goal or "").strip()
+    return candidate[:120] or "Workflow Studio draft"
+
+
+def _compile_workflow_definition_version(
+    definition: WorkflowDefinitionRecord,
+) -> tuple[models.PlanCreate, dict[str, Any]]:
+    raw_draft = definition.draft_json if isinstance(definition.draft_json, dict) else {}
+    goal_text = str(definition.goal or "").strip()
+    job_context = dict(definition.context_json) if isinstance(definition.context_json, dict) else {}
+    plan, diagnostics_errors, diagnostics_warnings = _build_plan_from_composer_draft(
+        raw_draft,
+        goal_text=goal_text,
+        job_context=job_context,
+    )
+    if plan is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "workflow_compile_failed",
+                "diagnostics": {
+                    "errors": diagnostics_errors,
+                    "warnings": diagnostics_warnings,
+                },
+            },
+        )
+    preflight_errors = _compile_plan_preflight(
+        plan,
+        job_context,
+        goal_text=goal_text,
+        goal_intent_graph=None,
+    )
+    if preflight_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "workflow_preflight_failed",
+                "preflight_errors": preflight_errors,
+                "diagnostics": {
+                    "errors": diagnostics_errors,
+                    "warnings": diagnostics_warnings,
+                },
+            },
+        )
+    return plan, {
+        "diagnostics": {
+            "errors": diagnostics_errors,
+            "warnings": diagnostics_warnings,
+        },
+        "preflight_errors": preflight_errors,
+    }
+
+
+@app.post("/workflows/definitions", response_model=models.WorkflowDefinition)
+def create_workflow_definition(
+    payload: models.WorkflowDefinitionCreate,
+    db: Session = Depends(get_db),
+) -> models.WorkflowDefinition:
+    now = _utcnow()
+    normalized_user_id = _semantic_normalize_text(payload.user_id, max_len=120) or _semantic_user_id_from_context(
+        payload.context_json
+    )
+    record = WorkflowDefinitionRecord(
+        id=str(uuid.uuid4()),
+        title=_workflow_title_fallback(payload.goal, payload.title),
+        goal=str(payload.goal or "").strip(),
+        context_json=dict(payload.context_json) if isinstance(payload.context_json, dict) else {},
+        draft_json=dict(payload.draft) if isinstance(payload.draft, dict) else {},
+        user_id=normalized_user_id or None,
+        metadata_json=dict(payload.metadata) if isinstance(payload.metadata, dict) else {},
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return _workflow_definition_from_record(record)
+
+
+@app.get("/workflows/definitions", response_model=List[models.WorkflowDefinition])
+def list_workflow_definitions(
+    user_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> List[models.WorkflowDefinition]:
+    query = db.query(WorkflowDefinitionRecord)
+    normalized_user_id = _semantic_normalize_text(user_id, max_len=120)
+    if normalized_user_id:
+        query = query.filter(WorkflowDefinitionRecord.user_id == normalized_user_id)
+    records = query.order_by(WorkflowDefinitionRecord.updated_at.desc()).all()
+    return [_workflow_definition_from_record(record) for record in records]
+
+
+@app.get("/workflows/definitions/{definition_id}", response_model=models.WorkflowDefinition)
+def get_workflow_definition(
+    definition_id: str,
+    db: Session = Depends(get_db),
+) -> models.WorkflowDefinition:
+    record = (
+        db.query(WorkflowDefinitionRecord)
+        .filter(WorkflowDefinitionRecord.id == definition_id)
+        .first()
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="workflow_definition_not_found")
+    return _workflow_definition_from_record(record)
+
+
+@app.put("/workflows/definitions/{definition_id}", response_model=models.WorkflowDefinition)
+def update_workflow_definition(
+    definition_id: str,
+    payload: models.WorkflowDefinitionUpdate,
+    db: Session = Depends(get_db),
+) -> models.WorkflowDefinition:
+    record = (
+        db.query(WorkflowDefinitionRecord)
+        .filter(WorkflowDefinitionRecord.id == definition_id)
+        .first()
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="workflow_definition_not_found")
+    next_goal = str(payload.goal if payload.goal is not None else record.goal or "").strip()
+    next_title = (
+        str(payload.title).strip()
+        if payload.title is not None
+        else str(record.title or "").strip()
+    )
+    record.title = _workflow_title_fallback(next_goal, next_title)
+    record.goal = next_goal
+    if payload.context_json is not None and isinstance(payload.context_json, dict):
+        record.context_json = dict(payload.context_json)
+    if payload.draft is not None and isinstance(payload.draft, dict):
+        record.draft_json = dict(payload.draft)
+    if payload.user_id is not None:
+        record.user_id = _semantic_normalize_text(payload.user_id, max_len=120) or None
+    if payload.metadata is not None and isinstance(payload.metadata, dict):
+        record.metadata_json = dict(payload.metadata)
+    record.updated_at = _utcnow()
+    db.commit()
+    db.refresh(record)
+    return _workflow_definition_from_record(record)
+
+
+@app.get(
+    "/workflows/definitions/{definition_id}/versions",
+    response_model=List[models.WorkflowVersion],
+)
+def list_workflow_versions(
+    definition_id: str,
+    db: Session = Depends(get_db),
+) -> List[models.WorkflowVersion]:
+    definition = (
+        db.query(WorkflowDefinitionRecord)
+        .filter(WorkflowDefinitionRecord.id == definition_id)
+        .first()
+    )
+    if definition is None:
+        raise HTTPException(status_code=404, detail="workflow_definition_not_found")
+    records = (
+        db.query(WorkflowVersionRecord)
+        .filter(WorkflowVersionRecord.definition_id == definition_id)
+        .order_by(WorkflowVersionRecord.version_number.desc())
+        .all()
+    )
+    return [_workflow_version_from_record(record) for record in records]
+
+
+@app.post(
+    "/workflows/definitions/{definition_id}/publish",
+    response_model=models.WorkflowVersion,
+)
+def publish_workflow_definition(
+    definition_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> models.WorkflowVersion:
+    definition = (
+        db.query(WorkflowDefinitionRecord)
+        .filter(WorkflowDefinitionRecord.id == definition_id)
+        .first()
+    )
+    if definition is None:
+        raise HTTPException(status_code=404, detail="workflow_definition_not_found")
+    compiled_plan, publish_meta = _compile_workflow_definition_version(definition)
+    latest = (
+        db.query(WorkflowVersionRecord)
+        .filter(WorkflowVersionRecord.definition_id == definition_id)
+        .order_by(WorkflowVersionRecord.version_number.desc())
+        .first()
+    )
+    next_version_number = 1 if latest is None else int(latest.version_number) + 1
+    merged_metadata = dict(definition.metadata_json or {})
+    if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
+        merged_metadata.update(dict(payload["metadata"]))
+    merged_metadata["publish"] = publish_meta
+    record = WorkflowVersionRecord(
+        id=str(uuid.uuid4()),
+        definition_id=definition.id,
+        version_number=next_version_number,
+        title=definition.title,
+        goal=definition.goal,
+        context_json=dict(definition.context_json or {}),
+        draft_json=dict(definition.draft_json or {}),
+        compiled_plan_json=compiled_plan.model_dump(mode="json"),
+        user_id=definition.user_id,
+        metadata_json=merged_metadata,
+        created_at=_utcnow(),
+    )
+    definition.updated_at = _utcnow()
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return _workflow_version_from_record(record)
+
+
+@app.post(
+    "/workflows/versions/{version_id}/run",
+    response_model=models.WorkflowRunResult,
+)
+def run_workflow_version(
+    version_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> models.WorkflowRunResult:
+    version = (
+        db.query(WorkflowVersionRecord)
+        .filter(WorkflowVersionRecord.id == version_id)
+        .first()
+    )
+    if version is None:
+        raise HTTPException(status_code=404, detail="workflow_version_not_found")
+    definition = (
+        db.query(WorkflowDefinitionRecord)
+        .filter(WorkflowDefinitionRecord.id == version.definition_id)
+        .first()
+    )
+    if definition is None:
+        raise HTTPException(status_code=404, detail="workflow_definition_not_found")
+    compiled_plan = _parse_plan_payload(version.compiled_plan_json or {})
+    if compiled_plan is None:
+        raise HTTPException(status_code=400, detail="workflow_version_plan_invalid")
+    context_json = dict(version.context_json or {})
+    if isinstance(payload, dict) and isinstance(payload.get("context_json"), dict):
+        context_json.update(dict(payload["context_json"]))
+    priority_raw = payload.get("priority", 0) if isinstance(payload, dict) else 0
+    try:
+        priority = int(priority_raw)
+    except (TypeError, ValueError):
+        priority = 0
+    idempotency_key = (
+        str(payload.get("idempotency_key") or "").strip()
+        if isinstance(payload, dict)
+        else ""
+    )
+    job = _create_job_internal(
+        models.JobCreate(
+            goal=version.goal or definition.goal or definition.title,
+            context_json=context_json,
+            priority=priority,
+            idempotency_key=idempotency_key or None,
+        ),
+        db,
+        emit_job_created_event=False,
+        metadata_overrides={
+            "workflow_source": "studio",
+            "workflow_definition_id": definition.id,
+            "workflow_version_id": version.id,
+            "goal_intent_graph": None,
+        },
+    )
+    plan_record = _create_plan_internal(compiled_plan, job_id=job.id, db=db)
+    return models.WorkflowRunResult(
+        workflow_definition=_workflow_definition_from_record(definition),
+        workflow_version=_workflow_version_from_record(version),
+        job=job,
+        plan=plan_record,
+    )
+
+
 @app.post("/composer/compile")
 def compile_composer_draft(
     payload: dict[str, Any],
@@ -6767,6 +7095,7 @@ def compile_composer_draft(
     plan, diagnostics_errors, diagnostics_warnings = _build_plan_from_composer_draft(
         raw_draft,
         goal_text=goal_text,
+        job_context=job_context,
     )
     preflight_errors: dict[str, str] = {}
     if plan is not None:
@@ -6876,8 +7205,12 @@ def recommend_composer_capabilities(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-@app.post("/plans", response_model=models.Plan)
-def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_db)) -> models.Plan:
+def _create_plan_internal(
+    plan: models.PlanCreate,
+    *,
+    job_id: str,
+    db: Session,
+) -> models.Plan:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
     goal_text = job.goal if job and isinstance(job.goal, str) else ""
@@ -6971,3 +7304,8 @@ def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_
     payload["correlation_id"] = str(uuid.uuid4())
     _emit_event("plan.created", payload)
     return _plan_from_record(record)
+
+
+@app.post("/plans", response_model=models.Plan)
+def create_plan(plan: models.PlanCreate, job_id: str, db: Session = Depends(get_db)) -> models.Plan:
+    return _create_plan_internal(plan, job_id=job_id, db=db)

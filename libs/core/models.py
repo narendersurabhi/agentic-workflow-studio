@@ -268,6 +268,57 @@ class JobCreate(BaseModel):
     idempotency_key: Optional[str] = None
 
 
+class WorkflowDefinitionCreate(BaseModel):
+    title: str
+    goal: str = ""
+    context_json: Dict[str, Any] = Field(default_factory=dict)
+    draft: Dict[str, Any] = Field(default_factory=dict)
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowDefinitionUpdate(BaseModel):
+    title: Optional[str] = None
+    goal: Optional[str] = None
+    context_json: Optional[Dict[str, Any]] = None
+    draft: Optional[Dict[str, Any]] = None
+    user_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class WorkflowDefinition(BaseModel):
+    id: str
+    title: str
+    goal: str = ""
+    context_json: Dict[str, Any] = Field(default_factory=dict)
+    draft: Dict[str, Any] = Field(default_factory=dict)
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowVersion(BaseModel):
+    id: str
+    definition_id: str
+    version_number: int
+    title: str
+    goal: str = ""
+    context_json: Dict[str, Any] = Field(default_factory=dict)
+    draft: Dict[str, Any] = Field(default_factory=dict)
+    compiled_plan: Dict[str, Any] = Field(default_factory=dict)
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class WorkflowRunResult(BaseModel):
+    workflow_definition: WorkflowDefinition
+    workflow_version: WorkflowVersion
+    job: Job
+    plan: Plan
+
+
 class JobUpdate(BaseModel):
     status: JobStatus
 

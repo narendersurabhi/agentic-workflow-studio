@@ -38,6 +38,64 @@ def test_create_job():
     assert data["goal"] == "demo"
 
 
+def test_workflow_definition_publish_and_run_bypasses_planner_job_event() -> None:
+    create_response = client.post(
+        "/workflows/definitions",
+        json={
+            "title": "Workspace listing",
+            "goal": "List workspace files",
+            "user_id": "narendersurabhi",
+            "context_json": {"user_id": "narendersurabhi"},
+            "draft": {
+                "summary": "Workspace listing",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "taskName": "ListWorkspace",
+                        "capabilityId": "filesystem.workspace.list",
+                        "bindings": {},
+                    }
+                ],
+                "edges": [],
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    definition = create_response.json()
+
+    publish_response = client.post(f"/workflows/definitions/{definition['id']}/publish", json={})
+    assert publish_response.status_code == 200
+    version = publish_response.json()
+    assert version["version_number"] == 1
+    assert version["compiled_plan"]["tasks"][0]["name"] == "ListWorkspace"
+
+    run_response = client.post(
+        f"/workflows/versions/{version['id']}/run",
+        json={"priority": 2},
+    )
+    assert run_response.status_code == 200
+    run_body = run_response.json()
+    job_id = run_body["job"]["id"]
+    assert run_body["job"]["metadata"]["workflow_source"] == "studio"
+    assert run_body["job"]["metadata"]["workflow_definition_id"] == definition["id"]
+    assert run_body["job"]["metadata"]["workflow_version_id"] == version["id"]
+    assert run_body["plan"]["job_id"] == job_id
+
+    with SessionLocal() as db:
+        task_records = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+        assert len(task_records) == 1
+        event_records = db.query(EventOutboxRecord).all()
+    matching_events = [
+        row
+        for row in event_records
+        if isinstance(row.envelope_json, dict) and row.envelope_json.get("job_id") == job_id
+    ]
+    event_types = {row.event_type for row in matching_events}
+    assert "plan.created" in event_types
+    assert "job.created" not in event_types
+
+
 def test_intent_clarify_endpoint_validates_goal():
     response = client.post("/intent/clarify", json={})
     assert response.status_code == 400
@@ -2364,6 +2422,52 @@ def test_build_plan_from_composer_draft_requires_parallel_fan_in_sources(monkeyp
     assert plan is None
     codes = {entry["code"] for entry in errors}
     assert "draft.control_parallel_fan_in_sources_missing" in codes
+
+
+def test_build_plan_from_composer_draft_injects_user_id_for_user_memory_bindings(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    plan, errors, _warnings = main._build_plan_from_composer_draft(
+        {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "capabilityId": "json_transform",
+                    "taskName": "LoadProfile",
+                    "bindings": {
+                        "profile": {"kind": "memory", "scope": "user", "name": "user_profile", "key": "profile"}
+                    },
+                }
+            ]
+        },
+        job_context={"user_id": "narendersurabhi"},
+    )
+
+    assert errors == []
+    assert plan is not None
+    assert plan.tasks[0].tool_inputs["json_transform"]["profile"] == {
+        "scope": "user",
+        "name": "user_profile",
+        "key": "profile",
+        "user_id": "narendersurabhi",
+    }
 
 
 def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:

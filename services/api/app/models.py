@@ -54,6 +54,47 @@ class ChatMessageRecord(Base):
     session: Mapped[ChatSessionRecord] = relationship("ChatSessionRecord", back_populates="messages")
 
 
+class WorkflowDefinitionRecord(Base):
+    __tablename__ = "workflow_definitions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    title: Mapped[str] = mapped_column(String)
+    goal: Mapped[str] = mapped_column(String, default="")
+    context_json: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    draft_json: Mapped[Dict[str, Any]] = mapped_column("draft", JSON, default=dict)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+    versions: Mapped[List["WorkflowVersionRecord"]] = relationship(
+        "WorkflowVersionRecord",
+        back_populates="definition",
+        cascade="all, delete-orphan",
+    )
+
+
+class WorkflowVersionRecord(Base):
+    __tablename__ = "workflow_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    definition_id: Mapped[str] = mapped_column(ForeignKey("workflow_definitions.id"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String)
+    goal: Mapped[str] = mapped_column(String, default="")
+    context_json: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    draft_json: Mapped[Dict[str, Any]] = mapped_column("draft", JSON, default=dict)
+    compiled_plan_json: Mapped[Dict[str, Any]] = mapped_column("compiled_plan", JSON, default=dict)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+
+    definition: Mapped[WorkflowDefinitionRecord] = relationship(
+        "WorkflowDefinitionRecord",
+        back_populates="versions",
+    )
+
+
 class PlanRecord(Base):
     __tablename__ = "plans"
 

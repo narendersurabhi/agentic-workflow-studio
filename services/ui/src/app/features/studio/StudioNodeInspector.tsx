@@ -54,7 +54,7 @@ type StudioNodeInspectorProps = {
   updateVisualBindingMemory: (
     nodeId: string,
     field: string,
-    patch: { scope?: "job" | "global"; name?: string; key?: string }
+    patch: { scope?: "job" | "user" | "global"; name?: string; key?: string }
   ) => void;
   setVisualBindingFromPrevious: (nodeId: string, field: string) => void;
   canInsertDeriveOutputPath: boolean;
@@ -621,11 +621,12 @@ export default function StudioNodeInspector({
                         value={binding?.kind === "memory" ? binding.scope : "job"}
                         onChange={(event) =>
                           updateVisualBindingMemory(selectedDagNode.id, status.field, {
-                            scope: event.target.value as "job" | "global",
+                            scope: event.target.value as "job" | "user" | "global",
                           })
                         }
                       >
                         <option value="job">job</option>
+                        <option value="user">user</option>
                         <option value="global">global</option>
                       </select>
                       <input

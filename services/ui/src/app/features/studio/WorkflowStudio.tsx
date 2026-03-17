@@ -24,6 +24,9 @@ import type {
   StudioControlCase,
   StudioControlConfig,
   StudioControlKind,
+  WorkflowDefinition,
+  WorkflowRunResult,
+  WorkflowVersion,
 } from "./types";
 import {
   CHAINABLE_REQUIRED_FIELDS,
@@ -54,6 +57,8 @@ import {
 } from "./utils";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
+const DEFAULT_WORKSPACE_USER_ID = "narendersurabhi";
 
 const initialStudioDraft = (): ComposerDraft => ({
   summary: "Workflow Studio draft",
@@ -133,6 +138,7 @@ const initialContextJson = () =>
 export default function WorkflowStudio() {
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState(initialContextJson);
+  const [workspaceUserId, setWorkspaceUserId] = useState(DEFAULT_WORKSPACE_USER_ID);
   const [composerDraft, setComposerDraft] = useState<ComposerDraft>(initialStudioDraft);
   const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalog | null>(null);
   const [capabilityLoading, setCapabilityLoading] = useState(true);
@@ -145,6 +151,11 @@ export default function WorkflowStudio() {
   const [composerCompileLoading, setComposerCompileLoading] = useState(false);
   const [chainPreflightResult, setChainPreflightResult] = useState<ChainPreflightResult | null>(null);
   const [composerCompileResult, setComposerCompileResult] = useState<ComposerCompileResponse | null>(null);
+  const [savedWorkflowDefinition, setSavedWorkflowDefinition] = useState<WorkflowDefinition | null>(null);
+  const [publishedWorkflowVersion, setPublishedWorkflowVersion] = useState<WorkflowVersion | null>(null);
+  const [workflowActionLoading, setWorkflowActionLoading] = useState<
+    "save" | "publish" | "run" | null
+  >(null);
   const [activeComposerIssueFocus, setActiveComposerIssueFocus] = useState<ComposerIssueFocus | null>(
     null
   );
@@ -170,6 +181,34 @@ export default function WorkflowStudio() {
   const visualChainNodes = composerDraft.nodes;
   const composerDraftEdges = composerDraft.edges;
   const contextState = useMemo(() => readContextObject(contextJson), [contextJson]);
+  const withWorkspaceUserContext = (value: Record<string, unknown>) => {
+    const normalizedUserId = workspaceUserId.trim();
+    if (!normalizedUserId) {
+      return value;
+    }
+    const existing = value.user_id;
+    if (typeof existing === "string" && existing.trim()) {
+      return value;
+    }
+    return { ...value, user_id: normalizedUserId };
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const stored = window.localStorage.getItem(MEMORY_USER_ID_KEY);
+    if (stored && stored.trim()) {
+      setWorkspaceUserId(stored.trim());
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(MEMORY_USER_ID_KEY, workspaceUserId);
+  }, [workspaceUserId]);
   const contextPathSuggestions = useMemo(
     () => collectContextPathSuggestions(contextState.context),
     [contextState.context]
@@ -490,7 +529,7 @@ export default function WorkflowStudio() {
   const setVisualBindingMemory = (
     nodeId: string,
     field: string,
-    scope: "job" | "global" = "job"
+    scope: "job" | "user" | "global" = "job"
   ) => {
     setVisualChainNodes((prev) =>
       prev.map((node) =>
@@ -620,7 +659,7 @@ export default function WorkflowStudio() {
   const updateVisualBindingMemory = (
     nodeId: string,
     field: string,
-    patch: { scope?: "job" | "global"; name?: string; key?: string }
+    patch: { scope?: "job" | "user" | "global"; name?: string; key?: string }
   ) => {
     setVisualChainNodes((prev) =>
       prev.map((node) => {
@@ -1660,7 +1699,9 @@ export default function WorkflowStudio() {
   }, [composerDraftEdges, visualChainNodes]);
 
   const compileRequestPayload = useMemo(() => {
-    const parsedContext = contextState.invalid ? { __invalid_context_json: true } : contextState.context;
+    const parsedContext = contextState.invalid
+      ? { __invalid_context_json: true }
+      : withWorkspaceUserContext(contextState.context);
     return {
       draft: {
         summary: composerDraft.summary || "Workflow Studio draft",
@@ -1678,10 +1719,12 @@ export default function WorkflowStudio() {
       job_context: parsedContext,
       goal: goal.trim() || undefined,
     };
-  }, [composerDraft.summary, composerDraftEdges, contextState.context, contextState.invalid, goal, visualChainNodes]);
+  }, [composerDraft.summary, composerDraftEdges, contextState.context, contextState.invalid, goal, visualChainNodes, workspaceUserId]);
 
   const draftPayloadPreview = useMemo(() => {
-    const parsedContext = contextState.invalid ? { __invalid_context_json: true } : contextState.context;
+    const parsedContext = contextState.invalid
+      ? { __invalid_context_json: true }
+      : withWorkspaceUserContext(contextState.context);
     return {
       draft: {
         summary: composerDraft.summary || "Workflow Studio draft",
@@ -1702,12 +1745,150 @@ export default function WorkflowStudio() {
       job_context: parsedContext,
       goal: goal.trim() || undefined,
     };
-  }, [composerDraft.summary, composerDraftEdges, contextState.context, contextState.invalid, goal, visualChainNodes]);
+  }, [composerDraft.summary, composerDraftEdges, contextState.context, contextState.invalid, goal, visualChainNodes, workspaceUserId]);
+
+  const persistedWorkflowDraft = useMemo(
+    () => ({
+      summary: composerDraft.summary || "Workflow Studio draft",
+      goal: goal.trim() || undefined,
+      contextJsonText: contextJson,
+      nodePositions: composerNodePositions,
+      nodes: visualChainNodes.map((node) => ({
+        id: node.id,
+        taskName: node.taskName,
+        capabilityId: node.capabilityId,
+        outputPath: node.outputPath,
+        nodeKind: node.nodeKind || "capability",
+        controlKind: node.controlKind || undefined,
+        controlConfig: node.controlConfig || undefined,
+        inputBindings: node.inputBindings,
+        outputs: node.outputs,
+        variables: node.variables,
+      })),
+      edges: composerDraftEdges,
+    }),
+    [composerDraft.summary, composerDraftEdges, composerNodePositions, contextJson, goal, visualChainNodes]
+  );
+
+  const saveWorkflowDefinition = async () => {
+    if (contextState.invalid) {
+      setStudioNotice("Workflow drafts can only be saved when Context JSON is valid.");
+      return null;
+    }
+    setWorkflowActionLoading("save");
+    try {
+      const response = await fetch(
+        savedWorkflowDefinition
+          ? `${apiUrl}/workflows/definitions/${encodeURIComponent(savedWorkflowDefinition.id)}`
+          : `${apiUrl}/workflows/definitions`,
+        {
+          method: savedWorkflowDefinition ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: composerDraft.summary || goal.trim() || "Workflow Studio draft",
+            goal: goal.trim(),
+            context_json: withWorkspaceUserContext(contextState.context),
+            draft: persistedWorkflowDraft,
+            user_id: workspaceUserId.trim() || undefined,
+            metadata: { source: "workflow_studio" },
+          }),
+        }
+      );
+      const body = (await response.json()) as WorkflowDefinition | { detail?: unknown };
+      if (!response.ok) {
+        throw new Error(
+          typeof (body as { detail?: unknown }).detail === "string"
+            ? (body as { detail: string }).detail
+            : `Save draft failed (${response.status}).`
+        );
+      }
+      const definition = body as WorkflowDefinition;
+      setSavedWorkflowDefinition(definition);
+      setStudioNotice(`Saved draft ${definition.title}.`);
+      return definition;
+    } catch (error) {
+      setStudioNotice(error instanceof Error ? error.message : "Failed to save workflow draft.");
+      return null;
+    } finally {
+      setWorkflowActionLoading(null);
+    }
+  };
+
+  const publishWorkflowVersion = async () => {
+    const definition = await saveWorkflowDefinition();
+    if (!definition) {
+      return null;
+    }
+    setWorkflowActionLoading("publish");
+    try {
+      const response = await fetch(
+        `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}/publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ metadata: { source: "workflow_studio" } }),
+        }
+      );
+      const body = (await response.json()) as WorkflowVersion | { detail?: unknown };
+      if (!response.ok) {
+        const detail = (body as { detail?: unknown }).detail;
+        throw new Error(
+          typeof detail === "string" ? detail : `Publish version failed (${response.status}).`
+        );
+      }
+      const version = body as WorkflowVersion;
+      setPublishedWorkflowVersion(version);
+      setStudioNotice(`Published workflow version v${version.version_number}.`);
+      return version;
+    } catch (error) {
+      setStudioNotice(error instanceof Error ? error.message : "Failed to publish workflow version.");
+      return null;
+    } finally {
+      setWorkflowActionLoading(null);
+    }
+  };
+
+  const runWorkflowVersion = async () => {
+    const version = await publishWorkflowVersion();
+    if (!version) {
+      return;
+    }
+    setWorkflowActionLoading("run");
+    try {
+      const response = await fetch(
+        `${apiUrl}/workflows/versions/${encodeURIComponent(version.id)}/run`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ priority: 0 }),
+        }
+      );
+      const body = (await response.json()) as WorkflowRunResult | { detail?: unknown };
+      if (!response.ok) {
+        const detail = (body as { detail?: unknown }).detail;
+        throw new Error(
+          typeof detail === "string" ? detail : `Run workflow failed (${response.status}).`
+        );
+      }
+      const result = body as WorkflowRunResult;
+      setStudioNotice(
+        `Started job ${result.job.id} from workflow version v${result.workflow_version.version_number}.`
+      );
+    } catch (error) {
+      setStudioNotice(error instanceof Error ? error.message : "Failed to run workflow version.");
+    } finally {
+      setWorkflowActionLoading(null);
+    }
+  };
 
   const composerIssues = useMemo(
     () => collectComposerValidationIssues(chainPreflightResult, composerCompileResult, visualChainNodes),
     [chainPreflightResult, composerCompileResult, visualChainNodes]
   );
+
+  useEffect(() => {
+    setPublishedWorkflowVersion(null);
+  }, [persistedWorkflowDraft, workspaceUserId]);
 
   const runChainPreflight = async () => {
     const localErrors: string[] = [];
@@ -1965,7 +2146,7 @@ export default function WorkflowStudio() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               plan: compiledPlan,
-              job_context: contextState.context,
+              job_context: withWorkspaceUserContext(contextState.context),
               goal: goal.trim() || undefined,
             }),
           });
@@ -2041,21 +2222,64 @@ export default function WorkflowStudio() {
                 setSelectedDagNodeId(null);
                 setChainPreflightResult(null);
                 setComposerCompileResult(null);
+                setSavedWorkflowDefinition(null);
+                setPublishedWorkflowVersion(null);
                 setStudioNotice("Started a fresh studio draft.");
               }}
             >
               New Draft
             </button>
             <button
+              className={screenHeaderSecondaryActionClassName}
+              onClick={saveWorkflowDefinition}
+              disabled={workflowActionLoading !== null}
+            >
+              {workflowActionLoading === "save" ? "Saving..." : "Save Draft"}
+            </button>
+            <button
+              className={screenHeaderSecondaryActionClassName}
+              onClick={publishWorkflowVersion}
+              disabled={workflowActionLoading !== null}
+            >
+              {workflowActionLoading === "publish" ? "Publishing..." : "Publish Version"}
+            </button>
+            <button
+              className={screenHeaderSecondaryActionClassName}
+              onClick={runWorkflowVersion}
+              disabled={workflowActionLoading !== null}
+            >
+              {workflowActionLoading === "run" ? "Starting..." : "Run Workflow"}
+            </button>
+            <button
               className={screenHeaderPrimaryActionClassName}
               onClick={runChainPreflight}
-              disabled={composerCompileLoading || chainPreflightLoading}
+              disabled={composerCompileLoading || chainPreflightLoading || workflowActionLoading !== null}
             >
               {composerCompileLoading || chainPreflightLoading ? "Compiling..." : "Compile Preview"}
             </button>
           </>
         }
-      />
+      >
+        <div className="mt-6 rounded-2xl border border-white/15 bg-white/10 px-4 py-4 text-white/95">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="min-w-[220px] flex-1">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100">
+                Memory User ID
+              </div>
+              <input
+                className="mt-2 w-full rounded-2xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/45 focus:border-white/40 focus:bg-white/15"
+                value={workspaceUserId}
+                onChange={(event) => setWorkspaceUserId(event.target.value)}
+                placeholder="narendersurabhi"
+              />
+            </label>
+            <div className="max-w-xl text-xs leading-5 text-slate-200">
+              User-scoped memory bindings inherit this id automatically unless a node overrides
+              it explicitly.
+            </div>
+          </div>
+        </div>
+      </ScreenHeader>
 
       {studioNotice ? (
         <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
