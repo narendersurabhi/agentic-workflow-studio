@@ -223,8 +223,8 @@ def _parse_capability_registry(data: dict[str, Any]) -> CapabilityRegistry:
 def _parse_capability(raw: dict[str, Any], idx: int) -> CapabilitySpec:
     capability_id = _required_str(raw, ("id", "capability_id"), f"capabilities[{idx}].id")
     description = _required_str(raw, ("description",), f"capabilities[{idx}].description")
-    risk_tier = _optional_str(raw.get("risk_tier"), "read_only")
-    idempotency = _optional_str(raw.get("idempotency"), "read")
+    risk_tier = _optional_str(raw.get("risk_tier"), "read_only") or "read_only"
+    idempotency = _optional_str(raw.get("idempotency"), "read") or "read"
     group = _optional_str(raw.get("group"), None)
     subgroup = _optional_str(raw.get("subgroup"), None)
     input_schema_ref = _optional_str(raw.get("input_schema_ref"), None)
@@ -262,7 +262,7 @@ def _parse_adapter(raw: Any, capability_idx: int, adapter_idx: int) -> Capabilit
     field_prefix = f"capabilities[{capability_idx}].adapters[{adapter_idx}]"
     if not isinstance(raw, dict):
         raise CapabilityRegistryError(f"{field_prefix} must be an object")
-    adapter_type = _optional_str(raw.get("type"), "mcp")
+    adapter_type = _optional_str(raw.get("type"), "mcp") or "mcp"
     server_id = _required_str(raw, ("server_id",), f"{field_prefix}.server_id")
     tool_name = _required_str(raw, ("tool_name",), f"{field_prefix}.tool_name")
     route_paths = _parse_route_paths(raw.get("route_paths"), f"{field_prefix}.route_paths")
