@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from libs.core import capability_registry, mcp_gateway, models, tool_bootstrap, tool_governance
+from libs.core import capability_registry, mcp_gateway, tool_bootstrap, tool_governance
 from libs.framework.tool_runtime import ToolExecutionError, ToolRegistry
 
 

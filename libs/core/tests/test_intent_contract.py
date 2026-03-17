@@ -71,12 +71,52 @@ def test_decompose_goal_intent_handles_empty_goal() -> None:
     assert graph["summary"]["schema_version"] == "intent_v2"
 
 
-def test_decompose_goal_intent_render_segment_does_not_insert_derive_step() -> None:
+def test_decompose_goal_intent_render_segment_includes_output_derivation_hint() -> None:
     graph = intent_contract.decompose_goal_intent("Render a PDF status report.")
     segments = graph["segments"]
     assert len(segments) == 1
     assert segments[0]["intent"] == "render"
-    assert segments[0]["suggested_capabilities"] == ["document.pdf.generate"]
+    assert segments[0]["suggested_capabilities"] == [
+        "document.pdf.generate",
+        "document.output.derive",
+    ]
+
+
+def test_decompose_goal_intent_splits_comma_separated_action_clauses() -> None:
+    graph = intent_contract.decompose_goal_intent(
+        "Generate an implementation runbook, validate the document spec, then render a DOCX."
+    )
+    segments = graph["segments"]
+    assert [segment["intent"] for segment in segments[:3]] == ["generate", "validate", "render"]
+    assert "document.spec.generate" in segments[0]["suggested_capabilities"]
+    assert segments[1]["suggested_capabilities"] == ["document.spec.validate"]
+    assert segments[2]["suggested_capabilities"] == [
+        "document.docx.generate",
+        "document.output.derive",
+    ]
+
+
+def test_decompose_goal_intent_prefers_openapi_iterative_capabilities() -> None:
+    graph = intent_contract.decompose_goal_intent(
+        "Generate an OpenAPI specification for a payment API and iteratively improve it."
+    )
+    segments = graph["segments"]
+    assert len(segments) >= 2
+    assert segments[0]["intent"] == "generate"
+    assert segments[0]["suggested_capabilities"][0] == "openapi.spec.generate_iterative"
+    assert segments[1]["intent"] == "transform"
+    assert segments[1]["suggested_capabilities"][0] == "openapi.spec.improve_iterative"
+
+
+def test_decompose_goal_intent_prefers_github_publish_capabilities() -> None:
+    graph = intent_contract.decompose_goal_intent(
+        "Generate code changes, push files to GitHub, and create a pull request."
+    )
+    segments = graph["segments"]
+    assert [segment["intent"] for segment in segments[:3]] == ["generate", "io", "io"]
+    assert segments[0]["suggested_capabilities"][0] == "codegen.generate"
+    assert segments[1]["suggested_capabilities"][0] == "github.files.push"
+    assert segments[2]["suggested_capabilities"][0] == "github.pull_request.create"
 
 
 def test_validate_intent_segment_contract_allows_renderer_without_explicit_path() -> None:

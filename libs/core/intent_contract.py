@@ -13,7 +13,21 @@ TASK_INTENT_VALUES = tuple(intent.value for intent in models.ToolIntent)
 _KEYWORD_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("validate", ("validate", "verify", "check", "lint", "schema")),
     ("render", ("render", "rendering", "docx", "pdf")),
-    ("transform", ("transform", "reshape", "wrap", "convert", "derive", "summarize", "repair")),
+    (
+        "transform",
+        (
+            "transform",
+            "reshape",
+            "wrap",
+            "convert",
+            "derive",
+            "summarize",
+            "repair",
+            "improve",
+            "iterate",
+            "iteratively",
+        ),
+    ),
     ("generate", ("generate", "create", "draft", "write", "compose", "produce", "build")),
     ("io", ("read", "fetch", "list", "search", "load", "save", "download", "upload")),
 )
@@ -118,6 +132,53 @@ _SLOT_RISK_RANK: dict[str, int] = {
     "high_risk": 3,
     "high_risk_write": 3,
 }
+
+_CLAUSE_SPLIT_ACTION_HINTS: tuple[str, ...] = (
+    "read",
+    "fetch",
+    "list",
+    "search",
+    "load",
+    "save",
+    "download",
+    "upload",
+    "generate",
+    "create",
+    "draft",
+    "write",
+    "compose",
+    "produce",
+    "build",
+    "transform",
+    "reshape",
+    "wrap",
+    "convert",
+    "derive",
+    "summarize",
+    "repair",
+    "improve",
+    "validate",
+    "verify",
+    "check",
+    "lint",
+    "render",
+    "push",
+    "publish",
+    "open",
+)
+
+
+def _contains_any(text: str, tokens: Iterable[str]) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in tokens)
+
+
+def _prepend_unique(items: list[str], *candidates: str) -> list[str]:
+    ordered = list(items)
+    for candidate in reversed(candidates):
+        if candidate and candidate not in ordered:
+            ordered.insert(0, candidate)
+    return ordered
 
 
 def _coerce_string_tuple(value: Any) -> tuple[str, ...]:
@@ -575,6 +636,21 @@ def _infer_intent_from_text_with_source(
     source: str,
 ) -> TaskIntentInference:
     normalized = text.lower()
+    if "pull request" in normalized or re.search(r"\bpr\b", normalized):
+        if _contains_any(normalized, ("create", "open", "submit", "raise")):
+            confidence = 0.9 if source == _INTENT_SOURCE_TASK_TEXT else 0.82
+            return TaskIntentInference(intent="io", source=source, confidence=confidence)
+    if _contains_any(normalized, ("push", "publish", "upload")) and _contains_any(
+        normalized, ("github", "repo", "repository", "file", "files", "branch")
+    ):
+        confidence = 0.88 if source == _INTENT_SOURCE_TASK_TEXT else 0.8
+        return TaskIntentInference(intent="io", source=source, confidence=confidence)
+    if "openapi" in normalized and _contains_any(normalized, ("improve", "repair", "iterate")):
+        confidence = 0.86 if source == _INTENT_SOURCE_TASK_TEXT else 0.78
+        return TaskIntentInference(intent="transform", source=source, confidence=confidence)
+    if "openapi" in normalized and _contains_any(normalized, ("generate", "create", "build")):
+        confidence = 0.86 if source == _INTENT_SOURCE_TASK_TEXT else 0.78
+        return TaskIntentInference(intent="generate", source=source, confidence=confidence)
     for intent, keywords in _KEYWORD_MAP:
         if any(keyword in normalized for keyword in keywords):
             confidence = 0.82 if source == _INTENT_SOURCE_TASK_TEXT else 0.72
@@ -656,6 +732,13 @@ def _split_goal_clauses(goal_text: str) -> list[str]:
     if not goal:
         return []
     normalized = goal.replace("->", " then ").replace("=>", " then ")
+    action_pattern = "|".join(re.escape(token) for token in _CLAUSE_SPLIT_ACTION_HINTS)
+    normalized = re.sub(
+        rf",\s*(?=(?:{action_pattern})\b)",
+        " then ",
+        normalized,
+        flags=re.IGNORECASE,
+    )
     parts = re.split(
         r"(?:\b(?:and then|then|after that|next|finally)\b|[;\n])",
         normalized,
@@ -697,6 +780,12 @@ def _required_inputs_for_clause(intent: str, clause: str) -> tuple[str, ...]:
             base.append("output_format=docx")
     if intent == "io" and any(token in lowered for token in ("github", "repo", "repository")):
         base.append("query")
+    if intent == "io" and any(token in lowered for token in ("pull request", "branch", "files")):
+        base.append("target_repo")
+    if intent == "generate" and "openapi" in lowered:
+        base.append("instruction")
+    if intent == "transform" and "openapi" in lowered:
+        base.append("input_data")
     deduped: list[str] = []
     for item in base:
         if item not in deduped:
@@ -704,16 +793,73 @@ def _required_inputs_for_clause(intent: str, clause: str) -> tuple[str, ...]:
     return tuple(deduped)
 
 
-def _suggested_capabilities_for_clause(intent: str, clause: str) -> tuple[str, ...]:
+def _suggested_capabilities_for_clause(
+    intent: str,
+    clause: str,
+    *,
+    goal_context: str = "",
+) -> tuple[str, ...]:
     suggestions = list(_SUGGESTED_CAPABILITIES_BY_INTENT.get(intent, ()))
     lowered = clause.lower()
+    context_lowered = f"{goal_context} {clause}".lower().strip()
+    if intent == "io":
+        if "semantic memory" in context_lowered:
+            suggestions = _prepend_unique(suggestions, "memory.semantic.search", "memory.read")
+        elif any(token in context_lowered for token in ("memory", "notes", "preferences", "context")):
+            suggestions = _prepend_unique(suggestions, "memory.read")
+        if "workspace" in context_lowered and any(token in lowered for token in ("search", "find", "grep")):
+            suggestions = _prepend_unique(suggestions, "filesystem.workspace.search_text")
+        if "artifact" in context_lowered and any(token in lowered for token in ("search", "find", "error")):
+            suggestions = _prepend_unique(suggestions, "filesystem.artifacts.search_text")
+        if "branch" in lowered and "github" in context_lowered:
+            suggestions = _prepend_unique(suggestions, "github.branch.list", "github.repo.list")
+        elif any(token in context_lowered for token in ("github", "repo", "repository")):
+            suggestions = _prepend_unique(suggestions, "github.repo.list")
+        if any(token in lowered for token in ("push", "publish")) and any(
+            token in context_lowered for token in ("github", "repo", "repository", "files")
+        ):
+            suggestions = _prepend_unique(suggestions, "github.files.push")
+        if "pull request" in lowered or re.search(r"\bpr\b", lowered):
+            suggestions = _prepend_unique(suggestions, "github.pull_request.create")
     if intent == "render":
         if "pdf" in lowered:
-            suggestions = ["document.pdf.generate"]
+            suggestions = ["document.pdf.generate", "document.output.derive"]
         elif "docx" in lowered:
-            suggestions = ["document.docx.generate"]
-    if intent == "io" and any(token in lowered for token in ("github", "repo", "repository")):
-        suggestions.insert(0, "github.repo.list")
+            suggestions = ["document.docx.generate", "document.output.derive"]
+    if intent == "generate":
+        if "openapi" in context_lowered:
+            suggestions = _prepend_unique(suggestions, "openapi.spec.generate_iterative")
+        if any(token in lowered for token in ("code changes", "codegen", "code change", "source code")):
+            suggestions = _prepend_unique(suggestions, "codegen.generate")
+        if "markdown" in lowered:
+            suggestions = _prepend_unique(suggestions, "document.spec.generate_from_markdown")
+        if any(token in lowered for token in ("runbook", "document", "report", "brief", "release notes")):
+            suggestions = _prepend_unique(suggestions, "document.spec.generate", "llm.text.generate")
+    if intent == "transform":
+        if "openapi" in context_lowered:
+            suggestions = _prepend_unique(
+                suggestions,
+                "openapi.spec.improve_iterative",
+                "utility.json.transform",
+            )
+        if any(token in lowered for token in ("repair", "invalid")) and any(
+            token in lowered for token in ("document", "schema", "spec", "field")
+        ):
+            suggestions = _prepend_unique(
+                suggestions,
+                "document.spec.repair",
+                "utility.json.transform",
+            )
+        if (
+            "openapi" not in lowered
+            and "improve" in lowered
+            and any(token in lowered for token in ("document", "spec"))
+        ):
+            suggestions = _prepend_unique(
+                suggestions,
+                "document.spec.improve",
+                "utility.json.transform",
+            )
     deduped: list[str] = []
     for item in suggestions:
         if item not in deduped:
@@ -744,7 +890,11 @@ def decompose_goal_intent(goal_text: str) -> dict[str, Any]:
         segment_id = f"s{index + 1}"
         depends_on = (f"s{index}",) if index > 0 else ()
         required_inputs = _required_inputs_for_clause(inferred.intent, clause)
-        suggested_capabilities = _suggested_capabilities_for_clause(inferred.intent, clause)
+        suggested_capabilities = _suggested_capabilities_for_clause(
+            inferred.intent,
+            clause,
+            goal_context=goal,
+        )
         slots = normalize_intent_segment_slots(
             raw_slots={},
             intent=inferred.intent,

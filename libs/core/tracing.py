@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Literal, Mapping
 from urllib.parse import urlparse, urlunparse
 
 LOGGER = logging.getLogger(__name__)
@@ -17,13 +17,13 @@ try:  # pragma: no cover - optional dependency
     from opentelemetry.trace import Status, StatusCode
 except Exception:  # noqa: BLE001
     _OTEL_AVAILABLE = False
-    _trace = None  # type: ignore[assignment]
-    OTLPSpanExporter = None  # type: ignore[assignment]
-    Resource = None  # type: ignore[assignment]
-    TracerProvider = None  # type: ignore[assignment]
-    BatchSpanProcessor = None  # type: ignore[assignment]
-    Status = None  # type: ignore[assignment]
-    StatusCode = None  # type: ignore[assignment]
+    _trace = None
+    OTLPSpanExporter = None
+    Resource = None
+    TracerProvider = None
+    BatchSpanProcessor = None
+    Status = None
+    StatusCode = None
 
 _TRACING_CONFIGURED = False
 
@@ -43,7 +43,7 @@ class _NoopSpanContext:
     def __enter__(self) -> _NoopSpan:
         return _NoopSpan()
 
-    def __exit__(self, _exc_type, _exc, _tb) -> bool:
+    def __exit__(self, _exc_type, _exc, _tb) -> Literal[False]:
         return False
 
 
