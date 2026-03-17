@@ -14,11 +14,11 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from .llm_provider import LLMProvider, LLMRequest
-from . import prompts, tool_bootstrap, tool_catalog, tool_governance, tool_plugins, tracing as core_tracing
+from . import tool_bootstrap, tool_catalog, tool_governance, tool_plugins, tracing as core_tracing
 from libs.core import mcp_gateway
 from .models import ToolSpec
 from libs.framework.tool_runtime import (
-    Tool,
+    Tool as _FrameworkTool,
     ToolExecutionError,
     ToolRegistry,
     classify_tool_error as _classify_tool_error,
@@ -34,6 +34,8 @@ from libs.tools import mcp_client
 from libs.tools import coder_tools
 
 LOGGER = logging.getLogger(__name__)
+
+Tool = _FrameworkTool
 
 
 ToolPluginLoadError = tool_plugins.ToolPluginLoadError
@@ -818,29 +820,6 @@ def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:
         nested_context.get("role_name"),
         nested_context.get("topic"),
     )
-    company_name = pick_str(
-        payload.get("company_name"),
-        payload.get("company"),
-        memory_context.get("company_name"),
-        memory_context.get("company"),
-        nested_context.get("company_name"),
-        nested_context.get("company"),
-    )
-    candidate_name = pick_str(
-        payload.get("candidate_name"),
-        memory_context.get("candidate_name"),
-        nested_context.get("candidate_name"),
-    )
-    first_name = pick_str(
-        payload.get("first_name"),
-        memory_context.get("first_name"),
-        nested_context.get("first_name"),
-    )
-    last_name = pick_str(
-        payload.get("last_name"),
-        memory_context.get("last_name"),
-        nested_context.get("last_name"),
-    )
     job_description = pick_str(
         payload.get("job_description"),
         memory_context.get("job_description"),
@@ -1512,7 +1491,7 @@ def _sanitize_document_blocks(blocks: List[Any]) -> List[Dict[str, Any]]:
     return cleaned
 
 
-def _resolve_llm_iterative_tool_timeout_s(provider: LLMProvider) -> int:
+def _resolve_llm_iterative_tool_timeout_s(provider: Optional[LLMProvider]) -> int:
     base = _resolve_llm_timeout_s(provider)
     return min(900, max(60, base * 3))
 

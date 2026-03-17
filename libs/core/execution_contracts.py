@@ -17,7 +17,7 @@ DEFAULT_SECRET_PROVIDER = "env"
 class SecretRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["secret_ref"] = SECRET_REF_KIND
+    kind: Literal["secret_ref"] = "secret_ref"
     provider: str = DEFAULT_SECRET_PROVIDER
     name: str
 
@@ -172,6 +172,8 @@ def build_task_execution_request(
         attempts,
         _max_attempts(payload.get("max_attempts"), default_max_attempts),
     )
+    context_value = payload.get("context")
+    dependency_artifacts_value = payload.get("dependency_artifacts")
     return TaskExecutionRequest(
         task_id=_string_value(payload.get("task_id")),
         job_id=_string_value(payload.get("job_id")),
@@ -180,7 +182,7 @@ def build_task_execution_request(
         name=_string_value(payload.get("name")),
         description=_string_value(payload.get("description")),
         instruction=_string_value(payload.get("instruction")),
-        context=dict(payload.get("context")) if isinstance(payload.get("context"), Mapping) else {},
+        context=dict(context_value) if isinstance(context_value, Mapping) else {},
         attempts=attempts,
         max_attempts=max_attempts,
         intent=_normalized_intent(payload),
@@ -188,8 +190,8 @@ def build_task_execution_request(
         intent_confidence=_intent_confidence(payload.get("intent_confidence")),
         intent_segment=_intent_segment(payload),
         dependency_artifacts=(
-            dict(payload.get("dependency_artifacts"))
-            if isinstance(payload.get("dependency_artifacts"), Mapping)
+            dict(dependency_artifacts_value)
+            if isinstance(dependency_artifacts_value, Mapping)
             else {}
         ),
         retry_policy=_string_value(payload.get("retry_policy")) or None,

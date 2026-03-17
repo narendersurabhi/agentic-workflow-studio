@@ -34,6 +34,13 @@ UV_EVAL_DEPS = \
 	--with redis \
 	--with psycopg2-binary \
 	--with prometheus-client
+UV_QUALITY_DEPS = \
+	$(UV_EVAL_DEPS) \
+	--with pytest \
+	--with mypy \
+	--with ruff \
+	--with docxtpl \
+	--with httpx
 
 up:
 	docker compose up -d --build
@@ -136,19 +143,19 @@ down:
 	docker compose down
 
 lint:
-	ruff check libs services
+	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) ruff check libs services
 
 format:
-	ruff format libs services
+	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) ruff format libs services
 
 test:
-	PYTHONPATH=. pytest
+	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) pytest --import-mode=importlib
 
 typecheck:
-	mypy --config-file mypy.ini
+	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) mypy --config-file mypy.ini
 
 schemas:
-	python -c "from pathlib import Path; from libs.core.schemas import export_schemas; export_schemas(Path('schemas'))"
+	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) python -c "from pathlib import Path; from libs.core.schemas import export_schemas; export_schemas(Path('schemas'))"
 
 eval-intent:
 	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_intent_decompose.py --gold eval/intent_gold.yaml --mode heuristic --top-k 3 --verbose
