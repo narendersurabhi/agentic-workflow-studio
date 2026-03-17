@@ -15,6 +15,25 @@ IMAGE_REGISTRY ?= localhost:5001
 IMAGE_OWNER ?= localhost
 IMAGE_TAG ?= latest
 LOCAL_IMAGE_TAG ?= local-$(shell date +%Y%m%d%H%M%S)
+UV_EVAL_DEPS = \
+	--with typing-extensions \
+	--with pydantic \
+	--with pydantic-settings \
+	--with jsonschema \
+	--with python-docx \
+	--with reportlab \
+	--with boto3 \
+	--with mcp \
+	--with sqlalchemy \
+	--with opentelemetry-api \
+	--with opentelemetry-sdk \
+	--with opentelemetry-exporter-otlp \
+	--with structlog \
+	--with pyyaml \
+	--with fastapi \
+	--with redis \
+	--with psycopg2-binary \
+	--with prometheus-client
 
 up:
 	docker compose up -d --build
@@ -132,16 +151,16 @@ schemas:
 	python -c "from pathlib import Path; from libs.core.schemas import export_schemas; export_schemas(Path('schemas'))"
 
 eval-intent:
-	PYTHONPATH=. python3 scripts/eval_intent_decompose.py --gold eval/intent_gold.yaml --mode heuristic --top-k 3 --verbose
+	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_intent_decompose.py --gold eval/intent_gold.yaml --mode heuristic --top-k 3 --verbose
 
 eval-intent-gate:
-	PYTHONPATH=. python3 scripts/eval_intent_decompose.py --gold eval/intent_gold.yaml --mode heuristic --top-k 3 --min-intent-f1 0.80 --min-capability-f1 0.60 --min-segment-hit-rate 0.30
+	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_intent_decompose.py --gold eval/intent_gold.yaml --mode heuristic --top-k 3 --min-intent-f1 0.80 --min-capability-f1 0.60 --min-segment-hit-rate 0.30
 
 eval-capability-search:
-	PYTHONPATH=. python3 scripts/eval_capability_search.py --gold eval/capability_search_gold.jsonl --top-k 5 --verbose
+	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_capability_search.py --gold eval/capability_search_gold.jsonl --top-k 5 --verbose
 
 eval-capability-search-gate:
-	PYTHONPATH=. python3 scripts/eval_capability_search.py --gold eval/capability_search_gold.jsonl --top-k 5 --min-hit-rate-at-3 0.70 --min-mrr 0.55 --min-ndcg 0.60
+	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_capability_search.py --gold eval/capability_search_gold.jsonl --top-k 5 --min-hit-rate-at-3 0.70 --min-mrr 0.55 --min-ndcg 0.60
 
 build-capability-feedback:
 	PYTHONPATH=. python3 scripts/build_capability_search_feedback.py --source auto --output artifacts/evals/capability_search_feedback.jsonl
