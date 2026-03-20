@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import difflib
 import json
 import os
 import logging
@@ -6150,6 +6151,13 @@ def _compile_plan_preflight(
                 if isinstance(resolved_payload_raw, Mapping)
                 else {}
             )
+            request_payload_error = _preflight_request_payload_semantics(
+                request_id=request_id,
+                payload=resolved_payload,
+            )
+            if request_payload_error:
+                errors[task.name] = request_payload_error
+                break
             segment_payload = dict(resolved_payload)
             segment_payload.setdefault("tool_inputs", task_payload.get("tool_inputs", {}))
             if (
@@ -6184,6 +6192,54 @@ def _compile_plan_preflight(
                 break
 
     return errors
+
+
+def _preflight_request_payload_semantics(
+    *,
+    request_id: str,
+    payload: Mapping[str, Any],
+) -> str | None:
+    if request_id in {"memory.read", "memory.write"}:
+        return _preflight_memory_request_payload(request_id=request_id, payload=payload)
+    return None
+
+
+def _preflight_memory_request_payload(
+    *,
+    request_id: str,
+    payload: Mapping[str, Any],
+) -> str | None:
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        return None
+
+    registry = memory_store.MEMORY_REGISTRY
+    if not registry.has(name):
+        suggestion = difflib.get_close_matches(
+            name,
+            [spec.name for spec in registry.list()],
+            n=1,
+            cutoff=0.45,
+        )
+        suffix = f"; did you mean '{suggestion[0]}'?" if suggestion else ""
+        return f"{request_id}:unknown_memory:{name}{suffix}"
+
+    spec = registry.get(name)
+    raw_scope = str(payload.get("scope") or "").strip().lower()
+    expected_scope = spec.scope.value
+    if raw_scope and raw_scope != expected_scope:
+        return (
+            f"{request_id}:scope_mismatch:{name}:expected_{expected_scope}:got_{raw_scope}"
+        )
+
+    resolved_scope = raw_scope or expected_scope
+    if resolved_scope in {"request", "session"} and not str(payload.get("job_id") or "").strip():
+        return f"{request_id}:job_id_required:{name}:{resolved_scope}"
+    if resolved_scope == "user" and not str(payload.get("user_id") or "").strip():
+        return f"{request_id}:user_id_required:{name}"
+    if resolved_scope == "project" and not str(payload.get("project_id") or "").strip():
+        return f"{request_id}:project_id_required:{name}"
+    return None
 
 
 def _task_intent_inference_for_task(

@@ -2108,6 +2108,45 @@ def test_preflight_plan_endpoint_rejects_tool_intent_mismatch():
     assert body["errors"]["IoTask"].startswith("tool_intent_mismatch:llm_generate")
 
 
+def test_preflight_plan_endpoint_rejects_unknown_memory_read_name() -> None:
+    payload = {
+        "plan": {
+            "planner_version": "ui_chaining_composer_v2",
+            "tasks_summary": "Workflow Studio draft",
+            "dag_edges": [],
+            "tasks": [
+                {
+                    "name": "MemoryRead",
+                    "description": "Read memory entries for pointer resolution and context hydration.",
+                    "instruction": "Use capability memory.read.",
+                    "acceptance_criteria": ["Completed capability memory.read"],
+                    "expected_output_schema_ref": "",
+                    "intent": "io",
+                    "deps": [],
+                    "tool_requests": ["memory.read"],
+                    "tool_inputs": {
+                        "memory.read": {
+                            "name": "profile",
+                            "scope": "user",
+                            "key": "profile",
+                            "user_id": "narendersurabhi",
+                        }
+                    },
+                    "critic_required": False,
+                }
+            ],
+        },
+        "job_context": {},
+    }
+
+    response = client.post("/plans/preflight", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert body["errors"]["MemoryRead"].startswith("memory.read:unknown_memory:profile")
+    assert "user_profile" in body["errors"]["MemoryRead"]
+
+
 def test_preflight_plan_endpoint_rejects_capability_intent_mismatch(monkeypatch):
     capability = cap_registry.CapabilitySpec(
         capability_id="github.repo.list",
@@ -2989,9 +3028,47 @@ def test_workflow_version_run_accepts_explicit_inputs(monkeypatch) -> None:
     with SessionLocal() as db:
         task_record = db.query(TaskRecord).filter(TaskRecord.job_id == run_body["job"]["id"]).first()
         assert task_record is not None
-        assert task_record.tool_inputs["json_transform"]["input"] == {
-            "$from": ["job_context", "workflow", "variables", "topic_alias"]
-        }
+    assert task_record.tool_inputs["json_transform"]["input"] == {
+        "$from": ["job_context", "workflow", "variables", "topic_alias"]
+    }
+
+
+def test_publish_workflow_definition_rejects_unknown_memory_read_name() -> None:
+    create_response = client.post(
+        "/workflows/definitions",
+        json={
+            "title": "Broken profile read",
+            "goal": "Read profile memory",
+            "user_id": "narendersurabhi",
+            "context_json": {"user_id": "narendersurabhi"},
+            "draft": {
+                "summary": "Broken profile read",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "taskName": "ReadProfile",
+                        "capabilityId": "memory.read",
+                        "bindings": {
+                            "name": {"kind": "literal", "value": "profile"},
+                            "scope": {"kind": "literal", "value": "user"},
+                            "key": {"kind": "literal", "value": "profile"},
+                            "user_id": {"kind": "literal", "value": "narendersurabhi"},
+                        },
+                    }
+                ],
+                "edges": [],
+            },
+        },
+    )
+    assert create_response.status_code == 200
+    definition = create_response.json()
+
+    publish_response = client.post(f"/workflows/definitions/{definition['id']}/publish", json={})
+    assert publish_response.status_code == 400
+    detail = publish_response.json()["detail"]
+    assert detail["error"] == "workflow_preflight_failed"
+    assert detail["preflight_errors"]["ReadProfile"].startswith("memory.read:unknown_memory:profile")
+    assert "user_profile" in detail["preflight_errors"]["ReadProfile"]
 
 
 def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:

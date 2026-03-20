@@ -75,6 +75,8 @@ tool_governance:
         - workspace_copy
         - workspace_read_text
         - workspace_list_files
+        - memory_read
+        - memory_semantic_search
         - coding_agent_generate
         - coding_agent_autonomous
         - coding_agent_publish_pr

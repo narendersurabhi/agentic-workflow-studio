@@ -401,6 +401,23 @@ def test_default_registry_api_includes_chat_direct_read_tools(monkeypatch) -> No
     assert "memory_semantic_search" in specs
 
 
+def test_default_registry_worker_includes_memory_read_tools(monkeypatch) -> None:
+    monkeypatch.delenv("ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+    monkeypatch.delenv("WORKER_ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("WORKER_DISABLED_TOOLS", raising=False)
+    monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "true")
+    monkeypatch.setenv("TOOL_GOVERNANCE_MODE", "enforce")
+    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_KEY", None)
+    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_VALUE", None)
+
+    registry = default_registry(service_name="worker")
+    specs = {spec.name for spec in registry.list_specs()}
+
+    assert "memory_read" in specs
+    assert "memory_semantic_search" in specs
+
+
 def test_evaluate_tool_allowlist_uses_governance_config_enforce(monkeypatch, tmp_path) -> None:
     cfg_path = tmp_path / "tool_governance.yaml"
     cfg_path.write_text(
