@@ -1649,6 +1649,9 @@ def _process_task_ready_message(message_id: str, envelope: Mapping[str, Any]) ->
             "started_at": datetime.utcnow().isoformat(),
             "finished_at": datetime.utcnow().isoformat(),
             "error": error,
+            "attempts": attempts,
+            "max_attempts": max_attempts,
+            "worker_consumer": WORKER_CONSUMER,
             "run_id": run_id,
         }
         _emit_task_event("task.failed", envelope, failed_payload)
@@ -1685,6 +1688,9 @@ def _process_task_ready_message(message_id: str, envelope: Mapping[str, Any]) ->
 
     event_type = "task.failed" if result.status == models.TaskStatus.failed else "task.completed"
     result_payload = result.model_dump(mode="json")
+    result_payload["attempts"] = attempts
+    result_payload["max_attempts"] = max_attempts
+    result_payload["worker_consumer"] = WORKER_CONSUMER
     result_payload["run_id"] = run_id
     _emit_task_event(event_type, envelope, result_payload)
     if result.status == models.TaskStatus.failed:

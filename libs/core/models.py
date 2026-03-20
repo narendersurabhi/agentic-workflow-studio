@@ -154,6 +154,9 @@ class ToolCall(BaseModel):
     input: Dict[str, Any]
     idempotency_key: str
     trace_id: str
+    request_id: Optional[str] = None
+    capability_id: Optional[str] = None
+    adapter_id: Optional[str] = None
     started_at: datetime
     finished_at: Optional[datetime] = None
     status: str
@@ -315,6 +318,51 @@ class RunSpec(BaseModel):
     dag_edges: List[List[str]] = Field(default_factory=list)
     capability_requests: List[CapabilityRequestSpec] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StepAttempt(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    step_id: str
+    attempt_number: int
+    status: str
+    worker_id: Optional[str] = None
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    retry_classification: Optional[str] = None
+    result_summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+class Invocation(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    step_id: str
+    step_attempt_id: str
+    request_id: Optional[str] = None
+    capability_id: str
+    adapter_id: Optional[str] = None
+    request: Dict[str, Any] = Field(default_factory=dict)
+    response: Dict[str, Any] = Field(default_factory=dict)
+    status: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class RunEvent(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    step_id: Optional[str] = None
+    step_attempt_id: Optional[str] = None
+    event_type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime
 
 
 class JobCreate(BaseModel):

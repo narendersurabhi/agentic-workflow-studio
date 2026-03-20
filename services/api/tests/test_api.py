@@ -1,6 +1,7 @@
+import json
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import redis
 from fastapi.testclient import TestClient
@@ -16,8 +17,11 @@ from services.api.app.database import Base, engine
 from services.api.app.database import SessionLocal
 from services.api.app.models import (
     EventOutboxRecord,
+    InvocationRecord,
     JobRecord,
     PlanRecord,
+    RunEventRecord,
+    StepAttemptRecord,
     TaskRecord,
     TaskResultRecord,
     WorkflowDefinitionRecord,
@@ -1602,7 +1606,7 @@ def test_job_details():
     assert task_id in data["task_results"]
 
 
-def test_job_debugger_returns_timeline_and_error_classification(monkeypatch):
+def test_job_debugger_returns_timeline_and_error_classification():
     job_id = f"job-debug-{uuid.uuid4()}"
     plan_id = f"plan-debug-{uuid.uuid4()}"
     task_id = f"task-debug-{uuid.uuid4()}"
@@ -1658,45 +1662,129 @@ def test_job_debugger_returns_timeline_and_error_classification(monkeypatch):
         )
         db.commit()
 
-    monkeypatch.setattr(
-        main,
-        "_load_task_result",
-        lambda _task_id: {"task_id": _task_id, "error": "contract.input_missing:job"},
-    )
-    monkeypatch.setattr(
-        main,
-        "_read_task_events_for_job",
-        lambda _job_id, _limit: [
-            {
-                "stream_id": "1-0",
-                "type": "task.started",
-                "occurred_at": now.isoformat(),
-                "job_id": _job_id,
-                "task_id": task_id,
-                "status": "running",
-                "attempts": 2,
-                "max_attempts": 3,
-                "worker_consumer": "worker-a",
-                "run_id": "run-1",
-                "error": "",
-            }
-        ],
-    )
+    started_envelope = models.EventEnvelope(
+        type="task.started",
+        version="1",
+        occurred_at=now,
+        correlation_id=f"corr-start-{uuid.uuid4()}",
+        job_id=job_id,
+        task_id=task_id,
+        payload={
+            "task_id": task_id,
+            "attempts": 2,
+            "max_attempts": 3,
+            "worker_consumer": "worker-a",
+            "run_id": "run-1",
+        },
+    ).model_dump(mode="json")
+    failed_envelope = models.EventEnvelope(
+        type="task.failed",
+        version="1",
+        occurred_at=now + timedelta(seconds=1),
+        correlation_id=f"corr-fail-{uuid.uuid4()}",
+        job_id=job_id,
+        task_id=task_id,
+        payload={
+            "task_id": task_id,
+            "status": models.TaskStatus.failed.value,
+            "outputs": {
+                "tool_error": {
+                    "error": "contract.input_missing:job",
+                    "error_code": "contract.input_missing",
+                }
+            },
+            "artifacts": [
+                {
+                    "type": "run_scorecard",
+                    "summary": {"total_latency_ms": 125, "failure_stage": "task_execution"},
+                }
+            ],
+            "tool_calls": [
+                models.ToolCall(
+                    tool_name="document.spec.generate",
+                    input={"job": {"topic": "latency"}},
+                    idempotency_key="debug-call-1",
+                    trace_id="trace-debug-1",
+                    request_id="document.spec.generate",
+                    capability_id="document.spec.generate",
+                    adapter_id="local_tool:document.spec.generate",
+                    started_at=now,
+                    finished_at=now + timedelta(milliseconds=125),
+                    status="failed",
+                    output_or_error={
+                        "error": "contract.input_missing:job",
+                        "error_code": "contract.input_missing",
+                    },
+                ).model_dump(mode="json")
+            ],
+            "started_at": now.isoformat(),
+            "finished_at": (now + timedelta(seconds=1)).isoformat(),
+            "error": "contract.input_missing:job",
+            "attempts": 2,
+            "max_attempts": 3,
+            "worker_consumer": "worker-a",
+            "run_id": "run-1",
+        },
+    ).model_dump(mode="json")
+
+    main._handle_event(events.TASK_STREAM, {"data": json.dumps(started_envelope)})
+    main._handle_event(events.TASK_STREAM, {"data": json.dumps(failed_envelope)})
+
+    with SessionLocal() as db:
+        step_attempt_rows = db.query(StepAttemptRecord).filter(StepAttemptRecord.job_id == job_id).all()
+        invocation_rows = db.query(InvocationRecord).filter(InvocationRecord.job_id == job_id).all()
+        run_event_rows = (
+            db.query(RunEventRecord)
+            .filter(RunEventRecord.job_id == job_id)
+            .order_by(RunEventRecord.occurred_at.asc())
+            .all()
+        )
+    assert len(step_attempt_rows) == 1
+    assert step_attempt_rows[0].attempt_number == 2
+    assert step_attempt_rows[0].status == models.TaskStatus.failed.value
+    assert step_attempt_rows[0].retry_classification == "terminal_contract"
+    assert len(invocation_rows) == 1
+    assert invocation_rows[0].capability_id == "document.spec.generate"
+    assert len(run_event_rows) == 2
+    assert [row.event_type for row in run_event_rows] == ["task.started", "task.failed"]
+
+    attempts_response = client.get(f"/jobs/{job_id}/debugger/attempts")
+    assert attempts_response.status_code == 200
+    attempts_payload = attempts_response.json()
+    assert len(attempts_payload) == 1
+    assert attempts_payload[0]["attempt_number"] == 2
+
+    invocations_response = client.get(f"/jobs/{job_id}/debugger/invocations")
+    assert invocations_response.status_code == 200
+    invocations_payload = invocations_response.json()
+    assert len(invocations_payload) == 1
+    assert invocations_payload[0]["request_id"] == "document.spec.generate"
+
+    events_response = client.get(f"/jobs/{job_id}/debugger/events")
+    assert events_response.status_code == 200
+    events_payload = events_response.json()
+    assert len(events_payload) == 2
+    assert [entry["event_type"] for entry in events_payload] == ["task.started", "task.failed"]
 
     response = client.get(f"/jobs/{job_id}/debugger")
     assert response.status_code == 200
     payload = response.json()
     assert payload["job_id"] == job_id
-    assert payload["job_status"] == "running"
+    assert payload["job_status"] == "failed"
     assert payload["plan_id"] == plan_id
-    assert payload["timeline_events_scanned"] == 1
+    assert payload["timeline_events_scanned"] == 2
     assert len(payload["tasks"]) == 1
     task_payload = payload["tasks"][0]
     assert task_payload["task"]["id"] == task_id
     assert task_payload["tool_inputs_resolved"] is True
     assert task_payload["error"]["category"] == "contract"
     assert task_payload["error"]["retryable"] is False
-    assert len(task_payload["timeline"]) == 1
+    assert len(task_payload["timeline"]) == 2
+    assert len(task_payload["attempts"]) == 1
+    assert task_payload["attempts"][0]["attempt_number"] == 2
+    assert task_payload["attempts"][0]["status"] == "failed"
+    assert len(task_payload["attempts"][0]["invocations"]) == 1
+    assert task_payload["attempts"][0]["invocations"][0]["capability_id"] == "document.spec.generate"
 
 
 def test_plan_created_enqueues_ready_tasks():

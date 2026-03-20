@@ -434,6 +434,9 @@ def _execute_capability_tool(
                 input_payload={},
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=capability_spec.capability_id,
+                adapter_id=_capability_adapter_id(capability_spec),
                 error=tool_error,
                 error_code="policy.capability_not_allowed",
             )
@@ -462,6 +465,9 @@ def _execute_capability_tool(
                 input_payload={},
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=capability_spec.capability_id,
+                adapter_id=_capability_adapter_id(capability_spec),
                 error=tool_error,
                 error_code="contract.intent_mismatch",
             )
@@ -495,6 +501,9 @@ def _execute_capability_tool(
                 input_payload=recorded_payload,
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=capability_spec.capability_id,
+                adapter_id=_capability_adapter_id(capability_spec),
                 error=secret_error,
                 error_code=secret_error.split(":", 1)[0],
             )
@@ -540,6 +549,9 @@ def _execute_capability_tool(
                 input_payload=recorded_payload,
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=capability_spec.capability_id,
+                adapter_id=_capability_adapter_id(capability_spec),
                 error=capability_payload_error,
                 error_code="contract.input_invalid",
             )
@@ -573,6 +585,9 @@ def _execute_capability_tool(
                 input_payload=recorded_payload,
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=capability_spec.capability_id,
+                adapter_id=_capability_adapter_id(capability_spec),
                 error=tool_error,
                 error_code="contract.intent_mismatch",
             )
@@ -626,6 +641,9 @@ def _execute_capability_tool(
         tool_runtime=context.tool_runtime,
     )
     call.input = recorded_payload
+    call.request_id = request_id
+    call.capability_id = capability_spec.capability_id
+    call.adapter_id = _capability_adapter_id(capability_spec)
     duration_ms = int((time.monotonic() - tool_started_at) * 1000)
     core_logging.log_event(
         context.logger,
@@ -771,6 +789,9 @@ def _execute_native_tool(
                 input_payload={},
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=request_id,
+                adapter_id=_native_adapter_id(tool_name),
                 error=tool_error,
                 error_code="policy.tool_not_allowed",
             )
@@ -795,6 +816,9 @@ def _execute_native_tool(
                 input_payload={},
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=request_id,
+                adapter_id=_native_adapter_id(tool_name),
                 error=tool_error,
             )
         )
@@ -824,6 +848,9 @@ def _execute_native_tool(
                     input_payload=recorded_payload,
                     trace_id=trace_id,
                     started_at=started_at,
+                    request_id=request_id,
+                    capability_id=request_id,
+                    adapter_id=_native_adapter_id(tool_name),
                     error=tool_error,
                 )
             )
@@ -843,6 +870,9 @@ def _execute_native_tool(
                 input_payload=recorded_payload,
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=request_id,
+                adapter_id=_native_adapter_id(tool_name),
                 error=secret_error,
                 error_code=secret_error.split(":", 1)[0],
             )
@@ -875,6 +905,9 @@ def _execute_native_tool(
                 input_payload=recorded_payload,
                 trace_id=trace_id,
                 started_at=started_at,
+                request_id=request_id,
+                capability_id=request_id,
+                adapter_id=_native_adapter_id(tool_name),
                 error=tool_error,
                 error_code="contract.intent_mismatch",
             )
@@ -925,6 +958,9 @@ def _execute_native_tool(
         max_output_bytes=context.config.output_size_cap,
     )
     call.input = recorded_payload
+    call.request_id = request_id
+    call.capability_id = request_id
+    call.adapter_id = _native_adapter_id(tool_name)
     duration_ms = int((time.monotonic() - tool_started_at) * 1000)
     core_logging.log_event(
         context.logger,
@@ -1068,6 +1104,9 @@ def _failed_tool_call(
     input_payload: dict[str, Any],
     trace_id: str,
     started_at: datetime,
+    request_id: str | None = None,
+    capability_id: str | None = None,
+    adapter_id: str | None = None,
     error: str,
     error_code: str | None = None,
 ) -> models.ToolCall:
@@ -1079,11 +1118,32 @@ def _failed_tool_call(
         input=input_payload,
         idempotency_key=str(uuid.uuid4()),
         trace_id=trace_id,
+        request_id=request_id,
+        capability_id=capability_id,
+        adapter_id=adapter_id,
         started_at=started_at,
         finished_at=datetime.now(UTC),
         status="failed",
         output_or_error=output_or_error,
     )
+
+
+def _capability_adapter_id(capability_spec: capability_registry.CapabilitySpec) -> str | None:
+    adapters = capability_spec.adapters if isinstance(capability_spec.adapters, tuple) else ()
+    if not adapters:
+        return None
+    adapter = adapters[0]
+    parts = [
+        str(adapter.type or "").strip(),
+        str(adapter.server_id or "").strip(),
+        str(adapter.tool_name or "").strip(),
+    ]
+    normalized = [part for part in parts if part]
+    return ":".join(normalized) if normalized else None
+
+
+def _native_adapter_id(tool_name: str) -> str:
+    return f"local_tool:{tool_name}"
 
 
 def _normalize_timeout_error(error: str) -> str:

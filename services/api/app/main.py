@@ -54,8 +54,11 @@ from .models import (
     ChatMessageRecord,
     ChatSessionRecord,
     EventOutboxRecord,
+    InvocationRecord,
     JobRecord,
     PlanRecord,
+    RunEventRecord,
+    StepAttemptRecord,
     TaskRecord,
     TaskResultRecord,
     WorkflowDefinitionRecord,
@@ -5218,6 +5221,7 @@ def _handle_event(stream_name: str, data: dict[str, str]) -> None:
         _handle_task_rework(envelope)
     elif event_type == "policy.decision_made":
         _handle_policy_decision(envelope)
+    _persist_run_event(envelope)
 
 
 def _handle_plan_created(envelope: dict) -> None:
@@ -5382,10 +5386,21 @@ def _handle_task_completed(envelope: dict) -> None:
     _store_task_output(task_id, payload.get("outputs", {}))
     _store_task_result(task_id, payload)
     now = _utcnow()
+    occurred_at = _parse_event_datetime(envelope.get("occurred_at")) or now
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
             return
+        job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
+        attempt = _upsert_step_attempt_finished(
+            db,
+            task=task,
+            job=job,
+            payload=payload,
+            status=models.TaskStatus.completed.value,
+            occurred_at=occurred_at,
+        )
+        _replace_attempt_invocations(db, attempt=attempt, task=task, payload=payload)
         for capability_id in task.tool_requests or []:
             normalized_capability = str(capability_id or "").strip()
             if normalized_capability:
@@ -5410,10 +5425,21 @@ def _handle_task_failed(envelope: dict) -> None:
     _store_task_result(task_id, payload)
     error = payload.get("error")
     now = _utcnow()
+    occurred_at = _parse_event_datetime(envelope.get("occurred_at")) or now
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
             return
+        job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
+        attempt = _upsert_step_attempt_finished(
+            db,
+            task=task,
+            job=job,
+            payload=payload,
+            status=models.TaskStatus.failed.value,
+            occurred_at=occurred_at,
+        )
+        _replace_attempt_invocations(db, attempt=attempt, task=task, payload=payload)
         for capability_id in task.tool_requests or []:
             normalized_capability = str(capability_id or "").strip()
             if normalized_capability:
@@ -5434,7 +5460,6 @@ def _handle_task_failed(envelope: dict) -> None:
                 return
         task.status = models.TaskStatus.failed.value
         task.updated_at = now
-        job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
         if job:
             _set_job_status(job, models.JobStatus.failed)
             job.updated_at = now
@@ -5493,6 +5518,7 @@ def _handle_task_started(envelope: dict) -> None:
     if not task_id:
         return
     now = _utcnow()
+    occurred_at = _parse_event_datetime(envelope.get("occurred_at")) or now
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
@@ -5506,6 +5532,13 @@ def _handle_task_started(envelope: dict) -> None:
             task.attempts = max(0, attempts)
         task.updated_at = now
         job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
+        _upsert_step_attempt_started(
+            db,
+            task=task,
+            job=job,
+            payload=payload,
+            occurred_at=occurred_at,
+        )
         if job:
             _set_job_status(job, models.JobStatus.running)
             job.updated_at = now
@@ -5559,6 +5592,11 @@ def _handle_task_accepted(envelope: dict) -> None:
             return
         task.status = models.TaskStatus.accepted.value
         task.updated_at = now
+        _update_latest_step_attempt_status(
+            db,
+            task=task,
+            status=models.TaskStatus.accepted.value,
+        )
         db.commit()
         job_id = task.job_id
         plan_id = task.plan_id
@@ -5576,6 +5614,11 @@ def _handle_task_rework(envelope: dict) -> None:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
             return
+        _update_latest_step_attempt_status(
+            db,
+            task=task,
+            status=models.TaskStatus.rework_requested.value,
+        )
         task.rework_count = (task.rework_count or 0) + 1
         if _limit_exceeded(task.rework_count, task.max_reworks):
             task.status = models.TaskStatus.failed.value
@@ -7423,6 +7466,526 @@ def _extract_error_from_task_result(result: dict[str, Any]) -> str | None:
     return None
 
 
+def _durable_run_id(job: JobRecord | None, job_id: str) -> str:
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    workflow_run_id = str(metadata.get("workflow_run_id") or "").strip()
+    return workflow_run_id or job_id
+
+
+def _payload_attempt_number(payload: Mapping[str, Any] | None) -> int | None:
+    if not isinstance(payload, Mapping):
+        return None
+    raw_attempt = payload.get("attempts")
+    if isinstance(raw_attempt, bool):
+        return None
+    try:
+        attempt_number = int(raw_attempt)
+    except (TypeError, ValueError):
+        return None
+    return attempt_number if attempt_number > 0 else None
+
+
+def _parse_event_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, str) and value.strip():
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
+
+
+def _step_attempt_record_id(step_id: str, attempt_number: int) -> str:
+    return hashlib.sha1(f"step_attempt:{step_id}:{attempt_number}".encode("utf-8")).hexdigest()
+
+
+def _run_event_record_id(
+    *,
+    event_type: str,
+    correlation_id: str,
+    job_id: str,
+    step_id: str | None,
+    occurred_at: datetime,
+    payload: Mapping[str, Any],
+) -> str:
+    material = json.dumps(
+        {
+            "event_type": event_type,
+            "correlation_id": correlation_id,
+            "job_id": job_id,
+            "step_id": step_id,
+            "occurred_at": occurred_at.isoformat(),
+            "payload": dict(payload),
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha1(material.encode("utf-8")).hexdigest()
+
+
+def _invocation_record_id(
+    step_attempt_id: str,
+    index: int,
+    request_id: str | None,
+    tool_call: Mapping[str, Any],
+) -> str:
+    material = json.dumps(
+        {
+            "step_attempt_id": step_attempt_id,
+            "index": index,
+            "request_id": request_id,
+            "tool_name": tool_call.get("tool_name"),
+            "idempotency_key": tool_call.get("idempotency_key"),
+            "trace_id": tool_call.get("trace_id"),
+            "started_at": tool_call.get("started_at"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha1(material.encode("utf-8")).hexdigest()
+
+
+def _task_error_from_payload(payload: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    error = payload.get("error")
+    if isinstance(error, str) and error:
+        return error
+    outputs = payload.get("outputs")
+    if isinstance(outputs, Mapping):
+        tool_error = outputs.get("tool_error")
+        if isinstance(tool_error, Mapping):
+            message = tool_error.get("error")
+            if isinstance(message, str) and message:
+                return message
+        validation_error = outputs.get("validation_error")
+        if isinstance(validation_error, Mapping):
+            message = validation_error.get("error")
+            if isinstance(message, str) and message:
+                return message
+    return None
+
+
+def _task_error_code_from_payload(
+    payload: Mapping[str, Any] | None,
+    error_message: str | None,
+) -> str | None:
+    if isinstance(payload, Mapping):
+        outputs = payload.get("outputs")
+        if isinstance(outputs, Mapping):
+            tool_error = outputs.get("tool_error")
+            if isinstance(tool_error, Mapping):
+                raw_code = tool_error.get("error_code")
+                if isinstance(raw_code, str) and raw_code:
+                    return raw_code
+            validation_error = outputs.get("validation_error")
+            if isinstance(validation_error, Mapping):
+                raw_code = validation_error.get("error_code")
+                if isinstance(raw_code, str) and raw_code:
+                    return raw_code
+    if isinstance(error_message, str) and error_message:
+        return error_message.split(":", 1)[0]
+    return None
+
+
+def _retry_classification_for_error(error_message: str | None) -> str | None:
+    if not error_message:
+        return "succeeded"
+    classification = _classify_task_error(error_message)
+    if classification.get("retryable"):
+        return "retryable"
+    return f"terminal_{classification.get('category', 'runtime')}"
+
+
+def _build_step_attempt_result_summary(
+    payload: Mapping[str, Any] | None,
+    error_message: str | None,
+) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    outputs = payload.get("outputs")
+    artifacts = payload.get("artifacts")
+    tool_calls = payload.get("tool_calls")
+    summary: dict[str, Any] = {
+        "status": str(payload.get("status") or ""),
+        "output_keys": sorted(outputs.keys()) if isinstance(outputs, Mapping) else [],
+        "artifact_count": len(artifacts) if isinstance(artifacts, list) else 0,
+        "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+    }
+    if error_message:
+        classification = _classify_task_error(error_message)
+        summary["error_category"] = classification.get("category")
+        summary["error_code"] = classification.get("code")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                continue
+            if artifact.get("type") != "run_scorecard":
+                continue
+            run_scorecard = artifact.get("summary")
+            if isinstance(run_scorecard, Mapping):
+                summary["run_scorecard"] = dict(run_scorecard)
+                break
+    return summary
+
+
+def _latest_step_attempt_record(db: Session, step_id: str) -> StepAttemptRecord | None:
+    return (
+        db.query(StepAttemptRecord)
+        .filter(StepAttemptRecord.step_id == step_id)
+        .order_by(StepAttemptRecord.attempt_number.desc(), StepAttemptRecord.started_at.desc())
+        .first()
+    )
+
+
+def _upsert_step_attempt_started(
+    db: Session,
+    *,
+    task: TaskRecord,
+    job: JobRecord | None,
+    payload: Mapping[str, Any],
+    occurred_at: datetime,
+) -> StepAttemptRecord:
+    attempt_number = _payload_attempt_number(payload) or max(int(task.attempts or 0), 1)
+    attempt_id = _step_attempt_record_id(task.id, attempt_number)
+    record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
+    if record is None:
+        record = StepAttemptRecord(
+            id=attempt_id,
+            run_id=_durable_run_id(job, task.job_id),
+            job_id=task.job_id,
+            step_id=task.id,
+            attempt_number=attempt_number,
+            status=models.TaskStatus.running.value,
+            worker_id=payload.get("worker_consumer")
+            if isinstance(payload.get("worker_consumer"), str)
+            else None,
+            started_at=occurred_at,
+            finished_at=None,
+            error_code=None,
+            error_message=None,
+            retry_classification=None,
+            result_summary_json={},
+        )
+        db.add(record)
+        return record
+    record.status = models.TaskStatus.running.value
+    record.worker_id = (
+        payload.get("worker_consumer")
+        if isinstance(payload.get("worker_consumer"), str)
+        else record.worker_id
+    )
+    if record.started_at is None or occurred_at < record.started_at:
+        record.started_at = occurred_at
+    return record
+
+
+def _upsert_step_attempt_finished(
+    db: Session,
+    *,
+    task: TaskRecord,
+    job: JobRecord | None,
+    payload: Mapping[str, Any],
+    status: str,
+    occurred_at: datetime,
+) -> StepAttemptRecord:
+    latest_attempt = _latest_step_attempt_record(db, task.id)
+    attempt_number = _payload_attempt_number(payload)
+    if attempt_number is None and latest_attempt is not None:
+        attempt_number = latest_attempt.attempt_number
+    if attempt_number is None:
+        attempt_number = max(int(task.attempts or 0), 1)
+    attempt_id = _step_attempt_record_id(task.id, attempt_number)
+    record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
+    started_at = _parse_event_datetime(payload.get("started_at")) or occurred_at
+    if record is None:
+        record = StepAttemptRecord(
+            id=attempt_id,
+            run_id=_durable_run_id(job, task.job_id),
+            job_id=task.job_id,
+            step_id=task.id,
+            attempt_number=attempt_number,
+            status=status,
+            worker_id=payload.get("worker_consumer")
+            if isinstance(payload.get("worker_consumer"), str)
+            else None,
+            started_at=started_at,
+            finished_at=None,
+            error_code=None,
+            error_message=None,
+            retry_classification=None,
+            result_summary_json={},
+        )
+        db.add(record)
+    error_message = _task_error_from_payload(payload)
+    record.status = status
+    record.worker_id = (
+        payload.get("worker_consumer")
+        if isinstance(payload.get("worker_consumer"), str)
+        else record.worker_id
+    )
+    record.started_at = record.started_at or started_at
+    record.finished_at = _parse_event_datetime(payload.get("finished_at")) or occurred_at
+    record.error_message = error_message
+    record.error_code = _task_error_code_from_payload(payload, error_message)
+    record.retry_classification = _retry_classification_for_error(error_message)
+    record.result_summary_json = _build_step_attempt_result_summary(payload, error_message)
+    return record
+
+
+def _update_latest_step_attempt_status(
+    db: Session,
+    *,
+    task: TaskRecord,
+    status: str,
+) -> StepAttemptRecord | None:
+    record = _latest_step_attempt_record(db, task.id)
+    if record is None:
+        return None
+    record.status = status
+    if status in {
+        models.TaskStatus.accepted.value,
+        models.TaskStatus.rework_requested.value,
+    }:
+        record.finished_at = record.finished_at or _utcnow()
+    return record
+
+
+def _binding_adapter_id(binding: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(binding, Mapping):
+        return None
+    parts = [
+        str(binding.get("adapter_type") or "").strip(),
+        str(binding.get("server_id") or "").strip(),
+        str(binding.get("tool_name") or "").strip(),
+    ]
+    normalized = [part for part in parts if part]
+    return ":".join(normalized) if normalized else None
+
+
+def _replace_attempt_invocations(
+    db: Session,
+    *,
+    attempt: StepAttemptRecord,
+    task: TaskRecord,
+    payload: Mapping[str, Any],
+) -> None:
+    db.query(InvocationRecord).filter(
+        InvocationRecord.step_attempt_id == attempt.id
+    ).delete(synchronize_session=False)
+    tool_calls = payload.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return
+    bindings = _task_capability_bindings(
+        task.tool_requests or [],
+        task.tool_inputs if isinstance(task.tool_inputs, dict) else {},
+    )
+    for index, raw_call in enumerate(tool_calls):
+        if not isinstance(raw_call, Mapping):
+            continue
+        request_id = raw_call.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            request_id = task.tool_requests[index] if index < len(task.tool_requests or []) else None
+        binding = bindings.get(request_id) if isinstance(request_id, str) else None
+        tool_name = str(raw_call.get("tool_name") or "").strip()
+        capability_id = str(raw_call.get("capability_id") or "").strip()
+        if not capability_id and isinstance(binding, Mapping):
+            capability_id = str(binding.get("capability_id") or "").strip()
+        capability_id = capability_id or tool_name or str(request_id or "")
+        adapter_id = raw_call.get("adapter_id")
+        if not isinstance(adapter_id, str) or not adapter_id.strip():
+            adapter_id = _binding_adapter_id(binding)
+        request_payload = raw_call.get("input")
+        response_payload = raw_call.get("output_or_error")
+        error_message = None
+        error_code = None
+        if isinstance(response_payload, Mapping):
+            maybe_error = response_payload.get("error")
+            if isinstance(maybe_error, str) and maybe_error:
+                error_message = maybe_error
+            maybe_code = response_payload.get("error_code")
+            if isinstance(maybe_code, str) and maybe_code:
+                error_code = maybe_code
+        if error_code is None and error_message:
+            error_code = error_message.split(":", 1)[0]
+        db.add(
+            InvocationRecord(
+                id=_invocation_record_id(attempt.id, index, request_id, raw_call),
+                run_id=attempt.run_id,
+                job_id=attempt.job_id,
+                step_id=attempt.step_id,
+                step_attempt_id=attempt.id,
+                request_id=request_id if isinstance(request_id, str) else None,
+                capability_id=capability_id,
+                adapter_id=adapter_id.strip() if isinstance(adapter_id, str) and adapter_id.strip() else None,
+                request_json=dict(request_payload) if isinstance(request_payload, Mapping) else {},
+                response_json=dict(response_payload) if isinstance(response_payload, Mapping) else {},
+                status=str(raw_call.get("status") or ""),
+                started_at=_parse_event_datetime(raw_call.get("started_at")) or attempt.started_at,
+                finished_at=_parse_event_datetime(raw_call.get("finished_at")),
+                error_code=error_code,
+                error_message=error_message,
+            )
+        )
+
+
+def _resolve_step_attempt_id_for_event(
+    db: Session,
+    *,
+    step_id: str | None,
+    payload: Mapping[str, Any],
+) -> str | None:
+    if not isinstance(step_id, str) or not step_id:
+        return None
+    attempt_number = _payload_attempt_number(payload)
+    if attempt_number is not None:
+        attempt_id = _step_attempt_record_id(step_id, attempt_number)
+        record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
+        if record is not None:
+            return record.id
+    latest_attempt = _latest_step_attempt_record(db, step_id)
+    return latest_attempt.id if latest_attempt is not None else None
+
+
+def _persist_run_event(envelope: Mapping[str, Any]) -> None:
+    event_type = str(envelope.get("type") or "").strip()
+    correlation_id = str(envelope.get("correlation_id") or "").strip()
+    payload = envelope.get("payload")
+    payload_dict = dict(payload) if isinstance(payload, Mapping) else {}
+    step_id = envelope.get("task_id")
+    if not isinstance(step_id, str) or not step_id:
+        raw_task_id = payload_dict.get("task_id")
+        step_id = raw_task_id if isinstance(raw_task_id, str) and raw_task_id else None
+    job_id = envelope.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raw_job_id = payload_dict.get("job_id")
+        job_id = raw_job_id if isinstance(raw_job_id, str) and raw_job_id else None
+    if not event_type or not correlation_id:
+        return
+    with SessionLocal() as db:
+        task = None
+        if isinstance(step_id, str) and step_id:
+            task = db.query(TaskRecord).filter(TaskRecord.id == step_id).first()
+            if job_id is None and task is not None:
+                job_id = task.job_id
+        if not isinstance(job_id, str) or not job_id:
+            return
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        occurred_at = _parse_event_datetime(envelope.get("occurred_at")) or _utcnow()
+        step_attempt_id = _resolve_step_attempt_id_for_event(
+            db,
+            step_id=step_id,
+            payload=payload_dict,
+        )
+        record_id = _run_event_record_id(
+            event_type=event_type,
+            correlation_id=correlation_id,
+            job_id=job_id,
+            step_id=step_id,
+            occurred_at=occurred_at,
+            payload=payload_dict,
+        )
+        record = db.query(RunEventRecord).filter(RunEventRecord.id == record_id).first()
+        if record is None:
+            record = RunEventRecord(
+                id=record_id,
+                run_id=_durable_run_id(job, job_id),
+                job_id=job_id,
+                step_id=step_id,
+                step_attempt_id=step_attempt_id,
+                event_type=event_type,
+                payload_json=payload_dict,
+                occurred_at=occurred_at,
+            )
+            db.add(record)
+        else:
+            record.step_attempt_id = step_attempt_id
+            record.payload_json = payload_dict
+            record.occurred_at = occurred_at
+        db.commit()
+
+
+def _step_attempt_from_record(record: StepAttemptRecord) -> models.StepAttempt:
+    return models.StepAttempt(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        step_id=record.step_id,
+        attempt_number=record.attempt_number,
+        status=record.status,
+        worker_id=record.worker_id,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        error_code=record.error_code,
+        error_message=record.error_message,
+        retry_classification=record.retry_classification,
+        result_summary=record.result_summary_json or {},
+    )
+
+
+def _invocation_from_record(record: InvocationRecord) -> models.Invocation:
+    return models.Invocation(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        step_id=record.step_id,
+        step_attempt_id=record.step_attempt_id,
+        request_id=record.request_id,
+        capability_id=record.capability_id,
+        adapter_id=record.adapter_id,
+        request=record.request_json or {},
+        response=record.response_json or {},
+        status=record.status,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        error_code=record.error_code,
+        error_message=record.error_message,
+    )
+
+
+def _run_event_from_record(record: RunEventRecord) -> models.RunEvent:
+    return models.RunEvent(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        step_id=record.step_id,
+        step_attempt_id=record.step_attempt_id,
+        event_type=record.event_type,
+        payload=record.payload_json or {},
+        occurred_at=record.occurred_at,
+    )
+
+
+def _debugger_timeline_entry_from_run_event(record: RunEventRecord) -> dict[str, Any]:
+    payload = record.payload_json if isinstance(record.payload_json, dict) else {}
+    status = payload.get("status")
+    status_text = status if isinstance(status, str) and status else record.event_type.replace("task.", "")
+    return {
+        "stream_id": record.id,
+        "type": record.event_type,
+        "occurred_at": record.occurred_at.isoformat(),
+        "job_id": record.job_id,
+        "task_id": record.step_id,
+        "status": status_text,
+        "attempts": payload.get("attempts"),
+        "max_attempts": payload.get("max_attempts"),
+        "worker_consumer": payload.get("worker_consumer")
+        if isinstance(payload.get("worker_consumer"), str)
+        else None,
+        "run_id": payload.get("run_id") if isinstance(payload.get("run_id"), str) else record.run_id,
+        "error": _task_error_from_payload(payload) or "",
+    }
+
+
 def _latest_task_failures_for_jobs(
     db: Session,
     job_ids: Sequence[str],
@@ -7524,6 +8087,55 @@ def _read_task_events_for_job(job_id: str, limit: int) -> list[dict[str, Any]]:
             break
     entries.reverse()
     return entries
+
+
+def _list_step_attempts_for_job(db: Session, job_id: str) -> list[models.StepAttempt]:
+    rows = (
+        db.query(StepAttemptRecord)
+        .filter(StepAttemptRecord.job_id == job_id)
+        .order_by(StepAttemptRecord.started_at.asc(), StepAttemptRecord.attempt_number.asc())
+        .all()
+    )
+    return [_step_attempt_from_record(row) for row in rows]
+
+
+def _list_invocations_for_job(db: Session, job_id: str) -> list[models.Invocation]:
+    rows = (
+        db.query(InvocationRecord)
+        .filter(InvocationRecord.job_id == job_id)
+        .order_by(InvocationRecord.started_at.asc(), InvocationRecord.capability_id.asc())
+        .all()
+    )
+    return [_invocation_from_record(row) for row in rows]
+
+
+def _list_run_events_for_job(
+    db: Session,
+    job_id: str,
+    *,
+    limit: int,
+) -> list[models.RunEvent]:
+    rows = (
+        db.query(RunEventRecord)
+        .filter(RunEventRecord.job_id == job_id)
+        .order_by(RunEventRecord.occurred_at.asc())
+        .limit(limit)
+        .all()
+    )
+    return [_run_event_from_record(row) for row in rows]
+
+
+def _debugger_timeline_for_job(job_id: str, *, limit: int, db: Session) -> list[dict[str, Any]]:
+    durable_rows = (
+        db.query(RunEventRecord)
+        .filter(RunEventRecord.job_id == job_id)
+        .order_by(RunEventRecord.occurred_at.asc())
+        .limit(limit)
+        .all()
+    )
+    if durable_rows:
+        return [_debugger_timeline_entry_from_run_event(row) for row in durable_rows]
+    return _read_task_events_for_job(job_id, limit)
 
 
 @app.post("/chat/sessions", response_model=chat_contracts.ChatSession)
@@ -7926,13 +8538,25 @@ def get_job_debugger(
         job.metadata_json if isinstance(job.metadata_json, dict) else {}
     )
 
-    timeline = _read_task_events_for_job(job_id, limit)
+    timeline = _debugger_timeline_for_job(job_id, limit=limit, db=db)
     timeline_by_task: dict[str, list[dict[str, Any]]] = {}
     for entry in timeline:
         task_id = entry.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             continue
         timeline_by_task.setdefault(task_id, []).append(entry)
+    step_attempts = _list_step_attempts_for_job(db, job_id)
+    invocations = _list_invocations_for_job(db, job_id)
+    invocations_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for invocation in invocations:
+        invocations_by_attempt.setdefault(invocation.step_attempt_id, []).append(
+            invocation.model_dump(mode="json")
+        )
+    attempts_by_task: dict[str, list[dict[str, Any]]] = {}
+    for attempt in step_attempts:
+        attempt_payload = attempt.model_dump(mode="json")
+        attempt_payload["invocations"] = invocations_by_attempt.get(attempt.id, [])
+        attempts_by_task.setdefault(attempt.step_id, []).append(attempt_payload)
 
     tasks_payload: list[dict[str, Any]] = []
     for record in task_records:
@@ -7964,6 +8588,7 @@ def get_job_debugger(
                 "tool_inputs_resolved": bool(hydrated_payload.get("tool_inputs_resolved")),
                 "context_keys": sorted(context.keys()),
                 "timeline": timeline_entries,
+                "attempts": attempts_by_task.get(record.id, []),
                 "latest_result": task_result,
                 "error": _classify_task_error(latest_error),
             }
@@ -7977,6 +8602,40 @@ def get_job_debugger(
         "timeline_events_scanned": len(timeline),
         "tasks": tasks_payload,
     }
+
+
+@app.get("/jobs/{job_id}/debugger/attempts", response_model=List[models.StepAttempt])
+def get_job_debugger_attempts(
+    job_id: str,
+    db: Session = Depends(get_db),
+) -> List[models.StepAttempt]:
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _list_step_attempts_for_job(db, job_id)
+
+
+@app.get("/jobs/{job_id}/debugger/invocations", response_model=List[models.Invocation])
+def get_job_debugger_invocations(
+    job_id: str,
+    db: Session = Depends(get_db),
+) -> List[models.Invocation]:
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _list_invocations_for_job(db, job_id)
+
+
+@app.get("/jobs/{job_id}/debugger/events", response_model=List[models.RunEvent])
+def get_job_debugger_events(
+    job_id: str,
+    limit: int = Query(400, ge=50, le=2000),
+    db: Session = Depends(get_db),
+) -> List[models.RunEvent]:
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _list_run_events_for_job(db, job_id, limit=limit)
 
 
 @app.get("/jobs/{job_id}/events/outbox")

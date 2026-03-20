@@ -188,6 +188,64 @@ class TaskResultRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime)
 
 
+class StepAttemptRecord(Base):
+    __tablename__ = "step_attempts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    step_id: Mapped[str] = mapped_column(String, index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String, default="")
+    worker_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True)
+    retry_classification: Mapped[str | None] = mapped_column(String, nullable=True)
+    result_summary_json: Mapped[Dict[str, Any]] = mapped_column("result_summary", JSON, default=dict)
+
+
+class InvocationRecord(Base):
+    __tablename__ = "invocations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    step_id: Mapped[str] = mapped_column(String, index=True)
+    step_attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("step_attempts.id"),
+        index=True,
+    )
+    request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    capability_id: Mapped[str] = mapped_column(String)
+    adapter_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    request_json: Mapped[Dict[str, Any]] = mapped_column("request", JSON, default=dict)
+    response_json: Mapped[Dict[str, Any]] = mapped_column("response", JSON, default=dict)
+    status: Mapped[str] = mapped_column(String, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class RunEventRecord(Base):
+    __tablename__ = "run_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    step_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    step_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("step_attempts.id"),
+        nullable=True,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String, index=True)
+    payload_json: Mapped[Dict[str, Any]] = mapped_column("payload", JSON, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
 class EventOutboxRecord(Base):
     __tablename__ = "event_outbox"
 
