@@ -36,6 +36,7 @@ from libs.core import (
     mcp_gateway,
     models,
     payload_resolver,
+    run_specs,
     runtime_manifest,
     state_machine,
     tool_bootstrap,
@@ -595,10 +596,42 @@ def _workflow_version_from_record(record: WorkflowVersionRecord) -> models.Workf
         context_json=record.context_json or {},
         draft=record.draft_json or {},
         compiled_plan=record.compiled_plan_json or {},
+        run_spec=_workflow_version_run_spec_payload(record),
         user_id=record.user_id,
         metadata=record.metadata_json or {},
         created_at=record.created_at,
     )
+
+
+def _workflow_version_run_spec(record: WorkflowVersionRecord) -> models.RunSpec | None:
+    metadata = record.metadata_json if isinstance(record.metadata_json, dict) else {}
+    stored_run_spec = run_specs.parse_run_spec(metadata.get("run_spec"))
+    if stored_run_spec is not None:
+        return stored_run_spec
+    compiled_plan = _parse_plan_payload(record.compiled_plan_json or {})
+    if compiled_plan is None:
+        return None
+    try:
+        return run_specs.plan_to_run_spec(compiled_plan, kind=models.RunKind.studio)
+    except ValueError:
+        return None
+
+
+def _workflow_version_run_spec_payload(record: WorkflowVersionRecord) -> dict[str, Any]:
+    run_spec = _workflow_version_run_spec(record)
+    if run_spec is None:
+        return {}
+    return run_spec.model_dump(mode="json")
+
+
+def _workflow_version_plan(record: WorkflowVersionRecord) -> models.PlanCreate | None:
+    run_spec = _workflow_version_run_spec(record)
+    if run_spec is not None:
+        try:
+            return run_specs.run_spec_to_plan(run_spec)
+        except ValueError:
+            pass
+    return _parse_plan_payload(record.compiled_plan_json or {})
 
 
 def _workflow_trigger_from_record(
@@ -8820,7 +8853,7 @@ def _workflow_title_fallback(goal: str, title: str) -> str:
 
 def _compile_workflow_definition_version(
     definition: WorkflowDefinitionRecord,
-) -> tuple[models.PlanCreate, dict[str, Any]]:
+) -> tuple[models.PlanCreate, models.RunSpec, dict[str, Any]]:
     raw_draft = definition.draft_json if isinstance(definition.draft_json, dict) else {}
     goal_text = str(definition.goal or "").strip()
     job_context = dict(definition.context_json) if isinstance(definition.context_json, dict) else {}
@@ -8884,6 +8917,24 @@ def _compile_workflow_definition_version(
         preflight_errors,
         _compile_plan_runtime_conformance_errors(plan),
     )
+    try:
+        run_spec = run_specs.plan_to_run_spec(plan, kind=models.RunKind.studio)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "workflow_run_spec_compile_failed",
+                "diagnostics": {
+                    "errors": [
+                        {
+                            "code": "workflow.run_spec_compile_failed",
+                            "message": str(exc),
+                        }
+                    ],
+                    "warnings": diagnostics_warnings,
+                },
+            },
+        ) from exc
     if preflight_errors:
         raise HTTPException(
             status_code=400,
@@ -8896,7 +8947,7 @@ def _compile_workflow_definition_version(
                 },
             },
         )
-    return plan, {
+    return plan, run_spec, {
         "workflow_interface": workflow_interface,
         "diagnostics": {
             "errors": diagnostics_errors,
@@ -9061,7 +9112,7 @@ def publish_workflow_definition(
     )
     if definition is None:
         raise HTTPException(status_code=404, detail="workflow_definition_not_found")
-    compiled_plan, publish_meta = _compile_workflow_definition_version(definition)
+    compiled_plan, run_spec, publish_meta = _compile_workflow_definition_version(definition)
     latest = (
         db.query(WorkflowVersionRecord)
         .filter(WorkflowVersionRecord.definition_id == definition_id)
@@ -9073,6 +9124,7 @@ def publish_workflow_definition(
     if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
         merged_metadata.update(dict(payload["metadata"]))
     merged_metadata["publish"] = publish_meta
+    merged_metadata["run_spec"] = run_spec.model_dump(mode="json")
     record = WorkflowVersionRecord(
         id=str(uuid.uuid4()),
         definition_id=definition.id,
@@ -9238,7 +9290,7 @@ def _run_workflow_version_internal(
     trigger: WorkflowTriggerRecord | None = None,
     source: str,
 ) -> models.WorkflowRunResult:
-    compiled_plan = _parse_plan_payload(version.compiled_plan_json or {})
+    compiled_plan = _workflow_version_plan(version)
     if compiled_plan is None:
         raise HTTPException(status_code=400, detail="workflow_version_plan_invalid")
     context_json = dict(version.context_json or {})
@@ -9519,7 +9571,17 @@ def compile_composer_draft(
     diagnostics_errors.extend(workflow_context_errors)
     diagnostics_warnings.extend(workflow_interface_warnings)
     preflight_errors: dict[str, str] = {}
+    run_spec: models.RunSpec | None = None
     if plan is not None:
+        try:
+            run_spec = run_specs.plan_to_run_spec(plan, kind=models.RunKind.studio)
+        except ValueError as exc:
+            diagnostics_errors.append(
+                {
+                    "code": "draft.run_spec_compile_failed",
+                    "message": str(exc),
+                }
+            )
         preflight_errors = _compile_plan_preflight(
             plan,
             preview_job_context,
@@ -9544,6 +9606,7 @@ def compile_composer_draft(
             "warnings": diagnostics_warnings,
         },
         "plan": plan.model_dump() if plan is not None else None,
+        "run_spec": run_spec.model_dump(mode="json") if run_spec is not None else None,
         "preflight_errors": preflight_errors,
         "intent_inference": _task_intent_summary(plan.tasks, goal_text=goal_text)
         if plan is not None

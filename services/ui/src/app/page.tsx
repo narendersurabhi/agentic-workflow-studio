@@ -976,6 +976,7 @@ type ComposerCompileResponse = {
     warnings: ComposerCompileDiagnostic[];
   };
   plan: PlanCreatePayload | null;
+  run_spec?: Record<string, unknown> | null;
   preflight_errors: Record<string, string>;
 };
 

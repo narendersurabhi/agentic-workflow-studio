@@ -63,6 +63,14 @@ class WorkflowTriggerType(str, Enum):
     schedule = "schedule"
 
 
+class RunKind(str, Enum):
+    planner = "planner"
+    studio = "studio"
+    chat_direct = "chat_direct"
+    trigger = "trigger"
+    api = "api"
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
@@ -268,6 +276,47 @@ class PlanCreate(BaseModel):
     tasks: List[TaskCreate]
 
 
+class CapabilityRequestSpec(BaseModel):
+    request_id: str
+    capability_id: str
+
+
+class StepRetryPolicy(BaseModel):
+    max_attempts: int = 1
+
+
+class StepAcceptancePolicy(BaseModel):
+    acceptance_criteria: List[str] = Field(default_factory=list)
+    critic_required: bool = True
+
+
+class StepSpec(BaseModel):
+    step_id: str
+    name: str
+    description: str
+    instruction: str = ""
+    intent: Optional[ToolIntent] = None
+    capability_request: CapabilityRequestSpec
+    input_bindings: Dict[str, Any] = Field(default_factory=dict)
+    execution_gate: Optional[Dict[str, Any]] = None
+    expected_output_schema_ref: str = ""
+    retry_policy: StepRetryPolicy = Field(default_factory=StepRetryPolicy)
+    acceptance_policy: StepAcceptancePolicy = Field(default_factory=StepAcceptancePolicy)
+    depends_on: List[str] = Field(default_factory=list)
+    routing_hints: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RunSpec(BaseModel):
+    version: str = "1"
+    kind: RunKind = RunKind.studio
+    planner_version: str = ""
+    tasks_summary: str = ""
+    steps: List[StepSpec] = Field(default_factory=list)
+    dag_edges: List[List[str]] = Field(default_factory=list)
+    capability_requests: List[CapabilityRequestSpec] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class JobCreate(BaseModel):
     goal: str
     context_json: Dict[str, Any] = Field(default_factory=dict)
@@ -314,6 +363,7 @@ class WorkflowVersion(BaseModel):
     context_json: Dict[str, Any] = Field(default_factory=dict)
     draft: Dict[str, Any] = Field(default_factory=dict)
     compiled_plan: Dict[str, Any] = Field(default_factory=dict)
+    run_spec: Dict[str, Any] = Field(default_factory=dict)
     user_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime

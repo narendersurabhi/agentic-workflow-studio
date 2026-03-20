@@ -220,6 +220,7 @@ export type ComposerCompileResponse = {
     warnings: ComposerCompileDiagnostic[];
   };
   plan: Record<string, unknown> | null;
+  run_spec?: Record<string, unknown> | null;
   preflight_errors: Record<string, string>;
 };
 
@@ -258,6 +259,7 @@ export type WorkflowVersion = {
   context_json: Record<string, unknown>;
   draft: StudioPersistedWorkflowDraft;
   compiled_plan: Record<string, unknown>;
+  run_spec?: Record<string, unknown>;
   user_id?: string | null;
   metadata: Record<string, unknown>;
   created_at: string;

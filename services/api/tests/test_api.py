@@ -25,7 +25,7 @@ from services.api.app.models import (
     WorkflowTriggerRecord,
     WorkflowVersionRecord,
 )
-from libs.core import events, execution_contracts, models
+from libs.core import events, execution_contracts, models, run_specs
 from libs.core import capability_registry as cap_registry
 from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 
@@ -80,6 +80,8 @@ def test_workflow_definition_publish_and_run_bypasses_planner_job_event() -> Non
     version = publish_response.json()
     assert version["version_number"] == 1
     assert version["compiled_plan"]["tasks"][0]["name"] == "ListWorkspace"
+    assert version["run_spec"]["steps"][0]["name"] == "ListWorkspace"
+    assert version["metadata"]["run_spec"]["steps"][0]["name"] == "ListWorkspace"
 
     run_response = client.post(
         f"/workflows/versions/{version['id']}/run",
@@ -2515,6 +2517,85 @@ def test_build_plan_from_composer_draft_derives_intent_from_goal(monkeypatch) ->
     assert plan.tasks[0].intent == models.ToolIntent.render
 
 
+def test_composer_compile_emits_run_spec(monkeypatch) -> None:
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    response = client.post(
+        "/composer/compile",
+        json={
+            "draft": {
+                "summary": "Compile a gated chain",
+                "nodes": [
+                    {"id": "source", "capabilityId": "json_transform", "taskName": "LoadData"},
+                    {
+                        "id": "gate",
+                        "taskName": "OnlyIfApproved",
+                        "nodeKind": "control",
+                        "controlKind": "if",
+                        "capabilityId": "studio.control.if",
+                        "controlConfig": {"expression": "context.approved == true"},
+                    },
+                    {
+                        "id": "target",
+                        "capabilityId": "json_transform",
+                        "taskName": "TransformData",
+                        "bindings": {
+                            "source": {
+                                "kind": "step_output",
+                                "sourceNodeId": "source",
+                                "sourcePath": "items",
+                            }
+                        },
+                    },
+                ],
+                "edges": [
+                    {"fromNodeId": "source", "toNodeId": "gate"},
+                    {"fromNodeId": "gate", "toNodeId": "target"},
+                ],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert body["plan"] is not None
+    assert "LoadData" in body["preflight_errors"]
+    assert body["run_spec"]["kind"] == "studio"
+    assert [step["name"] for step in body["run_spec"]["steps"]] == ["LoadData", "TransformData"]
+    assert body["run_spec"]["steps"][1]["execution_gate"] == {
+        "expression": "context.approved == true"
+    }
+    assert body["run_spec"]["steps"][1]["input_bindings"] == {
+        "source": {
+            "$from": ["dependencies_by_name", "LoadData", "json_transform", "items"]
+        }
+    }
+    assert body["run_spec"]["dag_edges"] == [
+        [
+            body["run_spec"]["steps"][0]["step_id"],
+            body["run_spec"]["steps"][1]["step_id"],
+        ]
+    ]
+
+
 def test_build_plan_from_composer_draft_flags_control_flow_nodes() -> None:
     plan, errors, _warnings = main._build_plan_from_composer_draft(
         {
@@ -3238,6 +3319,58 @@ def test_publish_workflow_definition_rejects_unknown_memory_read_name() -> None:
     assert detail["error"] == "workflow_preflight_failed"
     assert detail["preflight_errors"]["ReadProfile"].startswith("memory.read:unknown_memory:profile")
     assert "user_profile" in detail["preflight_errors"]["ReadProfile"]
+
+
+def test_workflow_run_uses_published_run_spec_when_compiled_plan_missing() -> None:
+    create_response = client.post(
+        "/workflows/definitions",
+        json={
+            "title": "Workspace listing",
+            "goal": "List workspace files",
+            "user_id": "narendersurabhi",
+            "context_json": {"user_id": "narendersurabhi"},
+            "draft": {
+                "summary": "Workspace listing",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "taskName": "ListWorkspace",
+                        "capabilityId": "filesystem.workspace.list",
+                        "bindings": {},
+                    }
+                ],
+                "edges": [],
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    definition = create_response.json()
+
+    publish_response = client.post(f"/workflows/definitions/{definition['id']}/publish", json={})
+    assert publish_response.status_code == 200
+    version = publish_response.json()
+    parsed_run_spec = run_specs.parse_run_spec(version.get("run_spec"))
+    assert parsed_run_spec is not None
+
+    with SessionLocal() as db:
+        version_record = (
+            db.query(WorkflowVersionRecord)
+            .filter(WorkflowVersionRecord.id == version["id"])
+            .first()
+        )
+        assert version_record is not None
+        version_record.compiled_plan_json = {}
+        db.commit()
+
+    run_response = client.post(
+        f"/workflows/versions/{version['id']}/run",
+        json={"priority": 2},
+    )
+    assert run_response.status_code == 200
+    run_body = run_response.json()
+    assert run_body["workflow_run"]["version_id"] == version["id"]
+    assert run_body["plan"]["job_id"] == run_body["job"]["id"]
 
 
 def test_task_payload_from_record_flags_unresolved_reference_inputs() -> None:
