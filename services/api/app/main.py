@@ -245,6 +245,9 @@ RUNTIME_CONFORMANCE_ENABLED = (
 STUDIO_RUN_SCHEDULER_ENABLED = (
     os.getenv("STUDIO_RUN_SCHEDULER_ENABLED", "false").lower() == "true"
 )
+PLANNER_RUN_SCHEDULER_ENABLED = (
+    os.getenv("PLANNER_RUN_SCHEDULER_ENABLED", "false").lower() == "true"
+)
 RUNTIME_CONFORMANCE_SERVICE = (
     os.getenv("RUNTIME_CONFORMANCE_SERVICE", "worker").strip().lower() or "worker"
 )
@@ -665,6 +668,11 @@ def _job_workflow_run_id(job: JobRecord | None) -> str | None:
     return workflow_run_id or None
 
 
+def _planner_job_run_spec(job: JobRecord | None) -> models.RunSpec | None:
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    return run_specs.parse_run_spec(metadata.get("run_spec"))
+
+
 def _workflow_trigger_from_record(
     record: WorkflowTriggerRecord,
 ) -> models.WorkflowTrigger:
@@ -886,6 +894,7 @@ def _task_record_tool_inputs(
     capability_bindings: Mapping[str, Any] | None = None,
     execution_gate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    merged = execution_contracts.strip_execution_metadata_from_tool_inputs(tool_inputs)
     normalized_execution_gate = execution_contracts.normalize_execution_gates(
         {"tool_inputs": tool_inputs},
         request_ids=tool_requests,
@@ -897,17 +906,16 @@ def _task_record_tool_inputs(
                 request_ids=tool_requests,
             )
         )
-    embedded = execution_contracts.embed_capability_bindings(
-        tool_inputs,
-        capability_bindings,
+    normalized_capability_bindings = execution_contracts.normalize_capability_bindings(
+        {"capability_bindings": capability_bindings},
         request_ids=tool_requests,
         capabilities=_api_enabled_capabilities(),
     )
-    return execution_contracts.embed_execution_gate(
-        embedded,
-        normalized_execution_gate,
-        request_ids=tool_requests,
-    )
+    if normalized_capability_bindings:
+        merged[execution_contracts.EXECUTION_BINDINGS_KEY] = normalized_capability_bindings
+    if normalized_execution_gate:
+        merged[execution_contracts.EXECUTION_GATE_KEY] = normalized_execution_gate
+    return merged
 
 
 def _task_intent_profile_entry(
@@ -5259,9 +5267,16 @@ def _handle_plan_created(envelope: dict) -> None:
     job_id = envelope.get("job_id") or payload.get("job_id")
     if not job_id:
         return
+    planner_run_spec = run_specs.parse_run_spec(payload.get("run_spec"))
     plan = _parse_plan_payload(payload)
+    if plan is None and planner_run_spec is not None:
+        try:
+            plan = run_specs.run_spec_to_plan(planner_run_spec)
+        except ValueError:
+            plan = None
     if plan is None:
         return
+    use_postgres_scheduler = PLANNER_RUN_SCHEDULER_ENABLED and planner_run_spec is not None
     now = _utcnow()
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
@@ -5300,6 +5315,12 @@ def _handle_plan_created(envelope: dict) -> None:
         existing = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
         if existing:
             plan_id = existing.id
+            if use_postgres_scheduler and job:
+                metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
+                metadata["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
+                metadata["run_spec"] = planner_run_spec.model_dump(mode="json")
+                job.metadata_json = metadata
+                job.updated_at = now
             db.commit()
             _dispatch_ready_work_for_job(job_id, plan_id, envelope.get("correlation_id"))
             _refresh_job_status(job_id)
@@ -5377,6 +5398,11 @@ def _handle_plan_created(envelope: dict) -> None:
             )
         if job:
             _merge_task_intent_profiles_into_job_metadata(job, task_intent_profiles)
+            if use_postgres_scheduler:
+                metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
+                metadata["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
+                metadata["run_spec"] = planner_run_spec.model_dump(mode="json")
+                job.metadata_json = metadata
             _set_job_status(job, models.JobStatus.planning)
             job.updated_at = now
         db.commit()
@@ -5731,35 +5757,43 @@ def _scheduler_effective_task_status(
     return task_status
 
 
-def _schedule_workflow_run(workflow_run_id: str, *, correlation_id: str | None = None) -> None:
+def _schedule_postgres_run(job_id: str, *, correlation_id: str | None = None) -> None:
     now = _utcnow()
     events_to_emit: list[tuple[str, dict[str, Any]]] = []
-    job_id: str | None = None
+    scheduled_job_id: str | None = None
     with SessionLocal() as db:
-        workflow_run = (
-            db.query(WorkflowRunRecord).filter(WorkflowRunRecord.id == workflow_run_id).first()
-        )
-        if workflow_run is None or not _workflow_run_uses_postgres_scheduler(workflow_run):
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        if job is None or not _job_uses_postgres_scheduler(job):
             return
-        version = (
-            db.query(WorkflowVersionRecord)
-            .filter(WorkflowVersionRecord.id == workflow_run.version_id)
-            .first()
-        )
-        if version is None:
-            return
-        run_spec = _workflow_version_run_spec(version)
+        workflow_run_id = _job_workflow_run_id(job)
+        workflow_run = None
+        run_spec: models.RunSpec | None = None
+        run_label = job.id
+        if workflow_run_id:
+            workflow_run = (
+                db.query(WorkflowRunRecord).filter(WorkflowRunRecord.id == workflow_run_id).first()
+            )
+            if workflow_run is not None and _workflow_run_uses_postgres_scheduler(workflow_run):
+                version = (
+                    db.query(WorkflowVersionRecord)
+                    .filter(WorkflowVersionRecord.id == workflow_run.version_id)
+                    .first()
+                )
+                if version is not None:
+                    run_spec = _workflow_version_run_spec(version)
+                    run_label = workflow_run.id
+        if run_spec is None:
+            run_spec = _planner_job_run_spec(job)
         if run_spec is None:
             logger.warning(
-                "studio_scheduler_run_spec_missing",
-                extra={"workflow_run_id": workflow_run.id, "version_id": workflow_run.version_id},
+                "postgres_scheduler_run_spec_missing",
+                extra={"job_id": job.id, "workflow_run_id": workflow_run_id},
             )
             return
-        job = db.query(JobRecord).filter(JobRecord.id == workflow_run.job_id).first()
-        plan = db.query(PlanRecord).filter(PlanRecord.id == workflow_run.plan_id).first()
-        if job is None or plan is None:
+        plan = db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+        if plan is None:
             return
-        job_id = job.id
+        scheduled_job_id = job.id
         task_records = db.query(TaskRecord).filter(TaskRecord.plan_id == plan.id).all()
         if not task_records:
             return
@@ -5780,9 +5814,9 @@ def _schedule_workflow_run(workflow_run_id: str, *, correlation_id: str | None =
             record = task_by_name.get(step.name)
             if record is None:
                 logger.warning(
-                    "studio_scheduler_task_missing",
+                    "postgres_scheduler_task_missing",
                     extra={
-                        "workflow_run_id": workflow_run.id,
+                        "run_id": run_label,
                         "job_id": job.id,
                         "step_id": step.step_id,
                         "step_name": step.name,
@@ -5869,8 +5903,19 @@ def _schedule_workflow_run(workflow_run_id: str, *, correlation_id: str | None =
         db.commit()
     for event_type, event_payload in events_to_emit:
         _emit_event(event_type, event_payload)
-    if job_id:
-        _refresh_job_status(job_id)
+    if scheduled_job_id:
+        _refresh_job_status(scheduled_job_id)
+
+
+def _schedule_workflow_run(workflow_run_id: str, *, correlation_id: str | None = None) -> None:
+    with SessionLocal() as db:
+        workflow_run = (
+            db.query(WorkflowRunRecord).filter(WorkflowRunRecord.id == workflow_run_id).first()
+        )
+        if workflow_run is None:
+            return
+        job_id = workflow_run.job_id
+    _schedule_postgres_run(job_id, correlation_id=correlation_id)
 
 
 def _dispatch_ready_work_for_job(
@@ -5878,19 +5923,17 @@ def _dispatch_ready_work_for_job(
     plan_id: str | None,
     correlation_id: str | None,
 ) -> None:
-    workflow_run_id: str | None = None
     resolved_plan_id = plan_id
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         if job is None:
             return
-        if _job_uses_postgres_scheduler(job):
-            workflow_run_id = _job_workflow_run_id(job)
+        use_postgres_scheduler = _job_uses_postgres_scheduler(job)
         if resolved_plan_id is None:
             plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
             resolved_plan_id = plan.id if plan is not None else None
-    if workflow_run_id:
-        _schedule_workflow_run(workflow_run_id, correlation_id=correlation_id)
+    if use_postgres_scheduler:
+        _schedule_postgres_run(job_id, correlation_id=correlation_id)
         return
     if resolved_plan_id:
         _enqueue_ready_tasks(job_id, resolved_plan_id, correlation_id)

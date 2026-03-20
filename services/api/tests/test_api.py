@@ -1974,7 +1974,7 @@ def test_plan_created_enqueues_ready_tasks():
                 acceptance_criteria=["ok"],
                 expected_output_schema_ref="TaskResult",
                 deps=[],
-                tool_requests=[],
+                tool_requests=["filesystem.workspace.list"],
                 critic_required=False,
             ),
             models.TaskCreate(
@@ -1984,7 +1984,7 @@ def test_plan_created_enqueues_ready_tasks():
                 acceptance_criteria=["ok"],
                 expected_output_schema_ref="TaskResult",
                 deps=["t1"],
-                tool_requests=[],
+                tool_requests=["filesystem.workspace.list"],
                 critic_required=False,
             ),
         ],
@@ -2014,7 +2014,196 @@ def test_plan_created_enqueues_ready_tasks():
     assert any(event_type == "task.ready" for event_type, _ in events)
 
 
-def test_handle_plan_created_persists_embedded_capability_bindings() -> None:
+def test_plan_created_with_run_spec_uses_postgres_scheduler_for_planner_jobs(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(main, "PLANNER_RUN_SCHEDULER_ENABLED", True)
+    job_id = f"job-test-planner-run-spec-{uuid.uuid4()}"
+    now = _utcnow()
+    with SessionLocal() as db:
+        db.add(
+            JobRecord(
+                id=job_id,
+                goal="demo",
+                context_json={},
+                status=models.JobStatus.queued.value,
+                created_at=now,
+                updated_at=now,
+                priority=0,
+                metadata_json={},
+            )
+        )
+        db.commit()
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="t1 then t2",
+        dag_edges=[["t1", "t2"]],
+        tasks=[
+            models.TaskCreate(
+                name="t1",
+                description="first",
+                instruction="do first",
+                acceptance_criteria=["ok"],
+                expected_output_schema_ref="TaskResult",
+                deps=[],
+                tool_requests=["filesystem.workspace.list"],
+                critic_required=False,
+            ),
+            models.TaskCreate(
+                name="t2",
+                description="second",
+                instruction="do second",
+                acceptance_criteria=["ok"],
+                expected_output_schema_ref="TaskResult",
+                deps=["t1"],
+                tool_requests=["filesystem.workspace.list"],
+                critic_required=False,
+            ),
+        ],
+    )
+    run_spec = run_specs.plan_to_run_spec(plan, kind=models.RunKind.planner)
+    envelope = {
+        "type": "plan.created",
+        "payload": {"job_id": job_id, "run_spec": run_spec.model_dump(mode="json")},
+        "job_id": job_id,
+        "correlation_id": "corr-planner",
+    }
+    events: list[tuple[str, dict]] = []
+    original_emit = main._emit_event
+    try:
+        main._emit_event = lambda event_type, event_payload: events.append(
+            (event_type, event_payload)
+        )
+        main._handle_plan_created(envelope)
+    finally:
+        main._emit_event = original_emit
+
+    with SessionLocal() as db:
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).one()
+        tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+        by_name = {task.name: task for task in tasks}
+        assert by_name["t1"].status == models.TaskStatus.ready.value
+        assert by_name["t2"].status == models.TaskStatus.pending.value
+        assert job.metadata_json["scheduler_mode"] == main.POSTGRES_RUN_SPEC_SCHEDULER_MODE
+        stored_run_spec = run_specs.parse_run_spec(job.metadata_json.get("run_spec"))
+        assert stored_run_spec is not None
+        assert stored_run_spec.kind == models.RunKind.planner
+    assert any(event_type == "task.ready" for event_type, _ in events)
+
+
+def test_planner_scheduler_advances_dependency_from_durable_step_state(monkeypatch) -> None:
+    monkeypatch.setattr(main, "PLANNER_RUN_SCHEDULER_ENABLED", True)
+    job_id = f"job-test-planner-durable-{uuid.uuid4()}"
+    now = _utcnow()
+    with SessionLocal() as db:
+        db.add(
+            JobRecord(
+                id=job_id,
+                goal="demo",
+                context_json={},
+                status=models.JobStatus.queued.value,
+                created_at=now,
+                updated_at=now,
+                priority=0,
+                metadata_json={},
+            )
+        )
+        db.commit()
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="t1 then t2",
+        dag_edges=[["t1", "t2"]],
+        tasks=[
+            models.TaskCreate(
+                name="t1",
+                description="first",
+                instruction="do first",
+                acceptance_criteria=["ok"],
+                expected_output_schema_ref="TaskResult",
+                deps=[],
+                tool_requests=["filesystem.workspace.list"],
+                critic_required=False,
+            ),
+            models.TaskCreate(
+                name="t2",
+                description="second",
+                instruction="do second",
+                acceptance_criteria=["ok"],
+                expected_output_schema_ref="TaskResult",
+                deps=["t1"],
+                tool_requests=["filesystem.workspace.list"],
+                critic_required=False,
+            ),
+        ],
+    )
+    run_spec = run_specs.plan_to_run_spec(plan, kind=models.RunKind.planner)
+    main._handle_plan_created(
+        {
+            "type": "plan.created",
+            "payload": {"job_id": job_id, "run_spec": run_spec.model_dump(mode="json")},
+            "job_id": job_id,
+            "correlation_id": "corr-initial",
+        }
+    )
+
+    with SessionLocal() as db:
+        plan_record = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).one()
+        plan_id = plan_record.id
+        tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+        tasks_by_name = {task.name: task for task in tasks}
+        source_task = tasks_by_name["t1"]
+        target_task = tasks_by_name["t2"]
+        assert source_task.status == models.TaskStatus.ready.value
+        assert target_task.status == models.TaskStatus.pending.value
+        source_task.status = models.TaskStatus.pending.value
+        source_task.updated_at = now
+        db.add(
+            StepAttemptRecord(
+                id=main._step_attempt_record_id(source_task.id, 1),
+                run_id=job_id,
+                job_id=job_id,
+                step_id=source_task.id,
+                attempt_number=1,
+                status=models.TaskStatus.completed.value,
+                worker_id="worker-a",
+                started_at=now,
+                finished_at=now,
+                error_code=None,
+                error_message=None,
+                retry_classification="succeeded",
+                result_summary_json={},
+            )
+        )
+        for row in db.query(EventOutboxRecord).all():
+            if isinstance(row.envelope_json, dict) and row.envelope_json.get("job_id") == job_id:
+                db.delete(row)
+        db.commit()
+
+    main._dispatch_ready_work_for_job(job_id, plan_id, "corr-durable-planner")
+
+    with SessionLocal() as db:
+        tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+        tasks_by_name = {task.name: task for task in tasks}
+        assert tasks_by_name["t1"].status == models.TaskStatus.completed.value
+        assert tasks_by_name["t2"].status == models.TaskStatus.ready.value
+        assert tasks_by_name["t2"].attempts == 1
+        event_records = db.query(EventOutboxRecord).all()
+    matching_events = [
+        row
+        for row in event_records
+        if isinstance(row.envelope_json, dict) and row.envelope_json.get("job_id") == job_id
+    ]
+    ready_payloads = [
+        row.envelope_json.get("payload", {})
+        for row in matching_events
+        if row.event_type == "task.ready"
+    ]
+    assert len(ready_payloads) == 1
+    assert ready_payloads[0]["name"] == "t2"
+
+
+def test_handle_plan_created_persists_embedded_capability_bindings(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     job_id = f"job-test-bindings-{uuid.uuid4()}"
     now = _utcnow()
     with SessionLocal() as db:

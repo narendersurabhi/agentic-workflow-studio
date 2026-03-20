@@ -116,4 +116,7 @@ def test_process_stream_entry_emits_created_and_selection_events() -> None:
     selected = json.loads(fake_redis.added[1][1]["data"])
     assert fake_redis.added[0][0] == events.PLAN_STREAM
     assert created["type"] == "plan.created"
+    assert created["payload"]["job_id"] == "job-1"
+    assert created["payload"]["run_spec"]["kind"] == models.RunKind.planner.value
+    assert created["payload"]["run_spec"]["steps"][0]["name"] == "TaskA"
     assert selected["type"] == "plan.capability_selection"
