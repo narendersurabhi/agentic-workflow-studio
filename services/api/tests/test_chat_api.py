@@ -1,5 +1,5 @@
 import os
-from types import SimpleNamespace
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +9,7 @@ os.environ["JOB_RECOVERY_ENABLED"] = "false"
 os.environ["POLICY_GATE_ENABLED"] = "false"
 os.environ["CAPABILITY_MODE"] = "enabled"
 
+from libs.core import models  # noqa: E402
 from services.api.app import chat_service, main  # noqa: E402
 from services.api.app.database import Base, engine  # noqa: E402
 
@@ -488,7 +489,7 @@ def test_chat_turn_can_use_llm_router_for_conversational_reply(monkeypatch) -> N
     assert body["assistant_message"]["content"] == "This stays in chat."
 
 
-def test_chat_turn_can_execute_direct_capability(monkeypatch) -> None:
+def test_chat_turn_executes_direct_capability_as_synchronous_one_step_run(monkeypatch) -> None:
     class _Router:
         def generate_request_json_object(self, request):
             assert "direct_capabilities" in request.prompt
@@ -502,20 +503,39 @@ def test_chat_turn_can_execute_direct_capability(monkeypatch) -> None:
                 "arguments": {"path": "", "max_files": 2},
             }
 
-    class _DirectExecutor:
-        def execute_capability(self, *, capability_id: str, arguments: dict[str, object], trace_id: str):
-            assert capability_id == "filesystem.workspace.list"
-            assert arguments["max_files"] == 2
-            assert trace_id
-            return SimpleNamespace(
-                capability_id=capability_id,
-                tool_name="workspace_list_files",
-                output={"entries": [{"path": "/shared/workspace/README.md", "type": "file"}]},
-                assistant_response="Entries:\n- /shared/workspace/README.md",
-            )
+    def _execute_chat_task_sync(task_payload: dict[str, object]) -> models.TaskResult:
+        assert task_payload["job_id"]
+        assert task_payload["run_id"] == task_payload["job_id"]
+        assert task_payload["tool_inputs"]["filesystem.workspace.list"]["max_files"] == 2
+        now = datetime.now(UTC)
+        output = {"entries": [{"path": "/shared/workspace/README.md", "type": "file"}]}
+        return models.TaskResult(
+            task_id=str(task_payload["task_id"]),
+            status=models.TaskStatus.completed,
+            outputs={"filesystem.workspace.list": output},
+            artifacts=[],
+            tool_calls=[
+                models.ToolCall(
+                    tool_name="filesystem.workspace.list",
+                    input=dict(task_payload["tool_inputs"]["filesystem.workspace.list"]),
+                    idempotency_key="chat-direct-sync",
+                    trace_id=str(task_payload["trace_id"]),
+                    request_id="filesystem.workspace.list",
+                    capability_id="filesystem.workspace.list",
+                    adapter_id="mcp:filesystem:workspace_list_files",
+                    started_at=now,
+                    finished_at=now,
+                    status="completed",
+                    output_or_error=output,
+                )
+            ],
+            started_at=now,
+            finished_at=now,
+            error=None,
+        )
 
     monkeypatch.setattr(main, "_chat_router_provider", _Router())
-    monkeypatch.setattr(main, "_chat_direct_executor", _DirectExecutor())
+    monkeypatch.setattr(main, "_execute_chat_task_sync", _execute_chat_task_sync)
     session = client.post("/chat/sessions", json={}).json()
 
     response = client.post(
@@ -525,13 +545,48 @@ def test_chat_turn_can_execute_direct_capability(monkeypatch) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["job"] is None
+    job_id = body["job"]["id"]
+    assert body["job"]["status"] == "succeeded"
+    assert body["job"]["metadata"]["workflow_source"] == "chat_direct"
+    assert body["job"]["metadata"]["scheduler_mode"] == "postgres_run_spec"
+    assert body["job"]["metadata"]["run_kind"] == "chat_direct"
+    assert body["job"]["metadata"]["run_spec"]["kind"] == "chat_direct"
+    assert body["session"]["active_job_id"] is None
     assert body["assistant_message"]["action"]["type"] == "tool_call"
+    assert body["assistant_message"]["action"]["job_id"] == job_id
     assert body["assistant_message"]["action"]["capability_id"] == "filesystem.workspace.list"
+    assert body["assistant_message"]["job_id"] == job_id
     assert "README.md" in body["assistant_message"]["content"]
     assert body["assistant_message"]["metadata"]["tool_output"]["entries"][0]["path"].endswith(
         "README.md"
     )
+
+    task_results = client.get(f"/jobs/{job_id}/task_results")
+    assert task_results.status_code == 200
+    task_result_payload = next(iter(task_results.json().values()))
+    assert task_result_payload["outputs"]["filesystem.workspace.list"]["entries"][0]["path"].endswith(
+        "README.md"
+    )
+
+    attempts_response = client.get(f"/jobs/{job_id}/debugger/attempts")
+    assert attempts_response.status_code == 200
+    attempts = attempts_response.json()
+    assert len(attempts) == 1
+    assert attempts[0]["run_id"] == job_id
+    assert attempts[0]["status"] == "completed"
+
+    invocations_response = client.get(f"/jobs/{job_id}/debugger/invocations")
+    assert invocations_response.status_code == 200
+    invocations = invocations_response.json()
+    assert len(invocations) == 1
+    assert invocations[0]["run_id"] == job_id
+    assert invocations[0]["capability_id"] == "filesystem.workspace.list"
+    assert invocations[0]["adapter_id"] == "mcp:filesystem:workspace_list_files"
+
+    events_response = client.get(f"/jobs/{job_id}/debugger/events")
+    assert events_response.status_code == 200
+    event_types = {entry["event_type"] for entry in events_response.json()}
+    assert {"task.ready", "task.started", "task.completed"}.issubset(event_types)
 
 
 def test_chat_memory_arguments_inherit_user_id_from_context() -> None:

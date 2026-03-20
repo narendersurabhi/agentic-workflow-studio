@@ -16,7 +16,7 @@ from .models import ChatMessageRecord, ChatSessionRecord
 @dataclass(frozen=True)
 class ChatServiceRuntime:
     route_turn: Callable[..., dict[str, Any]]
-    execute_direct_capability: Callable[..., dict[str, Any]]
+    run_direct_capability: Callable[..., "ChatDirectRunResult"]
     create_job: Callable[[models.JobCreate, Session], models.Job]
     run_workflow: Callable[..., models.WorkflowRunResult]
     inspect_workflow: Callable[..., "ChatWorkflowInspection"]
@@ -44,6 +44,16 @@ class ChatWorkflowInspection:
     version_id: str | None = None
     definition_id: str | None = None
     missing_inputs: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ChatDirectRunResult:
+    job: models.Job
+    capability_id: str
+    tool_name: str | None = None
+    output: dict[str, Any] = field(default_factory=dict)
+    assistant_response: str = ""
+    error: str | None = None
 
 
 def create_session(
@@ -293,29 +303,53 @@ def handle_turn(
         )
         arguments = _enrich_memory_arguments(capability_id, arguments, merged_context)
         try:
-            direct_result = runtime.execute_direct_capability(
+            direct_result = runtime.run_direct_capability(
+                db=db,
+                chat_session_id=record.id,
+                goal=candidate_goal,
                 capability_id=capability_id,
                 arguments=arguments,
-                trace_id=record.id,
-            )
-            direct_output = (
-                dict(direct_result.get("output"))
-                if isinstance(direct_result.get("output"), Mapping)
-                else None
-            )
-            assistant_content = str(direct_result.get("assistant_response") or assistant_content).strip()
-            assistant_action = chat_contracts.AssistantAction(
-                type=chat_contracts.AssistantActionType.tool_call,
-                goal=candidate_goal,
-                capability_id=str(direct_result.get("capability_id") or capability_id or "") or None,
-                tool_name=str(direct_result.get("tool_name") or "") or None,
-                goal_intent_profile=dict(assessment),
                 context_json=merged_context,
+                priority=request.priority,
             )
+            created_job = direct_result.job
+            if direct_result.error:
+                assistant_content = (
+                    "I could not complete that directly in chat. "
+                    f"One-step run failed: {direct_result.error}"
+                )
+                assistant_action = chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.respond,
+                    goal=candidate_goal,
+                    job_id=created_job.id,
+                    goal_intent_profile=dict(assessment),
+                    context_json=merged_context,
+                )
+            else:
+                direct_output = (
+                    dict(direct_result.output)
+                    if isinstance(direct_result.output, Mapping)
+                    else None
+                )
+                assistant_content = str(
+                    direct_result.assistant_response or assistant_content
+                ).strip()
+                assistant_action = chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.tool_call,
+                    goal=candidate_goal,
+                    job_id=created_job.id,
+                    capability_id=direct_result.capability_id or capability_id or None,
+                    tool_name=direct_result.tool_name,
+                    goal_intent_profile=dict(assessment),
+                    context_json=merged_context,
+                )
+                session_metadata.pop("draft_goal", None)
+                session_metadata.pop("pending_clarification", None)
+                session_metadata.pop("pending_workflow_input", None)
         except Exception as exc:  # noqa: BLE001
             assistant_content = (
                 "I could not complete that directly in chat. "
-                f"Direct capability call failed: {exc}"
+                f"One-step run failed: {exc}"
             )
             assistant_action = chat_contracts.AssistantAction(
                 type=chat_contracts.AssistantActionType.respond,

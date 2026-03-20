@@ -209,6 +209,8 @@ CHAT_DIRECT_CAPABILITIES = {
     ).split(",")
     if entry.strip()
 }
+if not CHAT_DIRECT_EXECUTION_ENABLED:
+    CHAT_DIRECT_CAPABILITIES = set()
 INTENT_MEMORY_PERSIST_ENABLED = (
     os.getenv("INTENT_MEMORY_PERSIST_ENABLED", "true").lower() == "true"
 )
@@ -255,6 +257,7 @@ POSTGRES_RUN_SPEC_SCHEDULER_MODE = "postgres_run_spec"
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 TASK_OUTPUT_KEY_PREFIX = "task_output:"
 TASK_RESULT_KEY_PREFIX = "task_result:"
+CHAT_DIRECT_SYNC_WORKER_CONSUMER = "api.chat_sync"
 
 _tool_spec_registry = tool_bootstrap.build_default_registry(
     http_fetch_enabled=False,
@@ -351,24 +354,6 @@ def _build_chat_router_provider() -> LLMProvider | None:
 
 
 _chat_router_provider = _build_chat_router_provider()
-
-
-def _build_chat_direct_executor() -> chat_execution_service.ChatDirectExecutor | None:
-    if not CHAT_DIRECT_EXECUTION_ENABLED:
-        return None
-    try:
-        return chat_execution_service.build_chat_direct_executor(
-            service_name="api",
-            allowed_capabilities=CHAT_DIRECT_CAPABILITIES,
-            llm_enabled=False,
-            llm_provider_instance=None,
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception("chat_direct_executor_init_failed")
-        return None
-
-
-_chat_direct_executor = _build_chat_direct_executor()
 
 
 def _rag_retriever_request_json(
@@ -1197,7 +1182,7 @@ def _route_chat_turn(
                     "You route chat turns for an agent platform. "
                     "Return JSON only. "
                     "Use route='respond' for normal conversation or explanation when no tools/workflow are needed. "
-                    "Use route='tool_call' only for a single safe read-only capability from the allowed catalog. "
+                    "Use route='tool_call' only for a single safe read-only capability from the allowed catalog as a synchronous one-step run. "
                     "Use route='run_workflow' only when the user wants to invoke a published Studio workflow and the provided context already includes workflow_trigger_id, workflow_version_id, or workflow_definition_id. "
                     "Use route='submit_job' only when the user wants the system to perform work, create artifacts, inspect systems, or run automation. "
                     "Use route='ask_clarification' only when workflow execution is needed but essential details are missing. "
@@ -1328,13 +1313,13 @@ def _build_chat_router_prompt(
         "Decide whether this turn should stay conversational or become a workflow request.\n"
         "Rules:\n"
         "- respond: answer normally, no workflow/job needed.\n"
-        "- tool_call: perform exactly one safe read-only capability from direct_capabilities.\n"
+        "- tool_call: execute exactly one safe read-only capability from direct_capabilities as a synchronous one-step run.\n"
         "- run_workflow: invoke the referenced published Studio workflow from workflow_context.\n"
         "- ask_clarification: workflow is needed, but essential details are missing.\n"
         "- submit_job: workflow/job should be created now.\n"
         "- If pending_clarification is true, treat the user message as an attempt to complete an existing workflow request.\n"
         "- Ask for safety constraints only when a high-risk write workflow is actually being requested.\n"
-        "- Use tool_call only when one direct capability is sufficient and no durable workflow is needed.\n"
+        "- Use tool_call only when one direct capability is sufficient and a single synchronous run is enough.\n"
         "- Use run_workflow only when workflow_context.target_available is true.\n"
         "- Prefer run_workflow over submit_job when the user wants to run an already-published Studio workflow.\n"
         "- Return JSON only.\n\n"
@@ -1481,7 +1466,7 @@ def _dispatch_runtime() -> dispatch_service.ApiDispatchRuntime:
 def _chat_runtime() -> chat_service.ChatServiceRuntime:
     return chat_service.ChatServiceRuntime(
         route_turn=_route_chat_turn,
-        execute_direct_capability=_execute_chat_direct_capability,
+        run_direct_capability=_run_chat_direct_capability,
         create_job=_create_job_internal,
         run_workflow=_run_chat_workflow,
         inspect_workflow=_inspect_chat_workflow,
@@ -1490,25 +1475,338 @@ def _chat_runtime() -> chat_service.ChatServiceRuntime:
     )
 
 
-def _execute_chat_direct_capability(
+def _chat_direct_capability_spec(
     *,
     capability_id: str,
-    arguments: dict[str, Any],
-    trace_id: str,
-) -> dict[str, Any]:
-    if _chat_direct_executor is None:
+):
+    normalized_capability_id = str(capability_id or "").strip()
+    if not CHAT_DIRECT_EXECUTION_ENABLED:
         raise RuntimeError("chat_direct_execution_disabled")
-    result = _chat_direct_executor.execute_capability(
-        capability_id=capability_id,
-        arguments=arguments,
-        trace_id=trace_id,
+    if not normalized_capability_id:
+        raise RuntimeError("chat_direct_missing_capability_id")
+    if normalized_capability_id not in CHAT_DIRECT_CAPABILITIES:
+        raise RuntimeError(f"chat_direct_capability_not_allowed:{normalized_capability_id}")
+    if capability_registry.resolve_capability_mode() == "disabled":
+        raise RuntimeError("chat_direct_capabilities_disabled")
+    registry = capability_registry.load_capability_registry()
+    spec = registry.require(normalized_capability_id)
+    if not spec.enabled:
+        raise RuntimeError(f"chat_direct_capability_disabled:{normalized_capability_id}")
+    if spec.risk_tier != "read_only":
+        raise RuntimeError(f"chat_direct_capability_not_read_only:{normalized_capability_id}")
+    allow_decision = capability_registry.evaluate_capability_allowlist(
+        normalized_capability_id,
+        RUNTIME_CONFORMANCE_SERVICE,
     )
-    return {
-        "capability_id": result.capability_id,
-        "tool_name": result.tool_name,
-        "output": result.output,
-        "assistant_response": result.assistant_response,
+    if not allow_decision.allowed:
+        raise RuntimeError(
+            f"chat_direct_capability_blocked:{normalized_capability_id}:{allow_decision.reason}"
+        )
+    return spec
+
+
+def _build_chat_direct_run_plan(
+    capability_spec: capability_registry.CapabilitySpec,
+    *,
+    arguments: Mapping[str, Any] | None,
+) -> tuple[models.PlanCreate, models.RunSpec]:
+    capability_id = capability_spec.capability_id
+    capability_binding = {
+        "capability_id": capability_id,
     }
+    if capability_spec.adapters:
+        adapter = capability_spec.adapters[0]
+        capability_binding.update(
+            {
+                "adapter_type": adapter.type,
+                "server_id": adapter.server_id,
+                "tool_name": adapter.tool_name,
+            }
+        )
+    task = models.TaskCreate(
+        name=f"ChatDirect:{capability_id}",
+        description=capability_spec.description,
+        instruction=(
+            f"Execute capability {capability_id} once for the current chat turn "
+            "and return the result."
+        ),
+        acceptance_criteria=[f"Capability {capability_id} executes successfully."],
+        expected_output_schema_ref=capability_spec.output_schema_ref or "",
+        intent=models.ToolIntent.io,
+        deps=[],
+        tool_requests=[capability_id],
+        tool_inputs={capability_id: dict(arguments or {})},
+        capability_bindings={capability_id: capability_binding},
+        critic_required=False,
+    )
+    plan = models.PlanCreate(
+        planner_version="chat_direct_v1",
+        tasks_summary=f"Execute {capability_id} as a synchronous chat direct run.",
+        dag_edges=[],
+        tasks=[task],
+    )
+    run_spec = run_specs.plan_to_run_spec(
+        plan,
+        kind=models.RunKind.chat_direct,
+        metadata={
+            "source": "chat_direct",
+            "execution_mode": "synchronous",
+        },
+    )
+    if run_spec.steps:
+        run_spec.steps[0].retry_policy.max_attempts = 1
+    return plan, run_spec
+
+
+def _handle_local_runtime_event(
+    event_type: str,
+    *,
+    correlation_id: str,
+    job_id: str,
+    task_id: str,
+    payload: Mapping[str, Any],
+    occurred_at: datetime | None = None,
+) -> None:
+    envelope = models.EventEnvelope(
+        type=event_type,
+        version="1",
+        occurred_at=occurred_at or _utcnow(),
+        correlation_id=correlation_id,
+        job_id=job_id,
+        task_id=task_id,
+        payload=dict(payload),
+    )
+    _handle_event("local_sync", {"data": envelope.model_dump_json()})
+
+
+def _execute_chat_task_sync(task_payload: dict[str, Any]) -> models.TaskResult:
+    from services.worker.app import main as worker_main
+
+    return worker_main.execute_task(task_payload)
+
+
+def _chat_direct_output_from_task_result(
+    task_result: Mapping[str, Any],
+    *,
+    request_id: str,
+) -> dict[str, Any]:
+    outputs = task_result.get("outputs")
+    if isinstance(outputs, Mapping):
+        resolved = outputs.get(request_id)
+        if isinstance(resolved, Mapping):
+            return dict(resolved)
+        if resolved is not None:
+            return {"result": resolved}
+        if len(outputs) == 1:
+            only_value = next(iter(outputs.values()))
+            if isinstance(only_value, Mapping):
+                return dict(only_value)
+            if only_value is not None:
+                return {"result": only_value}
+    tool_calls = task_result.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for call in reversed(tool_calls):
+            if not isinstance(call, Mapping):
+                continue
+            output = call.get("output_or_error")
+            if isinstance(output, Mapping):
+                return dict(output)
+            if output is not None:
+                return {"result": output}
+    return {}
+
+
+def _run_chat_direct_capability(
+    *,
+    db: Session,
+    chat_session_id: str,
+    goal: str,
+    capability_id: str,
+    arguments: Mapping[str, Any] | None = None,
+    context_json: Mapping[str, Any] | None = None,
+    priority: int = 0,
+) -> chat_service.ChatDirectRunResult:
+    capability_spec = _chat_direct_capability_spec(capability_id=capability_id)
+    normalized_arguments = dict(arguments) if isinstance(arguments, Mapping) else {}
+    normalized_context_json = dict(context_json) if isinstance(context_json, Mapping) else {}
+    plan, run_spec = _build_chat_direct_run_plan(
+        capability_spec,
+        arguments=normalized_arguments,
+    )
+    preflight_errors = _merge_preflight_errors(
+        _compile_plan_preflight(
+            plan,
+            normalized_context_json,
+            goal_text=str(goal or capability_spec.description or capability_spec.capability_id),
+            goal_intent_graph=None,
+        ),
+        _compile_plan_runtime_conformance_errors(plan),
+    )
+    if preflight_errors:
+        details = "; ".join(
+            f"{task_name}: {message}" for task_name, message in sorted(preflight_errors.items())
+        )
+        raise RuntimeError(f"chat_direct_preflight_failed:{details}")
+
+    job = _create_job_internal(
+        models.JobCreate(
+            goal=str(goal or capability_spec.description or capability_spec.capability_id),
+            context_json=normalized_context_json,
+            priority=priority,
+        ),
+        db,
+        emit_job_created_event=False,
+        metadata_overrides={
+            "goal_intent_graph": None,
+            "workflow_source": "chat_direct",
+            "scheduler_mode": POSTGRES_RUN_SPEC_SCHEDULER_MODE,
+            "run_kind": models.RunKind.chat_direct.value,
+            "run_spec": run_spec.model_dump(mode="json"),
+            "chat_session_id": chat_session_id,
+            "chat_execution_mode": "sync_direct",
+        },
+    )
+    plan_record = _create_plan_internal(
+        plan,
+        job_id=job.id,
+        db=db,
+        emit_plan_created_event=False,
+    )
+    task_records = db.query(TaskRecord).filter(TaskRecord.plan_id == plan_record.id).all()
+    if len(task_records) != 1:
+        raise RuntimeError("chat_direct_task_count_invalid")
+    task_record = task_records[0]
+    now = _utcnow()
+    task_record.attempts = 1
+    task_record.max_attempts = 1
+    task_record.max_reworks = 0
+    task_record.status = models.TaskStatus.ready.value
+    task_record.updated_at = now
+    db.commit()
+
+    job_record = db.query(JobRecord).filter(JobRecord.id == job.id).first()
+    if job_record is None:
+        raise RuntimeError("chat_direct_job_missing")
+    _set_job_status(job_record, models.JobStatus.planning)
+    job_record.updated_at = _utcnow()
+    db.commit()
+    tasks = _resolve_task_deps(task_records)
+    task_map = {task.id: task for task in tasks}
+    id_to_name = {record.id: record.name for record in task_records}
+    task_intent_profiles = _coerce_task_intent_profiles(
+        job_record.metadata_json if isinstance(job_record.metadata_json, dict) else {}
+    )
+    correlation_id = str(uuid.uuid4())
+    task_payload = _task_payload_from_record(
+        task_record,
+        correlation_id,
+        context=_build_task_context(
+            task_record.id,
+            task_map,
+            id_to_name,
+            job_record.context_json if isinstance(job_record.context_json, dict) else {},
+        ),
+        goal_text=job_record.goal if isinstance(job_record.goal, str) else "",
+        intent_profile=task_intent_profiles.get(task_record.id),
+    )
+    task_payload["run_id"] = job.id
+
+    attempts = int(task_payload.get("attempts") or 1)
+    max_attempts = int(task_payload.get("max_attempts") or 1)
+    if task_payload.get("tool_inputs_validation"):
+        failed_payload = dict(task_payload)
+        failed_payload["error"] = "tool_inputs_invalid"
+        _handle_local_runtime_event(
+            "task.failed",
+            correlation_id=correlation_id,
+            job_id=job.id,
+            task_id=task_record.id,
+            payload=failed_payload,
+        )
+    else:
+        _handle_local_runtime_event(
+            "task.ready",
+            correlation_id=correlation_id,
+            job_id=job.id,
+            task_id=task_record.id,
+            payload=task_payload,
+        )
+        started_at = _utcnow()
+        _handle_local_runtime_event(
+            "task.started",
+            correlation_id=correlation_id,
+            job_id=job.id,
+            task_id=task_record.id,
+            payload={
+                "task_id": task_record.id,
+                "attempts": attempts,
+                "max_attempts": max_attempts,
+                "worker_consumer": CHAT_DIRECT_SYNC_WORKER_CONSUMER,
+                "run_id": job.id,
+            },
+            occurred_at=started_at,
+        )
+        try:
+            result = _execute_chat_task_sync(dict(task_payload))
+            result_payload = result.model_dump(mode="json")
+            event_type = (
+                "task.failed" if result.status == models.TaskStatus.failed else "task.completed"
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = f"chat_direct_execution_error:{exc}"
+            event_type = "task.failed"
+            result_payload = {
+                "task_id": task_record.id,
+                "status": models.TaskStatus.failed.value,
+                "outputs": {"tool_error": {"error": error}},
+                "artifacts": [],
+                "tool_calls": [],
+                "started_at": started_at.isoformat(),
+                "finished_at": _utcnow().isoformat(),
+                "error": error,
+            }
+        result_payload["attempts"] = attempts
+        result_payload["max_attempts"] = max_attempts
+        result_payload["worker_consumer"] = CHAT_DIRECT_SYNC_WORKER_CONSUMER
+        result_payload["run_id"] = job.id
+        _handle_local_runtime_event(
+            event_type,
+            correlation_id=correlation_id,
+            job_id=job.id,
+            task_id=task_record.id,
+            payload=result_payload,
+        )
+
+    db.expire_all()
+    refreshed_job = db.query(JobRecord).filter(JobRecord.id == job.id).first()
+    if refreshed_job is None:
+        raise RuntimeError("chat_direct_job_missing")
+    task_result = _load_task_result(task_record.id)
+    error = _extract_error_from_task_result(task_result)
+    output = (
+        {}
+        if error
+        else _chat_direct_output_from_task_result(
+            task_result,
+            request_id=capability_spec.capability_id,
+        )
+    )
+    assistant_response = (
+        ""
+        if error
+        else chat_execution_service.format_chat_direct_result(
+            capability_spec.capability_id,
+            output,
+        )
+    )
+    return chat_service.ChatDirectRunResult(
+        job=_job_from_record(refreshed_job),
+        capability_id=capability_spec.capability_id,
+        tool_name=chat_execution_service.tool_name_for_capability(capability_spec),
+        output=output,
+        assistant_response=assistant_response,
+        error=error,
+    )
 
 
 def _run_chat_workflow(
