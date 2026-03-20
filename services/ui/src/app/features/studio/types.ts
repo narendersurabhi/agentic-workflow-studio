@@ -287,6 +287,10 @@ export type WorkflowRun = {
   job_id: string;
   plan_id: string;
   job_status?: string | null;
+  job_error?: string | null;
+  latest_task_id?: string | null;
+  latest_task_name?: string | null;
+  latest_task_error?: string | null;
   user_id?: string | null;
   metadata: Record<string, unknown>;
   created_at: string;

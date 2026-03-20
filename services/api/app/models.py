@@ -175,6 +175,19 @@ class TaskRecord(Base):
     plan: Mapped[PlanRecord] = relationship("PlanRecord", back_populates="tasks")
 
 
+class TaskResultRecord(Base):
+    __tablename__ = "task_results"
+
+    task_id: Mapped[str] = mapped_column(String, primary_key=True)
+    job_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    plan_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String, default="")
+    result_json: Mapped[Dict[str, Any]] = mapped_column("result", JSON, default=dict)
+    latest_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class EventOutboxRecord(Base):
     __tablename__ = "event_outbox"
 

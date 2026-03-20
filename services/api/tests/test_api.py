@@ -9,6 +9,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 os.environ["ORCHESTRATOR_ENABLED"] = "false"
 os.environ["JOB_RECOVERY_ENABLED"] = "false"
 os.environ["POLICY_GATE_ENABLED"] = "false"
+os.environ["CAPABILITY_MODE"] = "enabled"
 
 from services.api.app import main, memory_store  # noqa: E402
 from services.api.app.database import Base, engine
@@ -18,6 +19,7 @@ from services.api.app.models import (
     JobRecord,
     PlanRecord,
     TaskRecord,
+    TaskResultRecord,
     WorkflowDefinitionRecord,
     WorkflowRunRecord,
     WorkflowTriggerRecord,
@@ -185,6 +187,173 @@ def test_workflow_trigger_create_invoke_and_list() -> None:
     runs = runs_response.json()
     assert len(runs) >= 1
     assert runs[0]["trigger_id"] == trigger["id"]
+
+
+def test_task_result_persists_to_postgres_and_workflow_run_history_surfaces_latest_error() -> None:
+    create_response = client.post(
+        "/workflows/definitions",
+        json={
+            "title": "Runtime failure visibility",
+            "goal": "List workspace files",
+            "user_id": "narendersurabhi",
+            "context_json": {"user_id": "narendersurabhi"},
+            "draft": {
+                "summary": "Runtime failure visibility",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "taskName": "ListWorkspace",
+                        "capabilityId": "filesystem.workspace.list",
+                        "bindings": {},
+                    }
+                ],
+                "edges": [],
+            },
+        },
+    )
+    assert create_response.status_code == 200
+    definition = create_response.json()
+
+    publish_response = client.post(f"/workflows/definitions/{definition['id']}/publish", json={})
+    assert publish_response.status_code == 200
+    version = publish_response.json()
+
+    run_response = client.post(
+        f"/workflows/versions/{version['id']}/run",
+        json={"priority": 1},
+    )
+    assert run_response.status_code == 200
+    run_body = run_response.json()
+    job_id = run_body["job"]["id"]
+
+    tasks_response = client.get(f"/jobs/{job_id}/tasks")
+    assert tasks_response.status_code == 200
+    task = tasks_response.json()[0]
+    task_id = task["id"]
+    task_name = task["name"]
+    now = _utcnow().isoformat()
+
+    main._handle_task_failed(
+        {
+            "task_id": task_id,
+            "payload": {
+                "task_id": task_id,
+                "status": models.TaskStatus.failed.value,
+                "outputs": {"tool_error": {"error": "contract.input_missing:job"}},
+                "artifacts": [],
+                "tool_calls": [],
+                "started_at": now,
+                "finished_at": now,
+                "error": "contract.input_missing:job",
+            },
+        }
+    )
+
+    with SessionLocal() as db:
+        row = db.query(TaskResultRecord).filter(TaskResultRecord.task_id == task_id).first()
+        assert row is not None
+        assert row.latest_error == "contract.input_missing:job"
+
+    loaded_result = main._load_task_result(task_id)
+    assert loaded_result["error"] == "contract.input_missing:job"
+
+    runs_response = client.get(f"/workflows/definitions/{definition['id']}/runs?limit=5")
+    assert runs_response.status_code == 200
+    runs = runs_response.json()
+    assert runs[0]["job_id"] == job_id
+    assert runs[0]["job_status"] == models.JobStatus.failed.value
+    assert runs[0]["latest_task_name"] == task_name
+    assert runs[0]["latest_task_error"] == "contract.input_missing:job"
+
+
+def test_publish_workflow_definition_rejects_runtime_conformance_when_secret_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    create_response = client.post(
+        "/workflows/definitions",
+        json={
+            "title": "GitHub capability publish gate",
+            "goal": "Check repository visibility",
+            "user_id": "narendersurabhi",
+            "context_json": {"user_id": "narendersurabhi"},
+            "draft": {
+                "summary": "GitHub capability publish gate",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "taskName": "CheckRepo",
+                        "capabilityId": "github.repo.list",
+                        "bindings": {
+                            "query": {
+                                "kind": "literal",
+                                "value": "repo:planner-executer-agentic-platform owner:narendersurabhi",
+                            }
+                        },
+                    }
+                ],
+                "edges": [],
+            },
+        },
+    )
+    assert create_response.status_code == 200
+    definition = create_response.json()
+
+    publish_response = client.post(f"/workflows/definitions/{definition['id']}/publish", json={})
+    assert publish_response.status_code == 400
+    detail = publish_response.json()["detail"]
+    assert detail["error"] == "workflow_preflight_failed"
+    assert "CheckRepo" in detail["preflight_errors"]
+    assert "runtime conformance failed" in detail["preflight_errors"]["CheckRepo"]
+    assert "GITHUB_TOKEN" in detail["preflight_errors"]["CheckRepo"]
+
+
+def test_run_workflow_version_rechecks_runtime_conformance(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    create_response = client.post(
+        "/workflows/definitions",
+        json={
+            "title": "GitHub capability run gate",
+            "goal": "Check repository visibility",
+            "user_id": "narendersurabhi",
+            "context_json": {"user_id": "narendersurabhi"},
+            "draft": {
+                "summary": "GitHub capability run gate",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "taskName": "CheckRepo",
+                        "capabilityId": "github.repo.list",
+                        "bindings": {
+                            "query": {
+                                "kind": "literal",
+                                "value": "repo:planner-executer-agentic-platform owner:narendersurabhi",
+                            }
+                        },
+                    }
+                ],
+                "edges": [],
+            },
+        },
+    )
+    assert create_response.status_code == 200
+    definition = create_response.json()
+
+    publish_response = client.post(f"/workflows/definitions/{definition['id']}/publish", json={})
+    assert publish_response.status_code == 200
+    version = publish_response.json()
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    run_response = client.post(
+        f"/workflows/versions/{version['id']}/run",
+        json={"priority": 1},
+    )
+    assert run_response.status_code == 400
+    detail = run_response.json()["detail"]
+    assert detail["error"] == "workflow_preflight_failed"
+    assert "CheckRepo" in detail["preflight_errors"]
+    assert "runtime conformance failed" in detail["preflight_errors"]["CheckRepo"]
+    assert "GITHUB_TOKEN" in detail["preflight_errors"]["CheckRepo"]
 
 
 def test_delete_workflow_definition_removes_related_records() -> None:

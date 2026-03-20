@@ -7,6 +7,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 os.environ["ORCHESTRATOR_ENABLED"] = "false"
 os.environ["JOB_RECOVERY_ENABLED"] = "false"
 os.environ["POLICY_GATE_ENABLED"] = "false"
+os.environ["CAPABILITY_MODE"] = "enabled"
 
 from services.api.app import chat_service, main  # noqa: E402
 from services.api.app.database import Base, engine  # noqa: E402

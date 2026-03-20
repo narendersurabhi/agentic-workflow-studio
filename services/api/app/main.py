@@ -36,6 +36,7 @@ from libs.core import (
     mcp_gateway,
     models,
     payload_resolver,
+    runtime_manifest,
     state_machine,
     tool_bootstrap,
     workflow_contracts,
@@ -55,6 +56,7 @@ from .models import (
     JobRecord,
     PlanRecord,
     TaskRecord,
+    TaskResultRecord,
     WorkflowDefinitionRecord,
     WorkflowRunRecord,
     WorkflowTriggerRecord,
@@ -233,6 +235,12 @@ EVENT_OUTBOX_POLL_S = float(os.getenv("EVENT_OUTBOX_POLL_S", "1.0"))
 EVENT_OUTBOX_REDIS_RETRIES = int(os.getenv("EVENT_OUTBOX_REDIS_RETRIES", "3"))
 EVENT_OUTBOX_REDIS_RETRY_SLEEP_S = float(os.getenv("EVENT_OUTBOX_REDIS_RETRY_SLEEP_S", "0.2"))
 SEMANTIC_MEMORY_DEFAULT_USER_ID = os.getenv("SEMANTIC_MEMORY_DEFAULT_USER_ID", "default-user").strip()
+RUNTIME_CONFORMANCE_ENABLED = (
+    os.getenv("RUNTIME_CONFORMANCE_ENABLED", "true").lower() == "true"
+)
+RUNTIME_CONFORMANCE_SERVICE = (
+    os.getenv("RUNTIME_CONFORMANCE_SERVICE", "worker").strip().lower() or "worker"
+)
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 TASK_OUTPUT_KEY_PREFIX = "task_output:"
 TASK_RESULT_KEY_PREFIX = "task_result:"
@@ -613,18 +621,34 @@ def _workflow_trigger_from_record(
     )
 
 
+def _job_error_from_metadata(metadata: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    plan_error = metadata.get("plan_error")
+    if isinstance(plan_error, str) and plan_error.strip():
+        return plan_error.strip()
+    if metadata.get("plan_preflight_errors") is not None:
+        return f"plan_preflight_failed: {metadata.get('plan_preflight_errors')}"
+    return None
+
+
 def _workflow_run_from_record(
     record: WorkflowRunRecord,
     *,
     job_record: JobRecord | None = None,
+    latest_task_failure: Mapping[str, Any] | None = None,
 ) -> models.WorkflowRun:
     job_status: models.JobStatus | None = None
     updated_at = record.updated_at
+    job_error: str | None = None
     if job_record is not None:
         try:
             job_status = models.JobStatus(job_record.status)
         except ValueError:
             job_status = None
+        job_error = _job_error_from_metadata(
+            job_record.metadata_json if isinstance(job_record.metadata_json, dict) else {}
+        )
         if isinstance(job_record.updated_at, datetime) and job_record.updated_at > updated_at:
             updated_at = job_record.updated_at
     return models.WorkflowRun(
@@ -638,6 +662,22 @@ def _workflow_run_from_record(
         job_id=record.job_id,
         plan_id=record.plan_id,
         job_status=job_status,
+        job_error=job_error,
+        latest_task_id=(
+            str(latest_task_failure.get("task_id"))
+            if isinstance(latest_task_failure, Mapping) and latest_task_failure.get("task_id")
+            else None
+        ),
+        latest_task_name=(
+            str(latest_task_failure.get("task_name"))
+            if isinstance(latest_task_failure, Mapping) and latest_task_failure.get("task_name")
+            else None
+        ),
+        latest_task_error=(
+            str(latest_task_failure.get("error"))
+            if isinstance(latest_task_failure, Mapping) and latest_task_failure.get("error")
+            else None
+        ),
         user_id=record.user_id,
         metadata=record.metadata_json or {},
         created_at=record.created_at,
@@ -5170,6 +5210,10 @@ def _handle_plan_created(envelope: dict) -> None:
             if job and isinstance(job.metadata_json, dict)
             else None,
         )
+        preflight_errors = _merge_preflight_errors(
+            preflight_errors,
+            _compile_plan_runtime_conformance_errors(plan),
+        )
         if preflight_errors:
             if job:
                 _set_job_status(job, models.JobStatus.failed)
@@ -6194,6 +6238,68 @@ def _compile_plan_preflight(
     return errors
 
 
+def _merge_preflight_errors(
+    primary: Mapping[str, str] | None,
+    secondary: Mapping[str, str] | None,
+) -> dict[str, str]:
+    merged = dict(primary or {})
+    for task_name, message in (secondary or {}).items():
+        key = str(task_name)
+        if key not in merged:
+            merged[key] = str(message)
+    return merged
+
+
+def _task_capability_requests_for_runtime_conformance(
+    task: models.TaskCreate,
+    *,
+    known_capabilities: set[str],
+) -> list[str]:
+    capability_ids: list[str] = []
+    seen: set[str] = set()
+    for request_id in task.tool_requests or []:
+        normalized = str(request_id or "").strip()
+        if normalized and normalized in known_capabilities and normalized not in seen:
+            seen.add(normalized)
+            capability_ids.append(normalized)
+    raw_bindings = task.capability_bindings if isinstance(task.capability_bindings, dict) else {}
+    for binding in raw_bindings.values():
+        if not isinstance(binding, Mapping):
+            continue
+        capability_id = str(binding.get("capability_id") or "").strip()
+        if capability_id and capability_id not in seen:
+            seen.add(capability_id)
+            capability_ids.append(capability_id)
+    return capability_ids
+
+
+def _compile_plan_runtime_conformance_errors(
+    plan: models.PlanCreate,
+    *,
+    service_name: str = RUNTIME_CONFORMANCE_SERVICE,
+) -> dict[str, str]:
+    if not RUNTIME_CONFORMANCE_ENABLED:
+        return {}
+    manifest = runtime_manifest.build_runtime_manifest(service_name)
+    known_capabilities = set(manifest.capabilities.keys())
+    if not known_capabilities and not manifest.build_errors:
+        return {}
+    errors: dict[str, str] = {}
+    for task in plan.tasks:
+        for capability_id in _task_capability_requests_for_runtime_conformance(
+            task,
+            known_capabilities=known_capabilities,
+        ):
+            detail = runtime_manifest.explain_capability_unavailability(manifest, capability_id)
+            if detail:
+                errors[task.name] = (
+                    f"runtime conformance failed for capability '{capability_id}' on "
+                    f"{service_name}: {detail}"
+                )
+                break
+    return errors
+
+
 def _preflight_request_payload_semantics(
     *,
     request_id: str,
@@ -6418,6 +6524,9 @@ def _preflight_error_diagnostic(task_name: str, message: str) -> dict[str, Any]:
     if normalized.startswith("task_intent_mismatch:"):
         diagnostic["code"] = "task_intent_mismatch"
         return diagnostic
+    if normalized.startswith("runtime conformance failed for capability"):
+        diagnostic["code"] = "runtime_conformance_failed"
+        return diagnostic
     if normalized.startswith("capability_inputs_invalid:"):
         diagnostic["code"] = "capability_inputs_invalid"
         return diagnostic
@@ -6526,6 +6635,10 @@ def _store_task_output(task_id: str, outputs: dict[str, Any]) -> None:
 
 
 def _load_task_output(task_id: str) -> dict[str, Any]:
+    durable_result = _load_task_result_from_postgres(task_id)
+    durable_outputs = durable_result.get("outputs")
+    if isinstance(durable_outputs, dict):
+        return durable_outputs
     try:
         raw = redis_client.get(f"{TASK_OUTPUT_KEY_PREFIX}{task_id}")
         if not raw:
@@ -6535,14 +6648,89 @@ def _load_task_output(task_id: str) -> dict[str, Any]:
         return {}
 
 
-def _store_task_result(task_id: str, result: dict[str, Any]) -> None:
+def _json_safe_result_payload(result: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
     try:
-        redis_client.set(f"{TASK_RESULT_KEY_PREFIX}{task_id}", json.dumps(result))
+        normalized = json.loads(json.dumps(dict(result), default=str))
+    except Exception:
+        normalized = dict(result)
+    return normalized if isinstance(normalized, dict) else {}
+
+
+def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) -> None:
+    normalized_result = _json_safe_result_payload(result)
+    now = _utcnow()
+    try:
+        with SessionLocal() as db:
+            record = (
+                db.query(TaskResultRecord)
+                .filter(TaskResultRecord.task_id == task_id)
+                .first()
+            )
+            task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
+            job_id = (
+                task.job_id
+                if task is not None
+                else str(normalized_result.get("job_id") or "").strip() or None
+            )
+            plan_id = task.plan_id if task is not None else None
+            latest_error = _extract_error_from_task_result(normalized_result)
+            status = str(normalized_result.get("status") or "").strip()
+            if record is None:
+                db.add(
+                    TaskResultRecord(
+                        task_id=task_id,
+                        job_id=job_id,
+                        plan_id=plan_id,
+                        status=status,
+                        result_json=normalized_result,
+                        latest_error=latest_error,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            else:
+                record.job_id = job_id
+                record.plan_id = plan_id
+                record.status = status
+                record.result_json = normalized_result
+                record.latest_error = latest_error
+                record.updated_at = now
+            db.commit()
+    except Exception:
+        return
+
+
+def _load_task_result_from_postgres(task_id: str) -> dict[str, Any]:
+    try:
+        with SessionLocal() as db:
+            record = (
+                db.query(TaskResultRecord)
+                .filter(TaskResultRecord.task_id == task_id)
+                .first()
+            )
+            if record is None or not isinstance(record.result_json, dict):
+                return {}
+            return dict(record.result_json)
+    except Exception:
+        return {}
+
+
+def _store_task_result(task_id: str, result: dict[str, Any]) -> None:
+    normalized_result = _json_safe_result_payload(result)
+    _persist_task_result_to_postgres(task_id, normalized_result)
+    try:
+        redis_client.set(
+            f"{TASK_RESULT_KEY_PREFIX}{task_id}",
+            json.dumps(normalized_result),
+        )
     except Exception:
         return
 
 
 def _load_task_result(task_id: str) -> dict[str, Any]:
+    durable_result = _load_task_result_from_postgres(task_id)
+    if durable_result:
+        return durable_result
     try:
         raw = redis_client.get(f"{TASK_RESULT_KEY_PREFIX}{task_id}")
         if not raw:
@@ -7202,6 +7390,49 @@ def _extract_error_from_task_result(result: dict[str, Any]) -> str | None:
     return None
 
 
+def _latest_task_failures_for_jobs(
+    db: Session,
+    job_ids: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    normalized_job_ids = [job_id for job_id in job_ids if isinstance(job_id, str) and job_id]
+    if not normalized_job_ids:
+        return {}
+    task_records = (
+        db.query(TaskRecord)
+        .filter(TaskRecord.job_id.in_(normalized_job_ids))
+        .all()
+    )
+    task_name_by_id = {
+        record.id: record.name
+        for record in task_records
+        if isinstance(record.id, str) and record.id
+    }
+    result_records = (
+        db.query(TaskResultRecord)
+        .filter(TaskResultRecord.job_id.in_(normalized_job_ids))
+        .order_by(TaskResultRecord.updated_at.desc())
+        .all()
+    )
+    latest_by_job: dict[str, dict[str, Any]] = {}
+    for record in result_records:
+        if not isinstance(record.job_id, str) or not record.job_id:
+            continue
+        error = str(record.latest_error or "").strip()
+        if not error:
+            continue
+        if record.job_id in latest_by_job:
+            continue
+        latest_by_job[record.job_id] = {
+            "task_id": record.task_id,
+            "task_name": task_name_by_id.get(record.task_id),
+            "error": error,
+            "updated_at": record.updated_at.isoformat()
+            if isinstance(record.updated_at, datetime)
+            else None,
+        }
+    return latest_by_job
+
+
 def _parse_task_stream_event(stream_id: str, record: Mapping[str, str]) -> dict[str, Any] | None:
     raw = record.get("data")
     if not raw:
@@ -7628,15 +7859,10 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
     tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
     metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
     profiles = _coerce_task_intent_profiles(metadata)
-    job_error: str | None = None
-    if isinstance(metadata.get("plan_error"), str) and str(metadata.get("plan_error")).strip():
-        job_error = str(metadata.get("plan_error")).strip()
-    elif metadata.get("plan_preflight_errors") is not None:
-        job_error = f"plan_preflight_failed: {metadata.get('plan_preflight_errors')}"
     return models.JobDetails(
         job_id=job_id,
         job_status=models.JobStatus(job.status),
-        job_error=job_error,
+        job_error=_job_error_from_metadata(metadata),
         plan=_plan_from_record(plan_record) if plan_record else None,
         tasks=[_task_from_record(task, profiles.get(task.id)) for task in tasks],
         task_results={task.id: _load_task_result(task.id) for task in tasks},
@@ -8654,6 +8880,10 @@ def _compile_workflow_definition_version(
         goal_text=goal_text,
         goal_intent_graph=None,
     )
+    preflight_errors = _merge_preflight_errors(
+        preflight_errors,
+        _compile_plan_runtime_conformance_errors(plan),
+    )
     if preflight_errors:
         raise HTTPException(
             status_code=400,
@@ -8980,12 +9210,21 @@ def list_workflow_runs(
         .all()
     )
     job_ids = [record.job_id for record in records if isinstance(record.job_id, str)]
-    job_map = {
-        job.id: job
-        for job in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()
-    } if job_ids else {}
+    job_map = (
+        {
+            job.id: job
+            for job in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()
+        }
+        if job_ids
+        else {}
+    )
+    latest_failures = _latest_task_failures_for_jobs(db, job_ids)
     return [
-        _workflow_run_from_record(record, job_record=job_map.get(record.job_id))
+        _workflow_run_from_record(
+            record,
+            job_record=job_map.get(record.job_id),
+            latest_task_failure=latest_failures.get(record.job_id),
+        )
         for record in records
     ]
 
@@ -9046,6 +9285,27 @@ def _run_workflow_version_internal(
             detail={
                 "error": "workflow_inputs_invalid",
                 "diagnostics": {"errors": workflow_context_errors, "warnings": []},
+            },
+        )
+    run_preflight_errors = _merge_preflight_errors(
+        _compile_plan_preflight(
+            compiled_plan,
+            context_json,
+            goal_text=version.goal or definition.goal or definition.title,
+            goal_intent_graph=None,
+        ),
+        _compile_plan_runtime_conformance_errors(compiled_plan),
+    )
+    if run_preflight_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "workflow_preflight_failed",
+                "preflight_errors": run_preflight_errors,
+                "diagnostics": {
+                    "errors": _preflight_error_diagnostics(run_preflight_errors),
+                    "warnings": [],
+                },
             },
         )
     priority_raw = payload.get("priority", 0) if isinstance(payload, dict) else 0

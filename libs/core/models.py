@@ -360,6 +360,10 @@ class WorkflowRun(BaseModel):
     job_id: str
     plan_id: str
     job_status: Optional[JobStatus] = None
+    job_error: Optional[str] = None
+    latest_task_id: Optional[str] = None
+    latest_task_name: Optional[str] = None
+    latest_task_error: Optional[str] = None
     user_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
