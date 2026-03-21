@@ -1163,6 +1163,40 @@ def _slot_question(slot: str, goal: str) -> str:
     return intent_service.slot_question(slot, goal)
 
 
+_CHAT_PRE_SUBMIT_BLOCKING_SLOTS: set[str] = {
+    "output_format",
+    "target_system",
+    "safety_constraints",
+    "intent_action",
+}
+
+
+def _chat_route_goal_intent_profile(
+    profile: workflow_contracts.GoalIntentProfile,
+    *,
+    goal: str,
+) -> workflow_contracts.GoalIntentProfile:
+    chat_blocking_slots: list[str] = []
+    for raw_slot in profile.blocking_slots:
+        normalized = intent_contract.normalize_required_input_key(raw_slot)
+        if normalized in _CHAT_PRE_SUBMIT_BLOCKING_SLOTS and normalized not in chat_blocking_slots:
+            chat_blocking_slots.append(normalized)
+    chat_missing_slots: list[str] = []
+    for raw_slot in profile.missing_slots:
+        normalized = intent_contract.normalize_required_input_key(raw_slot)
+        if normalized in _CHAT_PRE_SUBMIT_BLOCKING_SLOTS and normalized not in chat_missing_slots:
+            chat_missing_slots.append(normalized)
+    return profile.model_copy(
+        update={
+            "needs_clarification": bool(chat_missing_slots),
+            "requires_blocking_clarification": bool(chat_missing_slots),
+            "questions": [_slot_question(slot_name, goal) for slot_name in chat_missing_slots],
+            "blocking_slots": chat_blocking_slots,
+            "missing_slots": chat_missing_slots,
+        }
+    )
+
+
 def _looks_like_conversational_turn(content: str) -> bool:
     lowered = str(content or "").strip().lower()
     if not lowered:
@@ -1240,12 +1274,19 @@ def _goal_intent_segments_from_metadata(metadata: Mapping[str, Any] | None) -> l
     return segments
 
 
-def _assess_goal_intent(goal: str) -> workflow_contracts.GoalIntentProfile:
+def _assess_goal_intent(
+    goal: str,
+    *,
+    mode_override: str | None = None,
+) -> workflow_contracts.GoalIntentProfile:
     return intent_service.assess_goal_intent(
         goal,
         config=_goal_intent_assess_config(),
         runtime=intent_service.GoalIntentRuntime(
-            infer_task_intent=_infer_goal_intent_with_metadata,
+            infer_task_intent=lambda goal_text: _infer_goal_intent_with_metadata(
+                goal_text,
+                mode_override=mode_override,
+            ),
             record_metrics=_record_goal_intent_assessment_metrics,
         ),
     )
@@ -1257,26 +1298,77 @@ def _normalize_goal_intent(
     db: Session | None = None,
     user_id: str | None = None,
     interaction_summaries: list[dict[str, Any]] | None = None,
+    include_decomposition: bool | None = None,
+    assessment_mode_override: str | None = None,
 ) -> workflow_contracts.NormalizedIntentEnvelope:
+    decomposition_enabled = (
+        INTENT_DECOMPOSE_ENABLED if include_decomposition is None else bool(include_decomposition)
+    )
+    normalized_assessment_mode = str(assessment_mode_override or "").strip().lower()
+    if normalized_assessment_mode not in {"heuristic", "llm", "hybrid"}:
+        normalized_assessment_mode = (
+            INTENT_ASSESS_MODE if INTENT_ASSESS_ENABLED else "disabled"
+        )
     return intent_service.normalize_goal_intent(
         goal,
         db=db,
         user_id=user_id,
         interaction_summaries=interaction_summaries,
         config=intent_service.IntentNormalizeConfig(
-            include_decomposition=INTENT_DECOMPOSE_ENABLED,
-            assessment_mode=INTENT_ASSESS_MODE if INTENT_ASSESS_ENABLED else "disabled",
-            assessment_model=(INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "")
-            .strip(),
-            decomposition_mode=INTENT_DECOMPOSE_MODE if INTENT_DECOMPOSE_ENABLED else "disabled",
-            decomposition_model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "").strip(),
+            include_decomposition=decomposition_enabled,
+            assessment_mode=normalized_assessment_mode,
+            assessment_model=(
+                (INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "").strip()
+                if normalized_assessment_mode not in {"disabled", "heuristic"}
+                else ""
+            ),
+            decomposition_mode=INTENT_DECOMPOSE_MODE if decomposition_enabled else "disabled",
+            decomposition_model=(
+                (INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "").strip()
+                if decomposition_enabled
+                else ""
+            ),
         ),
         runtime=intent_service.IntentNormalizeRuntime(
-            assess_goal_intent=_assess_goal_intent,
+            assess_goal_intent=lambda goal_text: _assess_goal_intent(
+                goal_text,
+                mode_override=normalized_assessment_mode,
+            ),
             decompose_goal_intent=_decompose_goal_intent,
             capability_required_inputs=_capability_required_inputs_for_intent_normalization,
         ),
     )
+
+
+def _attach_interaction_compaction_to_envelope(
+    normalized: workflow_contracts.NormalizedIntentEnvelope,
+    compaction: Mapping[str, Any],
+) -> workflow_contracts.NormalizedIntentEnvelope:
+    return normalized.model_copy(
+        update={
+            "graph": _attach_interaction_compaction_to_graph(
+                normalized.graph,
+                compaction,
+            )
+        }
+    )
+
+
+def _normalized_intent_response_payload(
+    normalized: workflow_contracts.NormalizedIntentEnvelope,
+    *,
+    include_legacy_graph: bool = False,
+) -> dict[str, Any]:
+    payload = {
+        "goal": normalized.goal,
+        "assessment": workflow_contracts.dump_goal_intent_profile(normalized.profile) or {},
+        "normalized_intent_envelope": (
+            workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
+        ),
+    }
+    if include_legacy_graph:
+        payload["intent_graph"] = workflow_contracts.dump_intent_graph(normalized.graph) or {}
+    return payload
 
 
 def _route_chat_turn(
@@ -1348,8 +1440,10 @@ def _fallback_chat_turn_route(
     pending_clarification = bool(
         isinstance(session_metadata, Mapping) and session_metadata.get("pending_clarification")
     )
-    assessment = _normalize_goal_intent(candidate_goal).profile
+    normalized = _normalize_goal_intent(candidate_goal)
+    assessment = _chat_route_goal_intent_profile(normalized.profile, goal=candidate_goal)
     assessment_json = workflow_contracts.dump_goal_intent_profile(assessment) or {}
+    normalized_json = workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
     if pending_clarification or not _looks_like_conversational_turn(content):
         if chat_service.workflow_invocation_from_context(merged_context) is not None:
             return {
@@ -1357,6 +1451,7 @@ def _fallback_chat_turn_route(
                 "assistant_content": "",
                 "clarification_questions": [],
                 "goal_intent_profile": assessment_json,
+                "normalized_intent_envelope": normalized_json,
             }
         if bool(assessment.requires_blocking_clarification):
             questions = [
@@ -1369,18 +1464,21 @@ def _fallback_chat_turn_route(
                 "assistant_content": "\n".join(questions) if questions else "What should I do next?",
                 "clarification_questions": questions,
                 "goal_intent_profile": assessment_json,
+                "normalized_intent_envelope": normalized_json,
             }
         return {
             "type": "submit_job",
             "assistant_content": "",
             "clarification_questions": [],
             "goal_intent_profile": assessment_json,
+            "normalized_intent_envelope": normalized_json,
         }
     return {
         "type": "respond",
         "assistant_content": _fallback_chat_response(content),
         "clarification_questions": [],
         "goal_intent_profile": assessment_json,
+        "normalized_intent_envelope": normalized_json,
     }
 
 
@@ -1467,7 +1565,12 @@ def _normalize_chat_route(
     fallback: Mapping[str, Any],
     workflow_invocation_available: bool,
 ) -> dict[str, Any]:
-    heuristic = _assess_goal_intent(candidate_goal)
+    heuristic = workflow_contracts.parse_goal_intent_profile(
+        fallback.get("goal_intent_profile")
+    )
+    if heuristic is None:
+        heuristic = _normalize_goal_intent(candidate_goal).profile
+    heuristic = _chat_route_goal_intent_profile(heuristic, goal=candidate_goal)
     route = str(parsed.get("route") or parsed.get("type") or "").strip().lower()
     if route not in {"respond", "tool_call", "ask_clarification", "submit_job", "run_workflow"}:
         route = str(fallback.get("type") or "respond")
@@ -1491,7 +1594,15 @@ def _normalize_chat_route(
     confidence = float(heuristic.confidence or 0.0)
     if isinstance(confidence_raw, (int, float)):
         confidence = max(0.0, min(1.0, float(confidence_raw)))
-    threshold = _resolve_intent_confidence_threshold(intent, risk_level)
+    threshold = (
+        float(heuristic.threshold)
+        if (
+            intent == str(heuristic.intent or "").strip().lower()
+            and risk_level == str(heuristic.risk_level or "").strip().lower()
+            and heuristic.threshold is not None
+        )
+        else _resolve_intent_confidence_threshold(intent, risk_level)
+    )
 
     slot_values = dict(heuristic.slot_values or {})
     for key in ("output_format", "target_system", "safety_constraints"):
@@ -1501,12 +1612,19 @@ def _normalize_chat_route(
     slot_values["intent_action"] = intent
     slot_values["risk_level"] = risk_level
 
-    blocking_slots = _blocking_clarification_slots(intent, risk_level)
-    missing_slots = [
-        slot_name
-        for slot_name in blocking_slots
-        if not str(slot_values.get(slot_name) or "").strip()
-    ]
+    if (
+        intent == str(heuristic.intent or "").strip().lower()
+        and risk_level == str(heuristic.risk_level or "").strip().lower()
+    ):
+        blocking_slots = list(heuristic.blocking_slots)
+        missing_slots = list(heuristic.missing_slots)
+    else:
+        blocking_slots = _blocking_clarification_slots(intent, risk_level)
+        missing_slots = [
+            slot_name
+            for slot_name in blocking_slots
+            if not str(slot_values.get(slot_name) or "").strip()
+        ]
     parsed_missing_slots = parsed.get("missing_slots")
     if isinstance(parsed_missing_slots, list):
         for slot_name in parsed_missing_slots:
@@ -1526,7 +1644,15 @@ def _normalize_chat_route(
         if isinstance(question, str) and question.strip()
     ]
     if route == "ask_clarification" and not clarification_questions:
-        clarification_questions = [_slot_question(slot_name, candidate_goal) for slot_name in missing_slots]
+        clarification_questions = [
+            str(question).strip()
+            for question in heuristic.questions
+            if isinstance(question, str) and question.strip()
+        ]
+        if not clarification_questions:
+            clarification_questions = [
+                _slot_question(slot_name, candidate_goal) for slot_name in missing_slots
+            ]
     assistant_response = str(parsed.get("assistant_response") or "").strip()
     if route == "respond" and not assistant_response:
         assistant_response = _fallback_chat_response(content)
@@ -3582,9 +3708,16 @@ def _llm_infer_goal_intent_with_capabilities(
     )
 
 
-def _infer_goal_intent_with_metadata(goal: str) -> intent_contract.TaskIntentInference:
+def _infer_goal_intent_with_metadata(
+    goal: str,
+    *,
+    mode_override: str | None = None,
+) -> intent_contract.TaskIntentInference:
     heuristic = intent_contract.infer_task_intent_from_goal_with_metadata(goal)
-    if not INTENT_ASSESS_ENABLED or INTENT_ASSESS_MODE == "heuristic":
+    assess_mode = str(mode_override or INTENT_ASSESS_MODE).strip().lower()
+    if assess_mode not in {"heuristic", "llm", "hybrid"}:
+        assess_mode = "heuristic"
+    if not INTENT_ASSESS_ENABLED or assess_mode == "heuristic":
         return heuristic
     provider = _intent_assess_provider
     if provider is None:
@@ -3614,7 +3747,7 @@ def _infer_goal_intent_with_metadata(goal: str) -> intent_contract.TaskIntentInf
     except Exception:  # noqa: BLE001
         logger.exception(
             "intent_assess_llm_failed",
-            extra={"goal": goal[:160], "mode": INTENT_ASSESS_MODE},
+            extra={"goal": goal[:160], "mode": assess_mode},
         )
         return heuristic
 
@@ -10336,15 +10469,7 @@ def clarify_intent(payload: dict[str, Any]) -> dict[str, Any]:
     if not goal:
         raise HTTPException(status_code=400, detail="goal_required")
     normalized = _normalize_goal_intent(goal)
-    assessment = normalized.profile
-    return {
-        "goal": goal,
-        "assessment": workflow_contracts.dump_goal_intent_profile(assessment) or {},
-        "normalized_intent_envelope": workflow_contracts.dump_normalized_intent_envelope(
-            normalized
-        )
-        or {},
-    }
+    return _normalized_intent_response_payload(normalized)
 
 
 @app.post("/intent/decompose")
@@ -10369,18 +10494,17 @@ def decompose_intent(
         payload.get("context_json") or payload.get("job_context")
     )
     semantic_user_id = explicit_user_id or _semantic_user_id_from_context(context_obj)
-    graph = _decompose_goal_intent(
+    normalized = _normalize_goal_intent(
         goal,
         db=db,
         user_id=semantic_user_id,
         interaction_summaries=compacted_summaries or interaction_summaries,
+        include_decomposition=True,
+        assessment_mode_override="heuristic",
     )
     if interaction_summaries:
-        graph = _attach_interaction_compaction_to_graph(graph, compaction)
-    return {
-        "goal": goal,
-        "intent_graph": graph.model_dump(mode="json", exclude_none=True),
-    }
+        normalized = _attach_interaction_compaction_to_envelope(normalized, compaction)
+    return _normalized_intent_response_payload(normalized, include_legacy_graph=True)
 
 
 def _workflow_title_fallback(goal: str, title: str) -> str:

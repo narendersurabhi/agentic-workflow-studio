@@ -818,11 +818,47 @@ def test_intent_decompose_endpoint_returns_graph():
     assert response.status_code == 200
     body = response.json()
     graph = body["intent_graph"]
+    envelope = body["normalized_intent_envelope"]
+    assessment = body["assessment"]
     assert graph["summary"]["segment_count"] >= 2
     assert graph["segments"][0]["id"] == "s1"
     assert graph["summary"]["schema_version"] == "intent_v2"
     assert isinstance(graph["segments"][0].get("slots"), dict)
     assert "must_have_inputs" in graph["segments"][0]["slots"]
+    assert envelope["graph"] == graph
+    assert envelope["profile"] == assessment
+
+
+def test_intent_decompose_endpoint_uses_normalized_envelope_without_assessment_llm(monkeypatch):
+    class _AssessProvider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            raise AssertionError(f"assessment provider should not be called: {request.metadata}")
+
+    class _DecomposeProvider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            return LLMResponse(
+                content=(
+                    '{"segments":[{"id":"s1","intent":"generate","objective":"Create summary",'
+                    '"confidence":0.92,"depends_on":[],"required_inputs":["instruction"],'
+                    '"suggested_capabilities":["llm.text.generate"],'
+                    '"slots":{"entity":"summary","artifact_type":"content","output_format":"txt",'
+                    '"risk_level":"read_only","must_have_inputs":["instruction"]}}]}'
+                )
+            )
+
+    monkeypatch.setattr(main, "INTENT_ASSESS_ENABLED", True)
+    monkeypatch.setattr(main, "INTENT_ASSESS_MODE", "hybrid")
+    monkeypatch.setattr(main, "_intent_assess_provider", _AssessProvider())
+    monkeypatch.setattr(main, "INTENT_DECOMPOSE_ENABLED", True)
+    monkeypatch.setattr(main, "INTENT_DECOMPOSE_MODE", "llm")
+    monkeypatch.setattr(main, "_intent_decompose_provider", _DecomposeProvider())
+
+    response = client.post("/intent/decompose", json={"goal": "Create summary"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["assessment"]["source"] in {"goal_text", "task_text", "explicit", "default"}
+    assert body["normalized_intent_envelope"]["profile"] == body["assessment"]
+    assert body["normalized_intent_envelope"]["graph"] == body["intent_graph"]
 
 
 def test_capabilities_search_returns_ranked_matches() -> None:
