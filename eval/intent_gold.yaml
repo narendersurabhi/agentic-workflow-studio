@@ -10,11 +10,10 @@ cases:
       - github.repo.list
       - utility.json.transform
       - document.pdf.generate
-      - document.output.derive
     expected_capabilities_by_segment:
       - [github.repo.list]
       - [utility.json.transform]
-      - [document.pdf.generate, document.output.derive]
+      - [document.pdf.generate]
 
   - id: runbook_docx_pipeline
     goal: Generate an implementation runbook, validate the document spec, then render a DOCX.
@@ -23,11 +22,10 @@ cases:
       - document.spec.generate
       - document.spec.validate
       - document.docx.generate
-      - document.output.derive
     expected_capabilities_by_segment:
       - [document.spec.generate, llm.text.generate]
       - [document.spec.validate]
-      - [document.docx.generate, document.output.derive]
+      - [document.docx.generate]
 
   - id: memory_to_summary
     goal: Read prior memory notes and generate a concise project summary.
@@ -59,10 +57,9 @@ cases:
       - llm.text.generate
       - document.spec.generate
       - document.pdf.generate
-      - document.output.derive
     expected_capabilities_by_segment:
       - [llm.text.generate, document.spec.generate]
-      - [document.pdf.generate, document.output.derive]
+      - [document.pdf.generate]
 
   - id: github_branches_release_notes
     goal: List GitHub branches and generate release notes.
@@ -82,11 +79,10 @@ cases:
       - document.spec.validate
       - document.spec.repair
       - document.pdf.generate
-      - document.output.derive
     expected_capabilities_by_segment:
       - [document.spec.validate]
       - [document.spec.repair, utility.json.transform]
-      - [document.pdf.generate, document.output.derive]
+      - [document.pdf.generate]
 
   - id: semantic_memory_brief
     goal: Search semantic memory for user preferences and generate a personalization brief.
@@ -129,12 +125,11 @@ cases:
       - document.spec.generate
       - document.spec.validate
       - document.docx.generate
-      - document.output.derive
     expected_capabilities_by_segment:
       - [memory.read]
       - [document.spec.generate, llm.text.generate]
       - [document.spec.validate]
-      - [document.docx.generate, document.output.derive]
+      - [document.docx.generate]
 
   - id: artifacts_error_summary
     goal: Search artifact files for errors and produce a summary.

@@ -62,6 +62,16 @@ Planner -> API
 Policy and Critic are optional guardrail/rework services
 ```
 
+Related design docs:
+
+- [`docs/target-architecture.md`](docs/target-architecture.md)
+- [`docs/intent-planning-tool-calling-architecture.md`](docs/intent-planning-tool-calling-architecture.md)
+- [`docs/intent-normalization-architecture.md`](docs/intent-normalization-architecture.md)
+- [`docs/intent-normalization-implementation-plan.md`](docs/intent-normalization-implementation-plan.md)
+- [`docs/top-companies-intent-planning-patterns.md`](docs/top-companies-intent-planning-patterns.md)
+- [`docs/top-companies-intent-normalization-patterns.md`](docs/top-companies-intent-normalization-patterns.md)
+- [`docs/top-companies-minimum-agent-capabilities.md`](docs/top-companies-minimum-agent-capabilities.md)
+
 ## Application Services
 
 - `api`: control plane for chat, jobs, plans, workflow definitions/versions/triggers/runs, memory APIs, downloads, and SSE

@@ -689,6 +689,93 @@ def test_intent_clarify_endpoint_returns_assessment():
     assert assessment["source"] in {"goal_text", "task_text", "explicit", "default"}
 
 
+def test_intent_clarify_endpoint_uses_llm_assessment_with_capability_catalog(monkeypatch):
+    requests: list[LLMRequest] = []
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            requests.append(request)
+            return LLMResponse(
+                content=(
+                    '{"intent":"render","confidence":0.94,'
+                    '"suggested_capabilities":["document.pdf.generate"],'
+                    '"reason":"PDF rendering capability best matches the goal"}'
+                )
+            )
+
+    monkeypatch.setattr(main, "INTENT_ASSESS_ENABLED", True)
+    monkeypatch.setattr(main, "INTENT_ASSESS_MODE", "llm")
+    monkeypatch.setattr(main, "INTENT_CAPABILITY_TOP_K", 3)
+    monkeypatch.setattr(main, "_intent_assess_provider", _Provider())
+    monkeypatch.setattr(
+        main,
+        "_intent_catalog_capability_entries",
+        lambda: [
+            {
+                "id": "document.pdf.generate",
+                "group": "document",
+                "subgroup": "render",
+                "description": "Render a PDF from a document spec",
+            },
+            {
+                "id": "llm.text.generate",
+                "group": "llm",
+                "subgroup": "generate",
+                "description": "Generate text with an LLM",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_intent_catalog_capability_ids",
+        lambda: {"document.pdf.generate", "llm.text.generate"},
+    )
+    monkeypatch.setattr(
+        main,
+        "_semantic_goal_capability_hints",
+        lambda **_kwargs: [
+            {
+                "id": "document.pdf.generate",
+                "score": 0.99,
+                "reason": "semantic match",
+                "source": "semantic_search",
+            }
+        ],
+    )
+
+    response = client.post("/intent/clarify", json={"goal": "Render a PDF status report"})
+    assert response.status_code == 200
+    body = response.json()
+    assessment = body["assessment"]
+    assert assessment["intent"] == "render"
+    assert assessment["source"] == "llm"
+    assert requests
+    assert requests[0].metadata is not None
+    assert requests[0].metadata["operation"] == "intent_assess"
+    assert "document.pdf.generate" in requests[0].prompt
+
+
+def test_intent_clarify_endpoint_falls_back_when_llm_assessment_fails(monkeypatch):
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest):
+            del request
+            return LLMResponse(content="not-json")
+
+    monkeypatch.setattr(main, "INTENT_ASSESS_ENABLED", True)
+    monkeypatch.setattr(main, "INTENT_ASSESS_MODE", "hybrid")
+    monkeypatch.setattr(main, "_intent_assess_provider", _Provider())
+    monkeypatch.setattr(main, "_intent_catalog_capability_entries", lambda: [])
+    monkeypatch.setattr(main, "_intent_catalog_capability_ids", lambda: set())
+    monkeypatch.setattr(main, "_semantic_goal_capability_hints", lambda **_kwargs: [])
+
+    response = client.post("/intent/clarify", json={"goal": "Render a PDF status report"})
+    assert response.status_code == 200
+    body = response.json()
+    assessment = body["assessment"]
+    assert assessment["intent"] == "render"
+    assert assessment["source"] in {"goal_text", "task_text", "explicit", "default"}
+
+
 def test_intent_decompose_endpoint_returns_graph():
     response = client.post(
         "/intent/decompose",
@@ -2487,12 +2574,12 @@ def test_composer_recommend_capabilities_heuristic(monkeypatch):
         adapters=(),
         enabled=True,
     )
-    spec_derive = cap_registry.CapabilitySpec(
-        capability_id="document.output.derive",
-        description="Derive output path",
-        risk_tier="read_only",
+    spec_render = cap_registry.CapabilitySpec(
+        capability_id="document.pdf.generate",
+        description="Render a PDF",
+        risk_tier="bounded_write",
         idempotency="read",
-        input_schema_ref="schema_derive",
+        input_schema_ref="schema_render",
         output_schema_ref=None,
         adapters=(),
         enabled=True,
@@ -2500,7 +2587,7 @@ def test_composer_recommend_capabilities_heuristic(monkeypatch):
     registry = cap_registry.CapabilityRegistry(
         capabilities={
             "document.spec.generate": spec_generate,
-            "document.output.derive": spec_derive,
+            "document.pdf.generate": spec_render,
         }
     )
     monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
@@ -2512,11 +2599,14 @@ def test_composer_recommend_capabilities_heuristic(monkeypatch):
                 "required": ["topic"],
                 "properties": {"topic": {"type": "string"}},
             }
-        if schema_ref == "schema_derive":
+        if schema_ref == "schema_render":
             return {
                 "type": "object",
-                "required": ["topic"],
-                "properties": {"topic": {"type": "string"}},
+                "required": ["document_spec", "path"],
+                "properties": {
+                    "document_spec": {"type": "object"},
+                    "path": {"type": "string"},
+                },
             }
         return None
 
@@ -2524,8 +2614,8 @@ def test_composer_recommend_capabilities_heuristic(monkeypatch):
     response = client.post(
         "/composer/recommend_capabilities",
         json={
-            "goal": "Use document.output.derive for output path",
-            "context_json": {"topic": "Latency"},
+            "goal": "Render the generated document to a PDF",
+            "context_json": {"topic": "Latency", "path": "documents/latency.pdf"},
             "draft": {"nodes": [{"id": "n1", "capabilityId": "document.spec.generate"}]},
             "use_llm": False,
             "max_results": 3,
@@ -2536,7 +2626,7 @@ def test_composer_recommend_capabilities_heuristic(monkeypatch):
     assert body["source"] == "heuristic"
     assert isinstance(body["recommendations"], list)
     assert len(body["recommendations"]) >= 1
-    assert body["recommendations"][0]["id"] == "document.output.derive"
+    assert body["recommendations"][0]["id"] == "document.pdf.generate"
 
 
 def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
@@ -2550,12 +2640,12 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
         adapters=(),
         enabled=True,
     )
-    spec_derive = cap_registry.CapabilitySpec(
-        capability_id="document.output.derive",
-        description="Derive output path",
-        risk_tier="read_only",
+    spec_render = cap_registry.CapabilitySpec(
+        capability_id="document.pdf.generate",
+        description="Render a PDF",
+        risk_tier="bounded_write",
         idempotency="read",
-        input_schema_ref="schema_derive",
+        input_schema_ref="schema_render",
         output_schema_ref=None,
         adapters=(),
         enabled=True,
@@ -2563,15 +2653,11 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
     registry = cap_registry.CapabilityRegistry(
         capabilities={
             "document.spec.generate": spec_generate,
-            "document.output.derive": spec_derive,
+            "document.pdf.generate": spec_render,
         }
     )
     monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
-    monkeypatch.setattr(
-        main,
-        "_load_schema_from_ref",
-        lambda _ref: {"type": "object", "required": ["topic"], "properties": {"topic": {"type": "string"}}},
-    )
+    monkeypatch.setattr(main, "_load_schema_from_ref", lambda _ref: {"type": "object"})
 
     requests: list[LLMRequest] = []
 
@@ -2579,7 +2665,7 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
         def generate_request(self, request: LLMRequest):
             requests.append(request)
             return LLMResponse(
-                content='{"recommendations":[{"id":"document.output.derive","reason":"next step","confidence":0.91}]}'
+                content='{"recommendations":[{"id":"document.pdf.generate","reason":"next step","confidence":0.91}]}'
             )
 
     monkeypatch.setattr(main, "_composer_recommender_provider", _Provider())
@@ -2597,7 +2683,7 @@ def test_composer_recommend_capabilities_uses_llm_when_available(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "llm"
-    assert body["recommendations"][0]["id"] == "document.output.derive"
+    assert body["recommendations"][0]["id"] == "document.pdf.generate"
     assert requests
     assert requests[0].metadata is not None
     assert requests[0].metadata["operation"] == "capability_recommendations"

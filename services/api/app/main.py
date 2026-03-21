@@ -186,6 +186,11 @@ INTENT_CLARIFICATION_BLOCKING_SLOTS = {
     ).split(",")
     if entry.strip()
 }
+INTENT_ASSESS_ENABLED = os.getenv("INTENT_ASSESS_ENABLED", "true").lower() == "true"
+INTENT_ASSESS_MODE = os.getenv("INTENT_ASSESS_MODE", "heuristic").strip().lower()
+if INTENT_ASSESS_MODE not in {"heuristic", "llm", "hybrid"}:
+    INTENT_ASSESS_MODE = "heuristic"
+INTENT_ASSESS_MODEL = os.getenv("INTENT_ASSESS_MODEL", "").strip()
 INTENT_DECOMPOSE_ENABLED = os.getenv("INTENT_DECOMPOSE_ENABLED", "true").lower() == "true"
 INTENT_DECOMPOSE_MODE = os.getenv("INTENT_DECOMPOSE_MODE", "heuristic").strip().lower()
 if INTENT_DECOMPOSE_MODE not in {"heuristic", "llm", "hybrid"}:
@@ -296,6 +301,37 @@ def _build_composer_recommender_provider() -> LLMProvider | None:
 
 
 _composer_recommender_provider = _build_composer_recommender_provider()
+
+
+def _build_intent_assess_provider() -> LLMProvider | None:
+    if not INTENT_ASSESS_ENABLED:
+        return None
+    if INTENT_ASSESS_MODE == "heuristic":
+        return None
+    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
+    if not provider_name or provider_name == "mock":
+        return None
+    model_name = (INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "").strip()
+    if not model_name:
+        return None
+    try:
+        return resolve_provider(
+            provider_name,
+            api_key=OPENAI_API_KEY or None,
+            model=model_name,
+            base_url=OPENAI_BASE_URL or None,
+            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
+            max_retries=max(0, OPENAI_MAX_RETRIES),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "intent_assess_provider_init_failed",
+            extra={"provider": provider_name, "model": model_name},
+        )
+        return None
+
+
+_intent_assess_provider = _build_intent_assess_provider()
 
 
 def _build_intent_decompose_provider() -> LLMProvider | None:
@@ -1141,7 +1177,7 @@ def _assess_goal_intent(goal: str) -> workflow_contracts.GoalIntentProfile:
         goal,
         config=_goal_intent_assess_config(),
         runtime=intent_service.GoalIntentRuntime(
-            infer_task_intent=intent_contract.infer_task_intent_from_goal_with_metadata,
+            infer_task_intent=_infer_goal_intent_with_metadata,
             record_metrics=_record_goal_intent_assessment_metrics,
         ),
     )
@@ -2623,8 +2659,6 @@ def _coerce_composer_nodes(value: Any) -> list[dict[str, str]]:
 
 def _infer_capability_output_path(capability_id: str) -> str:
     normalized = (capability_id or "").strip().lower()
-    if "output.derive" in normalized:
-        return "path"
     if "spec.validate" in normalized:
         return "validation_report"
     if "spec" in normalized:
@@ -2729,12 +2763,6 @@ def _heuristic_capability_recommendations(
             if last_output and last_output in required_inputs:
                 score += 32
                 reasons.append(f"uses previous output '{last_output}'")
-            if capability_id in {"document.docx.generate", "document.pdf.generate"} and (
-                last_capability_id == "document.output.derive"
-            ):
-                score += 36
-                reasons.append("render after derive output path")
-
         recommendations.append(
             {
                 "id": capability_id,
@@ -3068,6 +3096,7 @@ def _semantic_goal_capability_hints(
     allowed_capability_catalog: list[dict[str, Any]],
     limit: int = 8,
     intent_hint: str | None = None,
+    request_source: str = "intent_decompose",
 ) -> list[dict[str, Any]]:
     started = time.perf_counter()
     matches = capability_search.search_capabilities(
@@ -3082,7 +3111,7 @@ def _semantic_goal_capability_hints(
         intent_hint=intent_hint,
         limit=limit,
         matches=matches,
-        request_source="intent_decompose",
+        request_source=request_source,
         latency_ms=latency_ms,
     )
     return matches
@@ -3233,6 +3262,7 @@ def _rank_default_capabilities_for_intent_segment(
         allowed_capability_catalog=allowed_capability_catalog,
         limit=limit,
         intent_hint=intent,
+        request_source="intent_decompose",
     )
     semantic_filtered = [
         item
@@ -3337,6 +3367,140 @@ def _rank_default_capabilities_for_intent_segment(
         if len(ranked) >= max(1, limit):
             break
     return ranked
+
+
+def _llm_goal_intent_prompt(
+    *,
+    goal: str,
+    allowed_capability_catalog: list[dict[str, str]],
+    semantic_goal_capabilities: list[dict[str, Any]],
+    capability_top_k: int,
+) -> str:
+    allowed_intents = ", ".join(member.value for member in models.ToolIntent)
+    prompt = (
+        "Classify the user's primary execution intent for the goal.\n"
+        "Return ONLY JSON with this shape:\n"
+        '{ "intent": "generate", "confidence": 0.0, "suggested_capabilities": ["capability.id"], '
+        '"reason": "short rationale" }\n'
+        f"Allowed intent values: {allowed_intents}.\n"
+        "Rules:\n"
+        "- choose exactly one primary intent for the next best execution action\n"
+        "- confidence must be between 0 and 1\n"
+        "- suggested_capabilities must use only exact IDs from the capability lists below\n"
+        f"- suggested_capabilities should contain at most {capability_top_k} IDs\n"
+        f"Goal:\n{goal}\n"
+    )
+    if semantic_goal_capabilities:
+        prompt += "Most relevant allowed capabilities for this goal:\n"
+        prompt += json.dumps(semantic_goal_capabilities[:8], ensure_ascii=True)
+        prompt += "\n"
+    if allowed_capability_catalog:
+        catalog_lines = [
+            (
+                f"- {entry['id']}"
+                f" | group={entry.get('group') or '-'}"
+                f" | subgroup={entry.get('subgroup') or '-'}"
+                f" | description={(entry.get('description') or '')[:160]}"
+            )
+            for entry in allowed_capability_catalog[:48]
+            if str(entry.get("id") or "").strip()
+        ]
+        if catalog_lines:
+            prompt += "Allowed capability catalog sample:\n"
+            prompt += "\n".join(catalog_lines)
+            prompt += "\n"
+    return prompt
+
+
+def _llm_infer_goal_intent_with_capabilities(
+    *,
+    goal: str,
+    provider: LLMProvider,
+    fallback_inference: intent_contract.TaskIntentInference,
+    allowed_capability_ids: set[str],
+    allowed_capability_catalog: list[dict[str, str]],
+    capability_top_k: int,
+    semantic_goal_capabilities: list[dict[str, Any]] | None = None,
+) -> intent_contract.TaskIntentInference:
+    prompt = _llm_goal_intent_prompt(
+        goal=goal,
+        allowed_capability_catalog=allowed_capability_catalog,
+        semantic_goal_capabilities=semantic_goal_capabilities or [],
+        capability_top_k=capability_top_k,
+    )
+    parsed = provider.generate_request_json_object(
+        LLMRequest(
+            prompt=prompt,
+            metadata={
+                "component": "api",
+                "operation": "intent_assess",
+                "goal_len": len(goal),
+                "capability_catalog_size": len(allowed_capability_catalog),
+                "capability_top_k": capability_top_k,
+                "semantic_goal_capabilities": len(semantic_goal_capabilities or []),
+            },
+        )
+    )
+    intent = intent_contract.normalize_task_intent(parsed.get("intent"))
+    if not intent:
+        raise ValueError("llm_intent_assess_invalid_intent")
+    suggested_capabilities = _normalize_catalog_capability_ids(
+        _coerce_string_list(parsed.get("suggested_capabilities")),
+        allowed_capability_ids,
+        limit=capability_top_k,
+    )
+    confidence_default = max(0.4, min(0.95, float(fallback_inference.confidence or 0.6)))
+    confidence = _coerce_confidence(parsed.get("confidence"), confidence_default)
+    if semantic_goal_capabilities and suggested_capabilities:
+        semantic_ids = {
+            str(item.get("id") or "").strip()
+            for item in semantic_goal_capabilities
+            if str(item.get("id") or "").strip()
+        }
+        if not any(capability_id in semantic_ids for capability_id in suggested_capabilities):
+            confidence = min(confidence, max(0.45, confidence_default))
+    return intent_contract.TaskIntentInference(
+        intent=intent,
+        source="llm",
+        confidence=confidence,
+    )
+
+
+def _infer_goal_intent_with_metadata(goal: str) -> intent_contract.TaskIntentInference:
+    heuristic = intent_contract.infer_task_intent_from_goal_with_metadata(goal)
+    if not INTENT_ASSESS_ENABLED or INTENT_ASSESS_MODE == "heuristic":
+        return heuristic
+    provider = _intent_assess_provider
+    if provider is None:
+        return heuristic
+    allowed_capability_catalog = _intent_catalog_capability_entries()
+    allowed_capability_ids = {
+        str(entry.get("id") or "").strip()
+        for entry in allowed_capability_catalog
+        if str(entry.get("id") or "").strip()
+    } or _intent_catalog_capability_ids()
+    semantic_goal_capabilities = _semantic_goal_capability_hints(
+        goal=goal,
+        allowed_capability_catalog=allowed_capability_catalog,
+        limit=max(4, INTENT_CAPABILITY_TOP_K * 2),
+        request_source="intent_assess",
+    )
+    try:
+        return _llm_infer_goal_intent_with_capabilities(
+            goal=goal,
+            provider=provider,
+            fallback_inference=heuristic,
+            allowed_capability_ids=allowed_capability_ids,
+            allowed_capability_catalog=allowed_capability_catalog,
+            capability_top_k=INTENT_CAPABILITY_TOP_K,
+            semantic_goal_capabilities=semantic_goal_capabilities,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "intent_assess_llm_failed",
+            extra={"goal": goal[:160], "mode": INTENT_ASSESS_MODE},
+        )
+        return heuristic
 
 
 def _filter_catalog_capability_ids(
@@ -7991,7 +8155,7 @@ def _classify_task_error(error: str | None) -> dict[str, Any]:
             "code": "contract.input_invalid",
             "retryable": False,
             "message": error,
-            "hint": "Set a non-empty 'path' input. Recommended: add document.output.derive and bind its path output to the renderer path input.",
+            "hint": "Set a non-empty 'path' input and bind it explicitly from job context, workflow input, or a previous step.",
         }
     if "timeout" in normalized or "timed out" in normalized:
         return {

@@ -7,6 +7,7 @@
 	k8s-apply-observability k8s-delete-observability \
 	k8s-apply-keda-worker k8s-delete-keda-worker \
 	k8s-up-local k8s-down-local k8s-restart-local \
+	clear-local-registry \
 	k8s-sync-shared k8s-sync-workspace k8s-sync-artifacts \
 	images-list images-build images-push \
 	k8s-pin-local-images
@@ -118,6 +119,9 @@ k8s-up-local:
 
 k8s-down-local:
 	$(MAKE) k8s-delete-local
+
+clear-local-registry:
+	./scripts/clear_local_registry.sh --yes
 
 k8s-restart-local:
 	kubectl rollout restart deployment -n awe api planner policy worker coder qdrant rag-retriever-mcp ui

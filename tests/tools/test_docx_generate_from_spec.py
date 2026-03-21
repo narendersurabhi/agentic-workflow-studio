@@ -73,7 +73,7 @@ def test_invalid_validation_report_blocks_render(
         )
 
 
-def test_missing_path_auto_derives_output_path() -> None:
+def test_missing_path_is_rejected() -> None:
     import tempfile
 
     from pytest import MonkeyPatch
@@ -84,8 +84,8 @@ def test_missing_path_auto_derives_output_path() -> None:
     spec = _load_fixture("resume_ats_single_column_spec.json")
     try:
         call = registry.execute("docx_generate_from_spec", {"document_spec": spec}, "id", "trace")
-        assert call.status == "completed"
-        assert call.output_or_error["path"].endswith(".docx")
+        assert call.status == "failed"
+        assert "input schema validation failed" in call.output_or_error["error"]
     finally:
         monkeypatch.undo()
 

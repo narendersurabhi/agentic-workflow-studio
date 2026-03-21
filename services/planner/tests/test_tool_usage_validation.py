@@ -516,14 +516,14 @@ def test_emit_planner_capability_selection_event_reports_selected_capabilities(
         dag_edges=[],
         tasks=[
             models.TaskCreate(
-                name="derive_path",
-                description="derive output path",
-                instruction="derive output path",
+                name="generate_spec",
+                description="generate document spec",
+                instruction="generate document spec",
                 acceptance_criteria=["ok"],
-                expected_output_schema_ref="schemas/path",
-                intent=models.ToolIntent.transform,
+                expected_output_schema_ref="schemas/document_spec",
+                intent=models.ToolIntent.generate,
                 deps=[],
-                tool_requests=["document.output.derive"],
+                tool_requests=["document.spec.generate"],
                 tool_inputs={},
                 critic_required=False,
             ),
@@ -534,7 +534,7 @@ def test_emit_planner_capability_selection_event_reports_selected_capabilities(
                 acceptance_criteria=["ok"],
                 expected_output_schema_ref="schemas/file",
                 intent=models.ToolIntent.render,
-                deps=["derive_path"],
+                deps=["generate_spec"],
                 tool_requests=["document.pdf.generate"],
                 tool_inputs={},
                 critic_required=False,
@@ -549,10 +549,7 @@ def test_emit_planner_capability_selection_event_reports_selected_capabilities(
     assert event_type == "plan.capability_selection"
     payload = kwargs["payload"]
     assert payload["planner_version"] == "planner_v1"
-    assert payload["selected_capabilities"] == [
-        "document.output.derive",
-        "document.pdf.generate",
-    ]
+    assert payload["selected_capabilities"] == ["document.spec.generate", "document.pdf.generate"]
 
 
 def test_validate_plan_rejects_missing_root_required_with_anyof() -> None:
@@ -1154,213 +1151,6 @@ def test_validate_plan_rejects_capability_risk_above_intent_segment_threshold(
     assert reason.startswith(
         "intent_segment_invalid:filesystem.workspace.delete:task-1:risk_level_mismatch"
     )
-
-
-def test_ensure_renderer_output_extensions_sets_pdf_on_derive_task(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    capability_registry_path = tmp_path / "capability_registry.json"
-    capability_registry_path.write_text(
-        json.dumps(
-            {
-                "capabilities": [
-                    {
-                        "id": "document.output.derive",
-                        "description": "derive output path",
-                        "enabled": True,
-                        "planner_hints": {"derives_output_path": True},
-                        "adapters": [
-                            {
-                                "type": "tool",
-                                "server_id": "local_worker",
-                                "tool_name": "derive_output_path",
-                            }
-                        ],
-                    },
-                    {
-                        "id": "document.pdf.generate",
-                        "description": "render pdf",
-                        "enabled": True,
-                        "planner_hints": {"required_output_extension": "pdf"},
-                        "adapters": [
-                            {
-                                "type": "tool",
-                                "server_id": "local_worker",
-                                "tool_name": "pdf_generate_from_spec",
-                            }
-                        ],
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CAPABILITY_MODE", "enabled")
-    monkeypatch.setenv("CAPABILITY_REGISTRY_PATH", str(capability_registry_path))
-    plan = models.PlanCreate(
-        planner_version="1",
-        tasks_summary="doc pipeline",
-        dag_edges=[],
-        tasks=[
-            models.TaskCreate(
-                name="GenerateSpec",
-                description="gen",
-                instruction="gen",
-                acceptance_criteria=["ok"],
-                expected_output_schema_ref="schemas/DocumentSpec",
-                deps=[],
-                tool_requests=["document.spec.generate"],
-                tool_inputs={"document.spec.generate": {"job": {}}},
-                critic_required=False,
-            ),
-            models.TaskCreate(
-                name="DeriveOutputPath",
-                description="derive",
-                instruction="derive",
-                acceptance_criteria=["ok"],
-                expected_output_schema_ref="schemas/docx_path",
-                deps=["GenerateSpec"],
-                tool_requests=["document.output.derive"],
-                tool_inputs={
-                    "document.output.derive": {
-                        "topic": "Latency",
-                        "today": "2026-02-24",
-                        "output_dir": "documents",
-                        "document_type": "document",
-                    }
-                },
-                critic_required=False,
-            ),
-            models.TaskCreate(
-                name="RenderPdf",
-                description="render",
-                instruction="render",
-                acceptance_criteria=["ok"],
-                expected_output_schema_ref="schemas/pdf_output",
-                deps=["GenerateSpec", "DeriveOutputPath"],
-                tool_requests=["document.pdf.generate"],
-                tool_inputs={
-                    "document.pdf.generate": {
-                        "document_spec": {
-                            "$from": [
-                                "dependencies_by_name",
-                                "GenerateSpec",
-                                "document.spec.generate",
-                                "document_spec",
-                            ]
-                        },
-                        "path": {
-                            "$from": [
-                                "dependencies_by_name",
-                                "DeriveOutputPath",
-                                "document.output.derive",
-                                "path",
-                            ]
-                        },
-                    }
-                },
-                critic_required=False,
-            ),
-        ],
-    )
-    updated = _ensure_renderer_output_extensions(plan)
-    derive_inputs = updated.tasks[1].tool_inputs["document.output.derive"]
-    assert derive_inputs["output_extension"] == "pdf"
-
-
-def test_ensure_renderer_output_extensions_keeps_explicit_extension_when_aligned(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    capability_registry_path = tmp_path / "capability_registry.json"
-    capability_registry_path.write_text(
-        json.dumps(
-            {
-                "capabilities": [
-                    {
-                        "id": "document.output.derive",
-                        "description": "derive output path",
-                        "enabled": True,
-                        "planner_hints": {"derives_output_path": True},
-                        "adapters": [
-                            {
-                                "type": "tool",
-                                "server_id": "local_worker",
-                                "tool_name": "derive_output_path",
-                            }
-                        ],
-                    },
-                    {
-                        "id": "document.pdf.generate",
-                        "description": "render pdf",
-                        "enabled": True,
-                        "planner_hints": {"required_output_extension": "pdf"},
-                        "adapters": [
-                            {
-                                "type": "tool",
-                                "server_id": "local_worker",
-                                "tool_name": "pdf_generate_from_spec",
-                            }
-                        ],
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CAPABILITY_MODE", "enabled")
-    monkeypatch.setenv("CAPABILITY_REGISTRY_PATH", str(capability_registry_path))
-    plan = models.PlanCreate(
-        planner_version="1",
-        tasks_summary="doc pipeline",
-        dag_edges=[],
-        tasks=[
-            models.TaskCreate(
-                name="DeriveOutputPath",
-                description="derive",
-                instruction="derive",
-                acceptance_criteria=["ok"],
-                expected_output_schema_ref="schemas/docx_path",
-                deps=[],
-                tool_requests=["document.output.derive"],
-                tool_inputs={
-                    "document.output.derive": {
-                        "topic": "Latency",
-                        "today": "2026-02-24",
-                        "output_dir": "documents",
-                        "document_type": "document",
-                        "output_extension": "pdf",
-                    }
-                },
-                critic_required=False,
-            ),
-            models.TaskCreate(
-                name="RenderPdf",
-                description="render",
-                instruction="render",
-                acceptance_criteria=["ok"],
-                expected_output_schema_ref="schemas/pdf_output",
-                deps=["DeriveOutputPath"],
-                tool_requests=["document.pdf.generate"],
-                tool_inputs={
-                    "document.pdf.generate": {
-                        "path": {
-                            "$from": [
-                                "dependencies_by_name",
-                                "DeriveOutputPath",
-                                "document.output.derive",
-                                "path",
-                            ]
-                        }
-                    }
-                },
-                critic_required=False,
-            ),
-        ],
-    )
-    updated = _ensure_renderer_output_extensions(plan)
-    derive_inputs = updated.tasks[0].tool_inputs["document.output.derive"]
-    assert derive_inputs["output_extension"] == "pdf"
-
 
 
 def test_ensure_renderer_required_inputs_autowires_document_spec_only() -> None:

@@ -290,13 +290,11 @@ def _build_core_ops_handlers() -> CoreOpsHandlers:
         math_eval=_math_eval,
         text_summarize=_text_summarize,
         file_write_artifact=lambda payload: _write_text_file(payload, default_filename="artifact.txt"),
-        file_write_text=lambda payload: _write_text_file(payload, default_filename="output.txt"),
+        file_write_text=_write_text_file,
         file_write_code=_file_write_code,
         file_read_text=_file_read_text,
         list_files=_list_files,
-        workspace_write_text=lambda payload: _write_workspace_text_file(
-            payload, default_filename="output.txt"
-        ),
+        workspace_write_text=_write_workspace_text_file,
         workspace_write_code=_workspace_write_code,
         workspace_read_text=_workspace_read_text,
         workspace_list_files=_list_workspace_files,
@@ -309,7 +307,6 @@ def _build_core_ops_handlers() -> CoreOpsHandlers:
         artifact_copy=_artifact_copy,
         workspace_copy=_workspace_copy,
         artifact_move=_artifact_move_to_workspace,
-        derive_output_path=_derive_output_path,
         derive_output_filename=_derive_output_filename,
         run_tests=_run_tests,
         search_text=_search_text,
@@ -368,23 +365,37 @@ def _text_summarize(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"summary": summary}
 
 
-def _write_text_file(payload: Dict[str, Any], default_filename: str) -> Dict[str, Any]:
+def _write_text_file(
+    payload: Dict[str, Any], default_filename: str | None = None
+) -> Dict[str, Any]:
     path = payload.get("path", "")
     content = payload.get("content", "")
+    if not isinstance(path, str) or not path.strip():
+        if not default_filename:
+            raise ToolExecutionError("Missing path")
+        path = default_filename
+    path = path.strip()
     if path and path.endswith("/"):
         raise ToolExecutionError("Missing file name in path")
-    candidate = _safe_artifact_path(path, default_filename)
+    candidate = _safe_artifact_path(path, default_filename or "")
     candidate.parent.mkdir(parents=True, exist_ok=True)
     candidate.write_text(content, encoding="utf-8")
     return {"path": str(candidate)}
 
 
-def _write_workspace_text_file(payload: Dict[str, Any], default_filename: str) -> Dict[str, Any]:
+def _write_workspace_text_file(
+    payload: Dict[str, Any], default_filename: str | None = None
+) -> Dict[str, Any]:
     path = payload.get("path", "")
     content = payload.get("content", "")
+    if not isinstance(path, str) or not path.strip():
+        if not default_filename:
+            raise ToolExecutionError("Missing path")
+        path = default_filename
+    path = path.strip()
     if path and path.endswith("/"):
         raise ToolExecutionError("Missing file name in path")
-    candidate = _safe_workspace_path(path, default_filename)
+    candidate = _safe_workspace_path(path, default_filename or "")
     candidate.parent.mkdir(parents=True, exist_ok=True)
     candidate.write_text(content, encoding="utf-8")
     return {"path": str(candidate)}
@@ -395,7 +406,7 @@ def _file_write_code(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not path:
         raise ToolExecutionError("Missing file name in path")
     _ensure_code_extension(path)
-    return _write_text_file(payload, default_filename="output.txt")
+    return _write_text_file(payload)
 
 
 def _workspace_write_code(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -403,7 +414,7 @@ def _workspace_write_code(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not path:
         raise ToolExecutionError("Missing file name in path")
     _ensure_code_extension(path)
-    return _write_workspace_text_file(payload, default_filename="output.txt")
+    return _write_workspace_text_file(payload)
 
 
 def _ensure_code_extension(path: str) -> None:
@@ -678,124 +689,6 @@ def _artifact_move_to_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolExecutionError("Destination already exists")
     shutil.move(str(source), str(destination))
     return {"path": str(destination)}
-
-
-def _derive_output_path(payload: Dict[str, Any]) -> Dict[str, Any]:
-    def pick_str(*values: Any) -> str:
-        for value in values:
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return ""
-
-    memory_context = _select_job_context_from_memory(payload.get("memory"))
-    nested_context = memory_context.get("context_json")
-    if not isinstance(nested_context, dict):
-        nested_context = {}
-
-    topic = pick_str(
-        payload.get("topic"),
-        memory_context.get("topic"),
-        nested_context.get("topic"),
-    )
-    date_value = pick_str(
-        payload.get("date"),
-        payload.get("today"),
-        memory_context.get("date"),
-        memory_context.get("today"),
-        nested_context.get("date"),
-        nested_context.get("today"),
-    )
-    output_dir = (
-        pick_str(
-            payload.get("output_dir"),
-            memory_context.get("output_dir"),
-            nested_context.get("output_dir"),
-        )
-        or "documents"
-    )
-    document_type = pick_str(
-        payload.get("document_type"),
-        memory_context.get("document_type"),
-        nested_context.get("document_type"),
-    )
-    extension_hint = pick_str(
-        payload.get("output_extension"),
-        payload.get("file_extension"),
-        payload.get("extension"),
-        payload.get("format"),
-        memory_context.get("output_extension"),
-        memory_context.get("file_extension"),
-        memory_context.get("extension"),
-        memory_context.get("format"),
-        nested_context.get("output_extension"),
-        nested_context.get("file_extension"),
-        nested_context.get("extension"),
-        nested_context.get("format"),
-    )
-
-    if not topic:
-        raise ToolExecutionError("Missing topic")
-
-    normalized_doc_type = (
-        document_type.lower().replace("-", "_")
-        if isinstance(document_type, str) and document_type
-        else "document"
-    )
-    known_format_types = {
-        "pdf",
-        "docx",
-        "md",
-        "markdown",
-        "txt",
-        "html",
-        "htm",
-        "json",
-        "yaml",
-        "yml",
-        "xml",
-        "csv",
-    }
-
-    def normalize_extension(raw: str) -> str:
-        value = raw.strip().lower()
-        if value.startswith("."):
-            value = value[1:]
-        if value == "markdown":
-            value = "md"
-        if not value:
-            return ""
-        if not re.fullmatch(r"[a-z0-9]{1,16}", value):
-            raise ToolExecutionError("Invalid output_extension")
-        return value
-
-    output_extension = ""
-    if extension_hint:
-        output_extension = normalize_extension(extension_hint)
-    elif normalized_doc_type in known_format_types:
-        output_extension = normalize_extension(normalized_doc_type)
-    if not output_extension:
-        output_extension = "docx"
-
-    output_dir = output_dir.strip().strip("/")
-    if not output_dir:
-        output_dir = "documents"
-    if output_dir.startswith("/") or ".." in Path(output_dir).parts:
-        raise ToolExecutionError("Invalid output_dir")
-
-    date_source = date_value or datetime.now(UTC).date().isoformat()
-    topic_slug = re.sub(r"[^a-z0-9]+", "_", topic.lower())
-    topic_slug = re.sub(r"_+", "_", topic_slug).strip("_") or "document"
-    date_slug = re.sub(r"[^0-9]+", "_", date_source)
-    date_slug = re.sub(r"_+", "_", date_slug).strip("_")
-    if not date_slug:
-        raise ToolExecutionError("Invalid date")
-
-    filename = f"{topic_slug}_{date_slug}.{output_extension}"
-    return {
-        "path": f"{output_dir}/{filename}",
-        "document_type": normalized_doc_type,
-        "output_extension": output_extension,
-    }
 
 
 def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:

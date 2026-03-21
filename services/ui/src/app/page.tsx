@@ -48,12 +48,12 @@ const GUIDED_STARTER_TEMPLATES: Array<{
   {
     id: "document_pipeline",
     label: "Document Pipeline",
-    description: "Generate a DocumentSpec, derive output path, and render to selected format."
+    description: "Generate a DocumentSpec and render to the selected format at an explicit path."
   },
   {
     id: "runbook_pipeline",
     label: "Runbook Pipeline",
-    description: "Generate a runbook-style spec, derive output path, and render to selected format."
+    description: "Generate a runbook-style spec and render to the selected format at an explicit path."
   }
 ];
 
@@ -580,7 +580,7 @@ const outputPathSuggestionsForCapability = (
   if (normalized.includes("docx") || normalized.includes("pdf") || normalized.includes("render")) {
     add("path");
   }
-  if (normalized.includes("filename") || normalized.includes("output.derive")) {
+  if (normalized.includes("filename")) {
     add("path");
     add("output_path");
   }
@@ -1338,9 +1338,6 @@ const isContextInputPresent = (value: unknown) => {
 };
 
 const inferCapabilityOutputPath = (capabilityId: string) => {
-  if (capabilityId.includes("output.derive")) {
-    return "path";
-  }
   if (capabilityId.includes("spec.validate")) {
     return "validation_report";
   }
@@ -1360,23 +1357,6 @@ const inferCapabilityOutputPath = (capabilityId: string) => {
     return "text";
   }
   return "result";
-};
-
-const inferOutputExtensionForCapability = (capabilityId: string): string => {
-  const normalized = capabilityId.toLowerCase();
-  if (normalized.includes(".docx.")) {
-    return "docx";
-  }
-  if (normalized.includes(".pdf.")) {
-    return "pdf";
-  }
-  if (normalized.includes("write_text")) {
-    return "txt";
-  }
-  if (normalized.includes("write_content")) {
-    return "json";
-  }
-  return "txt";
 };
 
 const isPathOutputReference = (sourcePath: string): boolean => {
@@ -1639,10 +1619,9 @@ const BUILT_IN_TEMPLATES: Template[] = [
       "Use llm_generate_document_spec to create a DocumentSpec about '{{topic}}' for '{{audience}}' in a '{{tone}}' tone. " +
       "Provide allowed_block_types as [text, paragraph, heading, bullets, spacer, optional_paragraph, repeat]. " +
       "Validate with document_spec_validate (strict). " +
-      "Derive a filesystem-safe output path with document.output.derive (derive_output_path) using topic '{{topic}}', output_dir '{{output_dir}}', and today's date. " +
-      "Render a DOCX with docx_generate_from_spec using the derived path.",
+      "Render a DOCX with docx_generate_from_spec using explicit path '{{path}}'.",
     contextJson:
-      '{\n  "topic": "{{topic}}",\n  "audience": "{{audience}}",\n  "tone": "{{tone}}",\n  "today": "{{today}}",\n  "output_dir": "{{output_dir}}"\n}',
+      '{\n  "topic": "{{topic}}",\n  "audience": "{{audience}}",\n  "tone": "{{tone}}",\n  "today": "{{today}}",\n  "path": "{{path}}"\n}',
     priority: 2,
     builtIn: true,
     variables: [
@@ -1674,13 +1653,7 @@ const BUILT_IN_TEMPLATES: Template[] = [
         required: true,
         placeholder: "2026-02-10"
       },
-      {
-        key: "output_dir",
-        label: "Output Folder",
-        scope: "default",
-        required: false,
-        placeholder: "documents"
-      }
+      { key: "path", label: "Output Path", scope: "per_run", required: true, placeholder: "documents/report.docx" }
     ]
   },
   {
@@ -1697,10 +1670,9 @@ const BUILT_IN_TEMPLATES: Template[] = [
       "Do not invent sections beyond the markdown structure. " +
       "Set allowed_block_types to [\"text\",\"paragraph\",\"heading\",\"bullets\",\"spacer\",\"optional_paragraph\",\"repeat\"], strict=true, and document_type=\"document\". " +
       "Validate the result with document_spec_validate strict=true. " +
-      "Then call document.output.derive (derive_output_path) with topic '{{topic}}', output_dir '{{output_dir}}', date '{{today}}'. " +
-      "Finally, call document.docx.generate with document_spec from document.spec.generate_from_markdown and path from derive_output_path.",
+      "Finally, call document.docx.generate with document_spec from document.spec.generate_from_markdown and explicit path '{{path}}'.",
     contextJson:
-      '{\n  "markdown_text": "{{markdown_text}}",\n  "topic": "{{topic}}",\n  "tone": "{{tone}}",\n  "today": "{{today}}",\n  "output_dir": "{{output_dir}}"\n}',
+      '{\n  "markdown_text": "{{markdown_text}}",\n  "topic": "{{topic}}",\n  "tone": "{{tone}}",\n  "today": "{{today}}",\n  "path": "{{path}}"\n}',
     priority: 2,
     builtIn: true,
     variables: [
@@ -1732,13 +1704,7 @@ const BUILT_IN_TEMPLATES: Template[] = [
         required: true,
         placeholder: "2026-03-12"
       },
-      {
-        key: "output_dir",
-        label: "Output Folder",
-        scope: "default",
-        required: false,
-        placeholder: "documents"
-      }
+      { key: "path", label: "Output Path", scope: "per_run", required: true, placeholder: "documents/report.docx" }
     ]
   },
   {
@@ -1747,16 +1713,16 @@ const BUILT_IN_TEMPLATES: Template[] = [
     description:
       "Demonstrate capability chaining by passing outputs to downstream inputs with $from references.",
     goal:
-      "Create a 4-task plan with these exact task names: GenerateSpec, ValidateSpec, DeriveOutputPath, RenderDocx. " +
-      "Use capability IDs document.spec.generate, document.spec.validate, document.output.derive, and document.docx.generate. " +
+      "Create a 3-task plan with these exact task names: GenerateSpec, ValidateSpec, RenderDocx. " +
+      "Use capability IDs document.spec.generate, document.spec.validate, and document.docx.generate. " +
       "You MUST use explicit tool_inputs reference objects for chaining. " +
       "For ValidateSpec.document_spec use {\"$from\":[\"dependencies_by_name\",\"GenerateSpec\",\"document.spec.generate\",\"document_spec\"]}. " +
       "For RenderDocx.document_spec use the same GenerateSpec reference. " +
-      "For RenderDocx.path use {\"$from\":[\"dependencies_by_name\",\"DeriveOutputPath\",\"document.output.derive\",\"path\"]}. " +
+      "For RenderDocx.path use {\"$from\":[\"job_context\",\"path\"]}. " +
       "Set allowed_block_types to [\"text\",\"paragraph\",\"heading\",\"bullets\",\"spacer\",\"optional_paragraph\",\"repeat\"], set strict=true, and set document_type='document'. " +
       "Keep references as array paths because capability IDs contain dots.",
     contextJson:
-      '{\n  "topic": "{{topic}}",\n  "audience": "{{audience}}",\n  "tone": "{{tone}}",\n  "today": "{{today}}",\n  "output_dir": "{{output_dir}}"\n}',
+      '{\n  "topic": "{{topic}}",\n  "audience": "{{audience}}",\n  "tone": "{{tone}}",\n  "today": "{{today}}",\n  "path": "{{path}}"\n}',
     priority: 2,
     builtIn: true,
     variables: [
@@ -1788,13 +1754,7 @@ const BUILT_IN_TEMPLATES: Template[] = [
         required: true,
         placeholder: "2026-02-24"
       },
-      {
-        key: "output_dir",
-        label: "Output Folder",
-        scope: "default",
-        required: false,
-        placeholder: "documents"
-      }
+      { key: "path", label: "Output Path", scope: "per_run", required: true, placeholder: "documents/report.docx" }
     ]
   }
 ];
@@ -2071,6 +2031,7 @@ function HomeContent() {
   const [chatSession, setChatSession] = useState<ChatSession | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatUseComposeContext, setChatUseComposeContext] = useState(true);
   const [showTaskInputs, setShowTaskInputs] = useState(false);
@@ -2673,21 +2634,6 @@ function HomeContent() {
         if (item.requiredInputs.includes(lastOutput)) {
           score += 32;
           reasons.push(`uses previous output '${lastOutput}'`);
-        }
-        if (
-          item.id === "document.output.derive" &&
-          (lastNode.capabilityId.startsWith("document.spec.") ||
-            lastNode.capabilityId.startsWith("document.runbook."))
-        ) {
-          score += 30;
-          reasons.push("common next step after document spec generation");
-        }
-        if (
-          (item.id === "document.docx.generate" || item.id === "document.pdf.generate") &&
-          lastNode.capabilityId === "document.output.derive"
-        ) {
-          score += 36;
-          reasons.push("render after derive output path");
         }
       }
 
@@ -3452,34 +3398,6 @@ function HomeContent() {
     );
   };
 
-  const buildDeriveOutputBindings = (
-    context: Record<string, unknown>,
-    targetCapabilityId: string,
-    documentTypeHint: string
-  ): Record<string, ComposerInputBinding> => {
-    const extension = inferOutputExtensionForCapability(targetCapabilityId);
-    const topicValue =
-      typeof context.topic === "string" && context.topic.trim().length > 0
-        ? context.topic.trim()
-        : "generated_document";
-    const outputDirValue =
-      typeof context.output_dir === "string" && context.output_dir.trim().length > 0
-        ? context.output_dir.trim()
-        : "documents";
-    const todayValue =
-      typeof context.today === "string" && context.today.trim().length > 0
-        ? context.today.trim()
-        : formatLocalIsoDate(new Date());
-
-    return {
-      topic: { kind: "literal", value: topicValue },
-      output_dir: { kind: "literal", value: outputDirValue },
-      document_type: { kind: "literal", value: documentTypeHint || "document" },
-      output_extension: { kind: "literal", value: extension },
-      today: { kind: "literal", value: todayValue }
-    };
-  };
-
   const parseGuidedStarterIterations = () => {
     const raw = Number(guidedStarterMaxIterations);
     if (!Number.isFinite(raw)) {
@@ -3497,12 +3415,10 @@ function HomeContent() {
         : useIterativeGenerator
           ? "document.spec.generate_iterative"
           : "document.spec.generate";
-    const starterSequence =
-      [
-        generatorCapability,
-        "document.output.derive",
-        guidedStarterFormat === "pdf" ? "document.pdf.generate" : "document.docx.generate"
-      ];
+    const starterSequence = [
+      generatorCapability,
+      guidedStarterFormat === "pdf" ? "document.pdf.generate" : "document.docx.generate"
+    ];
 
     const missing = starterSequence.filter((capabilityId) => !capabilityById.has(capabilityId));
     if (missing.length > 0) {
@@ -3536,15 +3452,15 @@ function HomeContent() {
         const inputBindings: Record<string, ComposerInputBinding> = {};
         const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(capabilityId));
 
-        if (capabilityId === "document.output.derive") {
-          Object.assign(
-            inputBindings,
-            buildDeriveOutputBindings(
-              context,
-              guidedStarterFormat === "pdf" ? "document.pdf.generate" : "document.docx.generate",
-              guidedStarterTemplate === "runbook_pipeline" ? "runbook" : "document"
-            )
-          );
+        if (
+          (capabilityId === "document.docx.generate" || capabilityId === "document.pdf.generate") &&
+          typeof context.path === "string" &&
+          context.path.trim().length > 0
+        ) {
+          inputBindings.path = {
+            kind: "context",
+            path: "path"
+          };
         }
         requiredInputs.forEach((field) => {
           if (inputBindings[field]) {
@@ -3565,20 +3481,6 @@ function HomeContent() {
             sourcePath: previousNode.outputPath || "result"
           };
         });
-
-        if (
-          (capabilityId === "document.docx.generate" || capabilityId === "document.pdf.generate") &&
-          !inputBindings.path
-        ) {
-          const deriveNode = [...nodes].reverse().find((node) => node.capabilityId === "document.output.derive");
-          if (deriveNode) {
-            inputBindings.path = {
-              kind: "step_output",
-              sourceNodeId: deriveNode.id,
-              sourcePath: "path"
-            };
-          }
-        }
 
         nodes.push({
           id: nodeId,
@@ -3611,64 +3513,6 @@ function HomeContent() {
           : "Generate a practical technical document and render it to a downloadable document."
       );
     }
-  };
-
-  const insertDeriveOutputPathStepForNode = (nodeId: string) => {
-    const context = readContextObject();
-    setComposerDraft((prev) => {
-      const targetIndex = prev.nodes.findIndex((node) => node.id === nodeId);
-      if (targetIndex < 0) {
-        return prev;
-      }
-      const targetNode = prev.nodes[targetIndex];
-      if (targetNode.capabilityId === "document.output.derive") {
-        return prev;
-      }
-
-      const deriveNodeId = `chain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const deriveNode: ComposerDraftNode = {
-        id: deriveNodeId,
-        taskName: uniqueTaskName("DeriveOutputPath", prev.nodes),
-        capabilityId: "document.output.derive",
-        outputPath: "path",
-        inputBindings: buildDeriveOutputBindings(
-          context,
-          targetNode.capabilityId,
-          targetNode.capabilityId.includes("runbook") ? "runbook" : "document"
-        )
-      };
-
-      const updatedTargetNode: ComposerDraftNode = {
-        ...targetNode,
-        inputBindings: {
-          ...targetNode.inputBindings,
-          path: {
-            kind: "step_output",
-            sourceNodeId: deriveNodeId,
-            sourcePath: "path"
-          }
-        }
-      };
-
-      const nextNodes = [
-        ...prev.nodes.slice(0, targetIndex),
-        deriveNode,
-        updatedTargetNode,
-        ...prev.nodes.slice(targetIndex + 1)
-      ];
-      const nextEdges = normalizeComposerEdges(nextNodes, [
-        ...prev.edges,
-        { fromNodeId: deriveNodeId, toNodeId: targetNode.id }
-      ]);
-
-      return {
-        ...prev,
-        nodes: nextNodes,
-        edges: nextEdges
-      };
-    });
-    setSelectedDagNodeId(nodeId);
-    setChainComposerNotice("Inserted derive-output-path step and wired target path input.");
   };
 
   const updateVisualChainNode = (
@@ -4818,30 +4662,6 @@ function HomeContent() {
     () => visualChainNodes.find((node) => node.id === selectedDagNodeId) || null,
     [selectedDagNodeId, visualChainNodes]
   );
-
-  const canInsertDeriveForSelectedNode = useMemo(() => {
-    if (!selectedDagNode) {
-      return false;
-    }
-    if (!capabilityById.has("document.output.derive")) {
-      return false;
-    }
-    if (selectedDagNode.capabilityId === "document.output.derive") {
-      return false;
-    }
-    const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(selectedDagNode.capabilityId));
-    if (!requiredInputs.includes("path")) {
-      return false;
-    }
-    const pathBinding = selectedDagNode.inputBindings.path;
-    if (pathBinding?.kind === "step_output") {
-      const sourceNode = visualChainNodes.find((node) => node.id === pathBinding.sourceNodeId);
-      if (sourceNode?.capabilityId === "document.output.derive") {
-        return false;
-      }
-    }
-    return true;
-  }, [capabilityById, selectedDagNode, visualChainNodes]);
 
   const focusComposerValidationIssue = (issue: ComposerValidationIssue) => {
     const nodeId = issue.nodeId;
@@ -6102,6 +5922,7 @@ const openTemplateModal = (template: Template) => {
     setChatSession(null);
     setChatInput("");
     setChatError(null);
+    setChatNotice(null);
   };
 
   const loadChatSession = async (sessionId: string) => {
@@ -6111,6 +5932,22 @@ const openTemplateModal = (template: Template) => {
     }
     const session = (await response.json()) as ChatSession;
     setChatSession(session);
+  };
+
+  const refreshChatJobViews = async (jobId: string) => {
+    setChatNotice("Refreshing jobs and details in the background...");
+    try {
+      await loadJobs();
+      await loadJobDetails(jobId);
+      setChatNotice(null);
+    } catch (error) {
+      setChatNotice(null);
+      setChatError(
+        error instanceof Error
+          ? `Message sent, but failed to refresh job data (${error.message}).`
+          : "Message sent, but failed to refresh job data."
+      );
+    }
   };
 
   const submitChatTurn = async () => {
@@ -6127,6 +5964,7 @@ const openTemplateModal = (template: Template) => {
     try {
       setChatLoading(true);
       setChatError(null);
+      setChatNotice(null);
       let session = chatSession;
       if (!session) {
         session = await createChatSession();
@@ -6154,10 +5992,13 @@ const openTemplateModal = (template: Template) => {
       setChatSession(body.session);
       setChatInput("");
       if (body.job?.id) {
-        await loadJobs();
-        await loadJobDetails(body.job.id);
+        setChatLoading(false);
+        void refreshChatJobViews(body.job.id);
+        return;
       }
+      setChatNotice(null);
     } catch (error) {
+      setChatNotice(null);
       setChatError(error instanceof Error ? error.message : "Network error while sending chat.");
     } finally {
       setChatLoading(false);
@@ -7575,8 +7416,6 @@ const openTemplateModal = (template: Template) => {
               updateVisualBindingContextPath={updateVisualBindingContextPath}
               updateVisualBindingMemory={updateVisualBindingMemory}
               setVisualBindingFromPrevious={setVisualBindingFromPrevious}
-              canInsertDeriveOutputPath={canInsertDeriveForSelectedNode}
-              onInsertDeriveOutputPath={insertDeriveOutputPathStepForNode}
             />
             <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3">
               <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
@@ -9103,6 +8942,11 @@ const openTemplateModal = (template: Template) => {
                 {chatError ? (
                   <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-300/10 px-3 py-2 text-sm text-rose-100">
                     {chatError}
+                  </div>
+                ) : null}
+                {chatNotice ? (
+                  <div className="mt-3 rounded-xl border border-sky-300/20 bg-sky-300/10 px-3 py-2 text-sm text-sky-100">
+                    {chatNotice}
                   </div>
                 ) : null}
                 <div className="mt-4 space-y-3">

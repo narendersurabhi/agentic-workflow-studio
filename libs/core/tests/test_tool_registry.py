@@ -162,6 +162,7 @@ def test_pdf_generate_tool_registered() -> None:
     assert "path" in schema["properties"]
     assert "render_context" in schema["properties"]
     assert "strict" in schema["properties"]
+    assert "path" in schema["required"]
 
 
 def test_file_write_text_requires_path() -> None:
@@ -256,66 +257,6 @@ def test_derive_output_filename_defaults_to_today_when_missing_date() -> None:
     assert call.status == "completed"
     assert call.output_or_error["path"] == f"documents/platform_engineer_{today_slug}.pdf"
     assert call.output_or_error["output_extension"] == "pdf"
-
-
-def test_derive_output_path_uses_generic_slug_naming() -> None:
-    registry = default_registry()
-    call = registry.execute(
-        "derive_output_path",
-        {
-            "topic": "Latency in Distributed Systems",
-            "today": "2026-02-25",
-            "output_dir": "documents",
-            "document_type": "document",
-            "output_extension": "pdf",
-        },
-        "id",
-        "trace",
-    )
-    assert call.status == "completed"
-    assert (
-        call.output_or_error["path"]
-        == "documents/latency_in_distributed_systems_2026_02_25.pdf"
-    )
-    assert call.output_or_error["output_extension"] == "pdf"
-
-
-def test_derive_output_path_defaults_document_type_when_missing() -> None:
-    registry = default_registry()
-    call = registry.execute(
-        "derive_output_path",
-        {
-            "topic": "Latency in Distributed Systems",
-            "today": "2026-02-25",
-            "output_dir": "documents",
-        },
-        "id",
-        "trace",
-    )
-    assert call.status == "completed"
-    assert (
-        call.output_or_error["path"]
-        == "documents/latency_in_distributed_systems_2026_02_25.docx"
-    )
-    assert call.output_or_error["document_type"] == "document"
-    assert call.output_or_error["output_extension"] == "docx"
-
-
-def test_derive_output_path_rejects_invalid_output_dir() -> None:
-    registry = default_registry()
-    call = registry.execute(
-        "derive_output_path",
-        {
-            "topic": "Latency in Distributed Systems",
-            "today": "2026-02-25",
-            "output_dir": "../documents",
-            "document_type": "document",
-        },
-        "id",
-        "trace",
-    )
-    assert call.status == "failed"
-    assert "Invalid output_dir" in call.output_or_error["error"]
 
 
 def test_default_registry_loads_module_plugins(monkeypatch, tmp_path) -> None:
@@ -942,7 +883,7 @@ def test_llm_iterative_improve_runbook_spec_generates_document_spec() -> None:
     assert out["validation_report"]["valid"] is True
 
 
-def test_docx_generate_from_spec_auto_derives_path_when_missing(
+def test_docx_generate_from_spec_requires_explicit_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path))
@@ -951,17 +892,12 @@ def test_docx_generate_from_spec_auto_derives_path_when_missing(
         "docx_generate_from_spec",
         {
             "document_spec": {"blocks": [{"type": "paragraph", "text": "Hello"}]},
-            "topic": "Latency in Distributed Systems",
-            "today": "2026-02-25",
-            "output_dir": "documents",
         },
         "id",
         "trace",
     )
-    assert call.status == "completed"
-    output_path = Path(call.output_or_error["path"])
-    assert output_path.exists()
-    assert output_path.suffix == ".docx"
+    assert call.status == "failed"
+    assert "input schema validation failed" in call.output_or_error["error"]
 
 
 class _RequestOnlyProvider(LLMProvider):

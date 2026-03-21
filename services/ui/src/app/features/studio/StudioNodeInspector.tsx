@@ -77,8 +77,6 @@ type StudioNodeInspectorProps = {
     variableKey: string
   ) => void;
   setVisualBindingFromPrevious: (nodeId: string, field: string) => void;
-  canInsertDeriveOutputPath: boolean;
-  onInsertDeriveOutputPath: (nodeId: string) => void;
   addNodeOutput: (nodeId: string) => void;
   upsertNodeOutputFromSchema: (nodeId: string, field: CapabilitySchemaField) => void;
   updateNodeOutput: (
@@ -176,8 +174,6 @@ export default function StudioNodeInspector({
   updateVisualBindingWorkflowInput,
   updateVisualBindingWorkflowVariable,
   setVisualBindingFromPrevious,
-  canInsertDeriveOutputPath,
-  onInsertDeriveOutputPath,
   addNodeOutput,
   upsertNodeOutputFromSchema,
   updateNodeOutput,
@@ -231,13 +227,6 @@ export default function StudioNodeInspector({
             onClick={() => quickFixNodeBindings(selectedDagNode.id)}
           >
             Quick Fix
-          </button>
-          <button
-            className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
-            onClick={() => onInsertDeriveOutputPath(selectedDagNode.id)}
-            disabled={!canInsertDeriveOutputPath}
-          >
-            Insert Derive Path
           </button>
           <button
             className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"

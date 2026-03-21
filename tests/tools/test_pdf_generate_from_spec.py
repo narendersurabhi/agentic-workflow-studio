@@ -43,3 +43,15 @@ def test_invalid_validation_report_blocks_pdf_render(
                 },
             }
         )
+
+
+def test_missing_path_is_rejected() -> None:
+    registry = _make_registry()
+    call = registry.execute(
+        "pdf_generate_from_spec",
+        {"document_spec": {"blocks": [{"type": "paragraph", "text": "Hello"}]}},
+        "id",
+        "trace",
+    )
+    assert call.status == "failed"
+    assert "input schema validation failed" in call.output_or_error["error"]

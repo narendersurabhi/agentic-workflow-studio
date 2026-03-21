@@ -856,27 +856,6 @@ capabilities:
         retry_sleep_s: 0.25
         arg_map: {}
         enabled: true
-  - id: document.output.derive
-    description: Derive a generic safe relative output path for generated document artifacts (set output_extension for pdf/md/etc.).
-    risk_tier: read_only
-    idempotency: read
-    group: documents
-    subgroup: output
-    input_schema_ref: document_derive_output_path_capability_input
-    output_schema_ref: ""
-    tags:
-      - documents
-      - path
-      - artifacts
-    planner_hints:
-      derives_output_path: true
-    enabled: true
-    adapters:
-      - type: tool
-        server_id: local_worker
-        tool_name: derive_output_path
-        arg_map: {}
-        enabled: true
   - id: document.spec.generate
     description: Generate a DocumentSpec from instruction/topic/audience/tone using the LLM.
     risk_tier: read_only

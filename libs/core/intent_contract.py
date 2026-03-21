@@ -259,20 +259,28 @@ def _infer_segment_output_format(
     return None
 
 
+def _objective_mentions_document_spec(objective: str) -> bool:
+    lowered = objective.lower()
+    if "document spec" in lowered or "document_spec" in lowered:
+        return True
+    dense = re.sub(r"[^a-z0-9]+", "", lowered)
+    return "documentspec" in dense
+
+
 def _infer_segment_entity(objective: str, artifact_type: str) -> str:
     lowered = objective.lower()
     if "runbook" in lowered:
         return "runbook"
     if "repo" in lowered or "github" in lowered:
         return "repository"
-    if "document spec" in lowered or "document_spec" in lowered:
+    if _objective_mentions_document_spec(objective):
         return "document_spec"
     return artifact_type
 
 
 def _infer_segment_artifact_type(intent: str, objective: str, output_format: str | None) -> str:
     lowered = objective.lower()
-    if "document spec" in lowered or "document_spec" in lowered or " spec" in f" {lowered} ":
+    if _objective_mentions_document_spec(objective) or " spec" in f" {lowered} ":
         return "document_spec"
     if "validation" in lowered or "schema" in lowered or intent == "validate":
         return "validation_report"
@@ -356,6 +364,9 @@ def normalize_intent_segment_slots(
     fallback_slots: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallback_slots = fallback_slots if isinstance(fallback_slots, Mapping) else {}
+    objective_is_document_spec_generation = (
+        intent == "generate" and _objective_mentions_document_spec(objective)
+    )
     output_format = (
         _normalize_output_format(_slot_value(raw_slots, "output_format"))
         or _normalize_output_format(fallback_slots.get("output_format"))
@@ -366,11 +377,15 @@ def normalize_intent_segment_slots(
         or _normalize_slot_token(fallback_slots.get("artifact_type"))
         or _infer_segment_artifact_type(intent, objective, output_format)
     )
+    if objective_is_document_spec_generation:
+        artifact_type = "document_spec"
     entity = (
         _normalize_slot_token(_slot_value(raw_slots, "entity"))
         or _normalize_slot_token(fallback_slots.get("entity"))
         or _infer_segment_entity(objective, artifact_type)
     )
+    if objective_is_document_spec_generation:
+        entity = "document_spec"
     risk_level = (
         _normalize_risk_level(_slot_value(raw_slots, "risk_level"))
         or _normalize_risk_level(fallback_slots.get("risk_level"))
@@ -383,6 +398,20 @@ def normalize_intent_segment_slots(
         fallback_inputs=required_inputs,
         output_format=output_format,
     )
+    if intent == "generate" and artifact_type == "document_spec":
+        must_have_inputs = tuple(
+            key
+            for key in must_have_inputs
+            if key
+            not in {
+                "filename",
+                "path",
+                "output_path",
+                "output_format",
+                "format",
+                "compactness",
+            }
+        )
     return {
         "entity": entity or "artifact",
         "artifact_type": artifact_type or "content",
@@ -562,11 +591,6 @@ def validate_intent_segment_contract(
             continue
         if key == "output_format" and _tool_output_format_hint(capability_id or tool_name):
             continue
-        if (
-            key in {"path", "output_path"}
-            and _capability_auto_derives_output_path(capability_id or tool_name)
-        ):
-            continue
         if key == "document_spec" and _capability_derives_output_path(capability_id or tool_name):
             # Output-path derivation capabilities don't need the full document spec payload.
             continue
@@ -611,21 +635,9 @@ def validate_intent_segment_contract(
     return None
 
 
-def _capability_auto_derives_output_path(capability_id_or_tool_name: str) -> bool:
-    normalized = str(capability_id_or_tool_name or "").strip().lower()
-    return normalized in {
-        "document.docx.generate",
-        "document.pdf.generate",
-        "docx_generate_from_spec",
-        "pdf_generate_from_spec",
-    }
-
-
 def _capability_derives_output_path(capability_id_or_tool_name: str) -> bool:
     normalized = str(capability_id_or_tool_name or "").strip().lower()
     return normalized in {
-        "document.output.derive",
-        "derive_output_path",
         "derive_output_filename",
     }
 
@@ -823,9 +835,9 @@ def _suggested_capabilities_for_clause(
             suggestions = _prepend_unique(suggestions, "github.pull_request.create")
     if intent == "render":
         if "pdf" in lowered:
-            suggestions = ["document.pdf.generate", "document.output.derive"]
+            suggestions = ["document.pdf.generate"]
         elif "docx" in lowered:
-            suggestions = ["document.docx.generate", "document.output.derive"]
+            suggestions = ["document.docx.generate"]
     if intent == "generate":
         if "openapi" in context_lowered:
             suggestions = _prepend_unique(suggestions, "openapi.spec.generate_iterative")

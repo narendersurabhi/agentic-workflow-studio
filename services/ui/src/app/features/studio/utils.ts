@@ -192,9 +192,6 @@ export const collectContextPathSuggestions = (
 };
 
 export const inferCapabilityOutputPath = (capabilityId: string) => {
-  if (capabilityId.includes("output.derive")) {
-    return "path";
-  }
   if (capabilityId.includes("spec.validate")) {
     return "validation_report";
   }
@@ -281,7 +278,7 @@ export const outputPathSuggestionsForCapability = (
   if (normalized.includes("docx") || normalized.includes("pdf") || normalized.includes("render")) {
     add("path");
   }
-  if (normalized.includes("filename") || normalized.includes("output.derive")) {
+  if (normalized.includes("filename")) {
     add("path");
     add("output_path");
   }

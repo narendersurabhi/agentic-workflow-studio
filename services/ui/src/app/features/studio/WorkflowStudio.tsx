@@ -57,7 +57,6 @@ import {
   formatTimestamp,
   getCapabilityRequiredInputs,
   inferCapabilityOutputPath,
-  inferOutputExtensionForCapability,
   isContextInputPresent,
   isInteractiveCanvasTarget,
   isPathOutputReference,
@@ -1942,93 +1941,6 @@ export default function WorkflowStudio() {
     setStudioNotice("Auto-layout applied to canvas.");
   };
 
-  const buildDeriveOutputBindings = (
-    context: Record<string, unknown>,
-    targetCapabilityId: string,
-    documentTypeHint: string
-  ): Record<string, ComposerInputBinding> => {
-    const extension = inferOutputExtensionForCapability(targetCapabilityId);
-    const topicValue =
-      typeof context.topic === "string" && context.topic.trim().length > 0
-        ? context.topic.trim()
-        : "generated_document";
-    const outputDirValue =
-      typeof context.output_dir === "string" && context.output_dir.trim().length > 0
-        ? context.output_dir.trim()
-        : "documents";
-    const todayValue =
-      typeof context.today === "string" && context.today.trim().length > 0
-        ? context.today.trim()
-        : new Date().toISOString().slice(0, 10);
-
-    return {
-      topic: { kind: "literal", value: topicValue },
-      output_dir: { kind: "literal", value: outputDirValue },
-      document_type: { kind: "literal", value: documentTypeHint || "document" },
-      output_extension: { kind: "literal", value: extension },
-      today: { kind: "literal", value: todayValue },
-    };
-  };
-
-  const insertDeriveOutputPathStepForNode = (nodeId: string) => {
-    const context = contextState.context;
-    setComposerDraft((prev) => {
-      const targetIndex = prev.nodes.findIndex((node) => node.id === nodeId);
-      if (targetIndex < 0) {
-        return prev;
-      }
-      const targetNode = prev.nodes[targetIndex];
-      if (targetNode.capabilityId === "document.output.derive") {
-        return prev;
-      }
-
-      const deriveNodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const deriveNode: ComposerDraftNode = {
-        id: deriveNodeId,
-        taskName: uniqueTaskName("DeriveOutputPath", prev.nodes),
-        capabilityId: "document.output.derive",
-        outputPath: "path",
-        inputBindings: buildDeriveOutputBindings(
-          context,
-          targetNode.capabilityId,
-          targetNode.capabilityId.includes("runbook") ? "runbook" : "document"
-        ),
-        outputs: [],
-        variables: [],
-      };
-
-      const updatedTargetNode: ComposerDraftNode = {
-        ...targetNode,
-        inputBindings: {
-          ...targetNode.inputBindings,
-          path: {
-            kind: "step_output",
-            sourceNodeId: deriveNodeId,
-            sourcePath: "path",
-          },
-        },
-      };
-
-      const nextNodes = [
-        ...prev.nodes.slice(0, targetIndex),
-        deriveNode,
-        updatedTargetNode,
-        ...prev.nodes.slice(targetIndex + 1),
-      ];
-      const nextEdges = normalizeComposerEdges(nextNodes, [
-        ...prev.edges,
-        { fromNodeId: deriveNodeId, toNodeId: targetNode.id },
-      ]);
-
-      return {
-        ...prev,
-        nodes: nextNodes,
-        edges: nextEdges,
-      };
-    });
-    setSelectedDagNodeId(nodeId);
-  };
-
   const visualChainNodesWithStatus = useMemo(() => {
     const context = contextState.context;
     return visualChainNodes.map((node, index) => {
@@ -2328,33 +2240,6 @@ export default function WorkflowStudio() {
       node,
       node ? capabilityById.get(node.capabilityId) : undefined
     );
-
-  const canInsertDeriveForSelectedNode = useMemo(() => {
-    if (!selectedDagNode) {
-      return false;
-    }
-    if (selectedDagNode.nodeKind === "control") {
-      return false;
-    }
-    if (!capabilityById.has("document.output.derive")) {
-      return false;
-    }
-    if (selectedDagNode.capabilityId === "document.output.derive") {
-      return false;
-    }
-    const requiredInputs = getCapabilityRequiredInputs(capabilityById.get(selectedDagNode.capabilityId));
-    if (!requiredInputs.includes("path")) {
-      return false;
-    }
-    const pathBinding = selectedDagNode.inputBindings.path;
-    if (pathBinding?.kind === "step_output") {
-      const sourceNode = visualChainNodes.find((node) => node.id === pathBinding.sourceNodeId);
-      if (sourceNode?.capabilityId === "document.output.derive") {
-        return false;
-      }
-    }
-    return true;
-  }, [capabilityById, selectedDagNode, visualChainNodes]);
 
   const quickFixNodeBindings = (nodeId: string) => {
     const targetNode = visualChainNodes.find((node) => node.id === nodeId);
@@ -3759,8 +3644,6 @@ export default function WorkflowStudio() {
             updateVisualBindingWorkflowInput={updateVisualBindingWorkflowInput}
             updateVisualBindingWorkflowVariable={updateVisualBindingWorkflowVariable}
             setVisualBindingFromPrevious={setVisualBindingFromPrevious}
-            canInsertDeriveOutputPath={canInsertDeriveForSelectedNode}
-            onInsertDeriveOutputPath={insertDeriveOutputPathStepForNode}
             addNodeOutput={addNodeOutput}
             upsertNodeOutputFromSchema={upsertNodeOutputFromSchema}
             updateNodeOutput={updateNodeOutput}

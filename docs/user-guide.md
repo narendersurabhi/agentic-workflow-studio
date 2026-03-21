@@ -271,7 +271,7 @@ Recommended path:
 
 1. Use `document.spec.generate`
 2. Use `document.spec.validate`
-3. Use `document.output.derive`
+3. Set an explicit output `path`
 4. Use `document.docx.generate` or `document.pdf.generate`
 
 Important note:
@@ -287,7 +287,7 @@ Recommended path:
 
 1. `document.spec.generate_from_markdown`
 2. `document.spec.validate`
-3. `document.output.derive`
+3. Set an explicit output `path`
 4. `document.docx.generate`
 
 ### 3. Inspect a GitHub Repository

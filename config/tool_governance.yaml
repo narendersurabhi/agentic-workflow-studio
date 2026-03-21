@@ -19,7 +19,6 @@ tool_governance:
         - docx_generate_from_spec
         - pdf_generate_from_spec
         - docx_render
-        - derive_output_path
         - derive_output_filename
         - file_read_text
         - list_files
@@ -57,7 +56,6 @@ tool_governance:
         - docx_generate_from_spec
         - pdf_generate_from_spec
         - docx_render
-        - derive_output_path
         - derive_output_filename
         - file_read_text
         - file_write_text
@@ -111,7 +109,6 @@ tool_governance:
         - docx_generate_from_spec
         - pdf_generate_from_spec
         - docx_render
-        - derive_output_path
         - derive_output_filename
         - file_read_text
         - list_files
