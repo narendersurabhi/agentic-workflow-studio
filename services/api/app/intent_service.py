@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
-from libs.core import workflow_contracts
+from libs.core import intent_contract, workflow_contracts
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,7 @@ class IntentNormalizeConfig:
 class IntentNormalizeRuntime:
     assess_goal_intent: Callable[[str], workflow_contracts.GoalIntentProfile]
     decompose_goal_intent: Callable[..., workflow_contracts.IntentGraph]
+    capability_required_inputs: Callable[[str], list[str]]
 
 
 def normalize_goal_intent(
@@ -71,7 +72,7 @@ def normalize_goal_intent(
     config: IntentNormalizeConfig,
     runtime: IntentNormalizeRuntime,
 ) -> workflow_contracts.NormalizedIntentEnvelope:
-    profile = runtime.assess_goal_intent(goal)
+    initial_profile = runtime.assess_goal_intent(goal)
     graph = workflow_contracts.IntentGraph()
     if config.include_decomposition:
         graph = runtime.decompose_goal_intent(
@@ -80,19 +81,50 @@ def normalize_goal_intent(
             user_id=user_id,
             interaction_summaries=interaction_summaries,
         )
+    candidate_capabilities = _candidate_capabilities_by_segment(graph)
+    clarification = intent_contract.derive_envelope_clarification(
+        goal=goal,
+        profile=initial_profile.model_dump(mode="json", exclude_none=True),
+        graph=graph.model_dump(mode="json", exclude_none=True),
+        candidate_required_inputs_by_segment={
+            segment_id: _segment_required_inputs_for_candidates(
+                capability_ids,
+                required_input_lookup=runtime.capability_required_inputs,
+            )
+            for segment_id, capability_ids in candidate_capabilities.items()
+        },
+    )
+    profile = initial_profile.model_copy(
+        update={
+            "needs_clarification": bool(clarification.get("needs_clarification")),
+            "requires_blocking_clarification": bool(
+                clarification.get("requires_blocking_clarification")
+            ),
+            "questions": list(clarification.get("questions") or []),
+            "blocking_slots": list(clarification.get("blocking_slots") or []),
+            "missing_slots": list(clarification.get("missing_inputs") or []),
+            "slot_values": dict(clarification.get("slot_values") or dict(initial_profile.slot_values)),
+            "clarification_mode": str(
+                clarification.get("clarification_mode") or initial_profile.clarification_mode or ""
+            )
+            or None,
+        }
+    )
     return workflow_contracts.NormalizedIntentEnvelope(
         goal=goal,
         profile=profile,
         graph=graph,
-        candidate_capabilities=_candidate_capabilities_by_segment(graph),
+        candidate_capabilities=candidate_capabilities,
         clarification=workflow_contracts.ClarificationState(
-            needs_clarification=bool(profile.needs_clarification),
-            requires_blocking_clarification=bool(profile.requires_blocking_clarification),
-            missing_inputs=list(profile.missing_slots),
-            questions=list(profile.questions),
-            blocking_slots=list(profile.blocking_slots),
-            slot_values=dict(profile.slot_values),
-            clarification_mode=profile.clarification_mode,
+            needs_clarification=bool(clarification.get("needs_clarification")),
+            requires_blocking_clarification=bool(
+                clarification.get("requires_blocking_clarification")
+            ),
+            missing_inputs=list(clarification.get("missing_inputs") or []),
+            questions=list(clarification.get("questions") or []),
+            blocking_slots=list(clarification.get("blocking_slots") or []),
+            slot_values=dict(clarification.get("slot_values") or {}),
+            clarification_mode=str(clarification.get("clarification_mode") or "") or None,
         ),
         trace=workflow_contracts.NormalizationTrace(
             assessment_source=str(profile.source or "").strip() or None,
@@ -339,6 +371,20 @@ def _candidate_capabilities_by_segment(
         if deduped:
             candidates[segment.id] = deduped
     return candidates
+
+
+def _segment_required_inputs_for_candidates(
+    capability_ids: list[str],
+    *,
+    required_input_lookup: Callable[[str], list[str]],
+) -> list[str]:
+    required_inputs: list[str] = []
+    for capability_id in capability_ids:
+        for raw_input in required_input_lookup(capability_id):
+            normalized = intent_contract.normalize_required_input_key(raw_input)
+            if normalized and normalized not in required_inputs:
+                required_inputs.append(normalized)
+    return required_inputs
 
 
 def _fallback_used(mode: str, source: str | None) -> bool:

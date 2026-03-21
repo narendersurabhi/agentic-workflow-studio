@@ -172,6 +172,9 @@ def test_normalize_goal_intent_returns_envelope() -> None:
                 ],
                 source="llm",
             ),
+            capability_required_inputs=lambda capability_id: (
+                ["topic"] if capability_id == "document.spec.generate" else []
+            ),
         ),
     )
 
@@ -183,3 +186,56 @@ def test_normalize_goal_intent_returns_envelope() -> None:
     assert envelope.trace.assessment_mode == "hybrid"
     assert envelope.trace.assessment_fallback_used is True
     assert envelope.trace.decomposition_fallback_used is False
+
+
+def test_normalize_goal_intent_uses_capability_required_inputs_for_clarification() -> None:
+    envelope = intent_service.normalize_goal_intent(
+        "Render the approved document spec as a PDF.",
+        config=intent_service.IntentNormalizeConfig(
+            include_decomposition=True,
+            assessment_mode="hybrid",
+            assessment_model="gpt-test",
+            decomposition_mode="hybrid",
+            decomposition_model="gpt-test",
+        ),
+        runtime=intent_service.IntentNormalizeRuntime(
+            assess_goal_intent=lambda _goal: workflow_contracts.GoalIntentProfile(
+                intent="render",
+                source="heuristic",
+                confidence=0.88,
+                risk_level="bounded_write",
+                low_confidence=False,
+                needs_clarification=False,
+                requires_blocking_clarification=False,
+                questions=[],
+                blocking_slots=["output_format"],
+                missing_slots=[],
+                slot_values={"intent_action": "render"},
+                clarification_mode="targeted_slot_filling",
+            ),
+            decompose_goal_intent=lambda _goal, **_kwargs: workflow_contracts.IntentGraph(
+                segments=[
+                    workflow_contracts.IntentGraphSegment(
+                        id="s1",
+                        intent="render",
+                        objective="Render final artifact",
+                        required_inputs=["input_data", "path_or_format"],
+                        suggested_capabilities=["document.pdf.generate"],
+                        slots=workflow_contracts.IntentGraphSlots(
+                            output_format="pdf",
+                            risk_level="bounded_write",
+                            must_have_inputs=["path"],
+                        ),
+                    )
+                ],
+                source="llm",
+            ),
+            capability_required_inputs=lambda capability_id: (
+                ["document_spec", "path"] if capability_id == "document.pdf.generate" else []
+            ),
+        ),
+    )
+
+    assert envelope.profile.missing_slots == ["path"]
+    assert envelope.profile.requires_blocking_clarification is True
+    assert envelope.clarification.questions == ["What output path or filename should be used?"]

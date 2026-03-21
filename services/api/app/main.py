@@ -1274,6 +1274,7 @@ def _normalize_goal_intent(
         runtime=intent_service.IntentNormalizeRuntime(
             assess_goal_intent=_assess_goal_intent,
             decompose_goal_intent=_decompose_goal_intent,
+            capability_required_inputs=_capability_required_inputs_for_intent_normalization,
         ),
     )
 
@@ -1347,7 +1348,7 @@ def _fallback_chat_turn_route(
     pending_clarification = bool(
         isinstance(session_metadata, Mapping) and session_metadata.get("pending_clarification")
     )
-    assessment = _assess_goal_intent(candidate_goal)
+    assessment = _normalize_goal_intent(candidate_goal).profile
     assessment_json = workflow_contracts.dump_goal_intent_profile(assessment) or {}
     if pending_clarification or not _looks_like_conversational_turn(content):
         if chat_service.workflow_invocation_from_context(merged_context) is not None:
@@ -2712,6 +2713,26 @@ def _resolve_capability_schemas(
         if input_schema is not None and output_schema is not None:
             break
     return input_schema, output_schema
+
+
+def _capability_required_inputs_for_intent_normalization(capability_id: str) -> list[str]:
+    normalized = str(capability_id or "").strip()
+    if not normalized:
+        return []
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception:  # noqa: BLE001
+        return []
+    spec = registry.get(normalized)
+    if spec is None:
+        return []
+    input_schema, _ = _resolve_capability_schemas(spec, include_schemas=True)
+    if not isinstance(input_schema, dict):
+        return []
+    required = input_schema.get("required")
+    if not isinstance(required, list):
+        return []
+    return [entry for entry in required if isinstance(entry, str)]
 
 
 def _coerce_context_object(value: Any) -> dict[str, Any]:

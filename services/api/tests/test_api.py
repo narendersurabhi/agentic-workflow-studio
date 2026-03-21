@@ -715,10 +715,12 @@ def test_intent_clarify_endpoint_returns_assessment():
     envelope = body["normalized_intent_envelope"]
     assert body["goal"] == "Render a PDF status report"
     assert assessment["intent"] == "render"
-    assert assessment["needs_clarification"] is False
+    assert assessment["needs_clarification"] is True
+    assert assessment["missing_slots"] == ["path"]
     assert assessment["source"] in {"goal_text", "task_text", "explicit", "default"}
     assert envelope["goal"] == "Render a PDF status report"
     assert envelope["profile"]["intent"] == assessment["intent"]
+    assert envelope["clarification"]["missing_inputs"] == ["path"]
 
 
 def test_intent_clarify_endpoint_uses_llm_assessment_with_capability_catalog(monkeypatch):
@@ -1107,18 +1109,19 @@ def test_create_job_requires_intent_clarification_when_confidence_is_low():
     assert detail["goal_intent_profile"]["needs_clarification"] is True
 
 
-def test_create_job_clarification_gate_blocks_only_blocking_slots(monkeypatch):
+def test_create_job_clarification_gate_blocks_capability_required_path(monkeypatch):
     monkeypatch.setattr(main, "INTENT_MIN_CONFIDENCE", 0.99)
     monkeypatch.setattr(main, "INTENT_CLARIFICATION_BLOCKING_SLOTS", {"output_format"})
     response = client.post(
         "/jobs?require_clarification=true",
         json={"goal": "Render a PDF deployment report", "context_json": {}, "priority": 0},
     )
-    assert response.status_code == 200
-    profile = response.json()["metadata"]["goal_intent_profile"]
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    profile = detail["goal_intent_profile"]
     assert profile["low_confidence"] is True
-    assert profile["missing_slots"] == []
-    assert profile["requires_blocking_clarification"] is False
+    assert profile["missing_slots"] == ["path"]
+    assert profile["requires_blocking_clarification"] is True
 
 
 def test_create_job_rejects_invalid_interaction_summaries_in_context():

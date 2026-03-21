@@ -133,6 +133,24 @@ _SLOT_RISK_RANK: dict[str, int] = {
     "high_risk_write": 3,
 }
 
+_CLARIFICATION_REQUIRED_INPUT_KEYS: set[str] = {
+    "path",
+    "output_path",
+    "filename",
+    "output_format",
+    "target_system",
+    "safety_constraints",
+    "intent_action",
+}
+
+_GENERIC_CAPABILITY_SYSTEMS: set[str] = {
+    "document",
+    "llm",
+    "utility",
+    "openapi",
+    "codegen",
+}
+
 _CLAUSE_SPLIT_ACTION_HINTS: tuple[str, ...] = (
     "read",
     "fetch",
@@ -229,6 +247,12 @@ def _extract_required_input_key(value: str) -> str:
         "source_or_query": "query",
     }
     return alias_map.get(token, token)
+
+
+def normalize_required_input_key(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _extract_required_input_key(value)
 
 
 def _infer_segment_output_format(
@@ -420,6 +444,195 @@ def normalize_intent_segment_slots(
         "must_have_inputs": list(must_have_inputs),
     }
 
+
+def required_input_question(required_input: str, goal: str) -> str:
+    key = normalize_required_input_key(required_input)
+    if key in {"path", "output_path", "filename"}:
+        return "What output path or filename should be used?"
+    if key == "output_format":
+        return "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?"
+    if key == "target_system":
+        return "Which target system should this use (for example GitHub, Jira, Slack, filesystem)?"
+    if key == "safety_constraints":
+        return "What safety constraints must be enforced (for example read-only, no deletes, dry-run)?"
+    if key == "intent_action":
+        return "What should the system do first (generate, transform, validate, render, or io)?"
+    return f"Provide clarification for input '{key}' for goal: '{goal[:120]}'."
+
+
+def _goal_mentions_explicit_path(goal: str, objective: str) -> bool:
+    blob = f"{goal} {objective}".strip()
+    if not blob:
+        return False
+    if re.search(r"(?:^|[\s'\"`])(?:/|\.?/)[^\s]+(?:\.[A-Za-z0-9]{2,8})", blob):
+        return True
+    return bool(re.search(r"\b[\w./-]+\.(?:pdf|docx|md|txt|html|json|csv|xlsx)\b", blob))
+
+
+def _segment_candidate_format_hints(capability_ids: Iterable[str]) -> set[str]:
+    hints: set[str] = set()
+    for capability_id in capability_ids:
+        hinted = _tool_output_format_hint(str(capability_id or ""))
+        if hinted:
+            hints.add(hinted)
+    return hints
+
+
+def _segment_candidate_system_hints(capability_ids: Iterable[str]) -> set[str]:
+    systems: set[str] = set()
+    for capability_id in capability_ids:
+        normalized = str(capability_id or "").strip().lower()
+        if "." not in normalized:
+            continue
+        system = normalized.split(".", 1)[0].strip()
+        if system and system not in _GENERIC_CAPABILITY_SYSTEMS:
+            systems.add(system)
+    return systems
+
+
+def derive_segment_missing_inputs(
+    *,
+    goal: str,
+    segment: Mapping[str, Any],
+    slot_values: Mapping[str, Any] | None = None,
+    candidate_required_inputs: Iterable[str] = (),
+    low_confidence: bool = False,
+) -> list[str]:
+    if not isinstance(segment, Mapping):
+        return []
+    slot_values = slot_values if isinstance(slot_values, Mapping) else {}
+    segment_slots = dict(segment.get("slots")) if isinstance(segment.get("slots"), Mapping) else {}
+    objective = str(segment.get("objective") or "").strip()
+    candidate_capabilities = _coerce_string_tuple(segment.get("suggested_capabilities"))
+    candidate_formats = _segment_candidate_format_hints(candidate_capabilities)
+    candidate_systems = _segment_candidate_system_hints(candidate_capabilities)
+    combined_required_inputs: list[str] = []
+    for raw_value in (
+        list(_coerce_string_tuple(segment.get("required_inputs")))
+        + list(_coerce_string_tuple(segment_slots.get("must_have_inputs")))
+        + [str(item) for item in candidate_required_inputs if isinstance(item, str)]
+    ):
+        normalized = normalize_required_input_key(raw_value)
+        if normalized and normalized not in combined_required_inputs:
+            combined_required_inputs.append(normalized)
+
+    def _mapping_has_value(mapping: Mapping[str, Any], *keys: str) -> bool:
+        for key in keys:
+            if key in mapping and _value_present(mapping.get(key), key=key):
+                return True
+        return False
+
+    path_present = (
+        _mapping_has_value(segment_slots, "path", "output_path", "filename", "file_name", "output_filename")
+        or _mapping_has_value(slot_values, "path", "output_path", "filename", "file_name", "output_filename")
+        or _goal_mentions_explicit_path(goal, objective)
+    )
+    output_format_present = (
+        _mapping_has_value(segment_slots, "output_format", "format")
+        or _mapping_has_value(slot_values, "output_format", "format")
+        or path_present
+        or len(candidate_formats) == 1
+    )
+    target_system_present = (
+        _mapping_has_value(segment_slots, "target_system")
+        or _mapping_has_value(slot_values, "target_system")
+        or len(candidate_systems) == 1
+    )
+    safety_present = _mapping_has_value(segment_slots, "safety_constraints") or _mapping_has_value(
+        slot_values, "safety_constraints"
+    )
+    intent_action_present = bool(
+        normalize_task_intent(slot_values.get("intent_action"))
+        or normalize_task_intent(segment.get("intent"))
+    )
+
+    missing_inputs: list[str] = []
+    for key in combined_required_inputs:
+        if key not in _CLARIFICATION_REQUIRED_INPUT_KEYS:
+            continue
+        if key in {"path", "output_path", "filename"} and not path_present:
+            missing_inputs.append("path")
+            continue
+        if key == "output_format" and not output_format_present:
+            missing_inputs.append("output_format")
+            continue
+        if key == "target_system" and not target_system_present:
+            missing_inputs.append("target_system")
+            continue
+        if key == "safety_constraints" and not safety_present:
+            missing_inputs.append("safety_constraints")
+
+    segment_intent = normalize_task_intent(segment.get("intent")) or ""
+    if (
+        segment_intent == "render"
+        and not output_format_present
+        and len(candidate_formats) > 1
+        and "output_format" not in missing_inputs
+    ):
+        missing_inputs.append("output_format")
+    if (
+        low_confidence
+        and not intent_action_present
+        and "intent_action" not in missing_inputs
+    ):
+        missing_inputs.append("intent_action")
+    return list(dict.fromkeys(missing_inputs))
+
+
+def derive_envelope_clarification(
+    *,
+    goal: str,
+    profile: Mapping[str, Any] | None,
+    graph: Mapping[str, Any] | None,
+    candidate_required_inputs_by_segment: Mapping[str, Iterable[str]] | None = None,
+) -> dict[str, Any]:
+    profile_map = profile if isinstance(profile, Mapping) else {}
+    graph_map = graph if isinstance(graph, Mapping) else {}
+    slot_values = (
+        dict(profile_map.get("slot_values"))
+        if isinstance(profile_map.get("slot_values"), Mapping)
+        else {}
+    )
+    segments = graph_map.get("segments") if isinstance(graph_map.get("segments"), list) else []
+    low_confidence = bool(profile_map.get("low_confidence"))
+    candidate_required_inputs_by_segment = (
+        candidate_required_inputs_by_segment
+        if isinstance(candidate_required_inputs_by_segment, Mapping)
+        else {}
+    )
+
+    missing_inputs: list[str] = []
+    for raw_segment in segments:
+        if not isinstance(raw_segment, Mapping):
+            continue
+        segment_id = str(raw_segment.get("id") or "").strip()
+        segment_missing = derive_segment_missing_inputs(
+            goal=goal,
+            segment=raw_segment,
+            slot_values=slot_values,
+            candidate_required_inputs=candidate_required_inputs_by_segment.get(segment_id, ()),
+            low_confidence=low_confidence,
+        )
+        for key in segment_missing:
+            if key not in missing_inputs:
+                missing_inputs.append(key)
+
+    if not missing_inputs:
+        for raw_key in _coerce_string_tuple(profile_map.get("missing_slots")):
+            normalized = normalize_required_input_key(raw_key)
+            if normalized and normalized not in missing_inputs:
+                missing_inputs.append(normalized)
+
+    questions = [required_input_question(key, goal) for key in missing_inputs]
+    return {
+        "needs_clarification": bool(missing_inputs),
+        "requires_blocking_clarification": bool(missing_inputs),
+        "missing_inputs": missing_inputs,
+        "questions": questions,
+        "blocking_slots": list(missing_inputs),
+        "slot_values": dict(slot_values),
+        "clarification_mode": "capability_required_inputs",
+    }
 
 def _tool_output_format_hint(tool_name: str) -> str | None:
     lowered = tool_name.lower()

@@ -627,3 +627,67 @@ def test_validate_intent_segment_contract_accepts_length_with_instruction() -> N
         capability_risk_tier="read_only",
     )
     assert mismatch is None
+
+
+def test_derive_envelope_clarification_requires_path_for_render_without_explicit_path() -> None:
+    clarification = intent_contract.derive_envelope_clarification(
+        goal="Render the approved document spec as a PDF.",
+        profile={
+            "intent": "render",
+            "low_confidence": False,
+            "slot_values": {"intent_action": "render"},
+            "blocking_slots": ["output_format"],
+            "missing_slots": [],
+        },
+        graph={
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "render",
+                    "objective": "Render final artifact",
+                    "required_inputs": ["input_data", "path_or_format"],
+                    "suggested_capabilities": ["document.pdf.generate"],
+                    "slots": {
+                        "output_format": "pdf",
+                        "risk_level": "bounded_write",
+                        "must_have_inputs": ["path"],
+                    },
+                }
+            ]
+        },
+        candidate_required_inputs_by_segment={"s1": ["document_spec", "path"]},
+    )
+
+    assert clarification["missing_inputs"] == ["path"]
+    assert clarification["questions"] == ["What output path or filename should be used?"]
+
+
+def test_derive_envelope_clarification_skips_target_system_when_capability_is_specific() -> None:
+    clarification = intent_contract.derive_envelope_clarification(
+        goal="List GitHub branches and summarize release readiness.",
+        profile={
+            "intent": "io",
+            "low_confidence": False,
+            "slot_values": {"intent_action": "io"},
+            "blocking_slots": ["target_system"],
+            "missing_slots": [],
+        },
+        graph={
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "io",
+                    "objective": "List GitHub branches",
+                    "required_inputs": ["source_or_query"],
+                    "suggested_capabilities": ["github.branch.list"],
+                    "slots": {
+                        "risk_level": "read_only",
+                        "must_have_inputs": ["query"],
+                    },
+                }
+            ]
+        },
+        candidate_required_inputs_by_segment={"s1": ["query"]},
+    )
+
+    assert clarification["missing_inputs"] == []
