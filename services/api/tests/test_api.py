@@ -53,6 +53,34 @@ def test_create_job():
     assert data["goal"] == "demo"
 
 
+def test_intent_assessment_fallback_used_respects_mode(monkeypatch) -> None:
+    monkeypatch.setattr(main, "INTENT_ASSESS_ENABLED", True)
+    monkeypatch.setattr(main, "INTENT_ASSESS_MODE", "hybrid")
+
+    assert main._intent_assessment_fallback_used("heuristic") is True
+    assert main._intent_assessment_fallback_used("llm") is False
+
+
+def test_intent_decompose_fallback_used_respects_mode(monkeypatch) -> None:
+    monkeypatch.setattr(main, "INTENT_DECOMPOSE_ENABLED", True)
+    monkeypatch.setattr(main, "INTENT_DECOMPOSE_MODE", "hybrid")
+
+    assert main._intent_decompose_fallback_used("heuristic") is True
+    assert main._intent_decompose_fallback_used("llm") is False
+
+
+def test_intent_segment_contract_reason_parses_prefixed_error() -> None:
+    assert (
+        main._intent_segment_contract_reason(
+            "intent_segment_invalid:llm_generate:GenerateText:must_have_inputs_missing:path"
+        )
+        == "must_have_inputs_missing"
+    )
+    assert main._intent_segment_contract_reason("output_format_mismatch:pdf:docx") == (
+        "output_format_mismatch"
+    )
+
+
 def test_workflow_definition_publish_and_run_bypasses_planner_job_event() -> None:
     create_response = client.post(
         "/workflows/definitions",

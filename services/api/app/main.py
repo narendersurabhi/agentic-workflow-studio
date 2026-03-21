@@ -464,16 +464,17 @@ orchestrator_recovered_events_total = Counter(
 intent_assessments_total = Counter(
     "intent_assessments_total",
     "Goal intent assessments produced",
-    ["needs_clarification"],
+    ["source", "needs_clarification", "requires_blocking_clarification", "fallback_used"],
 )
 intent_clarification_required_total = Counter(
     "intent_clarification_required_total",
     "Goal intent assessments that require clarification",
+    ["source", "fallback_used"],
 )
 intent_threshold_evaluations_total = Counter(
     "intent_threshold_evaluations_total",
     "Intent confidence threshold evaluations",
-    ["intent", "risk_level", "needs_clarification", "threshold_bucket"],
+    ["intent", "risk_level", "source", "needs_clarification", "threshold_bucket", "fallback_used"],
 )
 intent_confidence_outcomes_total = Counter(
     "intent_confidence_outcomes_total",
@@ -483,7 +484,7 @@ intent_confidence_outcomes_total = Counter(
 intent_decompose_requests_total = Counter(
     "intent_decompose_requests_total",
     "Intent decomposition requests",
-    ["mode", "model", "source", "result", "has_summaries"],
+    ["mode", "model", "source", "result", "has_summaries", "fallback_used"],
 )
 intent_decompose_failures_total = Counter(
     "intent_decompose_failures_total",
@@ -519,6 +520,11 @@ intent_capability_suggestions_matched_total = Counter(
     "intent_capability_suggestions_matched_total",
     "Intent capability suggestions that matched the catalog",
     ["source", "model"],
+)
+intent_segment_rejections_total = Counter(
+    "intent_segment_rejections_total",
+    "Intent segment contract rejections observed during control-plane validation",
+    ["surface", "reason"],
 )
 intent_memory_hint_candidates_total = Counter(
     "intent_memory_hint_candidates_total",
@@ -566,6 +572,57 @@ capability_execution_outcomes_total = Counter(
     "Capability execution outcomes observed from task results",
     ["capability", "status"],
 )
+
+
+def _intent_source_label(source: Any) -> str:
+    normalized = str(source or "").strip().lower()
+    return normalized or "unknown"
+
+
+def _intent_assessment_fallback_used(source: Any) -> bool:
+    if not INTENT_ASSESS_ENABLED or INTENT_ASSESS_MODE == "heuristic":
+        return False
+    return _intent_source_label(source) != "llm"
+
+
+def _intent_decompose_fallback_used(source: Any) -> bool:
+    if not INTENT_DECOMPOSE_ENABLED or INTENT_DECOMPOSE_MODE == "heuristic":
+        return False
+    return _intent_source_label(source) != "llm"
+
+
+def _intent_segment_contract_reason(detail: str) -> str:
+    normalized = str(detail or "").strip()
+    if not normalized:
+        return "unknown"
+    if normalized.startswith("intent_segment_invalid:"):
+        remainder = normalized[len("intent_segment_invalid:") :]
+        parts = remainder.split(":", 2)
+        normalized = parts[2] if len(parts) == 3 else parts[-1]
+    reason = normalized.split(":", 1)[0].strip().lower()
+    reason = re.sub(r"[^a-z0-9_]+", "_", reason)
+    return reason or "unknown"
+
+
+def _record_intent_segment_rejection(
+    *,
+    surface: str,
+    task_name: str,
+    request_id: str,
+    detail: str,
+) -> None:
+    reason = _intent_segment_contract_reason(detail)
+    intent_segment_rejections_total.labels(surface=surface, reason=reason).inc()
+    logger.warning(
+        "intent_segment_rejected",
+        extra={
+            "surface": surface,
+            "task_name": task_name,
+            "request_id": request_id,
+            "reason": reason,
+            "detail": detail,
+        },
+    )
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -1046,18 +1103,29 @@ def _goal_intent_assess_config() -> intent_service.GoalIntentConfig:
 def _record_goal_intent_assessment_metrics(
     profile: workflow_contracts.GoalIntentProfile,
 ) -> None:
+    source = _intent_source_label(profile.source)
     needs_clarification = bool(profile.needs_clarification)
+    requires_blocking_clarification = bool(profile.requires_blocking_clarification)
+    fallback_used = str(_intent_assessment_fallback_used(source)).lower()
     intent_assessments_total.labels(
-        needs_clarification=str(needs_clarification).lower()
+        source=source,
+        needs_clarification=str(needs_clarification).lower(),
+        requires_blocking_clarification=str(requires_blocking_clarification).lower(),
+        fallback_used=fallback_used,
     ).inc()
     intent_threshold_evaluations_total.labels(
         intent=profile.intent or "generate",
         risk_level=profile.risk_level or "read_only",
+        source=source,
         needs_clarification=str(needs_clarification).lower(),
         threshold_bucket=_threshold_bucket(float(profile.threshold or 0.0)),
+        fallback_used=fallback_used,
     ).inc()
-    if profile.requires_blocking_clarification:
-        intent_clarification_required_total.inc()
+    if requires_blocking_clarification:
+        intent_clarification_required_total.labels(
+            source=source,
+            fallback_used=fallback_used,
+        ).inc()
 
 
 def _resolve_intent_confidence_threshold(intent: str, risk_level: str) -> float:
@@ -3913,7 +3981,7 @@ def _record_intent_decompose_metrics(
     result: str,
     has_interaction_summaries: bool,
 ) -> None:
-    source = str(graph.get("source") or "unknown")
+    source = _intent_source_label(graph.get("source"))
     model_label = (INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "none").strip() or "none"
     mode_label = INTENT_DECOMPOSE_MODE
     intent_decompose_requests_total.labels(
@@ -3922,6 +3990,7 @@ def _record_intent_decompose_metrics(
         source=source,
         result=result,
         has_summaries=str(bool(has_interaction_summaries)).lower(),
+        fallback_used=str(_intent_decompose_fallback_used(source)).lower(),
     ).inc()
     segments = graph.get("segments")
     if isinstance(segments, list) and segments:
@@ -7044,6 +7113,12 @@ def _compile_plan_preflight(
                 else None,
             )
             if segment_contract_error:
+                _record_intent_segment_rejection(
+                    surface="api_preflight",
+                    task_name=task.name,
+                    request_id=request_id,
+                    detail=segment_contract_error,
+                )
                 errors[task.name] = (
                     f"intent_segment_invalid:{request_id}:{task.name}:{segment_contract_error}"
                 )

@@ -111,3 +111,16 @@ def test_evaluate_intent_cases_aggregates_metrics() -> None:
     assert summary["intent_micro"]["f1"] == 1.0
     assert summary["capability_micro"]["f1"] == 1.0
     assert summary["segment_topk"]["hit_rate"] == 1.0
+
+
+def test_phase0_intent_normalization_gold_set_loads() -> None:
+    cases = load_intent_eval_cases(Path("eval/intent_normalization_gold.yaml"))
+
+    assert [case.case_id for case in cases] == [
+        "document_generation_memo",
+        "render_explicit_pdf_path",
+        "repo_branch_release_summary",
+        "workspace_timeout_retrieval",
+        "high_risk_workspace_delete",
+    ]
+    assert cases[-1].expected_capabilities == ("filesystem.workspace.delete",)

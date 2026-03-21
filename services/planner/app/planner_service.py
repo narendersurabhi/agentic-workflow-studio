@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -78,6 +79,15 @@ def _format_intent_mismatch_recovery_block(recovery: Mapping[str, Any] | None) -
         "- If allowed_task_intents are provided, set task intent to one of them.\n"
         "- Keep dependencies valid while minimally modifying the prior plan shape.\n"
     )
+
+
+def _intent_segment_contract_reason(detail: str) -> str:
+    normalized = str(detail or "").strip()
+    if not normalized:
+        return "unknown"
+    reason = normalized.split(":", 1)[0].strip().lower()
+    reason = re.sub(r"[^a-z0-9_]+", "_", reason)
+    return reason or "unknown"
 
 
 def build_plan_request(
@@ -716,6 +726,14 @@ def validate_plan_request(
                 capability_risk_tier=capability.risk_tier if capability is not None else None,
             )
             if segment_contract_error:
+                core_logging.get_logger("planner").warning(
+                    "intent_segment_rejected",
+                    tool_name=tool_name,
+                    task_name=task.name,
+                    job_id=request.job_id,
+                    reason=_intent_segment_contract_reason(segment_contract_error),
+                    detail=segment_contract_error,
+                )
                 return (
                     False,
                     f"intent_segment_invalid:{tool_name}:{task.name}:{segment_contract_error}",
