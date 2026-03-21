@@ -83,6 +83,43 @@ class GoalIntentProfile(BaseModel):
     clarification_mode: str | None = None
 
 
+class ClarificationState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    needs_clarification: bool = False
+    requires_blocking_clarification: bool = False
+    missing_inputs: list[str] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    blocking_slots: list[str] = Field(default_factory=list)
+    slot_values: dict[str, Any] = Field(default_factory=dict)
+    clarification_mode: str | None = None
+
+
+class NormalizationTrace(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    assessment_source: str | None = None
+    assessment_mode: str | None = None
+    assessment_model: str | None = None
+    assessment_fallback_used: bool | None = None
+    decomposition_source: str | None = None
+    decomposition_mode: str | None = None
+    decomposition_model: str | None = None
+    decomposition_fallback_used: bool | None = None
+
+
+class NormalizedIntentEnvelope(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: str = "intent_envelope_v1"
+    goal: str = ""
+    profile: GoalIntentProfile = Field(default_factory=GoalIntentProfile)
+    graph: IntentGraph = Field(default_factory=IntentGraph)
+    candidate_capabilities: dict[str, list[str]] = Field(default_factory=dict)
+    clarification: ClarificationState = Field(default_factory=ClarificationState)
+    trace: NormalizationTrace = Field(default_factory=NormalizationTrace)
+
+
 def parse_intent_graph(value: Any) -> IntentGraph | None:
     if isinstance(value, IntentGraph):
         return value
@@ -119,3 +156,23 @@ def dump_goal_intent_profile(
     if profile is None:
         return None
     return profile.model_dump(mode="json", exclude_none=True)
+
+
+def parse_normalized_intent_envelope(value: Any) -> NormalizedIntentEnvelope | None:
+    if isinstance(value, NormalizedIntentEnvelope):
+        return value
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return NormalizedIntentEnvelope.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def dump_normalized_intent_envelope(
+    value: NormalizedIntentEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    envelope = parse_normalized_intent_envelope(value)
+    if envelope is None:
+        return None
+    return envelope.model_dump(mode="json", exclude_none=True)

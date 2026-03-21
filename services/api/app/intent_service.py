@@ -47,6 +47,73 @@ class GoalIntentRuntime:
     record_metrics: Callable[[workflow_contracts.GoalIntentProfile], None] | None = None
 
 
+@dataclass(frozen=True)
+class IntentNormalizeConfig:
+    include_decomposition: bool
+    assessment_mode: str
+    assessment_model: str
+    decomposition_mode: str
+    decomposition_model: str
+
+
+@dataclass(frozen=True)
+class IntentNormalizeRuntime:
+    assess_goal_intent: Callable[[str], workflow_contracts.GoalIntentProfile]
+    decompose_goal_intent: Callable[..., workflow_contracts.IntentGraph]
+
+
+def normalize_goal_intent(
+    goal: str,
+    *,
+    db: Session | None = None,
+    user_id: str | None = None,
+    interaction_summaries: list[dict[str, Any]] | None = None,
+    config: IntentNormalizeConfig,
+    runtime: IntentNormalizeRuntime,
+) -> workflow_contracts.NormalizedIntentEnvelope:
+    profile = runtime.assess_goal_intent(goal)
+    graph = workflow_contracts.IntentGraph()
+    if config.include_decomposition:
+        graph = runtime.decompose_goal_intent(
+            goal,
+            db=db,
+            user_id=user_id,
+            interaction_summaries=interaction_summaries,
+        )
+    return workflow_contracts.NormalizedIntentEnvelope(
+        goal=goal,
+        profile=profile,
+        graph=graph,
+        candidate_capabilities=_candidate_capabilities_by_segment(graph),
+        clarification=workflow_contracts.ClarificationState(
+            needs_clarification=bool(profile.needs_clarification),
+            requires_blocking_clarification=bool(profile.requires_blocking_clarification),
+            missing_inputs=list(profile.missing_slots),
+            questions=list(profile.questions),
+            blocking_slots=list(profile.blocking_slots),
+            slot_values=dict(profile.slot_values),
+            clarification_mode=profile.clarification_mode,
+        ),
+        trace=workflow_contracts.NormalizationTrace(
+            assessment_source=str(profile.source or "").strip() or None,
+            assessment_mode=config.assessment_mode or None,
+            assessment_model=config.assessment_model or None,
+            assessment_fallback_used=_fallback_used(
+                config.assessment_mode,
+                profile.source,
+            ),
+            decomposition_source=str(graph.source or "").strip() or None,
+            decomposition_mode=config.decomposition_mode or None,
+            decomposition_model=config.decomposition_model or None,
+            decomposition_fallback_used=(
+                _fallback_used(config.decomposition_mode, graph.source)
+                if config.include_decomposition
+                else False
+            ),
+        ),
+    )
+
+
 def decompose_goal_intent(
     goal: str,
     *,
@@ -257,6 +324,28 @@ def _infer_goal_risk_level(goal: str, intent: str) -> str:
     if intent == "io" and any(token in lowered for token in ("write", "upload", "save", "push")):
         return "bounded_write"
     return "read_only"
+
+
+def _candidate_capabilities_by_segment(
+    graph: workflow_contracts.IntentGraph,
+) -> dict[str, list[str]]:
+    candidates: dict[str, list[str]] = {}
+    for segment in graph.segments:
+        deduped: list[str] = []
+        for capability_id in segment.suggested_capabilities:
+            normalized = str(capability_id or "").strip()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        if deduped:
+            candidates[segment.id] = deduped
+    return candidates
+
+
+def _fallback_used(mode: str, source: str | None) -> bool:
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode in {"", "heuristic", "disabled"}:
+        return False
+    return str(source or "").strip().lower() != "llm"
 
 
 def _extract_goal_slot_signals(goal: str, intent: str, risk_level: str) -> dict[str, Any]:

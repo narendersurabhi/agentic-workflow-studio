@@ -51,6 +51,7 @@ def test_create_job():
     assert response.status_code == 200
     data = response.json()
     assert data["goal"] == "demo"
+    assert data["metadata"]["normalized_intent_envelope"]["goal"] == "demo"
 
 
 def test_intent_assessment_fallback_used_respects_mode(monkeypatch) -> None:
@@ -711,10 +712,13 @@ def test_intent_clarify_endpoint_returns_assessment():
     assert response.status_code == 200
     body = response.json()
     assessment = body["assessment"]
+    envelope = body["normalized_intent_envelope"]
     assert body["goal"] == "Render a PDF status report"
     assert assessment["intent"] == "render"
     assert assessment["needs_clarification"] is False
     assert assessment["source"] in {"goal_text", "task_text", "explicit", "default"}
+    assert envelope["goal"] == "Render a PDF status report"
+    assert envelope["profile"]["intent"] == assessment["intent"]
 
 
 def test_intent_clarify_endpoint_uses_llm_assessment_with_capability_catalog(monkeypatch):
@@ -1278,8 +1282,11 @@ def test_create_job_persists_goal_intent_graph():
     assert response.status_code == 200
     metadata = response.json()["metadata"]
     assert "goal_intent_graph" in metadata
+    assert "normalized_intent_envelope" in metadata
     graph = metadata["goal_intent_graph"]
+    envelope = metadata["normalized_intent_envelope"]
     assert graph["summary"]["segment_count"] >= 2
+    assert envelope["graph"]["summary"]["segment_count"] == graph["summary"]["segment_count"]
 
 
 def test_intent_decompose_uses_semantic_workflow_hints_in_llm_prompt(monkeypatch):

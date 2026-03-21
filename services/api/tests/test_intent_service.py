@@ -136,3 +136,50 @@ def test_decompose_goal_intent_falls_back_when_llm_fails() -> None:
 
     assert graph.segments[0].id == "fallback"
     assert failures
+
+
+def test_normalize_goal_intent_returns_envelope() -> None:
+    envelope = intent_service.normalize_goal_intent(
+        "Create a report",
+        config=intent_service.IntentNormalizeConfig(
+            include_decomposition=True,
+            assessment_mode="hybrid",
+            assessment_model="gpt-test",
+            decomposition_mode="hybrid",
+            decomposition_model="gpt-test",
+        ),
+        runtime=intent_service.IntentNormalizeRuntime(
+            assess_goal_intent=lambda _goal: workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                source="heuristic",
+                confidence=0.81,
+                risk_level="bounded_write",
+                needs_clarification=False,
+                requires_blocking_clarification=False,
+                questions=[],
+                blocking_slots=[],
+                missing_slots=[],
+                slot_values={"intent_action": "generate"},
+                clarification_mode="targeted_slot_filling",
+            ),
+            decompose_goal_intent=lambda _goal, **_kwargs: workflow_contracts.IntentGraph(
+                segments=[
+                    workflow_contracts.IntentGraphSegment(
+                        id="s1",
+                        intent="generate",
+                        suggested_capabilities=["document.spec.generate", "document.spec.generate"],
+                    )
+                ],
+                source="llm",
+            ),
+        ),
+    )
+
+    assert envelope.goal == "Create a report"
+    assert envelope.profile.intent == "generate"
+    assert envelope.graph.source == "llm"
+    assert envelope.candidate_capabilities == {"s1": ["document.spec.generate"]}
+    assert envelope.clarification.needs_clarification is False
+    assert envelope.trace.assessment_mode == "hybrid"
+    assert envelope.trace.assessment_fallback_used is True
+    assert envelope.trace.decomposition_fallback_used is False

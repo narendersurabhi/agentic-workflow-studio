@@ -1251,6 +1251,33 @@ def _assess_goal_intent(goal: str) -> workflow_contracts.GoalIntentProfile:
     )
 
 
+def _normalize_goal_intent(
+    goal: str,
+    *,
+    db: Session | None = None,
+    user_id: str | None = None,
+    interaction_summaries: list[dict[str, Any]] | None = None,
+) -> workflow_contracts.NormalizedIntentEnvelope:
+    return intent_service.normalize_goal_intent(
+        goal,
+        db=db,
+        user_id=user_id,
+        interaction_summaries=interaction_summaries,
+        config=intent_service.IntentNormalizeConfig(
+            include_decomposition=INTENT_DECOMPOSE_ENABLED,
+            assessment_mode=INTENT_ASSESS_MODE if INTENT_ASSESS_ENABLED else "disabled",
+            assessment_model=(INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "")
+            .strip(),
+            decomposition_mode=INTENT_DECOMPOSE_MODE if INTENT_DECOMPOSE_ENABLED else "disabled",
+            decomposition_model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "").strip(),
+        ),
+        runtime=intent_service.IntentNormalizeRuntime(
+            assess_goal_intent=_assess_goal_intent,
+            decompose_goal_intent=_decompose_goal_intent,
+        ),
+    )
+
+
 def _route_chat_turn(
     *,
     content: str,
@@ -9002,17 +9029,6 @@ def _create_job_internal(
 ) -> models.Job:
     job_id = str(uuid.uuid4())
     now = _utcnow()
-    goal_assessment = _assess_goal_intent(job.goal)
-    goal_assessment_json = workflow_contracts.dump_goal_intent_profile(goal_assessment) or {}
-    gate_on_create = bool(require_clarification or INTENT_CLARIFICATION_ON_CREATE)
-    if gate_on_create and bool(goal_assessment.requires_blocking_clarification):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "intent_clarification_required",
-                "goal_intent_profile": goal_assessment_json,
-            },
-        )
     context_json_for_job = (
         dict(job.context_json) if isinstance(job.context_json, dict) else {}
     )
@@ -9050,20 +9066,43 @@ def _create_job_internal(
     semantic_user_id = _semantic_user_id_from_context(
         context_json_for_job if isinstance(context_json_for_job, Mapping) else None
     )
+    normalized_intent_envelope = _normalize_goal_intent(
+        job.goal,
+        db=db,
+        user_id=semantic_user_id,
+        interaction_summaries=interaction_summaries_compact or interaction_summaries_raw,
+    )
+    if interaction_summaries_raw and INTENT_DECOMPOSE_ENABLED:
+        normalized_intent_envelope = normalized_intent_envelope.model_copy(
+            update={
+                "graph": _attach_interaction_compaction_to_graph(
+                    normalized_intent_envelope.graph,
+                    interaction_compaction,
+                )
+            }
+        )
+    goal_assessment = normalized_intent_envelope.profile
+    goal_assessment_json = workflow_contracts.dump_goal_intent_profile(goal_assessment) or {}
+    gate_on_create = bool(require_clarification or INTENT_CLARIFICATION_ON_CREATE)
+    if gate_on_create and bool(goal_assessment.requires_blocking_clarification):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "intent_clarification_required",
+                "goal_intent_profile": goal_assessment_json,
+                "normalized_intent_envelope": (
+                    workflow_contracts.dump_normalized_intent_envelope(normalized_intent_envelope)
+                    or {}
+                ),
+            },
+        )
     metadata["semantic_user_id"] = semantic_user_id
     metadata["goal_intent_profile"] = goal_assessment_json
+    metadata["normalized_intent_envelope"] = (
+        workflow_contracts.dump_normalized_intent_envelope(normalized_intent_envelope) or {}
+    )
     if INTENT_DECOMPOSE_ENABLED:
-        goal_intent_graph = _decompose_goal_intent(
-            job.goal,
-            db=db,
-            user_id=semantic_user_id,
-            interaction_summaries=interaction_summaries_compact or interaction_summaries_raw,
-        )
-        if interaction_summaries_raw:
-            goal_intent_graph = _attach_interaction_compaction_to_graph(
-                goal_intent_graph,
-                interaction_compaction,
-            )
+        goal_intent_graph = normalized_intent_envelope.graph
         metadata["goal_intent_graph"] = goal_intent_graph.model_dump(mode="json", exclude_none=True)
     if isinstance(metadata_overrides, Mapping):
         metadata.update(dict(metadata_overrides))
@@ -10275,10 +10314,15 @@ def clarify_intent(payload: dict[str, Any]) -> dict[str, Any]:
     goal = str(payload.get("goal") or "").strip()
     if not goal:
         raise HTTPException(status_code=400, detail="goal_required")
-    assessment = _assess_goal_intent(goal)
+    normalized = _normalize_goal_intent(goal)
+    assessment = normalized.profile
     return {
         "goal": goal,
         "assessment": workflow_contracts.dump_goal_intent_profile(assessment) or {},
+        "normalized_intent_envelope": workflow_contracts.dump_normalized_intent_envelope(
+            normalized
+        )
+        or {},
     }
 
 
