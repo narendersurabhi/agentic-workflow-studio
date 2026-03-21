@@ -1257,11 +1257,7 @@ def _fallback_chat_response(content: str) -> str:
 
 
 def _goal_intent_segments_from_metadata(metadata: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    graph = (
-        workflow_contracts.parse_intent_graph(metadata.get("goal_intent_graph"))
-        if isinstance(metadata, Mapping)
-        else None
-    )
+    graph = _goal_intent_graph_from_metadata(metadata)
     if graph is None:
         return []
     segments: list[dict[str, Any]] = []
@@ -1272,6 +1268,113 @@ def _goal_intent_segments_from_metadata(metadata: Mapping[str, Any] | None) -> l
         if normalized is not None:
             segments.append(normalized)
     return segments
+
+
+def _candidate_capabilities_from_intent_graph(
+    graph: workflow_contracts.IntentGraph | None,
+) -> dict[str, list[str]]:
+    if graph is None:
+        return {}
+    candidates: dict[str, list[str]] = {}
+    for segment in graph.segments:
+        deduped: list[str] = []
+        for capability_id in segment.suggested_capabilities:
+            normalized = str(capability_id or "").strip()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        if deduped:
+            candidates[segment.id] = deduped
+    return candidates
+
+
+def _normalized_intent_envelope_from_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    goal: str = "",
+) -> workflow_contracts.NormalizedIntentEnvelope | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    envelope = workflow_contracts.parse_normalized_intent_envelope(
+        metadata.get("normalized_intent_envelope")
+    )
+    if envelope is not None:
+        return envelope
+    profile = workflow_contracts.parse_goal_intent_profile(metadata.get("goal_intent_profile"))
+    graph = workflow_contracts.parse_intent_graph(metadata.get("goal_intent_graph"))
+    if profile is None and graph is None:
+        return None
+    graph = graph or workflow_contracts.IntentGraph()
+    profile = profile or workflow_contracts.GoalIntentProfile()
+    return workflow_contracts.NormalizedIntentEnvelope(
+        goal=str(goal or "").strip(),
+        profile=profile,
+        graph=graph,
+        candidate_capabilities=_candidate_capabilities_from_intent_graph(graph),
+        clarification=workflow_contracts.ClarificationState(
+            needs_clarification=bool(profile.needs_clarification),
+            requires_blocking_clarification=bool(profile.requires_blocking_clarification),
+            missing_inputs=list(profile.missing_slots),
+            questions=list(profile.questions),
+            blocking_slots=list(profile.blocking_slots),
+            slot_values=dict(profile.slot_values),
+            clarification_mode=profile.clarification_mode,
+        ),
+    )
+
+
+def _goal_intent_graph_from_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    goal: str = "",
+) -> workflow_contracts.IntentGraph | None:
+    envelope = _normalized_intent_envelope_from_metadata(metadata, goal=goal)
+    if envelope is None:
+        return None
+    if not envelope.graph.segments:
+        return None
+    return envelope.graph
+
+
+def _normalization_response_fields(
+    metadata: Mapping[str, Any] | None,
+    *,
+    goal: str = "",
+) -> dict[str, Any]:
+    envelope = _normalized_intent_envelope_from_metadata(metadata, goal=goal)
+    if envelope is None:
+        return {
+            "goal_intent_profile": {},
+            "goal_intent_graph": None,
+            "normalized_intent_envelope": {},
+            "normalization_trace": {},
+            "normalization_clarification": {},
+            "normalization_candidate_capabilities": {},
+        }
+    envelope_json = workflow_contracts.dump_normalized_intent_envelope(envelope) or {}
+    return {
+        "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(envelope.profile) or {},
+        "goal_intent_graph": workflow_contracts.dump_intent_graph(envelope.graph),
+        "normalized_intent_envelope": envelope_json,
+        "normalization_trace": (
+            dict(envelope_json.get("trace"))
+            if isinstance(envelope_json.get("trace"), Mapping)
+            else {}
+        ),
+        "normalization_clarification": (
+            dict(envelope_json.get("clarification"))
+            if isinstance(envelope_json.get("clarification"), Mapping)
+            else {}
+        ),
+        "normalization_candidate_capabilities": {
+            str(segment_id): [
+                str(capability_id).strip()
+                for capability_id in capability_ids
+                if str(capability_id).strip()
+            ]
+            for segment_id, capability_ids in envelope.candidate_capabilities.items()
+            if str(segment_id).strip()
+        },
+    }
 
 
 def _assess_goal_intent(
@@ -9510,6 +9613,7 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
     tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
     metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
     profiles = _coerce_task_intent_profiles(metadata)
+    normalization_fields = _normalization_response_fields(metadata, goal=job.goal or "")
     return models.JobDetails(
         job_id=job_id,
         job_status=models.JobStatus(job.status),
@@ -9517,6 +9621,12 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
         plan=_plan_from_record(plan_record) if plan_record else None,
         tasks=[_task_from_record(task, profiles.get(task.id)) for task in tasks],
         task_results={task.id: _load_task_result(task.id) for task in tasks},
+        goal_intent_profile=normalization_fields["goal_intent_profile"],
+        goal_intent_graph=normalization_fields["goal_intent_graph"],
+        normalized_intent_envelope=normalization_fields["normalized_intent_envelope"],
+        normalization_trace=normalization_fields["normalization_trace"],
+        normalization_clarification=normalization_fields["normalization_clarification"],
+        normalization_candidate_capabilities=normalization_fields["normalization_candidate_capabilities"],
     )
 
 
@@ -9540,9 +9650,9 @@ def get_job_debugger(
     task_map = {task.id: task for task in task_models}
     id_to_name = {record.id: record.name for record in task_records}
     job_context = job.context_json if isinstance(job.context_json, dict) else {}
-    task_intent_profiles = _coerce_task_intent_profiles(
-        job.metadata_json if isinstance(job.metadata_json, dict) else {}
-    )
+    metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+    task_intent_profiles = _coerce_task_intent_profiles(metadata)
+    normalization_fields = _normalization_response_fields(metadata, goal=job.goal or "")
 
     timeline = _debugger_timeline_for_job(job_id, limit=limit, db=db)
     timeline_by_task: dict[str, list[dict[str, Any]]] = {}
@@ -9606,6 +9716,12 @@ def get_job_debugger(
         "plan_id": plan_record.id if plan_record else None,
         "generated_at": _utcnow().isoformat(),
         "timeline_events_scanned": len(timeline),
+        "goal_intent_profile": normalization_fields["goal_intent_profile"],
+        "goal_intent_graph": normalization_fields["goal_intent_graph"],
+        "normalized_intent_envelope": normalization_fields["normalized_intent_envelope"],
+        "normalization_trace": normalization_fields["normalization_trace"],
+        "normalization_clarification": normalization_fields["normalization_clarification"],
+        "normalization_candidate_capabilities": normalization_fields["normalization_candidate_capabilities"],
         "tasks": tasks_payload,
     }
 

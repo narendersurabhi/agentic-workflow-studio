@@ -1869,13 +1869,54 @@ def test_job_details():
         db.add(
             JobRecord(
                 id=job_id,
-                goal="details",
+                goal="Render the detail report",
                 context_json={},
                 status=models.JobStatus.queued.value,
                 created_at=now,
                 updated_at=now,
                 priority=0,
-                metadata_json={},
+                metadata_json={
+                    "normalized_intent_envelope": {
+                        "goal": "Render the detail report",
+                        "profile": {
+                            "intent": "render",
+                            "source": "llm",
+                            "needs_clarification": True,
+                            "requires_blocking_clarification": True,
+                            "missing_slots": ["path"],
+                            "blocking_slots": ["path"],
+                            "questions": ["What output path or filename should be used?"],
+                            "slot_values": {"intent_action": "render", "output_format": "pdf"},
+                            "clarification_mode": "capability_required_inputs",
+                        },
+                        "graph": {
+                            "segments": [
+                                {
+                                    "id": "s1",
+                                    "intent": "render",
+                                    "objective": "Render the final PDF",
+                                    "suggested_capabilities": ["document.pdf.generate"],
+                                }
+                            ]
+                        },
+                        "candidate_capabilities": {"s1": ["document.pdf.generate"]},
+                        "clarification": {
+                            "needs_clarification": True,
+                            "requires_blocking_clarification": True,
+                            "missing_inputs": ["path"],
+                            "questions": ["What output path or filename should be used?"],
+                            "blocking_slots": ["path"],
+                            "slot_values": {"intent_action": "render", "output_format": "pdf"},
+                            "clarification_mode": "capability_required_inputs",
+                        },
+                        "trace": {
+                            "assessment_source": "llm",
+                            "assessment_mode": "hybrid",
+                            "decomposition_source": "llm",
+                            "decomposition_mode": "llm",
+                        },
+                    }
+                },
             )
         )
         db.add(
@@ -1924,6 +1965,12 @@ def test_job_details():
     assert len(data["tasks"]) == 1
     assert data["tasks"][0]["id"] == task_id
     assert task_id in data["task_results"]
+    assert data["normalized_intent_envelope"]["goal"] == "Render the detail report"
+    assert data["goal_intent_profile"]["intent"] == "render"
+    assert data["goal_intent_graph"]["segments"][0]["id"] == "s1"
+    assert data["normalization_trace"]["assessment_source"] == "llm"
+    assert data["normalization_clarification"]["missing_inputs"] == ["path"]
+    assert data["normalization_candidate_capabilities"] == {"s1": ["document.pdf.generate"]}
 
 
 def test_job_debugger_returns_timeline_and_error_classification():
@@ -1941,7 +1988,29 @@ def test_job_debugger_returns_timeline_and_error_classification():
                 created_at=now,
                 updated_at=now,
                 priority=0,
-                metadata_json={},
+                metadata_json={
+                    "goal_intent_profile": {
+                        "intent": "io",
+                        "source": "heuristic",
+                        "needs_clarification": True,
+                        "requires_blocking_clarification": True,
+                        "missing_slots": ["target_system"],
+                        "blocking_slots": ["target_system"],
+                        "questions": ["Which target system should this use?"],
+                        "slot_values": {"intent_action": "io"},
+                        "clarification_mode": "targeted_slot_filling",
+                    },
+                    "goal_intent_graph": {
+                        "segments": [
+                            {
+                                "id": "s1",
+                                "intent": "io",
+                                "objective": "List repositories",
+                                "suggested_capabilities": ["github.repo.list"],
+                            }
+                        ]
+                    },
+                },
             )
         )
         db.add(
@@ -2093,6 +2162,12 @@ def test_job_debugger_returns_timeline_and_error_classification():
     assert payload["job_status"] == "failed"
     assert payload["plan_id"] == plan_id
     assert payload["timeline_events_scanned"] == 2
+    assert payload["goal_intent_profile"]["intent"] == "io"
+    assert payload["goal_intent_graph"]["segments"][0]["id"] == "s1"
+    assert payload["normalized_intent_envelope"]["goal"] == "debug"
+    assert payload["normalization_trace"] == {}
+    assert payload["normalization_clarification"]["missing_inputs"] == ["target_system"]
+    assert payload["normalization_candidate_capabilities"] == {"s1": ["github.repo.list"]}
     assert len(payload["tasks"]) == 1
     task_payload = payload["tasks"][0]
     assert task_payload["task"]["id"] == task_id

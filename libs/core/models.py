@@ -256,6 +256,12 @@ class JobDetails(BaseModel):
     plan: Optional[Plan] = None
     tasks: List[Task] = Field(default_factory=list)
     task_results: Dict[str, Any] = Field(default_factory=dict)
+    goal_intent_profile: Dict[str, Any] = Field(default_factory=dict)
+    goal_intent_graph: Optional[Dict[str, Any]] = None
+    normalized_intent_envelope: Dict[str, Any] = Field(default_factory=dict)
+    normalization_trace: Dict[str, Any] = Field(default_factory=dict)
+    normalization_clarification: Dict[str, Any] = Field(default_factory=dict)
+    normalization_candidate_capabilities: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 class TaskCreate(BaseModel):
