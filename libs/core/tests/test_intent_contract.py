@@ -390,6 +390,23 @@ def test_normalize_intent_segment_slots_removes_format_and_compactness_fallbacks
     assert slots["must_have_inputs"] == ["instruction"]
 
 
+def test_normalize_intent_segment_slots_removes_length_limit_for_document_spec_generation() -> None:
+    slots = intent_contract.normalize_intent_segment_slots(
+        raw_slots={
+            "entity": "document",
+            "artifact_type": "document_spec",
+            "risk_level": "read_only",
+            "must_have_inputs": ["length_limit", "title"],
+        },
+        fallback_slots=None,
+        intent="generate",
+        objective="GenerateDocumentSpec",
+        required_inputs=["instruction"],
+        suggested_capabilities=["llm_generate_document_spec"],
+    )
+    assert slots["must_have_inputs"] == ["title"]
+
+
 def test_normalize_intent_segment_slots_detects_collapsed_documentspec_objective() -> None:
     slots = intent_contract.normalize_intent_segment_slots(
         raw_slots={"risk_level": "read_only"},

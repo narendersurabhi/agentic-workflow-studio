@@ -434,6 +434,7 @@ def normalize_intent_segment_slots(
                 "output_format",
                 "format",
                 "compactness",
+                "length_limit",
             }
         )
     return {
