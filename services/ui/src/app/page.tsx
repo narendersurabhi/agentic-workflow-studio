@@ -701,6 +701,29 @@ type ChatTurnResponse = {
   workflow_run?: Record<string, unknown> | null;
 };
 
+const makeOptimisticChatMessage = (sessionId: string, content: string): ChatMessage => {
+  const createdAt = new Date().toISOString();
+  return {
+    id: `optimistic-${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+    session_id: sessionId,
+    role: "user",
+    content,
+    created_at: createdAt,
+    metadata: {
+      optimistic: true,
+      pending: true,
+    },
+    action: null,
+    job_id: null,
+  };
+};
+
+const appendChatMessage = (session: ChatSession, message: ChatMessage): ChatSession => ({
+  ...session,
+  updated_at: message.created_at,
+  messages: [...(Array.isArray(session.messages) ? session.messages : []), message],
+});
+
 type Plan = {
   id: string;
   job_id: string;
@@ -2409,7 +2432,7 @@ function HomeContent() {
       return;
     }
     node.scrollTop = node.scrollHeight;
-  }, [chatMessages.length]);
+  }, [chatMessages.length, chatLoading]);
 
   const loadJobs = async () => {
     const response = await fetch(`${apiUrl}/jobs`);
@@ -5961,13 +5984,31 @@ const openTemplateModal = (template: Template) => {
       return;
     }
 
+    const previousSession = chatSessionRef.current;
+    const optimisticSessionId = previousSession?.id || `pending-${Date.now()}`;
+    const optimisticMessage = makeOptimisticChatMessage(optimisticSessionId, content);
+    const optimisticSession = previousSession
+      ? appendChatMessage(previousSession, optimisticMessage)
+      : {
+          id: optimisticSessionId,
+          title: content.slice(0, 80) || "New chat",
+          created_at: optimisticMessage.created_at,
+          updated_at: optimisticMessage.created_at,
+          metadata: {},
+          active_job_id: null,
+          messages: [optimisticMessage],
+        };
+
     try {
       setChatLoading(true);
       setChatError(null);
-      setChatNotice(null);
-      let session = chatSession;
+      setChatNotice("Sending message...");
+      setChatInput("");
+      setChatSession(optimisticSession);
+      let session = previousSession;
       if (!session) {
         session = await createChatSession();
+        setChatSession(appendChatMessage(session, { ...optimisticMessage, session_id: session.id }));
       }
       const response = await fetch(`${apiUrl}/chat/sessions/${encodeURIComponent(session.id)}/messages`, {
         method: "POST",
@@ -5990,7 +6031,6 @@ const openTemplateModal = (template: Template) => {
       }
       const body = (await response.json()) as ChatTurnResponse;
       setChatSession(body.session);
-      setChatInput("");
       if (body.job?.id) {
         setChatLoading(false);
         void refreshChatJobViews(body.job.id);
@@ -5998,6 +6038,8 @@ const openTemplateModal = (template: Template) => {
       }
       setChatNotice(null);
     } catch (error) {
+      setChatSession(previousSession);
+      setChatInput((current) => (current.trim() ? current : content));
       setChatNotice(null);
       setChatError(error instanceof Error ? error.message : "Network error while sending chat.");
     } finally {
@@ -8886,45 +8928,68 @@ const openTemplateModal = (template: Template) => {
                       “Open a PR for the generated repository”.
                     </div>
                   ) : (
-                    chatMessages.map((message) => (
-                      <div
-                        key={message.id}
-                        className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
-                          message.role === "user"
-                            ? "ml-auto bg-white text-slate-900"
-                            : "border border-white/10 bg-white/10 text-slate-100"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
-                          <span className={message.role === "user" ? "text-slate-500" : "text-slate-300"}>
-                            {message.role}
-                          </span>
-                          <span className={message.role === "user" ? "text-slate-400" : "text-slate-400"}>
-                            {formatTimestamp(message.created_at)}
-                          </span>
+                    <>
+                      {chatMessages.map((message) => {
+                        const isPending = Boolean(message.metadata?.pending);
+                        return (
+                          <div
+                            key={message.id}
+                            className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                              message.role === "user"
+                                ? "ml-auto bg-white text-slate-900"
+                                : "border border-white/10 bg-white/10 text-slate-100"
+                            } ${isPending ? "opacity-80" : ""}`}
+                          >
+                            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
+                              <div className="flex items-center gap-2">
+                                <span className={message.role === "user" ? "text-slate-500" : "text-slate-300"}>
+                                  {message.role}
+                                </span>
+                                {isPending ? (
+                                  <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
+                                    Pending
+                                  </span>
+                                ) : null}
+                              </div>
+                              <span className={message.role === "user" ? "text-slate-400" : "text-slate-400"}>
+                                {formatTimestamp(message.created_at)}
+                              </span>
+                            </div>
+                            <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
+                            {message.action?.clarification_questions &&
+                            message.action.clarification_questions.length > 0 ? (
+                              <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-[12px] text-amber-100">
+                                {message.action.clarification_questions.map((question, index) => (
+                                  <div key={`${message.id}-question-${index}`}>{question}</div>
+                                ))}
+                              </div>
+                            ) : null}
+                            {message.job_id ? (
+                              <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-[12px] text-emerald-100">
+                                <span>Job {message.job_id}</span>
+                                <button
+                                  className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
+                                  onClick={() => loadJobDetails(message.job_id || "")}
+                                >
+                                  Open
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                      {chatLoading ? (
+                        <div className="max-w-[92%] rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-slate-100 shadow-sm">
+                          <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
+                            <span className="text-slate-300">assistant</span>
+                            <span className="rounded-full border border-sky-300/20 bg-sky-300/10 px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-sky-200">
+                              Thinking
+                            </span>
+                          </div>
+                          <div className="mt-2 text-slate-300">Working on your request...</div>
                         </div>
-                        <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
-                        {message.action?.clarification_questions &&
-                        message.action.clarification_questions.length > 0 ? (
-                          <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-[12px] text-amber-100">
-                            {message.action.clarification_questions.map((question, index) => (
-                              <div key={`${message.id}-question-${index}`}>{question}</div>
-                            ))}
-                          </div>
-                        ) : null}
-                        {message.job_id ? (
-                          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-[12px] text-emerald-100">
-                            <span>Job {message.job_id}</span>
-                            <button
-                              className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
-                              onClick={() => loadJobDetails(message.job_id || "")}
-                            >
-                              Open
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    ))
+                      ) : null}
+                    </>
                   )}
                 </div>
                 <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
