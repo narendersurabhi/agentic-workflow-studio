@@ -536,6 +536,13 @@ def test_chat_turn_response_first_skips_router_for_conversational_turn(monkeypat
             return type("_Response", (), {"content": "Direct response model answer."})()
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(
+        main,
+        "_normalize_goal_intent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("intent normalization should not run for conversational fast path")
+        ),
+    )
     monkeypatch.setattr(main, "_chat_router_provider", _Router())
     monkeypatch.setattr(main, "_chat_response_provider", _Responder())
     session = client.post("/chat/sessions", json={}).json()
@@ -570,7 +577,31 @@ def test_chat_turn_response_first_still_uses_router_for_execution_turn(monkeypat
         def generate_request(self, request):
             raise AssertionError("response provider should not run for execution turns")
 
+    normalize_calls = {"count": 0}
+
+    def _normalize_goal_intent(goal, **_kwargs):
+        normalize_calls["count"] += 1
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="render",
+                source="test",
+                confidence=0.95,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=False,
+                requires_blocking_clarification=False,
+                questions=[],
+                blocking_slots=[],
+                missing_slots=[],
+                slot_values={"intent_action": "render", "risk_level": "bounded_write"},
+            ),
+            graph=main.workflow_contracts.IntentGraph(segments=[]),
+        )
+
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
     monkeypatch.setattr(main, "_chat_router_provider", _Router())
     monkeypatch.setattr(main, "_chat_response_provider", _Responder())
     session = client.post("/chat/sessions", json={}).json()
@@ -587,6 +618,7 @@ def test_chat_turn_response_first_still_uses_router_for_execution_turn(monkeypat
     assert response.status_code == 200
     body = response.json()
     assert calls["router"] == 1
+    assert normalize_calls["count"] >= 1
     assert body["job"]["goal"] == "Render a PDF deployment report"
     assert body["assistant_message"]["action"]["type"] == "submit_job"
 

@@ -1288,6 +1288,53 @@ def _fallback_chat_response(content: str) -> str:
     )
 
 
+def _conversational_chat_fast_path_envelope(
+    *,
+    goal: str,
+) -> workflow_contracts.NormalizedIntentEnvelope:
+    return workflow_contracts.NormalizedIntentEnvelope(
+        goal=str(goal or "").strip(),
+        profile=workflow_contracts.GoalIntentProfile(
+            intent="other",
+            source="chat_conversational_fast_path",
+            confidence=1.0,
+            risk_level="read_only",
+            threshold=0.0,
+            low_confidence=False,
+            needs_clarification=False,
+            requires_blocking_clarification=False,
+            questions=[],
+            blocking_slots=[],
+            missing_slots=[],
+            slot_values={"intent_action": "other", "risk_level": "read_only"},
+            clarification_mode="chat_fast_path",
+        ),
+        graph=workflow_contracts.IntentGraph(
+            segments=[],
+            source="chat_conversational_fast_path",
+            overall_confidence=1.0,
+        ),
+        candidate_capabilities={},
+        clarification=workflow_contracts.ClarificationState(
+            needs_clarification=False,
+            requires_blocking_clarification=False,
+            missing_inputs=[],
+            questions=[],
+            blocking_slots=[],
+            slot_values={"intent_action": "other", "risk_level": "read_only"},
+            clarification_mode="chat_fast_path",
+        ),
+        trace=workflow_contracts.NormalizationTrace(
+            assessment_source="chat_conversational_fast_path",
+            assessment_mode="fast_path",
+            assessment_fallback_used=False,
+            decomposition_source="disabled",
+            decomposition_mode="disabled",
+            decomposition_fallback_used=False,
+        ),
+    )
+
+
 def _goal_intent_segments_from_metadata(metadata: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     graph = _goal_intent_graph_from_metadata(metadata)
     if graph is None:
@@ -1599,12 +1646,25 @@ def _fallback_chat_turn_route(
     pending_clarification = bool(
         isinstance(session_metadata, Mapping) and session_metadata.get("pending_clarification")
     )
+    workflow_invocation = chat_service.workflow_invocation_from_context(merged_context)
+    if not pending_clarification and workflow_invocation is None and _looks_like_conversational_turn(content):
+        normalized = _conversational_chat_fast_path_envelope(goal=candidate_goal)
+        return {
+            "type": "respond",
+            "assistant_content": _fallback_chat_response(content),
+            "clarification_questions": [],
+            "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(normalized.profile)
+            or {},
+            "normalized_intent_envelope": (
+                workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
+            ),
+        }
     normalized = _normalize_goal_intent(candidate_goal)
     assessment = _chat_route_goal_intent_profile(normalized.profile, goal=candidate_goal)
     assessment_json = workflow_contracts.dump_goal_intent_profile(assessment) or {}
     normalized_json = workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
     if pending_clarification or not _looks_like_conversational_turn(content):
-        if chat_service.workflow_invocation_from_context(merged_context) is not None:
+        if workflow_invocation is not None:
             return {
                 "type": "run_workflow",
                 "assistant_content": "",
