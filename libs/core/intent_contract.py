@@ -291,6 +291,16 @@ def _objective_mentions_document_spec(objective: str) -> bool:
     return "documentspec" in dense
 
 
+def _objective_is_clarification_step(objective: str) -> bool:
+    lowered = objective.lower().strip()
+    if not lowered:
+        return False
+    if "clarify" in lowered or "clarification" in lowered:
+        return True
+    dense = re.sub(r"[^a-z0-9]+", "", lowered)
+    return "clarify" in dense or "clarification" in dense
+
+
 def _infer_segment_entity(objective: str, artifact_type: str) -> str:
     lowered = objective.lower()
     if "runbook" in lowered:
@@ -391,6 +401,7 @@ def normalize_intent_segment_slots(
     objective_is_document_spec_generation = (
         intent == "generate" and _objective_mentions_document_spec(objective)
     )
+    objective_is_clarification = _objective_is_clarification_step(objective)
     output_format = (
         _normalize_output_format(_slot_value(raw_slots, "output_format"))
         or _normalize_output_format(fallback_slots.get("output_format"))
@@ -433,6 +444,21 @@ def normalize_intent_segment_slots(
                 "output_path",
                 "output_format",
                 "format",
+                "compactness",
+                "length_limit",
+            }
+        )
+    if objective_is_clarification:
+        must_have_inputs = tuple(
+            key
+            for key in must_have_inputs
+            if key
+            not in {
+                "title",
+                "topic",
+                "audience",
+                "tone",
+                "output_format",
                 "compactness",
                 "length_limit",
             }

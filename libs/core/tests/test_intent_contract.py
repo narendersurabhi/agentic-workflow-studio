@@ -440,6 +440,21 @@ def test_normalize_intent_segment_slots_overrides_wrong_explicit_artifact_for_do
     assert slots["must_have_inputs"] == ["title"]
 
 
+def test_normalize_intent_segment_slots_removes_authoring_inputs_for_clarification_step() -> None:
+    slots = intent_contract.normalize_intent_segment_slots(
+        raw_slots={
+            "risk_level": "read_only",
+            "must_have_inputs": ["audience", "tone", "topic", "output_format"],
+        },
+        fallback_slots=None,
+        intent="generate",
+        objective="Clarify output format",
+        required_inputs=["audience", "tone", "topic", "output_format"],
+        suggested_capabilities=["llm_generate"],
+    )
+    assert slots["must_have_inputs"] == []
+
+
 def test_validate_intent_segment_contract_accepts_title_alias_from_explicit_payload() -> None:
     segment = {
         "intent": "generate",
@@ -482,6 +497,28 @@ def test_validate_intent_segment_contract_ignores_wrong_explicit_artifact_for_do
         tool_name="llm_generate_document_spec",
         payload={"instruction": "Generate a resume document spec."},
         capability_id="document.spec.generate",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_allows_clarify_output_format_without_authoring_inputs() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Clarify output format",
+        "required_inputs": ["audience", "tone", "topic", "output_format"],
+        "suggested_capabilities": ["llm_generate"],
+        "slots": {
+            "risk_level": "read_only",
+            "must_have_inputs": ["audience", "tone", "topic", "output_format"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="llm_generate",
+        payload={"instruction": "Ask the user which output format they want."},
+        capability_id="llm.text.generate",
         capability_risk_tier="read_only",
     )
     assert mismatch is None
