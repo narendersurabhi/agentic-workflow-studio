@@ -6002,7 +6002,7 @@ const openTemplateModal = (template: Template) => {
     try {
       setChatLoading(true);
       setChatError(null);
-      setChatNotice("Sending message...");
+      setChatNotice(null);
       setChatInput("");
       setChatSession(optimisticSession);
       let session = previousSession;
@@ -9038,7 +9038,7 @@ const openTemplateModal = (template: Template) => {
                       onClick={submitChatTurn}
                       disabled={chatLoading || !chatInput.trim()}
                     >
-                      {chatLoading ? "Sending..." : "Send"}
+                      Send
                     </button>
                   </div>
                 </div>

@@ -211,6 +211,9 @@ CHAT_DIRECT_EXECUTION_ENABLED = (
 CHAT_ROUTING_MODE = os.getenv("CHAT_ROUTING_MODE", "response_first").strip().lower()
 if CHAT_ROUTING_MODE not in {"always_router", "response_first"}:
     CHAT_ROUTING_MODE = "response_first"
+CHAT_PENDING_CORRECTION_MODE = os.getenv("CHAT_PENDING_CORRECTION_MODE", "llm").strip().lower()
+if CHAT_PENDING_CORRECTION_MODE not in {"heuristic", "llm", "hybrid"}:
+    CHAT_PENDING_CORRECTION_MODE = "llm"
 CHAT_DIRECT_CAPABILITIES = {
     entry.strip()
     for entry in os.getenv(
@@ -422,6 +425,15 @@ def _build_chat_response_provider() -> LLMProvider | None:
 
 
 _chat_response_provider = _build_chat_response_provider()
+
+
+def _build_chat_pending_correction_provider() -> LLMProvider | None:
+    if CHAT_PENDING_CORRECTION_MODE == "heuristic":
+        return None
+    return _chat_response_provider
+
+
+_chat_pending_correction_provider = _build_chat_pending_correction_provider()
 
 
 def _rag_retriever_request_json(
@@ -1233,6 +1245,8 @@ def _looks_like_conversational_turn(content: str) -> bool:
     lowered = str(content or "").strip().lower()
     if not lowered:
         return True
+    if _looks_like_chat_only_correction(content):
+        return True
     casual_phrases = (
         "hi",
         "hello",
@@ -1274,6 +1288,48 @@ def _looks_like_conversational_turn(content: str) -> bool:
     if lowered.endswith("?"):
         return True
     return any(lowered.startswith(phrase) or lowered == phrase for phrase in casual_phrases)
+
+
+def _looks_like_chat_only_correction(content: str) -> bool:
+    heuristic_result = chat_service.looks_like_chat_only_correction(content)
+    if CHAT_PENDING_CORRECTION_MODE == "heuristic":
+        return heuristic_result
+    provider = _chat_pending_correction_provider
+    if provider is None:
+        return heuristic_result
+    try:
+        parsed = provider.generate_request_json_object(
+            LLMRequest(
+                prompt=json.dumps(
+                    {
+                        "user_message": str(content or ""),
+                        "question": (
+                            "Is the user canceling or redirecting an in-progress workflow/job/document-style "
+                            "clarification and asking for a normal chat answer instead?"
+                        ),
+                        "response_schema": {
+                            "chat_only_correction": "boolean",
+                            "confidence": "0..1",
+                        },
+                    },
+                    ensure_ascii=True,
+                ),
+                system_prompt=(
+                    "Classify whether the message means: stop the workflow/job/document path and reply normally in chat. "
+                    "Return JSON only."
+                ),
+                metadata={"component": "chat_pending_correction"},
+            )
+        )
+        llm_result = bool(parsed.get("chat_only_correction"))
+        confidence_raw = parsed.get("confidence")
+        confidence = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else 0.0
+        if CHAT_PENDING_CORRECTION_MODE == "hybrid" and confidence < 0.7:
+            return heuristic_result
+        return llm_result
+    except Exception:  # noqa: BLE001
+        logger.exception("chat_pending_correction_classification_failed")
+        return heuristic_result
 
 
 def _fallback_chat_response(content: str) -> str:
@@ -1571,9 +1627,14 @@ def _route_chat_turn(
         isinstance(session_metadata, Mapping) and session_metadata.get("pending_clarification")
     )
     workflow_invocation = chat_service.workflow_invocation_from_context(merged_context)
+    exit_pending_to_chat = (
+        pending_clarification
+        and workflow_invocation is None
+        and _looks_like_chat_only_correction(content)
+    )
     should_use_router = (
         CHAT_ROUTING_MODE == "always_router"
-        or pending_clarification
+        or (pending_clarification and not exit_pending_to_chat)
         or workflow_invocation is not None
         or not _looks_like_conversational_turn(content)
     )
@@ -1647,6 +1708,24 @@ def _fallback_chat_turn_route(
         isinstance(session_metadata, Mapping) and session_metadata.get("pending_clarification")
     )
     workflow_invocation = chat_service.workflow_invocation_from_context(merged_context)
+    exit_pending_to_chat = (
+        pending_clarification
+        and workflow_invocation is None
+        and _looks_like_chat_only_correction(content)
+    )
+    if exit_pending_to_chat:
+        normalized = _conversational_chat_fast_path_envelope(goal=content.strip())
+        return {
+            "type": "respond",
+            "assistant_content": _fallback_chat_response(content),
+            "clarification_questions": [],
+            "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(normalized.profile)
+            or {},
+            "normalized_intent_envelope": (
+                workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
+            ),
+            "clear_pending_clarification": True,
+        }
     if not pending_clarification and workflow_invocation is None and _looks_like_conversational_turn(content):
         normalized = _conversational_chat_fast_path_envelope(goal=candidate_goal)
         return {
@@ -2031,6 +2110,7 @@ def _chat_runtime() -> chat_service.ChatServiceRuntime:
         inspect_workflow=_inspect_chat_workflow,
         utcnow=_utcnow,
         make_id=lambda: str(uuid.uuid4()),
+        is_chat_only_correction=_looks_like_chat_only_correction,
     )
 
 

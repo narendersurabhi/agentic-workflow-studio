@@ -22,6 +22,7 @@ class ChatServiceRuntime:
     inspect_workflow: Callable[..., "ChatWorkflowInspection"]
     utcnow: Callable[[], datetime]
     make_id: Callable[[], str]
+    is_chat_only_correction: Callable[[str], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,67 @@ class ChatDirectRunResult:
     output: dict[str, Any] = field(default_factory=dict)
     assistant_response: str = ""
     error: str | None = None
+
+
+def looks_like_chat_only_correction(content: str) -> bool:
+    lowered = str(content or "").strip().lower()
+    if not lowered:
+        return False
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    if not tokens:
+        return False
+
+    negation_tokens = {"no", "not", "dont", "don't", "do", "without", "skip", "cancel", "stop", "instead", "rather"}
+    execution_tokens = {
+        "document",
+        "doc",
+        "docx",
+        "pdf",
+        "markdown",
+        "report",
+        "file",
+        "files",
+        "workflow",
+        "job",
+        "artifact",
+        "artifacts",
+        "render",
+        "generate",
+        "create",
+        "submit",
+    }
+    chat_tokens = {
+        "chat",
+        "response",
+        "respond",
+        "answer",
+        "reply",
+        "explain",
+        "thoughts",
+        "here",
+    }
+    redirect_tokens = {"just", "only", "instead", "rather"}
+
+    has_execution_reference = bool(tokens & execution_tokens)
+    has_chat_reference = bool(tokens & chat_tokens)
+    has_negation_or_redirect = bool(tokens & negation_tokens)
+    has_redirect_reference = bool(tokens & redirect_tokens)
+
+    if has_chat_reference and (has_negation_or_redirect or has_redirect_reference):
+        return True
+    if has_execution_reference and has_chat_reference:
+        return True
+    if has_execution_reference and has_negation_or_redirect:
+        return True
+
+    compact = re.sub(r"[^a-z0-9]+", " ", lowered)
+    semantic_patterns = (
+        r"\b(?:answer|reply|respond|explain)\b.{0,24}\b(?:here|in chat|in the chat)\b",
+        r"\b(?:just|only)\b.{0,24}\b(?:chat|response|reply|answer)\b",
+        r"\b(?:not|no|dont|don't|skip|cancel|stop)\b.{0,24}\b(?:document|workflow|job|pdf|docx|report|artifact)\b",
+        r"\binstead\b.{0,24}\b(?:chat|answer|reply|respond|here)\b",
+    )
+    return any(re.search(pattern, compact) for pattern in semantic_patterns)
 
 
 def create_session(
@@ -126,7 +188,11 @@ def handle_turn(
     )
     db.add(user_message)
 
-    candidate_goal = _candidate_goal(content, session_metadata)
+    candidate_goal = _candidate_goal(
+        content,
+        session_metadata,
+        is_chat_only_correction=runtime.is_chat_only_correction,
+    )
     messages = _message_records_for_session(db, record.id)
     turn_plan = runtime.route_turn(
         content=content,
@@ -364,6 +430,10 @@ def handle_turn(
             goal_intent_profile=dict(assessment),
             context_json=merged_context,
         )
+        if bool(turn_plan.get("clear_pending_clarification")):
+            session_metadata.pop("draft_goal", None)
+            session_metadata.pop("pending_clarification", None)
+            session_metadata.pop("pending_workflow_input", None)
     if not assistant_content:
         assistant_content = "What should I do next?"
 
@@ -398,9 +468,17 @@ def handle_turn(
     )
 
 
-def _candidate_goal(content: str, session_metadata: Mapping[str, Any]) -> str:
+def _candidate_goal(
+    content: str,
+    session_metadata: Mapping[str, Any],
+    *,
+    is_chat_only_correction: Callable[[str], bool] | None = None,
+) -> str:
     draft_goal = session_metadata.get("draft_goal")
     pending = session_metadata.get("pending_clarification")
+    correction_detector = is_chat_only_correction or looks_like_chat_only_correction
+    if isinstance(pending, Mapping) and correction_detector(content):
+        return content.strip()
     if isinstance(draft_goal, str) and draft_goal.strip() and isinstance(pending, Mapping):
         return f"{draft_goal.strip()}\n\nUser clarification: {content.strip()}"
     return content.strip()

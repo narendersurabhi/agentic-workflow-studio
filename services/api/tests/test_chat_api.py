@@ -559,6 +559,146 @@ def test_chat_turn_response_first_skips_router_for_conversational_turn(monkeypat
     assert body["assistant_message"]["content"] == "Direct response model answer."
 
 
+def test_chat_turn_exits_pending_clarification_when_user_requests_chat_only_response(
+    monkeypatch,
+) -> None:
+    session = client.post("/chat/sessions", json={}).json()
+
+    first_response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Generate a deployment report", "context_json": {}, "priority": 0},
+    )
+    assert first_response.status_code == 200
+    first_body = first_response.json()
+    assert first_body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert first_body["session"]["metadata"]["pending_clarification"]["questions"]
+
+    class _Router:
+        def generate_request_json_object(self, request):
+            raise AssertionError("router should not run when user exits pending clarification to stay in chat")
+
+    class _PendingCorrectionProvider:
+        def generate_request_json_object(self, request):
+            assert request.metadata == {"component": "chat_pending_correction"}
+            return {"chat_only_correction": True, "confidence": 0.98}
+
+    class _Responder:
+        def generate_request(self, request):
+            assert request.metadata == {"component": "chat_response"}
+            assert "don't need a document" in request.prompt.lower()
+            return type("_Response", (), {"content": "Here are my thoughts on Kubernetes."})()
+
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(main, "CHAT_PENDING_CORRECTION_MODE", "llm")
+    monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    monkeypatch.setattr(main, "_chat_pending_correction_provider", _PendingCorrectionProvider())
+    monkeypatch.setattr(main, "_chat_response_provider", _Responder())
+    monkeypatch.setattr(
+        main,
+        "_normalize_goal_intent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("intent normalization should not run when user switches back to chat")
+        ),
+    )
+
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={
+            "content": "don't need a document. Just put in the chat response",
+            "context_json": {},
+            "priority": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"] is None
+    assert body["assistant_message"]["action"]["type"] == "respond"
+    assert body["assistant_message"]["content"] == "Here are my thoughts on Kubernetes."
+    assert "pending_clarification" not in body["session"]["metadata"]
+    assert "draft_goal" not in body["session"]["metadata"]
+
+
+def test_chat_turn_exits_pending_clarification_for_semantic_chat_only_correction(
+    monkeypatch,
+) -> None:
+    session = client.post("/chat/sessions", json={}).json()
+
+    first_response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Generate a deployment report", "context_json": {}, "priority": 0},
+    )
+    assert first_response.status_code == 200
+
+    class _Router:
+        def generate_request_json_object(self, request):
+            raise AssertionError("router should not run when user semantically redirects back to chat")
+
+    class _PendingCorrectionProvider:
+        def generate_request_json_object(self, request):
+            assert request.metadata == {"component": "chat_pending_correction"}
+            return {"chat_only_correction": True, "confidence": 0.95}
+
+    class _Responder:
+        def generate_request(self, request):
+            assert request.metadata == {"component": "chat_response"}
+            assert "skip the workflow and answer here" in request.prompt.lower()
+            return type("_Response", (), {"content": "Here is the direct chat answer."})()
+
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(main, "CHAT_PENDING_CORRECTION_MODE", "llm")
+    monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    monkeypatch.setattr(main, "_chat_pending_correction_provider", _PendingCorrectionProvider())
+    monkeypatch.setattr(main, "_chat_response_provider", _Responder())
+    monkeypatch.setattr(
+        main,
+        "_normalize_goal_intent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("intent normalization should not run when semantic correction redirects to chat")
+        ),
+    )
+
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={
+            "content": "Skip the workflow and answer here in chat.",
+            "context_json": {},
+            "priority": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"] is None
+    assert body["assistant_message"]["action"]["type"] == "respond"
+    assert body["assistant_message"]["content"] == "Here is the direct chat answer."
+    assert "pending_clarification" not in body["session"]["metadata"]
+
+
+def test_chat_pending_correction_llm_falls_back_to_heuristic_on_failure(monkeypatch) -> None:
+    monkeypatch.setattr(main, "CHAT_PENDING_CORRECTION_MODE", "llm")
+    monkeypatch.setattr(
+        main,
+        "_chat_pending_correction_provider",
+        type(
+            "_FailingProvider",
+            (),
+            {
+                "generate_request_json_object": lambda self, request: (_ for _ in ()).throw(
+                    RuntimeError("classification failed")
+                )
+            },
+        )(),
+    )
+
+    assert (
+        main._looks_like_chat_only_correction(
+            "Don't create a workflow. Just answer here in chat."
+        )
+        is True
+    )
+
+
 def test_chat_turn_response_first_still_uses_router_for_execution_turn(monkeypatch) -> None:
     calls = {"router": 0}
 
