@@ -373,6 +373,51 @@ def _feedback_dimensions(item: models.Feedback) -> dict[str, Any]:
     return normalized
 
 
+def _filter_feedback_items(
+    items: list[models.Feedback],
+    *,
+    workflow_source: str | None = None,
+    llm_model: str | None = None,
+    planner_version: str | None = None,
+    reason_code: str | None = None,
+    sentiments: set[models.FeedbackSentiment] | None = None,
+) -> list[models.Feedback]:
+    normalized_workflow_source = _non_empty_string(workflow_source)
+    normalized_llm_model = _non_empty_string(llm_model)
+    normalized_planner_version = _non_empty_string(planner_version)
+    normalized_reason_code = _non_empty_string(reason_code)
+    filtered = items
+    if sentiments:
+        filtered = [item for item in filtered if item.sentiment in sentiments]
+    if normalized_workflow_source is not None:
+        filtered = [
+            item
+            for item in filtered
+            if _non_empty_string(_feedback_dimensions(item).get("workflow_source"))
+            == normalized_workflow_source
+        ]
+    if normalized_llm_model is not None:
+        filtered = [
+            item
+            for item in filtered
+            if _non_empty_string(_feedback_dimensions(item).get("llm_model")) == normalized_llm_model
+        ]
+    if normalized_planner_version is not None:
+        filtered = [
+            item
+            for item in filtered
+            if _non_empty_string(_feedback_dimensions(item).get("planner_version"))
+            == normalized_planner_version
+        ]
+    if normalized_reason_code is not None:
+        filtered = [
+            item
+            for item in filtered
+            if normalized_reason_code in _normalize_reason_codes(item.reason_codes)
+        ]
+    return filtered
+
+
 def _increment_sentiment_bucket(
     bucket: models.FeedbackSummary | models.FeedbackBreakdownBucket,
     sentiment: models.FeedbackSentiment,
@@ -759,6 +804,59 @@ def list_feedback_response(
     return models.FeedbackListResponse(items=items, summary=summarize_feedback(items))
 
 
+def export_feedback_examples(
+    db: Session,
+    *,
+    target_type: models.FeedbackTargetType | None = None,
+    sentiments: list[models.FeedbackSentiment] | None = None,
+    reason_code: str | None = None,
+    workflow_source: str | None = None,
+    llm_model: str | None = None,
+    planner_version: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 200,
+) -> models.FeedbackExampleExportResponse:
+    rows = _feedback_records(
+        db,
+        target_type=target_type,
+        since=since,
+        until=until,
+        limit=max(limit, 5000),
+    )
+    items = [_feedback_from_record(row) for row in rows]
+    allowed_sentiments = set(sentiments or [])
+    if not allowed_sentiments:
+        allowed_sentiments = {
+            models.FeedbackSentiment.negative,
+            models.FeedbackSentiment.partial,
+        }
+    filtered = _filter_feedback_items(
+        items,
+        workflow_source=workflow_source,
+        llm_model=llm_model,
+        planner_version=planner_version,
+        reason_code=reason_code,
+        sentiments=allowed_sentiments,
+    )[: max(1, min(limit, 5000))]
+    examples = [
+        models.FeedbackExample(
+            feedback=item,
+            snapshot=dict(item.snapshot or {}),
+            dimensions=_feedback_dimensions(item),
+            linked_ids={
+                "session_id": item.session_id,
+                "job_id": item.job_id,
+                "plan_id": item.plan_id,
+                "message_id": item.message_id,
+                "target_id": item.target_id,
+            },
+        )
+        for item in filtered
+    ]
+    return models.FeedbackExampleExportResponse(total=len(examples), items=examples)
+
+
 def summary_feedback_response(
     db: Session,
     request: models.FeedbackSummaryRequest,
@@ -780,27 +878,11 @@ def summary_feedback_response(
         limit=scan_limit,
     )
     items = [_feedback_from_record(row) for row in rows]
-    workflow_source = _non_empty_string(request.workflow_source)
-    llm_model = _non_empty_string(request.llm_model)
-    planner_version = _non_empty_string(request.planner_version)
-    if workflow_source is not None:
-        items = [
-            item
-            for item in items
-            if _non_empty_string(_feedback_dimensions(item).get("workflow_source")) == workflow_source
-        ]
-    if llm_model is not None:
-        items = [
-            item
-            for item in items
-            if _non_empty_string(_feedback_dimensions(item).get("llm_model")) == llm_model
-        ]
-    if planner_version is not None:
-        items = [
-            item
-            for item in items
-            if _non_empty_string(_feedback_dimensions(item).get("planner_version"))
-            == planner_version
-        ]
+    items = _filter_feedback_items(
+        items,
+        workflow_source=request.workflow_source,
+        llm_model=request.llm_model,
+        planner_version=request.planner_version,
+    )
     items = items[: max(1, min(request.limit, 5000))]
     return summarize_feedback_rows(db, items)

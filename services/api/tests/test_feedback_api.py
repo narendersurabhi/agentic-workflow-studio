@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -148,6 +150,21 @@ def _attach_chat_session_to_job(
         )
         db.commit()
     return session_id
+
+
+def _metric_value(metrics_text: str, metric_name: str, labels: dict[str, str] | None = None) -> float:
+    for line in metrics_text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if labels:
+            if not line.startswith(f"{metric_name}{{"):
+                continue
+            if any(f'{key}="{value}"' not in line for key, value in labels.items()):
+                continue
+            return float(line.rsplit(" ", 1)[-1])
+        if re.match(rf"^{re.escape(metric_name)}\s+[-+0-9.eE]+$", line):
+            return float(line.rsplit(" ", 1)[-1])
+    return 0.0
 
 
 def test_submit_chat_message_feedback_and_list_for_session() -> None:
@@ -440,3 +457,180 @@ def test_feedback_summary_filters_breaks_down_dimensions_and_correlates() -> Non
     )
     assert plan_only.status_code == 200
     assert plan_only.json()["total"] == 1
+
+
+def test_feedback_examples_export_supports_filters_and_jsonl() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    workflow_source = f"examples-source-{suffix}"
+    llm_model = f"examples-model-{suffix}"
+    planner_version = f"examples-planner-{suffix}"
+
+    job_response = client.post(
+        "/jobs",
+        json={"goal": "Draft a troubleshooting guide", "context_json": {}, "priority": 0},
+    )
+    assert job_response.status_code == 200
+    job = job_response.json()
+    plan_id, _task_id = _create_plan_for_job(job["id"], planner_version=planner_version)
+    _update_job(
+        job["id"],
+        metadata={
+            "workflow_source": workflow_source,
+            "llm_provider": "openai",
+            "llm_model": llm_model,
+        },
+        status="failed",
+    )
+
+    negative_plan = client.post(
+        "/feedback",
+        headers={"X-Feedback-Actor-Id": f"examples-plan-{suffix}"},
+        json={
+            "target_type": "plan",
+            "target_id": plan_id,
+            "sentiment": "negative",
+            "reason_codes": ["missing_step"],
+            "comment": "A remediation step is missing.",
+        },
+    )
+    assert negative_plan.status_code == 200
+
+    partial_outcome = client.post(
+        "/feedback",
+        headers={"X-Feedback-Actor-Id": f"examples-outcome-{suffix}"},
+        json={
+            "target_type": "job_outcome",
+            "target_id": job["id"],
+            "sentiment": "partial",
+            "reason_codes": ["did_not_finish"],
+            "comment": "The guide stopped midway.",
+        },
+    )
+    assert partial_outcome.status_code == 200
+
+    positive_intent = client.post(
+        "/feedback",
+        headers={"X-Feedback-Actor-Id": f"examples-intent-{suffix}"},
+        json={
+            "target_type": "intent_assessment",
+            "target_id": job["id"],
+            "sentiment": "positive",
+            "reason_codes": [],
+            "comment": "Intent looked right.",
+        },
+    )
+    assert positive_intent.status_code == 200
+
+    export_response = client.get(
+        "/feedback/examples",
+        params={
+            "llm_model": llm_model,
+            "planner_version": planner_version,
+        },
+    )
+    assert export_response.status_code == 200
+    body = export_response.json()
+    assert body["total"] == 2
+    assert {item["feedback"]["sentiment"] for item in body["items"]} == {"negative", "partial"}
+    assert all(item["dimensions"]["llm_model"] == llm_model for item in body["items"])
+    assert all(item["dimensions"]["planner_version"] == planner_version for item in body["items"])
+    assert all(item["linked_ids"]["job_id"] == job["id"] for item in body["items"])
+    assert any(item["feedback"]["target_type"] == "plan" for item in body["items"])
+    assert any(item["feedback"]["target_type"] == "job_outcome" for item in body["items"])
+
+    filtered_reason = client.get(
+        "/feedback/examples",
+        params={
+            "llm_model": llm_model,
+            "planner_version": planner_version,
+            "reason_code": "did_not_finish",
+        },
+    )
+    assert filtered_reason.status_code == 200
+    filtered_body = filtered_reason.json()
+    assert filtered_body["total"] == 1
+    assert filtered_body["items"][0]["feedback"]["target_type"] == "job_outcome"
+
+    jsonl_response = client.get(
+        "/feedback/examples",
+        params=[
+            ("llm_model", llm_model),
+            ("planner_version", planner_version),
+            ("format", "jsonl"),
+            ("sentiment", "negative"),
+            ("sentiment", "partial"),
+        ],
+    )
+    assert jsonl_response.status_code == 200
+    assert "application/x-ndjson" in jsonl_response.headers["content-type"]
+    lines = [line for line in jsonl_response.text.splitlines() if line.strip()]
+    assert len(lines) == 2
+    parsed = [json.loads(line) for line in lines]
+    assert {row["sentiment"] for row in parsed} == {"negative", "partial"}
+    assert all(row["dimensions"]["llm_model"] == llm_model for row in parsed)
+
+
+def test_feedback_metrics_increment_for_submit_summary_and_export() -> None:
+    job_response = client.post(
+        "/jobs",
+        json={"goal": "Review a deployment plan", "context_json": {}, "priority": 0},
+    )
+    assert job_response.status_code == 200
+    job = job_response.json()
+    plan_id, _task_id = _create_plan_for_job(job["id"])
+
+    before_metrics = client.get("/metrics")
+    assert before_metrics.status_code == 200
+    before_text = before_metrics.text
+    submitted_before = _metric_value(
+        before_text,
+        "feedback_submitted_total",
+        {"target_type": "plan", "sentiment": "negative"},
+    )
+    reason_before = _metric_value(
+        before_text,
+        "feedback_reason_total",
+        {"target_type": "plan", "reason_code": "missing_step"},
+    )
+    summary_before = _metric_value(before_text, "feedback_summary_requests_total")
+    export_before = _metric_value(before_text, "feedback_examples_export_total")
+
+    feedback_response = client.post(
+        "/feedback",
+        headers={"X-Feedback-Actor-Id": f"metrics-plan-{uuid.uuid4().hex[:8]}"},
+        json={
+            "target_type": "plan",
+            "target_id": plan_id,
+            "sentiment": "negative",
+            "reason_codes": ["missing_step"],
+            "comment": "Metrics test negative plan feedback.",
+        },
+    )
+    assert feedback_response.status_code == 200
+
+    summary_response = client.get("/feedback/summary")
+    assert summary_response.status_code == 200
+    export_response = client.get("/feedback/examples", params={"target_type": "plan"})
+    assert export_response.status_code == 200
+
+    after_metrics = client.get("/metrics")
+    assert after_metrics.status_code == 200
+    after_text = after_metrics.text
+    assert (
+        _metric_value(
+            after_text,
+            "feedback_submitted_total",
+            {"target_type": "plan", "sentiment": "negative"},
+        )
+        >= submitted_before + 1
+    )
+    assert (
+        _metric_value(
+            after_text,
+            "feedback_reason_total",
+            {"target_type": "plan", "reason_code": "missing_step"},
+        )
+        >= reason_before + 1
+    )
+    assert _metric_value(after_text, "feedback_summary_requests_total") >= summary_before + 1
+    assert _metric_value(after_text, "feedback_examples_export_total") >= export_before + 1

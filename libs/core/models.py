@@ -97,6 +97,11 @@ class FeedbackSentiment(str, Enum):
     partial = "partial"
 
 
+class FeedbackExampleFormat(str, Enum):
+    json = "json"
+    jsonl = "jsonl"
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
@@ -507,6 +512,18 @@ class FeedbackSummaryResponse(BaseModel):
     assistant_action_types: List[FeedbackBreakdownBucket] = Field(default_factory=list)
     metrics: Dict[str, float] = Field(default_factory=dict)
     correlates: FeedbackCorrelationSummary = Field(default_factory=FeedbackCorrelationSummary)
+
+
+class FeedbackExample(BaseModel):
+    feedback: Feedback
+    snapshot: Dict[str, Any] = Field(default_factory=dict)
+    dimensions: Dict[str, Any] = Field(default_factory=dict)
+    linked_ids: Dict[str, Optional[str]] = Field(default_factory=dict)
+
+
+class FeedbackExampleExportResponse(BaseModel):
+    total: int = 0
+    items: List[FeedbackExample] = Field(default_factory=list)
 
 
 class JobCreate(BaseModel):

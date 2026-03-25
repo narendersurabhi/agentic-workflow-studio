@@ -31,6 +31,7 @@ from libs.core import (
     document_store,
     execution_contracts,
     events,
+    feedback_eval,
     intent_contract,
     logging as core_logging,
     mcp_gateway,
@@ -877,6 +878,24 @@ capability_execution_outcomes_total = Counter(
     "capability_execution_outcomes_total",
     "Capability execution outcomes observed from task results",
     ["capability", "status"],
+)
+feedback_submitted_total = Counter(
+    "feedback_submitted_total",
+    "Explicit feedback submissions",
+    ["target_type", "sentiment"],
+)
+feedback_reason_total = Counter(
+    "feedback_reason_total",
+    "Explicit feedback reasons submitted",
+    ["target_type", "reason_code"],
+)
+feedback_summary_requests_total = Counter(
+    "feedback_summary_requests_total",
+    "Feedback summary endpoint requests",
+)
+feedback_examples_export_total = Counter(
+    "feedback_examples_export_total",
+    "Feedback example export requests",
 )
 
 
@@ -11171,6 +11190,15 @@ def submit_feedback(
         )
     except ValueError as exc:
         _raise_feedback_http_error(exc)
+    feedback_submitted_total.labels(
+        target_type=feedback.target_type.value,
+        sentiment=feedback.sentiment.value,
+    ).inc()
+    for reason_code in feedback.reason_codes:
+        feedback_reason_total.labels(
+            target_type=feedback.target_type.value,
+            reason_code=reason_code,
+        ).inc()
     _emit_event("feedback.submitted", feedback.model_dump(mode="json"))
     return feedback
 
@@ -11212,6 +11240,7 @@ def get_feedback_summary(
     limit: int = Query(default=500, ge=1, le=5000),
     db: Session = Depends(get_db),
 ) -> models.FeedbackSummaryResponse:
+    feedback_summary_requests_total.inc()
     return feedback_service.summary_feedback_response(
         db,
         models.FeedbackSummaryRequest(
@@ -11225,6 +11254,44 @@ def get_feedback_summary(
             limit=limit,
         ),
     )
+
+
+@app.get("/feedback/examples", response_model=None)
+def get_feedback_examples(
+    target_type: models.FeedbackTargetType | None = Query(default=None),
+    sentiment: list[models.FeedbackSentiment] | None = Query(default=None),
+    reason_code: str | None = Query(default=None),
+    workflow_source: str | None = Query(default=None),
+    llm_model: str | None = Query(default=None),
+    planner_version: str | None = Query(default=None),
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=5000),
+    format: models.FeedbackExampleFormat = Query(default=models.FeedbackExampleFormat.json),
+    db: Session = Depends(get_db),
+) -> Any:
+    feedback_examples_export_total.inc()
+    export = feedback_service.export_feedback_examples(
+        db,
+        target_type=target_type,
+        sentiments=sentiment,
+        reason_code=reason_code,
+        workflow_source=workflow_source,
+        llm_model=llm_model,
+        planner_version=planner_version,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    if format == models.FeedbackExampleFormat.jsonl:
+        payload = feedback_eval.dumps_feedback_eval_rows_jsonl(
+            [item.model_dump(mode="json") for item in export.items]
+        )
+        return StreamingResponse(
+            iter([payload.encode("utf-8")]),
+            media_type="application/x-ndjson",
+        )
+    return export
 
 
 @app.get("/jobs/{job_id}/feedback", response_model=models.FeedbackListResponse)
