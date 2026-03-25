@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 import uuid
@@ -14,6 +15,7 @@ from .models import (
     FeedbackRecord,
     JobRecord,
     PlanRecord,
+    StepAttemptRecord,
     TaskRecord,
 )
 
@@ -293,6 +295,290 @@ def _resolve_feedback_target(
     raise ValueError("feedback_target_type_invalid")
 
 
+def derive_feedback_dimensions(
+    db: Session,
+    request: models.FeedbackCreate,
+    *,
+    resolution: Mapping[str, Any],
+) -> dict[str, Any]:
+    snapshot = dict(resolution.get("snapshot") or {})
+    job_id = _non_empty_string(resolution.get("job_id"))
+    plan_id = _non_empty_string(resolution.get("plan_id"))
+    message_id = _non_empty_string(resolution.get("message_id"))
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first() if job_id else None
+    plan = db.query(PlanRecord).filter(PlanRecord.id == plan_id).first() if plan_id else None
+    message = (
+        db.query(ChatMessageRecord).filter(ChatMessageRecord.id == message_id).first()
+        if message_id
+        else None
+    )
+    job_metadata = dict(job.metadata_json or {}) if job is not None else {}
+    message_action = (
+        dict(message.action_json or {})
+        if message is not None and isinstance(message.action_json, Mapping)
+        else {}
+    )
+    comment = _non_empty_string(request.comment)
+    reason_codes = _normalize_reason_codes(request.reason_codes)
+    workflow_source = _non_empty_string(job_metadata.get("workflow_source"))
+    llm_provider = _non_empty_string(job_metadata.get("llm_provider"))
+    llm_model = _non_empty_string(job_metadata.get("llm_model"))
+    planner_version = (
+        _non_empty_string(plan.planner_version if plan is not None else None)
+        or _non_empty_string(snapshot.get("planner_version"))
+    )
+    job_status = (
+        _non_empty_string(job.status if job is not None else None)
+        or _non_empty_string(snapshot.get("job_status"))
+        or _non_empty_string(snapshot.get("status"))
+    )
+    assistant_action_type = _non_empty_string(message_action.get("type"))
+    return {
+        "target_type": request.target_type.value,
+        "target_id": _non_empty_string(request.target_id),
+        "workflow_source": workflow_source,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
+        "planner_version": planner_version,
+        "job_status_at_feedback": job_status,
+        "assistant_action_type": assistant_action_type,
+        "has_comment": bool(comment),
+        "reason_count": len(reason_codes),
+    }
+
+
+def _feedback_dimensions(item: models.Feedback) -> dict[str, Any]:
+    metadata = dict(item.metadata or {})
+    dimensions = metadata.get("dimensions")
+    normalized = dict(dimensions) if isinstance(dimensions, Mapping) else {}
+    snapshot = dict(item.snapshot or {})
+    if "target_type" not in normalized:
+        normalized["target_type"] = item.target_type.value
+    if "target_id" not in normalized:
+        normalized["target_id"] = item.target_id
+    if "has_comment" not in normalized:
+        normalized["has_comment"] = bool(_non_empty_string(item.comment))
+    if "reason_count" not in normalized:
+        normalized["reason_count"] = len(_normalize_reason_codes(item.reason_codes))
+    if not _non_empty_string(normalized.get("planner_version")):
+        normalized["planner_version"] = _non_empty_string(snapshot.get("planner_version"))
+    if not _non_empty_string(normalized.get("job_status_at_feedback")):
+        normalized["job_status_at_feedback"] = (
+            _non_empty_string(snapshot.get("job_status")) or _non_empty_string(snapshot.get("status"))
+        )
+    if not _non_empty_string(normalized.get("assistant_action_type")):
+        action = snapshot.get("action")
+        if isinstance(action, Mapping):
+            normalized["assistant_action_type"] = _non_empty_string(action.get("type"))
+    return normalized
+
+
+def _increment_sentiment_bucket(
+    bucket: models.FeedbackSummary | models.FeedbackBreakdownBucket,
+    sentiment: models.FeedbackSentiment,
+) -> None:
+    bucket.total += 1
+    if sentiment == models.FeedbackSentiment.positive:
+        bucket.positive += 1
+    elif sentiment == models.FeedbackSentiment.negative:
+        bucket.negative += 1
+    elif sentiment == models.FeedbackSentiment.neutral:
+        bucket.neutral += 1
+    elif sentiment == models.FeedbackSentiment.partial:
+        bucket.partial += 1
+
+
+def dimension_breakdown(
+    items: list[models.Feedback],
+    dimension_key: str,
+    *,
+    fallback: str | None = None,
+) -> list[models.FeedbackBreakdownBucket]:
+    buckets: dict[str, models.FeedbackBreakdownBucket] = {}
+    for item in items:
+        dimensions = _feedback_dimensions(item)
+        value = _non_empty_string(dimensions.get(dimension_key))
+        if value is None and fallback == "target_type":
+            value = item.target_type.value
+        if value is None:
+            continue
+        bucket = buckets.get(value)
+        if bucket is None:
+            bucket = models.FeedbackBreakdownBucket(key=value)
+            buckets[value] = bucket
+        _increment_sentiment_bucket(bucket, item.sentiment)
+    return sorted(buckets.values(), key=lambda bucket: (-bucket.total, bucket.key))
+
+
+def reason_code_breakdown(items: list[models.Feedback]) -> list[models.FeedbackReasonBucket]:
+    counts: Counter[str] = Counter()
+    for item in items:
+        if item.sentiment not in {
+            models.FeedbackSentiment.negative,
+            models.FeedbackSentiment.partial,
+        }:
+            continue
+        for reason in _normalize_reason_codes(item.reason_codes):
+            counts[reason] += 1
+    return [
+        models.FeedbackReasonBucket(reason_code=reason_code, count=count)
+        for reason_code, count in sorted(counts.items(), key=lambda entry: (-entry[1], entry[0]))
+    ]
+
+
+def collect_job_feedback_correlates(
+    db: Session,
+    items: list[models.Feedback],
+) -> models.FeedbackCorrelationSummary:
+    job_ids = sorted(
+        {
+            normalized
+            for normalized in (_non_empty_string(item.job_id) for item in items)
+            if normalized is not None
+        }
+    )
+    if not job_ids:
+        return models.FeedbackCorrelationSummary()
+
+    jobs = {
+        record.id: record
+        for record in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()
+    }
+    tasks_by_job: dict[str, list[TaskRecord]] = {job_id: [] for job_id in job_ids}
+    for task in db.query(TaskRecord).filter(TaskRecord.job_id.in_(job_ids)).all():
+        tasks_by_job.setdefault(task.job_id, []).append(task)
+    attempts_by_job: dict[str, list[StepAttemptRecord]] = {job_id: [] for job_id in job_ids}
+    for attempt in db.query(StepAttemptRecord).filter(StepAttemptRecord.job_id.in_(job_ids)).all():
+        attempts_by_job.setdefault(attempt.job_id, []).append(attempt)
+
+    session_ids = sorted(
+        {
+            normalized
+            for item in items
+            for normalized in [_non_empty_string(item.session_id)]
+            if normalized is not None and _non_empty_string(item.job_id) in jobs
+        }
+    )
+    clarification_counts_by_session: dict[str, int] = {session_id: 0 for session_id in session_ids}
+    if session_ids:
+        messages = (
+            db.query(ChatMessageRecord)
+            .filter(ChatMessageRecord.session_id.in_(session_ids))
+            .all()
+        )
+        for message in messages:
+            if message.role != "assistant" or not isinstance(message.action_json, Mapping):
+                continue
+            if _non_empty_string(message.action_json.get("type")) != "ask_clarification":
+                continue
+            clarification_counts_by_session[message.session_id] = (
+                clarification_counts_by_session.get(message.session_id, 0) + 1
+            )
+
+    terminal_status_counts: dict[str, models.FeedbackBreakdownBucket] = {}
+    replan_count = 0
+    retry_count = 0
+    failed_task_count = 0
+    plan_failure_count = 0
+    clarification_turn_count = 0
+
+    first_session_by_job: dict[str, str | None] = {}
+    for item in items:
+        job_id = _non_empty_string(item.job_id)
+        if job_id is None or job_id in first_session_by_job:
+            continue
+        first_session_by_job[job_id] = _non_empty_string(item.session_id)
+
+    for job_id in job_ids:
+        job = jobs.get(job_id)
+        if job is None:
+            continue
+        status = _non_empty_string(job.status) or "unknown"
+        status_bucket = terminal_status_counts.get(status)
+        if status_bucket is None:
+            status_bucket = models.FeedbackBreakdownBucket(key=status, total=0)
+            terminal_status_counts[status] = status_bucket
+        status_bucket.total += 1
+        metadata = dict(job.metadata_json or {})
+        replan_count += max(0, int(metadata.get("replan_count", 0) or 0))
+        if _job_error_from_metadata(metadata):
+            plan_failure_count += 1
+        task_rows = tasks_by_job.get(job_id, [])
+        failed_task_count += sum(1 for task in task_rows if task.status == models.TaskStatus.failed.value)
+        retry_count += sum(max(0, int(task.rework_count or 0)) for task in task_rows)
+        step_attempts = attempts_by_job.get(job_id, [])
+        attempts_by_step: dict[str, int] = {}
+        for attempt in step_attempts:
+            attempts_by_step[attempt.step_id] = max(
+                attempts_by_step.get(attempt.step_id, 0),
+                max(0, int(attempt.attempt_number or 0)),
+            )
+        retry_count += sum(max(0, count - 1) for count in attempts_by_step.values())
+        session_id = first_session_by_job.get(job_id)
+        if session_id is not None:
+            clarification_turn_count += clarification_counts_by_session.get(session_id, 0)
+
+    return models.FeedbackCorrelationSummary(
+        job_count=len(jobs),
+        replan_count=replan_count,
+        retry_count=retry_count,
+        failed_task_count=failed_task_count,
+        plan_failure_count=plan_failure_count,
+        clarification_turn_count=clarification_turn_count,
+        terminal_statuses=sorted(
+            terminal_status_counts.values(),
+            key=lambda bucket: (-bucket.total, bucket.key),
+        ),
+    )
+
+
+def _positive_rate(
+    items: list[models.Feedback],
+    target_type: models.FeedbackTargetType,
+) -> float:
+    scoped = [item for item in items if item.target_type == target_type]
+    if not scoped:
+        return 0.0
+    positive = sum(1 for item in scoped if item.sentiment == models.FeedbackSentiment.positive)
+    return round(positive / len(scoped), 4)
+
+
+def summarize_feedback_rows(
+    db: Session,
+    items: list[models.Feedback],
+) -> models.FeedbackSummaryResponse:
+    return models.FeedbackSummaryResponse(
+        total=len(items),
+        sentiment_counts=summarize_feedback(items),
+        target_type_counts=dimension_breakdown(items, "target_type", fallback="target_type"),
+        negative_reasons=reason_code_breakdown(items),
+        workflow_sources=dimension_breakdown(items, "workflow_source"),
+        llm_models=dimension_breakdown(items, "llm_model"),
+        planner_versions=dimension_breakdown(items, "planner_version"),
+        job_statuses=dimension_breakdown(items, "job_status_at_feedback"),
+        assistant_action_types=dimension_breakdown(items, "assistant_action_type"),
+        metrics={
+            "chat_helpfulness_rate": _positive_rate(
+                items,
+                models.FeedbackTargetType.chat_message,
+            ),
+            "intent_agreement_rate": _positive_rate(
+                items,
+                models.FeedbackTargetType.intent_assessment,
+            ),
+            "plan_approval_rate": _positive_rate(
+                items,
+                models.FeedbackTargetType.plan,
+            ),
+            "job_outcome_positive_rate": _positive_rate(
+                items,
+                models.FeedbackTargetType.job_outcome,
+            ),
+        },
+        correlates=collect_job_feedback_correlates(db, items),
+    )
+
+
 def submit_feedback(
     db: Session,
     request: models.FeedbackCreate,
@@ -341,14 +627,24 @@ def submit_feedback(
     record.reason_codes_json = _normalize_reason_codes(request.reason_codes)
     record.comment = _non_empty_string(request.comment)
     record.snapshot_json = dict(resolution.get("snapshot") or {})
-    record.metadata_json = _normalize_metadata(request.metadata)
+    metadata = _normalize_metadata(request.metadata)
+    dimensions = dict(metadata.get("dimensions") or {}) if isinstance(metadata.get("dimensions"), Mapping) else {}
+    dimensions.update(
+        derive_feedback_dimensions(
+            db,
+            request,
+            resolution=resolution,
+        )
+    )
+    metadata["dimensions"] = dimensions
+    record.metadata_json = metadata
     record.updated_at = timestamp
     db.commit()
     db.refresh(record)
     return _feedback_from_record(record)
 
 
-def list_feedback(
+def _feedback_records(
     db: Session,
     *,
     target_type: models.FeedbackTargetType | None = None,
@@ -358,11 +654,16 @@ def list_feedback(
     plan_id: str | None = None,
     message_id: str | None = None,
     actor_key: str | None = None,
+    sentiment: models.FeedbackSentiment | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
     limit: int = 200,
-) -> list[models.Feedback]:
+) -> list[FeedbackRecord]:
     query = db.query(FeedbackRecord)
     if target_type is not None:
         query = query.filter(FeedbackRecord.target_type == target_type.value)
+    if sentiment is not None:
+        query = query.filter(FeedbackRecord.sentiment == sentiment.value)
     normalized_target_id = _non_empty_string(target_id)
     if normalized_target_id is not None:
         query = query.filter(FeedbackRecord.target_id == normalized_target_id)
@@ -381,10 +682,39 @@ def list_feedback(
     normalized_actor_key = _non_empty_string(actor_key)
     if normalized_actor_key is not None:
         query = query.filter(FeedbackRecord.actor_key == normalized_actor_key)
-    rows = (
+    if since is not None:
+        query = query.filter(FeedbackRecord.created_at >= since)
+    if until is not None:
+        query = query.filter(FeedbackRecord.created_at <= until)
+    return (
         query.order_by(FeedbackRecord.updated_at.desc(), FeedbackRecord.created_at.desc())
-        .limit(max(1, min(limit, 500)))
+        .limit(max(1, min(limit, 5000)))
         .all()
+    )
+
+
+def list_feedback(
+    db: Session,
+    *,
+    target_type: models.FeedbackTargetType | None = None,
+    target_id: str | None = None,
+    session_id: str | None = None,
+    job_id: str | None = None,
+    plan_id: str | None = None,
+    message_id: str | None = None,
+    actor_key: str | None = None,
+    limit: int = 200,
+) -> list[models.Feedback]:
+    rows = _feedback_records(
+        db,
+        target_type=target_type,
+        target_id=target_id,
+        session_id=session_id,
+        job_id=job_id,
+        plan_id=plan_id,
+        message_id=message_id,
+        actor_key=actor_key,
+        limit=limit,
     )
     return [_feedback_from_record(row) for row in rows]
 
@@ -427,3 +757,50 @@ def list_feedback_response(
         limit=limit,
     )
     return models.FeedbackListResponse(items=items, summary=summarize_feedback(items))
+
+
+def summary_feedback_response(
+    db: Session,
+    request: models.FeedbackSummaryRequest,
+) -> models.FeedbackSummaryResponse:
+    requires_dimension_filter = any(
+        [
+            _non_empty_string(request.workflow_source),
+            _non_empty_string(request.llm_model),
+            _non_empty_string(request.planner_version),
+        ]
+    )
+    scan_limit = 5000 if requires_dimension_filter else request.limit
+    rows = _feedback_records(
+        db,
+        target_type=request.target_type,
+        sentiment=request.sentiment,
+        since=request.since,
+        until=request.until,
+        limit=scan_limit,
+    )
+    items = [_feedback_from_record(row) for row in rows]
+    workflow_source = _non_empty_string(request.workflow_source)
+    llm_model = _non_empty_string(request.llm_model)
+    planner_version = _non_empty_string(request.planner_version)
+    if workflow_source is not None:
+        items = [
+            item
+            for item in items
+            if _non_empty_string(_feedback_dimensions(item).get("workflow_source")) == workflow_source
+        ]
+    if llm_model is not None:
+        items = [
+            item
+            for item in items
+            if _non_empty_string(_feedback_dimensions(item).get("llm_model")) == llm_model
+        ]
+    if planner_version is not None:
+        items = [
+            item
+            for item in items
+            if _non_empty_string(_feedback_dimensions(item).get("planner_version"))
+            == planner_version
+        ]
+    items = items[: max(1, min(request.limit, 5000))]
+    return summarize_feedback_rows(db, items)

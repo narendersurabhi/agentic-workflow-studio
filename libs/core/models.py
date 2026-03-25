@@ -460,6 +460,55 @@ class FeedbackListResponse(BaseModel):
     summary: FeedbackSummary = Field(default_factory=FeedbackSummary)
 
 
+class FeedbackBreakdownBucket(BaseModel):
+    key: str
+    total: int = 0
+    positive: int = 0
+    negative: int = 0
+    neutral: int = 0
+    partial: int = 0
+
+
+class FeedbackReasonBucket(BaseModel):
+    reason_code: str
+    count: int = 0
+
+
+class FeedbackCorrelationSummary(BaseModel):
+    job_count: int = 0
+    replan_count: int = 0
+    retry_count: int = 0
+    failed_task_count: int = 0
+    plan_failure_count: int = 0
+    clarification_turn_count: int = 0
+    terminal_statuses: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+
+
+class FeedbackSummaryRequest(BaseModel):
+    target_type: Optional[FeedbackTargetType] = None
+    sentiment: Optional[FeedbackSentiment] = None
+    workflow_source: Optional[str] = None
+    llm_model: Optional[str] = None
+    planner_version: Optional[str] = None
+    since: Optional[datetime] = None
+    until: Optional[datetime] = None
+    limit: int = Field(default=500, ge=1, le=5000)
+
+
+class FeedbackSummaryResponse(BaseModel):
+    total: int = 0
+    sentiment_counts: FeedbackSummary = Field(default_factory=FeedbackSummary)
+    target_type_counts: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+    negative_reasons: List[FeedbackReasonBucket] = Field(default_factory=list)
+    workflow_sources: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+    llm_models: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+    planner_versions: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+    job_statuses: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+    assistant_action_types: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+    metrics: Dict[str, float] = Field(default_factory=dict)
+    correlates: FeedbackCorrelationSummary = Field(default_factory=FeedbackCorrelationSummary)
+
+
 class JobCreate(BaseModel):
     goal: str
     context_json: Dict[str, Any] = Field(default_factory=dict)

@@ -11,6 +11,7 @@ import ScreenHeader, {
 import ComposerStepInspector from "./components/composer/ComposerStepInspector";
 import ComposerValidationPanel from "./components/composer/ComposerValidationPanel";
 import FeedbackControl from "./components/feedback/FeedbackControl";
+import FeedbackInsightsPanel from "./components/feedback/FeedbackInsightsPanel";
 import {
   CHAT_FEEDBACK_REASONS,
   INTENT_FEEDBACK_REASONS,
@@ -20,6 +21,7 @@ import {
   getFeedbackActorId,
   type FeedbackEntry,
   type FeedbackListResponse,
+  type FeedbackSummaryResponse,
   type FeedbackTargetType
 } from "./lib/feedback";
 
@@ -2081,6 +2083,9 @@ function HomeContent() {
   const [feedbackByTarget, setFeedbackByTarget] = useState<Record<string, FeedbackEntry>>({});
   const [feedbackSubmitting, setFeedbackSubmitting] = useState<Record<string, boolean>>({});
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummaryResponse | null>(null);
+  const [feedbackSummaryLoading, setFeedbackSummaryLoading] = useState(false);
+  const [feedbackSummaryError, setFeedbackSummaryError] = useState<string | null>(null);
   const [showTaskInputs, setShowTaskInputs] = useState(false);
   const [showRecentEvents, setShowRecentEvents] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
@@ -5968,6 +5973,23 @@ const openTemplateModal = (template: Template) => {
     }
   };
 
+  const loadFeedbackSummary = async () => {
+    setFeedbackSummaryLoading(true);
+    setFeedbackSummaryError(null);
+    const result = await fetchJson(`${apiUrl}/feedback/summary?limit=500`);
+    if (!result.ok || !result.data || typeof result.data !== "object") {
+      setFeedbackSummaryError(result.error || "Failed to load feedback summary.");
+      setFeedbackSummaryLoading(false);
+      return;
+    }
+    setFeedbackSummary(result.data as FeedbackSummaryResponse);
+    setFeedbackSummaryLoading(false);
+  };
+
+  useEffect(() => {
+    void loadFeedbackSummary();
+  }, []);
+
   const submitFeedback = async (
     targetType: FeedbackTargetType,
     targetId: string,
@@ -6006,6 +6028,7 @@ const openTemplateModal = (template: Template) => {
         ...previous,
         [feedbackTargetKey(body.target_type, body.target_id)]: body
       }));
+      void loadFeedbackSummary();
     } catch (error) {
       setFeedbackError(error instanceof Error ? error.message : "Failed to submit feedback.");
       throw error;
@@ -9172,6 +9195,13 @@ const openTemplateModal = (template: Template) => {
               ) : null}
             </div>
         </ScreenHeader>
+      <FeedbackInsightsPanel
+        summary={feedbackSummary}
+        loading={feedbackSummaryLoading}
+        error={feedbackSummaryError}
+        onRefresh={() => void loadFeedbackSummary()}
+      />
+
         <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm animate-fade-up-delayed">
         <div className="flex items-center justify-between gap-4">
           <div>

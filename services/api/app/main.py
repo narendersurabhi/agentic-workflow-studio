@@ -11200,6 +11200,33 @@ def get_feedback(
     )
 
 
+@app.get("/feedback/summary", response_model=models.FeedbackSummaryResponse)
+def get_feedback_summary(
+    target_type: models.FeedbackTargetType | None = Query(default=None),
+    sentiment: models.FeedbackSentiment | None = Query(default=None),
+    workflow_source: str | None = Query(default=None),
+    llm_model: str | None = Query(default=None),
+    planner_version: str | None = Query(default=None),
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+    db: Session = Depends(get_db),
+) -> models.FeedbackSummaryResponse:
+    return feedback_service.summary_feedback_response(
+        db,
+        models.FeedbackSummaryRequest(
+            target_type=target_type,
+            sentiment=sentiment,
+            workflow_source=workflow_source,
+            llm_model=llm_model,
+            planner_version=planner_version,
+            since=since,
+            until=until,
+            limit=limit,
+        ),
+    )
+
+
 @app.get("/jobs/{job_id}/feedback", response_model=models.FeedbackListResponse)
 def get_job_feedback(
     job_id: str,

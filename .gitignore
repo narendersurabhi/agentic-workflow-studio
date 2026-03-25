@@ -28,3 +28,5 @@ templates/
 ./templates
 ./workspace
 scripts/largest_paths_cleanup.sh
+./test.db
+./text.md

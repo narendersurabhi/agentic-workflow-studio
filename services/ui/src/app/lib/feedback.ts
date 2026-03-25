@@ -39,6 +39,50 @@ export type FeedbackListResponse = {
   };
 };
 
+export type FeedbackBreakdownBucket = {
+  key: string;
+  total: number;
+  positive: number;
+  negative: number;
+  neutral: number;
+  partial: number;
+};
+
+export type FeedbackReasonBucket = {
+  reason_code: string;
+  count: number;
+};
+
+export type FeedbackCorrelationSummary = {
+  job_count: number;
+  replan_count: number;
+  retry_count: number;
+  failed_task_count: number;
+  plan_failure_count: number;
+  clarification_turn_count: number;
+  terminal_statuses: FeedbackBreakdownBucket[];
+};
+
+export type FeedbackSummaryResponse = {
+  total: number;
+  sentiment_counts: {
+    total: number;
+    positive: number;
+    negative: number;
+    neutral: number;
+    partial: number;
+  };
+  target_type_counts: FeedbackBreakdownBucket[];
+  negative_reasons: FeedbackReasonBucket[];
+  workflow_sources: FeedbackBreakdownBucket[];
+  llm_models: FeedbackBreakdownBucket[];
+  planner_versions: FeedbackBreakdownBucket[];
+  job_statuses: FeedbackBreakdownBucket[];
+  assistant_action_types: FeedbackBreakdownBucket[];
+  metrics: Record<string, number>;
+  correlates: FeedbackCorrelationSummary;
+};
+
 const FEEDBACK_ACTOR_STORAGE_KEY = "ape.feedback.actor_id.v1";
 
 export const CHAT_FEEDBACK_REASONS: FeedbackReasonOption[] = [
@@ -92,4 +136,11 @@ export const getFeedbackActorId = (preferred?: string) => {
   const next = makeFallbackActorId();
   window.localStorage.setItem(FEEDBACK_ACTOR_STORAGE_KEY, next);
   return next;
+};
+
+export const formatFeedbackRate = (value?: number | null) => {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "0%";
+  }
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 };
