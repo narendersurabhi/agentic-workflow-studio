@@ -97,3 +97,38 @@ def test_build_chat_context_envelope_loads_profile_and_projects_views() -> None:
     assert route_view["user_profile"]["preferences"]["response_verbosity"] == "concise"
     assert "user_profile" not in submit_view
     assert submit_view["query_hint"] == "authentication failures"
+
+
+def test_build_workflow_runtime_context_envelope_merges_context_and_inputs() -> None:
+    envelope, runtime_inputs = context_service.build_workflow_runtime_context_envelope(
+        db=None,
+        goal="Run workflow",
+        version_context={"topic": "Release notes", "workflow_inputs": {"topic": "Version topic"}},
+        trigger_context={"channel": "chat"},
+        request_context={"topic": "Request topic", "workflow_context_json": {"priority": "high"}},
+        trigger_inputs={"repo": "repo-a"},
+        explicit_inputs={"repo": "repo-b", "topic": "Input topic"},
+        runtime_metadata={"surface": "workflow_runtime"},
+    )
+
+    runtime_view = context_service.workflow_runtime_context_view(envelope)
+    assert runtime_view["topic"] == "Request topic"
+    assert runtime_view["channel"] == "chat"
+    assert runtime_view["workflow_context_json"]["priority"] == "high"
+    assert runtime_inputs == {"repo": "repo-b", "topic": "Input topic"}
+    assert envelope.trace.sources_used[:3] == ["version_context", "trigger_context", "request_context"]
+
+
+def test_build_preflight_context_envelope_prefers_provided_job_context() -> None:
+    envelope = context_service.build_preflight_context_envelope(
+        db=None,
+        goal="Render report",
+        provided_job_context={"path": "documents/provided.docx"},
+        persisted_job_context={"path": "documents/persisted.docx", "topic": "Persisted"},
+        runtime_metadata={"surface": "preflight"},
+    )
+
+    preflight_view = context_service.preflight_context_view(envelope)
+    assert preflight_view["path"] == "documents/provided.docx"
+    assert "topic" not in preflight_view
+    assert envelope.trace.sources_used == ["provided_job_context"]

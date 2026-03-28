@@ -2545,6 +2545,106 @@ def _conversational_chat_fast_path_envelope(
     )
 
 
+def _plan_derived_normalized_intent_envelope(
+    *,
+    goal: str,
+    plan: models.PlanCreate,
+    source: str,
+) -> workflow_contracts.NormalizedIntentEnvelope:
+    segments: list[workflow_contracts.IntentGraphSegment] = []
+    candidate_capabilities: dict[str, list[str]] = {}
+    intent_order: list[str] = []
+    for index, task in enumerate(plan.tasks):
+        request_ids = _task_request_ids_for_preflight(task)
+        task_intent = _preflight_task_intent(task, goal_text=goal) or "io"
+        objective = (
+            str(task.instruction or "").strip()
+            or str(task.description or "").strip()
+            or str(task.name or "").strip()
+            or str(goal or "").strip()
+        )
+        segment_id = f"s{index + 1}"
+        slots = intent_contract.normalize_intent_segment_slots(
+            raw_slots={"must_have_inputs": []},
+            intent=task_intent,
+            objective=objective,
+            required_inputs=(),
+            suggested_capabilities=request_ids,
+            fallback_slots={"must_have_inputs": []},
+        )
+        segments.append(
+            workflow_contracts.IntentGraphSegment(
+                id=segment_id,
+                intent=task_intent,
+                objective=objective,
+                source=source,
+                confidence=1.0,
+                depends_on=[],
+                required_inputs=[],
+                suggested_capabilities=request_ids,
+                slots=workflow_contracts.IntentGraphSlots.model_validate(slots),
+            )
+        )
+        if request_ids:
+            candidate_capabilities[segment_id] = list(request_ids)
+        intent_order.append(task_intent)
+
+    unique_intents = list(dict.fromkeys(intent_order))
+    overall_intent = unique_intents[0] if len(unique_intents) == 1 else "other"
+    return workflow_contracts.NormalizedIntentEnvelope(
+        goal=str(goal or "").strip(),
+        profile=workflow_contracts.GoalIntentProfile(
+            intent=overall_intent,
+            source=source,
+            confidence=1.0,
+            risk_level="read_only",
+            threshold=0.0,
+            low_confidence=False,
+            needs_clarification=False,
+            requires_blocking_clarification=False,
+            questions=[],
+            blocking_slots=[],
+            missing_slots=[],
+            slot_values={
+                "intent_action": overall_intent,
+                "risk_level": "read_only",
+            },
+            clarification_mode=source,
+        ),
+        graph=workflow_contracts.IntentGraph(
+            segments=segments,
+            summary=workflow_contracts.IntentGraphSummary(
+                segment_count=len(segments),
+                intent_order=intent_order,
+                schema_version="intent_v2",
+            ),
+            overall_confidence=1.0,
+            source=source,
+        ),
+        candidate_capabilities=candidate_capabilities,
+        clarification=workflow_contracts.ClarificationState(
+            needs_clarification=False,
+            requires_blocking_clarification=False,
+            missing_inputs=[],
+            questions=[],
+            blocking_slots=[],
+            slot_values={
+                "intent_action": overall_intent,
+                "risk_level": "read_only",
+            },
+            clarification_mode=source,
+        ),
+        trace=workflow_contracts.NormalizationTrace(
+            assessment_source=source,
+            assessment_mode="compiled_plan",
+            assessment_fallback_used=False,
+            decomposition_source=source,
+            decomposition_mode="compiled_plan",
+            decomposition_fallback_used=False,
+        ),
+    )
+
+
 def _chat_response_turn_plan(
     *,
     goal: str,
@@ -3908,6 +4008,11 @@ def _run_chat_direct_capability(
         )
         raise RuntimeError(f"chat_direct_preflight_failed:{details}")
 
+    direct_envelope = _plan_derived_normalized_intent_envelope(
+        goal=str(goal or capability_spec.description or capability_spec.capability_id),
+        plan=plan,
+        source="chat_direct_compiled_plan",
+    )
     job = _create_job_internal(
         models.JobCreate(
             goal=str(goal or capability_spec.description or capability_spec.capability_id),
@@ -3917,7 +4022,13 @@ def _run_chat_direct_capability(
         db,
         emit_job_created_event=False,
         metadata_overrides={
-            "goal_intent_graph": None,
+            "goal_intent_profile": (
+                workflow_contracts.dump_goal_intent_profile(direct_envelope.profile) or {}
+            ),
+            "normalized_intent_envelope": (
+                workflow_contracts.dump_normalized_intent_envelope(direct_envelope) or {}
+            ),
+            "goal_intent_graph": workflow_contracts.dump_intent_graph(direct_envelope.graph),
             "workflow_source": "chat_direct",
             "render_path_mode": planner_contracts.RENDER_PATH_MODE_AUTO,
             "scheduler_mode": POSTGRES_RUN_SPEC_SCHEDULER_MODE,
@@ -4281,13 +4392,27 @@ def _prepare_chat_workflow_runtime_inputs(
     context_json: Mapping[str, Any] | None,
     inputs: Mapping[str, Any] | None,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any], dict[str, Any]]:
-    merged_context_json = dict(version.context_json or {})
-    if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict):
-        trigger_context = trigger.config_json.get("context_json")
-        if isinstance(trigger_context, Mapping):
-            merged_context_json.update(dict(trigger_context))
-    if isinstance(context_json, Mapping):
-        merged_context_json.update(dict(context_json))
+    trigger_context = (
+        trigger.config_json.get("context_json")
+        if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict)
+        else None
+    )
+    trigger_inputs = (
+        trigger.config_json.get("inputs")
+        if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict)
+        else None
+    )
+    context_envelope, runtime_inputs = context_service.build_workflow_runtime_context_envelope(
+        db=None,
+        goal=version.goal or "",
+        version_context=version.context_json if isinstance(version.context_json, Mapping) else None,
+        trigger_context=trigger_context if isinstance(trigger_context, Mapping) else None,
+        request_context=context_json,
+        trigger_inputs=trigger_inputs if isinstance(trigger_inputs, Mapping) else None,
+        explicit_inputs=inputs,
+        runtime_metadata={"surface": "chat_workflow_prepare"},
+    )
+    merged_context_json = context_service.workflow_runtime_context_view(context_envelope)
 
     workflow_interface, workflow_interface_errors, _workflow_interface_warnings = (
         _coerce_workflow_interface(
@@ -4306,14 +4431,6 @@ def _prepare_chat_workflow_runtime_inputs(
                 "diagnostics": {"errors": workflow_interface_errors, "warnings": []},
             },
         )
-
-    runtime_inputs: dict[str, Any] = {}
-    if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict):
-        trigger_inputs = trigger.config_json.get("inputs")
-        if isinstance(trigger_inputs, Mapping):
-            runtime_inputs.update(dict(trigger_inputs))
-    if isinstance(inputs, Mapping):
-        runtime_inputs.update(dict(inputs))
 
     for definition in workflow_interface.get("inputs", []):
         if not isinstance(definition, Mapping):
@@ -12854,9 +12971,17 @@ def preflight_plan(
             )
         if not isinstance(provided_graph, Mapping):
             provided_graph = job.metadata_json.get("goal_intent_graph")
+    preflight_envelope = context_service.build_preflight_context_envelope(
+        db=db,
+        goal=goal_text,
+        provided_job_context=job_context if job_context else None,
+        persisted_job_context=job.context_json if job and isinstance(job.context_json, dict) else None,
+        normalized_intent_envelope=provided_envelope,
+        runtime_metadata={"surface": "plans_preflight"},
+    )
     preflight_errors = _compile_plan_preflight(
         plan,
-        job_context,
+        context_service.preflight_context_view(preflight_envelope),
         goal_text=goal_text,
         normalized_intent_envelope=provided_envelope,
         goal_intent_graph=provided_graph if isinstance(provided_graph, Mapping) else None,
@@ -12928,6 +13053,14 @@ def _compile_workflow_definition_version(
     raw_draft = definition.draft_json if isinstance(definition.draft_json, dict) else {}
     goal_text = str(definition.goal or "").strip()
     job_context = dict(definition.context_json) if isinstance(definition.context_json, dict) else {}
+    compile_envelope = context_service.build_preflight_context_envelope(
+        db=None,
+        goal=goal_text,
+        provided_job_context=job_context,
+        persisted_job_context=None,
+        runtime_metadata={"surface": "workflow_definition_compile"},
+    )
+    compile_job_context = context_service.preflight_context_view(compile_envelope)
     workflow_interface, workflow_interface_errors, workflow_interface_warnings = (
         _coerce_workflow_interface(
             raw_draft.get("workflowInterface")
@@ -12948,7 +13081,7 @@ def _compile_workflow_definition_version(
         )
     preview_job_context, workflow_context_errors = _build_workflow_interface_runtime_context(
         workflow_interface,
-        base_context=job_context,
+        base_context=compile_job_context,
         preview=True,
     )
     if workflow_context_errors:
@@ -12965,7 +13098,7 @@ def _compile_workflow_definition_version(
     plan, diagnostics_errors, diagnostics_warnings = _build_plan_from_composer_draft(
         raw_draft,
         goal_text=goal_text,
-        job_context=job_context,
+        job_context=compile_job_context,
     )
     if plan is None:
         raise HTTPException(
@@ -13367,13 +13500,17 @@ def _run_workflow_version_internal(
         raise HTTPException(status_code=400, detail="workflow_version_plan_invalid")
     run_spec = _workflow_version_run_spec(version)
     use_postgres_scheduler = STUDIO_RUN_SCHEDULER_ENABLED and run_spec is not None
-    context_json = dict(version.context_json or {})
-    if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict):
-        trigger_context = trigger.config_json.get("context_json")
-        if isinstance(trigger_context, dict):
-            context_json.update(dict(trigger_context))
-    if isinstance(payload, dict) and isinstance(payload.get("context_json"), dict):
-        context_json.update(dict(payload["context_json"]))
+    trigger_context = (
+        trigger.config_json.get("context_json")
+        if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict)
+        else None
+    )
+    trigger_inputs = (
+        trigger.config_json.get("inputs")
+        if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict)
+        else None
+    )
+    request_context = payload.get("context_json") if isinstance(payload, dict) else None
     workflow_interface, workflow_interface_errors, _workflow_interface_warnings = (
         _coerce_workflow_interface(
             version.draft_json.get("workflowInterface")
@@ -13391,13 +13528,17 @@ def _run_workflow_version_internal(
                 "diagnostics": {"errors": workflow_interface_errors, "warnings": []},
             },
         )
-    runtime_inputs: dict[str, Any] = {}
-    if isinstance(trigger, WorkflowTriggerRecord) and isinstance(trigger.config_json, dict):
-        trigger_inputs = trigger.config_json.get("inputs")
-        if isinstance(trigger_inputs, dict):
-            runtime_inputs.update(dict(trigger_inputs))
-    if isinstance(payload, dict) and isinstance(payload.get("inputs"), dict):
-        runtime_inputs.update(dict(payload["inputs"]))
+    context_envelope, runtime_inputs = context_service.build_workflow_runtime_context_envelope(
+        db=db,
+        goal=version.goal or definition.goal or definition.title,
+        version_context=version.context_json if isinstance(version.context_json, Mapping) else None,
+        trigger_context=trigger_context if isinstance(trigger_context, Mapping) else None,
+        request_context=request_context if isinstance(request_context, Mapping) else None,
+        trigger_inputs=trigger_inputs if isinstance(trigger_inputs, Mapping) else None,
+        explicit_inputs=payload.get("inputs") if isinstance(payload, dict) and isinstance(payload.get("inputs"), dict) else None,
+        runtime_metadata={"surface": source},
+    )
+    context_json = context_service.workflow_runtime_context_view(context_envelope)
     context_json, workflow_context_errors = _build_workflow_interface_runtime_context(
         workflow_interface,
         base_context=context_json,
@@ -13435,6 +13576,11 @@ def _run_workflow_version_internal(
                 },
             },
         )
+    workflow_envelope = _plan_derived_normalized_intent_envelope(
+        goal=version.goal or definition.goal or definition.title,
+        plan=compiled_plan,
+        source="workflow_compiled_plan",
+    )
     priority_raw = payload.get("priority", 0) if isinstance(payload, dict) else 0
     try:
         priority = int(priority_raw)
@@ -13450,7 +13596,13 @@ def _run_workflow_version_internal(
         "render_path_mode": planner_contracts.RENDER_PATH_MODE_AUTO,
         "workflow_definition_id": definition.id,
         "workflow_version_id": version.id,
-        "goal_intent_graph": None,
+        "goal_intent_profile": (
+            workflow_contracts.dump_goal_intent_profile(workflow_envelope.profile) or {}
+        ),
+        "normalized_intent_envelope": (
+            workflow_contracts.dump_normalized_intent_envelope(workflow_envelope) or {}
+        ),
+        "goal_intent_graph": workflow_contracts.dump_intent_graph(workflow_envelope.graph),
     }
     if use_postgres_scheduler:
         metadata_overrides["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
@@ -13641,6 +13793,15 @@ def compile_composer_draft(
             )
         if not isinstance(provided_graph, Mapping):
             provided_graph = job.metadata_json.get("goal_intent_graph")
+    compile_envelope = context_service.build_preflight_context_envelope(
+        db=db,
+        goal=goal_text,
+        provided_job_context=job_context if job_context else None,
+        persisted_job_context=job.context_json if job and isinstance(job.context_json, dict) else None,
+        normalized_intent_envelope=provided_envelope,
+        runtime_metadata={"surface": "composer_compile"},
+    )
+    compile_job_context = context_service.preflight_context_view(compile_envelope)
 
     workflow_interface, workflow_interface_errors, workflow_interface_warnings = (
         _coerce_workflow_interface(
@@ -13651,14 +13812,14 @@ def compile_composer_draft(
     )
     preview_job_context, workflow_context_errors = _build_workflow_interface_runtime_context(
         workflow_interface,
-        base_context=job_context,
+        base_context=compile_job_context,
         explicit_inputs=payload.get("inputs") if isinstance(payload.get("inputs"), dict) else None,
         preview=True,
     )
     plan, diagnostics_errors, diagnostics_warnings = _build_plan_from_composer_draft(
         raw_draft,
         goal_text=goal_text,
-        job_context=job_context,
+        job_context=compile_job_context,
     )
     diagnostics_errors.extend(workflow_interface_errors)
     diagnostics_errors.extend(workflow_context_errors)

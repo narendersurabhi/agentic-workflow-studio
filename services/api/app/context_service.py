@@ -21,47 +21,75 @@ _WORKFLOW_CONTEXT_KEYS = (
 )
 
 
-def build_chat_context_envelope(
+def collect_context_sources(
+    **sources: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    collected: dict[str, dict[str, Any]] = {}
+    for name, value in sources.items():
+        if isinstance(value, Mapping):
+            collected[name] = dict(value)
+    return collected
+
+
+def normalize_context_sources(
+    sources: Mapping[str, Mapping[str, Any]] | None,
     *,
-    db: Session,
-    goal: str,
-    session_metadata: Mapping[str, Any] | None,
-    session_context: Mapping[str, Any] | None,
-    turn_context: Mapping[str, Any] | None,
-    user_id: str | None,
-    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
-    runtime_metadata: Mapping[str, Any] | None = None,
-) -> workflow_contracts.ContextEnvelope:
-    merged_context = _merge_context_maps(session_context, turn_context)
-    normalized_user_id = str(user_id or "").strip()
+    user_id: str | None = None,
+) -> tuple[dict[str, Any], list[str], str]:
+    merged_context: dict[str, Any] = {}
     sources_used: list[str] = []
-    if isinstance(session_context, Mapping) and session_context:
-        sources_used.append("session_context")
-    if isinstance(turn_context, Mapping) and turn_context:
-        sources_used.append("turn_context")
+    for source_name, payload in (sources or {}).items():
+        if not isinstance(payload, Mapping) or not payload:
+            continue
+        merged_context = _merge_context_maps(merged_context, payload)
+        sources_used.append(str(source_name))
+
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        normalized_user_id = str(
+            merged_context.get("user_id") or merged_context.get("semantic_user_id") or ""
+        ).strip()
     if normalized_user_id:
         merged_context["user_id"] = normalized_user_id
         merged_context["semantic_user_id"] = normalized_user_id
-        sources_used.append("authenticated_user")
+        if "authenticated_user" not in sources_used and user_id:
+            sources_used.append("authenticated_user")
+    return merged_context, sources_used, normalized_user_id
+
+
+def build_context_envelope(
+    *,
+    db: Session | None,
+    goal: str,
+    session_metadata: Mapping[str, Any] | None = None,
+    context_sources: Mapping[str, Mapping[str, Any]] | None = None,
+    user_id: str | None = None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    runtime_metadata: Mapping[str, Any] | None = None,
+) -> workflow_contracts.ContextEnvelope:
+    merged_context, sources_used, normalized_user_id = normalize_context_sources(
+        context_sources,
+        user_id=user_id,
+    )
 
     profile_payload: dict[str, Any] = {}
-    if normalized_user_id:
+    if normalized_user_id and db is not None:
         try:
             profile = memory_profile_service.load_user_profile(db, normalized_user_id)
             profile_payload = profile.model_dump(mode="json", exclude_none=True)
         except Exception:  # noqa: BLE001
             profile_payload = {}
-        if profile_payload:
+        if profile_payload and "user_profile" not in sources_used:
             sources_used.append("user_profile")
 
     parsed_normalized = workflow_contracts.parse_normalized_intent_envelope(
         normalized_intent_envelope
     )
-    if parsed_normalized is not None:
+    if parsed_normalized is not None and "normalized_intent_envelope" not in sources_used:
         sources_used.append("normalized_intent_envelope")
 
     interaction_summaries = _interaction_summaries_from_context(merged_context)
-    if interaction_summaries:
+    if interaction_summaries and "interaction_summaries" not in sources_used:
         sources_used.append("interaction_summaries")
 
     return workflow_contracts.ContextEnvelope(
@@ -93,6 +121,86 @@ def build_chat_context_envelope(
     )
 
 
+def build_chat_context_envelope(
+    *,
+    db: Session,
+    goal: str,
+    session_metadata: Mapping[str, Any] | None,
+    session_context: Mapping[str, Any] | None,
+    turn_context: Mapping[str, Any] | None,
+    user_id: str | None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    runtime_metadata: Mapping[str, Any] | None = None,
+) -> workflow_contracts.ContextEnvelope:
+    return build_context_envelope(
+        db=db,
+        goal=goal,
+        session_metadata=session_metadata,
+        context_sources=collect_context_sources(
+            session_context=session_context,
+            turn_context=turn_context,
+        ),
+        user_id=user_id,
+        normalized_intent_envelope=normalized_intent_envelope,
+        runtime_metadata=runtime_metadata,
+    )
+
+
+def build_workflow_runtime_context_envelope(
+    *,
+    db: Session | None,
+    goal: str,
+    version_context: Mapping[str, Any] | None,
+    trigger_context: Mapping[str, Any] | None,
+    request_context: Mapping[str, Any] | None,
+    trigger_inputs: Mapping[str, Any] | None,
+    explicit_inputs: Mapping[str, Any] | None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    runtime_metadata: Mapping[str, Any] | None = None,
+) -> tuple[workflow_contracts.ContextEnvelope, dict[str, Any]]:
+    envelope = build_context_envelope(
+        db=db,
+        goal=goal,
+        context_sources=collect_context_sources(
+            version_context=version_context,
+            trigger_context=trigger_context,
+            request_context=request_context,
+        ),
+        normalized_intent_envelope=normalized_intent_envelope,
+        runtime_metadata=runtime_metadata,
+    )
+    runtime_inputs, _sources_used, _normalized_user_id = normalize_context_sources(
+        collect_context_sources(
+            trigger_inputs=trigger_inputs,
+            explicit_inputs=explicit_inputs,
+        )
+    )
+    return envelope, runtime_inputs
+
+
+def build_preflight_context_envelope(
+    *,
+    db: Session | None,
+    goal: str,
+    provided_job_context: Mapping[str, Any] | None,
+    persisted_job_context: Mapping[str, Any] | None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    runtime_metadata: Mapping[str, Any] | None = None,
+) -> workflow_contracts.ContextEnvelope:
+    context_sources = (
+        collect_context_sources(provided_job_context=provided_job_context)
+        if isinstance(provided_job_context, Mapping) and provided_job_context
+        else collect_context_sources(persisted_job_context=persisted_job_context)
+    )
+    return build_context_envelope(
+        db=db,
+        goal=goal,
+        context_sources=context_sources,
+        normalized_intent_envelope=normalized_intent_envelope,
+        runtime_metadata=runtime_metadata,
+    )
+
+
 def chat_route_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -103,6 +211,24 @@ def chat_route_context_view(
     if parsed.profile:
         context["user_profile"] = dict(parsed.profile)
     return context
+
+
+def workflow_runtime_context_view(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    parsed = workflow_contracts.parse_context_envelope(envelope)
+    if parsed is None:
+        return {}
+    return dict(parsed.context_json or {})
+
+
+def preflight_context_view(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    parsed = workflow_contracts.parse_context_envelope(envelope)
+    if parsed is None:
+        return {}
+    return dict(parsed.context_json or {})
 
 
 def chat_submit_context_view(

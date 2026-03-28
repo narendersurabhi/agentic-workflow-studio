@@ -718,12 +718,19 @@ def _job_context_value(payload_map: Mapping[str, Any], key: str) -> Any:
 def _payload_has_required_input(
     payload_map: Mapping[str, Any], key: str, *, tool_name: str | None = None
 ) -> bool:
+    normalized_tool_name = str(tool_name or "").strip().lower()
     allow_job_context = tool_name not in {
         "llm_generate_document_spec",
         "document.spec.generate",
         "llm_generate_document_spec_from_markdown",
         "document.spec.generate_from_markdown",
     }
+    if key == "query" and normalized_tool_name in {
+        "filesystem.workspace.list",
+        "filesystem.artifacts.list",
+        "list_files",
+    }:
+        return True
     if key == "repo_full_name":
         owner = (
             payload_map.get("owner")
@@ -760,6 +767,7 @@ def _payload_has_required_input(
             "json",
             "data",
         ),
+        "query": ("path", "source"),
         "path": ("output_path",),
         "output_path": ("path",),
         "date": ("today",),

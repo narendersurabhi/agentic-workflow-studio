@@ -170,6 +170,52 @@ def test_validate_intent_segment_contract_accepts_path_for_path_requirement() ->
     assert mismatch is None
 
 
+def test_validate_intent_segment_contract_accepts_path_for_query_requirement() -> None:
+    segment = {
+        "intent": "io",
+        "objective": "List a workspace subdirectory",
+        "required_inputs": ["source_or_query"],
+        "slots": {
+            "entity": "workspace",
+            "artifact_type": "filesystem",
+            "risk_level": "read_only",
+            "must_have_inputs": ["query"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="io",
+        tool_name="filesystem.workspace.list",
+        payload={"path": "reports"},
+        capability_id="filesystem.workspace.list",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_allows_filesystem_list_without_query() -> None:
+    segment = {
+        "intent": "io",
+        "objective": "List workspace files",
+        "required_inputs": ["source_or_query"],
+        "slots": {
+            "entity": "workspace",
+            "artifact_type": "filesystem",
+            "risk_level": "read_only",
+            "must_have_inputs": ["query"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="io",
+        tool_name="filesystem.workspace.list",
+        payload={"recursive": None},
+        capability_id="filesystem.workspace.list",
+        capability_risk_tier="read_only",
+    )
+    assert mismatch is None
+
+
 def test_validate_intent_segment_contract_checks_output_format_hint() -> None:
     segment = {
         "intent": "render",
