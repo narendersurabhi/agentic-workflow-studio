@@ -48,6 +48,7 @@ class ApiDispatchCallbacks:
     stream_for_event: Callable[[str], str]
     resolve_task_deps: Callable[[list[TaskRecord]], list[models.Task]]
     build_task_context: Callable[[str, Mapping[str, Any], Mapping[str, str], dict[str, Any]], dict[str, Any]]
+    project_execution_context: Callable[[str, Mapping[str, Any], Mapping[str, Any] | None], dict[str, Any]]
     coerce_task_intent_profiles: Callable[[Mapping[str, Any]], dict[str, dict[str, Any]]]
     normalize_task_intent_profile_segment: Callable[[Any], Mapping[str, Any] | None]
     refresh_job_status: Callable[[str], None]
@@ -389,8 +390,18 @@ def enqueue_ready_tasks(
             else {}
         )
         job_goal = job_record.goal if job_record and isinstance(job_record.goal, str) else ""
+        job_metadata = (
+            job_record.metadata_json
+            if job_record and isinstance(job_record.metadata_json, dict)
+            else {}
+        )
+        projected_job_context = callbacks.project_execution_context(
+            job_goal,
+            job_context,
+            job_metadata,
+        )
         task_intent_profiles = callbacks.coerce_task_intent_profiles(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            job_metadata
         )
         tasks = callbacks.resolve_task_deps(task_records)
         task_map = {task.id: task for task in tasks}
@@ -422,7 +433,12 @@ def enqueue_ready_tasks(
                 if runtime.config.policy_gate_enabled:
                     record.status = models.TaskStatus.blocked.value
                     record.updated_at = now
-                    context = callbacks.build_task_context(record.id, task_map, id_to_name, job_context)
+                    context = callbacks.build_task_context(
+                        record.id,
+                        task_map,
+                        id_to_name,
+                        projected_job_context,
+                    )
                     payload = task_payload_from_record(
                         record,
                         correlation_id,
@@ -437,7 +453,12 @@ def enqueue_ready_tasks(
                 record.attempts = next_attempt
                 record.status = models.TaskStatus.ready.value
                 record.updated_at = now
-                context = callbacks.build_task_context(record.id, task_map, id_to_name, job_context)
+                context = callbacks.build_task_context(
+                    record.id,
+                    task_map,
+                    id_to_name,
+                    projected_job_context,
+                )
                 payload = task_payload_from_record(
                     record,
                     correlation_id,

@@ -25,12 +25,15 @@ _INTERACTION_SUMMARY_STAGE_LIMITS: dict[str, int] = {
     "envelope": 8,
     "chat_route": 3,
     "chat_submit": 6,
+    "planner": 4,
+    "execution": 6,
     "workflow_runtime": 8,
     "preflight": 8,
 }
 
 _CAPABILITY_CANDIDATE_STAGE_LIMITS: dict[str, int] = {
     "chat_route": 8,
+    "planner": 10,
 }
 
 _CONTEXT_NOISE_TOKENS: set[str] = {
@@ -295,6 +298,36 @@ def workflow_runtime_context_view(
     return budget_context_for_stage(envelope, stage="workflow_runtime")
 
 
+def planner_context_view(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    parsed = workflow_contracts.parse_context_envelope(envelope)
+    if parsed is None:
+        return {}
+    context = budget_context_for_stage(parsed, stage="planner")
+    context.pop("user_profile", None)
+    if parsed.capability_candidates:
+        limit = _CAPABILITY_CANDIDATE_STAGE_LIMITS.get("planner", 0)
+        ranked = list(parsed.capability_candidates)
+        if limit > 0:
+            ranked = ranked[:limit]
+        if ranked:
+            context["capability_candidates"] = ranked
+    if parsed.missing_inputs:
+        context["missing_inputs"] = list(parsed.missing_inputs)
+    return context
+
+
+def execution_context_view(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    context = budget_context_for_stage(envelope, stage="execution")
+    context.pop("user_profile", None)
+    context.pop("capability_candidates", None)
+    context.pop("missing_inputs", None)
+    return context
+
+
 def preflight_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -382,8 +415,16 @@ def budget_context_for_stage(
         stage=stage,
     )
     if stage != "chat_route":
-        context.pop("interaction_summaries_ref", None)
-        context.pop("interaction_summaries_meta", None)
+        for key in (
+            "interaction_summaries_ref",
+            "interaction_summaries_meta",
+        ):
+            context.pop(key, None)
+    if stage in {"chat_submit", "planner", "execution"}:
+        context.pop("user_profile", None)
+    if stage == "execution":
+        context.pop("capability_candidates", None)
+        context.pop("missing_inputs", None)
     return context
 
 

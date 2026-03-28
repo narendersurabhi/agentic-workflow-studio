@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from libs.core import capability_registry, models, planner_contracts
+from libs.core import capability_registry, models, planner_contracts, workflow_contracts
 
 
 def _job() -> models.Job:
@@ -154,6 +154,58 @@ def test_build_plan_request_defaults_render_path_mode_to_explicit() -> None:
     request = planner_contracts.build_plan_request(_job(), tools=[], capabilities={})
 
     assert request.render_path_mode == planner_contracts.RENDER_PATH_MODE_EXPLICIT
+
+
+def test_build_plan_request_projects_stage_specific_planner_context() -> None:
+    job = _job()
+    job.context_json = {
+        "title": "Senior AI Engineer cheat sheet",
+        "user_profile": {"preferences": {"response_verbosity": "concise"}},
+        "interaction_summaries": [
+            {"facts": ["thanks"], "action": "thanks"},
+            {"facts": ["document tone should be practical"], "action": "set document tone"},
+        ],
+        "interaction_summaries_ref": {"memory_name": "interaction_summaries_compact"},
+        "interaction_summaries_meta": {"count": 2},
+    }
+    job.metadata = {
+        "normalized_intent_envelope": workflow_contracts.dump_normalized_intent_envelope(
+            workflow_contracts.NormalizedIntentEnvelope(
+                goal=job.goal,
+                profile=workflow_contracts.GoalIntentProfile(
+                    intent="generate",
+                    source="test",
+                    missing_slots=["topic", "path"],
+                ),
+                graph=workflow_contracts.IntentGraph(
+                    segments=[
+                        workflow_contracts.IntentGraphSegment(
+                            id="seg-1",
+                            intent="generate",
+                            objective="Render the document",
+                            suggested_capabilities=["document.docx.render"],
+                        )
+                    ]
+                ),
+                candidate_capabilities={"seg-1": ["document.docx.render"]},
+                clarification=workflow_contracts.ClarificationState(
+                    missing_inputs=["topic", "path"],
+                ),
+            )
+        )
+        or {}
+    }
+
+    request = planner_contracts.build_plan_request(job, tools=[], capabilities={})
+
+    assert "user_profile" not in request.job_context
+    assert "interaction_summaries_ref" not in request.job_context
+    assert "interaction_summaries_meta" not in request.job_context
+    assert request.job_context["capability_candidates"] == ["document.docx.render"]
+    assert request.job_context["missing_inputs"] == ["path"]
+    assert request.job_context["interaction_summaries"] == [
+        {"facts": ["document tone should be practical"], "action": "set document tone"}
+    ]
 
 
 def test_validate_render_path_requirement_accepts_job_context_reference() -> None:

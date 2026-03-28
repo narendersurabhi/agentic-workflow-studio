@@ -4069,6 +4069,11 @@ def _run_chat_direct_capability(
         job_record.metadata_json if isinstance(job_record.metadata_json, dict) else {}
     )
     correlation_id = str(uuid.uuid4())
+    execution_job_context = _execution_job_context(
+        job_record.goal if isinstance(job_record.goal, str) else "",
+        job_record.context_json if isinstance(job_record.context_json, dict) else {},
+        job_record.metadata_json if isinstance(job_record.metadata_json, dict) else {},
+    )
     task_payload = _task_payload_from_record(
         task_record,
         correlation_id,
@@ -4076,7 +4081,7 @@ def _run_chat_direct_capability(
             task_record.id,
             task_map,
             id_to_name,
-            job_record.context_json if isinstance(job_record.context_json, dict) else {},
+            execution_job_context,
         ),
         goal_text=job_record.goal if isinstance(job_record.goal, str) else "",
         intent_profile=task_intent_profiles.get(task_record.id),
@@ -4444,11 +4449,54 @@ def _prepare_chat_workflow_runtime_inputs(
     return workflow_interface, merged_context_json, runtime_inputs
 
 
+def _execution_job_context(
+    goal_text: str,
+    job_context: Mapping[str, Any] | None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_goal = str(goal_text or "").strip()
+    envelope = context_service.build_context_envelope(
+        db=None,
+        goal=normalized_goal,
+        context_sources=context_service.collect_context_sources(job_context=job_context),
+        normalized_intent_envelope=_normalized_intent_envelope_from_metadata(
+            metadata,
+            goal=normalized_goal,
+        ),
+        runtime_metadata={"surface": "execution_context"},
+    )
+    return context_service.execution_context_view(envelope)
+
+
+def _preflight_job_context(
+    *,
+    db: Session | None,
+    goal_text: str,
+    job_context: Mapping[str, Any] | None,
+    metadata: Mapping[str, Any] | None = None,
+    surface: str,
+) -> dict[str, Any]:
+    normalized_goal = str(goal_text or "").strip()
+    envelope = context_service.build_preflight_context_envelope(
+        db=db,
+        goal=normalized_goal,
+        provided_job_context=job_context if isinstance(job_context, Mapping) and job_context else None,
+        persisted_job_context=None,
+        normalized_intent_envelope=_normalized_intent_envelope_from_metadata(
+            metadata,
+            goal=normalized_goal,
+        ),
+        runtime_metadata={"surface": surface},
+    )
+    return context_service.preflight_context_view(envelope)
+
+
 def _dispatch_callbacks() -> dispatch_service.ApiDispatchCallbacks:
     return dispatch_service.ApiDispatchCallbacks(
         stream_for_event=_stream_for_event,
         resolve_task_deps=_resolve_task_deps,
         build_task_context=_build_task_context,
+        project_execution_context=_execution_job_context,
         coerce_task_intent_profiles=_coerce_task_intent_profiles,
         normalize_task_intent_profile_segment=_normalize_task_intent_profile_segment,
         refresh_job_status=_refresh_job_status,
@@ -8196,21 +8244,26 @@ def _handle_plan_created(envelope: dict) -> None:
     now = _utcnow()
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
-        job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
         job_goal = job.goal if job and isinstance(job.goal, str) else ""
+        job_metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+        job_context = _preflight_job_context(
+            db=db,
+            goal_text=job_goal,
+            job_context=job.context_json if job and isinstance(job.context_json, dict) else {},
+            metadata=job_metadata,
+            surface="plan_created_preflight",
+        )
         preflight_errors = _compile_plan_preflight(
             plan,
             job_context,
             goal_text=job_goal,
             normalized_intent_envelope=_normalized_intent_envelope_from_metadata(
-                job.metadata_json if job and isinstance(job.metadata_json, dict) else None,
+                job_metadata,
                 goal=job_goal,
             ),
-            goal_intent_graph=job.metadata_json.get("goal_intent_graph")
-            if job and isinstance(job.metadata_json, dict)
-            else None,
+            goal_intent_graph=job_metadata.get("goal_intent_graph") if isinstance(job_metadata, dict) else None,
             render_path_mode=planner_contracts.render_path_mode_from_metadata(
-                job.metadata_json if job and isinstance(job.metadata_json, dict) else None
+                job_metadata,
             ),
         )
         preflight_errors = _merge_preflight_errors(
@@ -8725,7 +8778,11 @@ def _schedule_postgres_run(job_id: str, *, correlation_id: str | None = None) ->
         tasks = _resolve_task_deps(task_records)
         task_map = {task.id: task for task in tasks}
         id_to_name = {record.id: record.name for record in task_records}
-        job_context = job.context_json if isinstance(job.context_json, dict) else {}
+        job_context = _execution_job_context(
+            job.goal if isinstance(job.goal, str) else "",
+            job.context_json if isinstance(job.context_json, dict) else {},
+            job.metadata_json if isinstance(job.metadata_json, dict) else {},
+        )
         job_goal = job.goal if isinstance(job.goal, str) else ""
         task_intent_profiles = _coerce_task_intent_profiles(
             job.metadata_json if isinstance(job.metadata_json, dict) else {}
@@ -8950,8 +9007,16 @@ def _handle_policy_decision(envelope: dict) -> None:
                 id_to_name = {record.id: record.name for record in task_records}
                 job_record = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
                 job_context = (
-                    job_record.context_json
-                    if job_record and isinstance(job_record.context_json, dict)
+                    _execution_job_context(
+                        job_record.goal if job_record and isinstance(job_record.goal, str) else "",
+                        job_record.context_json
+                        if job_record and isinstance(job_record.context_json, dict)
+                        else {},
+                        job_record.metadata_json
+                        if job_record and isinstance(job_record.metadata_json, dict)
+                        else {},
+                    )
+                    if job_record
                     else {}
                 )
                 job_goal = job_record.goal if job_record and isinstance(job_record.goal, str) else ""
@@ -12051,8 +12116,12 @@ def get_job_debugger(
     task_models = _resolve_task_deps(task_records)
     task_map = {task.id: task for task in task_models}
     id_to_name = {record.id: record.name for record in task_records}
-    job_context = job.context_json if isinstance(job.context_json, dict) else {}
     metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+    job_context = _execution_job_context(
+        job.goal if isinstance(job.goal, str) else "",
+        job.context_json if isinstance(job.context_json, dict) else {},
+        metadata,
+    )
     task_intent_profiles = _coerce_task_intent_profiles(metadata)
     normalization_fields = _normalization_response_fields(metadata, goal=job.goal or "")
 
@@ -13953,21 +14022,26 @@ def _create_plan_internal(
     emit_plan_created_event: bool = True,
 ) -> models.Plan:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
-    job_context = job.context_json if job and isinstance(job.context_json, dict) else {}
     goal_text = job.goal if job and isinstance(job.goal, str) else ""
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    job_context = _preflight_job_context(
+        db=db,
+        goal_text=goal_text,
+        job_context=job.context_json if job and isinstance(job.context_json, dict) else {},
+        metadata=metadata,
+        surface="create_plan_internal_preflight",
+    )
     preflight_errors = _compile_plan_preflight(
         plan,
         job_context,
         goal_text=goal_text,
         normalized_intent_envelope=_normalized_intent_envelope_from_metadata(
-            job.metadata_json if job and isinstance(job.metadata_json, dict) else None,
+            metadata,
             goal=goal_text,
         ),
-        goal_intent_graph=job.metadata_json.get("goal_intent_graph")
-        if job and isinstance(job.metadata_json, dict)
-        else None,
+        goal_intent_graph=metadata.get("goal_intent_graph") if isinstance(metadata, dict) else None,
         render_path_mode=planner_contracts.render_path_mode_from_metadata(
-            job.metadata_json if job and isinstance(job.metadata_json, dict) else None
+            metadata,
         ),
     )
     if preflight_errors:

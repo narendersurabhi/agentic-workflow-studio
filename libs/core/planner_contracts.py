@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import os
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +29,21 @@ _RENDER_REQUEST_IDS = frozenset(
     }
 )
 _RENDER_PATH_KEYS = ("path", "output_path", "filename", "file_name", "output_filename")
+_PLANNER_CONTEXT_NOISE_TOKENS = {
+    "yes",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "thanks",
+    "thank you",
+    "go ahead",
+    "sounds good",
+    "looks good",
+    "use default",
+}
+_PLANNER_INTERACTION_SUMMARY_LIMIT = 4
+_PLANNER_CAPABILITY_CANDIDATE_LIMIT = 10
 
 
 class PlanRequestCapabilityAdapter(BaseModel):
@@ -283,6 +299,36 @@ def normalized_intent_envelope_for_job(
     )
 
 
+def project_planner_job_context(job: models.Job) -> dict[str, Any]:
+    projected = dict(job.context_json) if isinstance(job.context_json, Mapping) else {}
+    for key in (
+        "user_profile",
+        "interaction_summaries_ref",
+        "interaction_summaries_meta",
+    ):
+        projected.pop(key, None)
+
+    interaction_summaries = _planner_interaction_summaries(projected)
+    if interaction_summaries:
+        projected["interaction_summaries"] = interaction_summaries[:_PLANNER_INTERACTION_SUMMARY_LIMIT]
+    else:
+        projected.pop("interaction_summaries", None)
+
+    normalized_intent_envelope = normalized_intent_envelope_for_job(job)
+    capability_candidates = _planner_capability_candidates(projected, normalized_intent_envelope)
+    if capability_candidates:
+        projected["capability_candidates"] = capability_candidates[:_PLANNER_CAPABILITY_CANDIDATE_LIMIT]
+    else:
+        projected.pop("capability_candidates", None)
+
+    missing_inputs = _planner_missing_inputs(projected, normalized_intent_envelope)
+    if missing_inputs:
+        projected["missing_inputs"] = missing_inputs
+    else:
+        projected.pop("missing_inputs", None)
+    return projected
+
+
 def build_plan_request(
     job: models.Job,
     *,
@@ -311,7 +357,7 @@ def build_plan_request(
     return PlanRequest(
         job_id=job.id,
         goal=job.goal,
-        job_context=job.context_json if isinstance(job.context_json, dict) else {},
+        job_context=project_planner_job_context(job),
         job_metadata=dict(job_metadata),
         job_payload=job.model_dump(mode="json"),
         tools=list(tools),
@@ -350,6 +396,152 @@ def build_plan_request(
         max_dependency_depth=max_dependency_depth,
         render_path_mode=render_path_mode_from_metadata(job_metadata),
     )
+
+
+def _planner_interaction_summaries(context: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw = context.get("interaction_summaries")
+    if not isinstance(raw, list):
+        return []
+    summaries: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        summary = dict(item)
+        if _planner_interaction_summary_is_noisy(summary):
+            continue
+        summaries.append(summary)
+    return summaries
+
+
+def _planner_interaction_summary_is_noisy(item: Mapping[str, Any]) -> bool:
+    text = _planner_interaction_summary_text(item)
+    if not text:
+        return True
+    normalized = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    if not normalized:
+        return True
+    if normalized in _PLANNER_CONTEXT_NOISE_TOKENS:
+        return True
+    tokens = [token for token in normalized.split() if token]
+    return bool(
+        tokens
+        and all(token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"} for token in tokens)
+    )
+
+
+def _planner_interaction_summary_text(item: Mapping[str, Any]) -> str:
+    fields: list[str] = []
+    for key in ("action", "facts", "evidence", "speculation"):
+        value = item.get(key)
+        if isinstance(value, str):
+            fields.append(value)
+        elif isinstance(value, list):
+            fields.extend(str(entry) for entry in value if isinstance(entry, str))
+    return " ".join(fields).strip().lower()
+
+
+def _planner_capability_candidates(
+    context: Mapping[str, Any],
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | None,
+) -> list[str]:
+    capability_ids: list[str] = []
+    seen: set[str] = set()
+    raw = context.get("capability_candidates")
+    if isinstance(raw, list):
+        for capability_id in raw:
+            normalized = capability_registry.canonicalize_capability_id(capability_id)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                capability_ids.append(normalized)
+    if normalized_intent_envelope is not None:
+        for capability_list in normalized_intent_envelope.candidate_capabilities.values():
+            for capability_id in capability_list:
+                normalized = capability_registry.canonicalize_capability_id(capability_id)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    capability_ids.append(normalized)
+        for segment in normalized_intent_envelope.graph.segments:
+            for capability_id in segment.suggested_capabilities:
+                normalized = capability_registry.canonicalize_capability_id(capability_id)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    capability_ids.append(normalized)
+    return capability_ids
+
+
+def _planner_missing_inputs(
+    context: Mapping[str, Any],
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | None,
+) -> list[str]:
+    if normalized_intent_envelope is None:
+        existing = context.get("missing_inputs")
+        if isinstance(existing, list):
+            return [
+                normalized
+                for normalized in (
+                    intent_contract.normalize_required_input_key(item) for item in existing
+                )
+                if normalized
+            ]
+        return []
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for value in normalized_intent_envelope.profile.missing_slots:
+        normalized = intent_contract.normalize_required_input_key(value)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(normalized)
+    for value in normalized_intent_envelope.clarification.missing_inputs:
+        normalized = intent_contract.normalize_required_input_key(value)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(normalized)
+    unresolved: list[str] = []
+    for key in candidates:
+        if not _planner_context_has_required_input(context, key):
+            unresolved.append(key)
+    return unresolved
+
+
+def _planner_context_has_required_input(context: Mapping[str, Any], key: str) -> bool:
+    normalized = intent_contract.normalize_required_input_key(key)
+    if not normalized:
+        return False
+    aliases: dict[str, tuple[str, ...]] = {
+        "path": ("output_path", "filename", "file_name", "output_filename"),
+        "output_path": ("path", "filename", "file_name", "output_filename"),
+        "filename": ("path", "output_path", "file_name", "output_filename"),
+        "query": ("path", "source"),
+        "instruction": ("goal_details", "goal"),
+        "topic": ("main_topic", "title", "subject"),
+        "main_topic": ("topic", "title", "subject"),
+        "target_repo": ("repo", "repo_name", "repo_full_name", "query"),
+    }
+    for candidate in (normalized,) + aliases.get(normalized, ()):
+        if _planner_mapping_has_non_empty_value(context, candidate):
+            return True
+        workflow = context.get("workflow")
+        if isinstance(workflow, Mapping):
+            workflow_inputs = workflow.get("inputs")
+            if isinstance(workflow_inputs, Mapping) and _planner_mapping_has_non_empty_value(
+                workflow_inputs,
+                candidate,
+            ):
+                return True
+    return False
+
+
+def _planner_mapping_has_non_empty_value(mapping: Mapping[str, Any], key: str) -> bool:
+    if key not in mapping:
+        return False
+    value = mapping.get(key)
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return value is not None
 
 
 def capability_map(request: PlanRequest) -> dict[str, PlanRequestCapability]:

@@ -228,3 +228,40 @@ def test_chat_submit_context_view_drops_interaction_summary_refs() -> None:
     assert submit_view["query"] == "auth failures"
     assert "interaction_summaries_ref" not in submit_view
     assert "interaction_summaries_meta" not in submit_view
+
+
+def test_planner_and_execution_context_views_use_stage_specific_projection() -> None:
+    envelope = workflow_contracts.ContextEnvelope(
+        goal="Search GitHub issues",
+        context_json={
+            "query": "auth failures",
+            "user_profile": {"preferences": {"response_verbosity": "concise"}},
+            "interaction_summaries": [
+                {"facts": ["thanks"], "action": "thanks"},
+                {"facts": ["github auth failures"], "action": "search github auth issues"},
+            ],
+            "interaction_summaries_ref": {"memory_name": "interaction_summaries_compact"},
+            "interaction_summaries_meta": {"count": 2},
+            "capability_candidates": ["memory.read"],
+            "missing_inputs": ["query"],
+        },
+        profile={"preferences": {"response_verbosity": "concise"}},
+        capability_candidates=["github.issue.search", "memory.read"],
+        missing_inputs=["query"],
+    )
+
+    planner_view = context_service.planner_context_view(envelope)
+    execution_view = context_service.execution_context_view(envelope)
+
+    assert planner_view["query"] == "auth failures"
+    assert planner_view["capability_candidates"] == ["github.issue.search", "memory.read"]
+    assert planner_view["missing_inputs"] == ["query"]
+    assert "user_profile" not in planner_view
+    assert "interaction_summaries_ref" not in planner_view
+    assert len(planner_view["interaction_summaries"]) == 1
+
+    assert execution_view["query"] == "auth failures"
+    assert "capability_candidates" not in execution_view
+    assert "missing_inputs" not in execution_view
+    assert "user_profile" not in execution_view
+    assert "interaction_summaries_ref" not in execution_view
