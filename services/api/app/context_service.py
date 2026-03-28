@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,56 @@ _WORKFLOW_CONTEXT_KEYS = (
     "workflow_definition_id",
     "workflow_ref",
 )
+
+_INTERACTION_SUMMARY_STAGE_LIMITS: dict[str, int] = {
+    "envelope": 8,
+    "chat_route": 3,
+    "chat_submit": 6,
+    "workflow_runtime": 8,
+    "preflight": 8,
+}
+
+_CAPABILITY_CANDIDATE_STAGE_LIMITS: dict[str, int] = {
+    "chat_route": 8,
+}
+
+_CONTEXT_NOISE_TOKENS: set[str] = {
+    "yes",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "thanks",
+    "thank you",
+    "go ahead",
+    "sounds good",
+    "looks good",
+    "use default",
+}
+
+_COMMON_STOPWORDS: set[str] = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "your",
+    "have",
+    "what",
+    "when",
+    "where",
+    "which",
+    "about",
+    "only",
+    "give",
+    "just",
+    "need",
+    "want",
+    "make",
+}
 
 
 def collect_context_sources(
@@ -71,6 +122,14 @@ def build_context_envelope(
         context_sources,
         user_id=user_id,
     )
+    parsed_normalized = workflow_contracts.parse_normalized_intent_envelope(
+        normalized_intent_envelope
+    )
+    filtered_context, dropped_inputs = drop_noisy_context_items(
+        goal=goal,
+        context=merged_context,
+        stage="envelope",
+    )
 
     profile_payload: dict[str, Any] = {}
     if normalized_user_id and db is not None:
@@ -82,22 +141,27 @@ def build_context_envelope(
         if profile_payload and "user_profile" not in sources_used:
             sources_used.append("user_profile")
 
-    parsed_normalized = workflow_contracts.parse_normalized_intent_envelope(
-        normalized_intent_envelope
-    )
     if parsed_normalized is not None and "normalized_intent_envelope" not in sources_used:
         sources_used.append("normalized_intent_envelope")
 
-    interaction_summaries = _interaction_summaries_from_context(merged_context)
+    interaction_summaries = _interaction_summaries_from_context(filtered_context)
     if interaction_summaries and "interaction_summaries" not in sources_used:
         sources_used.append("interaction_summaries")
+    capability_candidates = _rank_capability_candidates(
+        goal=goal,
+        capability_candidates=_capability_candidates_from_envelope(parsed_normalized),
+        missing_inputs=derive_missing_inputs(
+            context=filtered_context,
+            normalized_intent_envelope=parsed_normalized,
+        ),
+    )
 
     return workflow_contracts.ContextEnvelope(
         goal=str(goal or "").strip(),
-        context_json=merged_context,
+        context_json=filtered_context,
         user_scope={"user_id": normalized_user_id} if normalized_user_id else {},
         session_scope=_session_scope_from_metadata(session_metadata),
-        workflow_scope=_workflow_scope_from_context(merged_context),
+        workflow_scope=_workflow_scope_from_context(filtered_context),
         normalized_intent_envelope=(
             workflow_contracts.dump_normalized_intent_envelope(parsed_normalized)
             if parsed_normalized is not None
@@ -105,10 +169,13 @@ def build_context_envelope(
         ),
         profile=profile_payload,
         interaction_summaries=interaction_summaries,
-        capability_candidates=_capability_candidates_from_envelope(parsed_normalized),
+        capability_candidates=capability_candidates,
         runtime_metadata=dict(runtime_metadata or {}),
-        missing_inputs=_missing_inputs_from_envelope(parsed_normalized),
-        dropped_inputs=[],
+        missing_inputs=derive_missing_inputs(
+            context=filtered_context,
+            normalized_intent_envelope=parsed_normalized,
+        ),
+        dropped_inputs=dropped_inputs,
         trace=workflow_contracts.ContextEnvelopeTrace(
             sources_used=sources_used,
             profile_loaded=bool(profile_payload),
@@ -207,37 +274,117 @@ def chat_route_context_view(
     parsed = workflow_contracts.parse_context_envelope(envelope)
     if parsed is None:
         return {}
-    context = dict(parsed.context_json or {})
+    context = budget_context_for_stage(parsed, stage="chat_route")
     if parsed.profile:
         context["user_profile"] = dict(parsed.profile)
+    if parsed.capability_candidates:
+        limit = _CAPABILITY_CANDIDATE_STAGE_LIMITS.get("chat_route", 0)
+        ranked = list(parsed.capability_candidates)
+        if limit > 0:
+            ranked = ranked[:limit]
+        if ranked:
+            context["capability_candidates"] = ranked
+    if parsed.missing_inputs:
+        context["missing_inputs"] = list(parsed.missing_inputs)
     return context
 
 
 def workflow_runtime_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    parsed = workflow_contracts.parse_context_envelope(envelope)
-    if parsed is None:
-        return {}
-    return dict(parsed.context_json or {})
+    return budget_context_for_stage(envelope, stage="workflow_runtime")
 
 
 def preflight_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    parsed = workflow_contracts.parse_context_envelope(envelope)
-    if parsed is None:
-        return {}
-    return dict(parsed.context_json or {})
+    return budget_context_for_stage(envelope, stage="preflight")
 
 
 def chat_submit_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    return budget_context_for_stage(envelope, stage="chat_submit")
+
+
+def rank_context_items(
+    *,
+    goal: str,
+    interaction_summaries: list[dict[str, Any]] | None = None,
+    capability_candidates: list[str] | None = None,
+    missing_inputs: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "interaction_summaries": _rank_interaction_summaries(
+            goal=goal,
+            interaction_summaries=interaction_summaries or [],
+        ),
+        "capability_candidates": _rank_capability_candidates(
+            goal=goal,
+            capability_candidates=capability_candidates or [],
+            missing_inputs=missing_inputs or [],
+        ),
+    }
+
+
+def drop_noisy_context_items(
+    *,
+    goal: str,
+    context: Mapping[str, Any] | None,
+    stage: str,
+) -> tuple[dict[str, Any], list[str]]:
+    payload = dict(context) if isinstance(context, Mapping) else {}
+    dropped: list[str] = []
+    interaction_summaries = _interaction_summaries_from_context(payload)
+    if interaction_summaries:
+        ranked = _rank_interaction_summaries(goal=goal, interaction_summaries=interaction_summaries)
+        if len(ranked) < len(interaction_summaries):
+            dropped.append("interaction_summaries:noise")
+        limit = _INTERACTION_SUMMARY_STAGE_LIMITS.get(stage, _INTERACTION_SUMMARY_STAGE_LIMITS["envelope"])
+        if len(ranked) > limit:
+            ranked = ranked[:limit]
+            dropped.append("interaction_summaries:budget")
+        if ranked:
+            payload["interaction_summaries"] = ranked
+        else:
+            payload.pop("interaction_summaries", None)
+    return payload, list(dict.fromkeys(dropped))
+
+
+def derive_missing_inputs(
+    *,
+    context: Mapping[str, Any] | None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None,
+) -> list[str]:
+    parsed = workflow_contracts.parse_normalized_intent_envelope(normalized_intent_envelope)
+    missing_inputs = _missing_inputs_from_envelope(parsed)
+    if not missing_inputs:
+        return []
+    context_map = dict(context) if isinstance(context, Mapping) else {}
+    unresolved: list[str] = []
+    for key in missing_inputs:
+        if not _context_has_required_input(context_map, key):
+            unresolved.append(key)
+    return unresolved
+
+
+def budget_context_for_stage(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+    *,
+    stage: str,
+) -> dict[str, Any]:
     parsed = workflow_contracts.parse_context_envelope(envelope)
     if parsed is None:
         return {}
-    return dict(parsed.context_json or {})
+    context, _dropped = drop_noisy_context_items(
+        goal=parsed.goal,
+        context=parsed.context_json,
+        stage=stage,
+    )
+    if stage != "chat_route":
+        context.pop("interaction_summaries_ref", None)
+        context.pop("interaction_summaries_meta", None)
+    return context
 
 
 def update_chat_context_envelope(
@@ -255,6 +402,11 @@ def update_chat_context_envelope(
     updated_context = dict(parsed.context_json or {})
     if isinstance(context_json, Mapping):
         updated_context = _merge_context_maps(updated_context, context_json)
+    updated_context, dropped_inputs = drop_noisy_context_items(
+        goal=str(goal or parsed.goal or "").strip(),
+        context=updated_context,
+        stage="envelope",
+    )
 
     parsed_normalized = workflow_contracts.parse_normalized_intent_envelope(
         normalized_intent_envelope or parsed.normalized_intent_envelope
@@ -273,10 +425,21 @@ def update_chat_context_envelope(
                 if parsed_normalized is not None
                 else None
             ),
-            "capability_candidates": _capability_candidates_from_envelope(parsed_normalized),
-            "missing_inputs": _missing_inputs_from_envelope(parsed_normalized),
+            "capability_candidates": _rank_capability_candidates(
+                goal=str(goal or parsed.goal or "").strip(),
+                capability_candidates=_capability_candidates_from_envelope(parsed_normalized),
+                missing_inputs=derive_missing_inputs(
+                    context=updated_context,
+                    normalized_intent_envelope=parsed_normalized,
+                ),
+            ),
+            "missing_inputs": derive_missing_inputs(
+                context=updated_context,
+                normalized_intent_envelope=parsed_normalized,
+            ),
             "interaction_summaries": _interaction_summaries_from_context(updated_context),
             "runtime_metadata": merged_runtime_metadata,
+            "dropped_inputs": dropped_inputs,
         }
     )
 
@@ -331,6 +494,131 @@ def _interaction_summaries_from_context(context: Mapping[str, Any]) -> list[dict
         if isinstance(item, Mapping):
             summaries.append(dict(item))
     return summaries
+
+
+def _rank_interaction_summaries(
+    *,
+    goal: str,
+    interaction_summaries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    goal_tokens = _goal_tokens(goal)
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for index, item in enumerate(interaction_summaries):
+        if _interaction_summary_is_noisy(item):
+            continue
+        haystack = _interaction_summary_text(item)
+        lexical_score = sum(1 for token in goal_tokens if token in haystack)
+        recency_score = float(index) / max(1, len(interaction_summaries))
+        score = float(lexical_score * 4) + recency_score
+        scored.append((score, index, dict(item)))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item for _score, _index, item in scored]
+
+
+def _rank_capability_candidates(
+    *,
+    goal: str,
+    capability_candidates: list[str],
+    missing_inputs: list[str],
+) -> list[str]:
+    goal_tokens = _goal_tokens(goal)
+    missing = {str(value or "").strip().lower() for value in missing_inputs if str(value or "").strip()}
+    scored: list[tuple[int, int, str]] = []
+    for index, capability_id in enumerate(capability_candidates):
+        normalized = capability_registry.canonicalize_capability_id(capability_id)
+        if not normalized:
+            continue
+        score = 0
+        parts = [part for part in normalized.lower().split(".") if part]
+        if any(token in parts for token in goal_tokens):
+            score += 2
+        if "path" in missing and any(token in parts for token in ("render", "filename", "filesystem")):
+            score += 1
+        if "query" in missing and any(token in parts for token in ("search", "list", "github", "filesystem")):
+            score += 1
+        scored.append((score, -index, normalized))
+    scored.sort(reverse=True)
+    deduped: list[str] = []
+    for _score, _neg_index, normalized in scored:
+        if normalized not in deduped:
+            deduped.append(normalized)
+    return deduped
+
+
+def _context_has_required_input(context: Mapping[str, Any], key: str) -> bool:
+    normalized = str(key or "").strip().lower()
+    if not normalized:
+        return False
+    aliases: dict[str, tuple[str, ...]] = {
+        "path": ("output_path", "filename", "file_name", "output_filename"),
+        "output_path": ("path", "filename", "file_name", "output_filename"),
+        "filename": ("path", "output_path", "file_name", "output_filename"),
+        "query": ("path", "source"),
+        "instruction": ("goal_details", "goal"),
+        "topic": ("main_topic", "title", "subject"),
+        "main_topic": ("topic", "title", "subject"),
+        "target_repo": ("repo", "repo_name", "repo_full_name", "query"),
+    }
+    candidates = (normalized,) + aliases.get(normalized, ())
+    for candidate in candidates:
+        if _mapping_has_non_empty_value(context, candidate):
+            return True
+        workflow = context.get("workflow")
+        if isinstance(workflow, Mapping):
+            workflow_inputs = workflow.get("inputs")
+            if isinstance(workflow_inputs, Mapping) and _mapping_has_non_empty_value(workflow_inputs, candidate):
+                return True
+    return False
+
+
+def _mapping_has_non_empty_value(mapping: Mapping[str, Any], key: str) -> bool:
+    if key not in mapping:
+        return False
+    value = mapping.get(key)
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return value is not None
+
+
+def _goal_tokens(goal: str) -> set[str]:
+    tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]{3,}", str(goal or "").lower())
+        if token not in _COMMON_STOPWORDS
+    }
+    return tokens
+
+
+def _interaction_summary_text(item: Mapping[str, Any]) -> str:
+    fields: list[str] = []
+    for key in ("action", "facts", "evidence", "speculation"):
+        value = item.get(key)
+        if isinstance(value, str):
+            fields.append(value)
+        elif isinstance(value, list):
+            fields.extend(str(entry) for entry in value if isinstance(entry, str))
+    return " ".join(fields).strip().lower()
+
+
+def _interaction_summary_is_noisy(item: Mapping[str, Any]) -> bool:
+    text = _interaction_summary_text(item)
+    if not text:
+        return True
+    normalized = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    if not normalized:
+        return True
+    if normalized in _CONTEXT_NOISE_TOKENS:
+        return True
+    tokens = [token for token in normalized.split() if token]
+    if tokens and all(token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"} for token in tokens):
+        return True
+    if len(tokens) <= 2 and normalized in _CONTEXT_NOISE_TOKENS:
+        return True
+    return False
 
 
 def _capability_candidates_from_envelope(

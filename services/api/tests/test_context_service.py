@@ -95,6 +95,8 @@ def test_build_chat_context_envelope_loads_profile_and_projects_views() -> None:
     route_view = context_service.chat_route_context_view(envelope)
     submit_view = context_service.chat_submit_context_view(envelope)
     assert route_view["user_profile"]["preferences"]["response_verbosity"] == "concise"
+    assert route_view["capability_candidates"] == ["github.issue.search"]
+    assert route_view["missing_inputs"] == ["query"]
     assert "user_profile" not in submit_view
     assert submit_view["query_hint"] == "authentication failures"
 
@@ -132,3 +134,97 @@ def test_build_preflight_context_envelope_prefers_provided_job_context() -> None
     assert preflight_view["path"] == "documents/provided.docx"
     assert "topic" not in preflight_view
     assert envelope.trace.sources_used == ["provided_job_context"]
+
+
+def test_chat_route_context_view_ranks_and_budgets_interaction_summaries() -> None:
+    normalized = workflow_contracts.NormalizedIntentEnvelope(
+        goal="Search GitHub issues",
+        profile=workflow_contracts.GoalIntentProfile(
+            intent="io",
+            source="test",
+            confidence=0.9,
+            risk_level="read_only",
+            missing_slots=["query"],
+        ),
+        graph=workflow_contracts.IntentGraph(
+            segments=[
+                workflow_contracts.IntentGraphSegment(
+                    id="s1",
+                    intent="io",
+                    objective="Search GitHub issues",
+                    suggested_capabilities=[
+                        "filesystem.workspace.list",
+                        "github.issue.search",
+                        "memory.read",
+                    ],
+                )
+            ]
+        ),
+        candidate_capabilities={
+            "s1": [
+                "filesystem.workspace.list",
+                "github.issue.search",
+                "memory.read",
+            ]
+        },
+        clarification=workflow_contracts.ClarificationState(
+            missing_inputs=["query"],
+        ),
+    )
+    envelope = context_service.build_chat_context_envelope(
+        db=None,
+        goal="Search GitHub issues",
+        session_metadata=None,
+        session_context={
+            "interaction_summaries": [
+                {"facts": ["thanks"], "action": "thanks"},
+                {"facts": ["github issues for auth"], "action": "search github auth issues"},
+                {"facts": ["workspace files"], "action": "list workspace"},
+                {"facts": ["github login failures"], "action": "search github login"},
+                {"facts": ["github auth tokens"], "action": "search github auth tokens"},
+            ]
+        },
+        turn_context=None,
+        user_id=None,
+        normalized_intent_envelope=normalized,
+    )
+
+    route_view = context_service.chat_route_context_view(envelope)
+
+    assert route_view["capability_candidates"][0] == "github.issue.search"
+    assert len(route_view["interaction_summaries"]) == 3
+    assert all(item["action"] != "thanks" for item in route_view["interaction_summaries"])
+    assert "interaction_summaries:noise" in envelope.dropped_inputs
+
+
+def test_derive_missing_inputs_uses_aliases_from_context() -> None:
+    normalized = workflow_contracts.NormalizedIntentEnvelope(
+        goal="List workspace files",
+        profile=workflow_contracts.GoalIntentProfile(missing_slots=["query"]),
+        clarification=workflow_contracts.ClarificationState(missing_inputs=["query"]),
+    )
+
+    missing = context_service.derive_missing_inputs(
+        context={"path": "reports"},
+        normalized_intent_envelope=normalized,
+    )
+
+    assert missing == []
+
+
+def test_chat_submit_context_view_drops_interaction_summary_refs() -> None:
+    envelope = workflow_contracts.ContextEnvelope(
+        goal="Search GitHub issues",
+        context_json={
+            "query": "auth failures",
+            "interaction_summaries": [{"facts": ["auth"], "action": "search github auth issues"}],
+            "interaction_summaries_ref": {"memory_name": "interaction_summaries_compact"},
+            "interaction_summaries_meta": {"count": 1},
+        },
+    )
+
+    submit_view = context_service.chat_submit_context_view(envelope)
+
+    assert submit_view["query"] == "auth failures"
+    assert "interaction_summaries_ref" not in submit_view
+    assert "interaction_summaries_meta" not in submit_view
