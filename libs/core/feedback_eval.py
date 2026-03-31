@@ -46,6 +46,18 @@ def build_feedback_eval_rows(examples: Iterable[Mapping[str, Any]]) -> list[dict
                     else ""
                 )
                 or None,
+                "clarification_current_question": (
+                    str(dimensions.get("clarification_current_question") or "").strip()
+                    if isinstance(dimensions, Mapping)
+                    else ""
+                )
+                or None,
+                "clarification_current_question_field": (
+                    str(dimensions.get("clarification_current_question_field") or "").strip()
+                    if isinstance(dimensions, Mapping)
+                    else ""
+                )
+                or None,
                 "clarification_slot_loss_state": (
                     str(dimensions.get("clarification_slot_loss_state") or "").strip()
                     if isinstance(dimensions, Mapping)
@@ -65,6 +77,41 @@ def build_feedback_eval_rows(examples: Iterable[Mapping[str, Any]]) -> list[dict
                 ),
                 "clarification_resolved_slot_count": (
                     int(dimensions.get("clarification_resolved_slot_count") or 0)
+                    if isinstance(dimensions, Mapping)
+                    else 0
+                ),
+                "clarification_mapping_active_field_before": (
+                    str(dimensions.get("clarification_mapping_active_field_before") or "").strip()
+                    if isinstance(dimensions, Mapping)
+                    else ""
+                )
+                or None,
+                "clarification_mapping_active_field_after": (
+                    str(dimensions.get("clarification_mapping_active_field_after") or "").strip()
+                    if isinstance(dimensions, Mapping)
+                    else ""
+                )
+                or None,
+                "clarification_mapping_resolved_active_field": (
+                    str(dimensions.get("clarification_mapping_resolved_active_field") or "").strip()
+                    if isinstance(dimensions, Mapping)
+                    else ""
+                )
+                or None,
+                "clarification_mapping_queue_advanced": (
+                    str(dimensions.get("clarification_mapping_queue_advanced") or "").strip()
+                    if isinstance(dimensions, Mapping)
+                    else ""
+                )
+                or None,
+                "clarification_mapping_restarted": (
+                    str(dimensions.get("clarification_mapping_restarted") or "").strip()
+                    if isinstance(dimensions, Mapping)
+                    else ""
+                )
+                or None,
+                "clarification_mapping_resolved_field_count": (
+                    int(dimensions.get("clarification_mapping_resolved_field_count") or 0)
                     if isinstance(dimensions, Mapping)
                     else 0
                 ),

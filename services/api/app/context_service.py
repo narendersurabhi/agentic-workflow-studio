@@ -564,6 +564,8 @@ def _session_scope_from_metadata(metadata: Mapping[str, Any] | None) -> dict[str
             "active_segment_id",
             "active_capability_id",
             "original_goal",
+            "current_question",
+            "current_question_field",
             "auto_path_allowed",
         ):
             value = pending_clarification.get(key)
@@ -574,6 +576,7 @@ def _session_scope_from_metadata(metadata: Mapping[str, Any] | None) -> dict[str
             if value is not None:
                 pending_scope[key] = value
         for key in (
+            "pending_questions",
             "pending_fields",
             "required_fields",
             "answered_fields",

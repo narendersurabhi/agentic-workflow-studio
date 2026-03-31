@@ -1,4 +1,5 @@
 .PHONY: up up-workers down lint format typecheck test schemas eval-intent eval-intent-gate \
+	eval-chat-clarification eval-chat-clarification-gate \
 	eval-capability-search eval-capability-search-gate \
 	build-capability-feedback \
 	build-intent-tuning-candidates \
@@ -185,6 +186,12 @@ eval-chat-boundary:
 
 eval-chat-boundary-gate:
 	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_boundary.py --gold eval/chat_boundary_gold.yaml --min-accuracy 0.95 --max-false-chat-reply-rate 0.05 --min-pending-continuation-rate 0.95 --max-active-family-drift-rate 0.05
+
+eval-chat-clarification:
+	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_clarification.py --gold eval/chat_clarification_mapping_gold.yaml --verbose
+
+eval-chat-clarification-gate:
+	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_clarification.py --gold eval/chat_clarification_mapping_gold.yaml --min-overall-accuracy 0.95 --min-restart-decision-accuracy 0.95 --min-resolved-active-field-accuracy 0.95 --min-queue-advance-accuracy 0.95 --max-wrong-field-assignment-rate 0.05
 
 build-capability-feedback:
 	PYTHONPATH=. python3 scripts/build_capability_search_feedback.py --source auto --output artifacts/evals/capability_search_feedback.jsonl

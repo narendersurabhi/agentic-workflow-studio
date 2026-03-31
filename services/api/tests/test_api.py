@@ -4942,6 +4942,105 @@ def test_task_payload_from_record_resolves_dotted_request_id_reference() -> None
     assert resolved["document_spec"]["blocks"][0]["text"] == "hello"
 
 
+def test_build_task_context_aliases_compiled_request_outputs_for_capability_refs(
+    monkeypatch,
+) -> None:
+    now = _utcnow()
+    generate_task = TaskRecord(
+        id=f"task-generate-{uuid.uuid4()}",
+        job_id="job-ref",
+        plan_id="plan-ref",
+        name="Generate DocumentSpec",
+        description="Generate doc spec",
+        instruction="Generate",
+        acceptance_criteria=["generated"],
+        expected_output_schema_ref="schemas/document_spec",
+        status=models.TaskStatus.completed.value,
+        deps=[],
+        attempts=1,
+        max_attempts=3,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        intent="generate",
+        tool_requests=["llm_generate_document_spec"],
+        tool_inputs=execution_contracts.embed_capability_bindings(
+            {"llm_generate_document_spec": {"instruction": "Generate a document"}},
+            {
+                "llm_generate_document_spec": {
+                    "request_id": "llm_generate_document_spec",
+                    "capability_id": "document.spec.generate",
+                    "tool_name": "llm_generate_document_spec",
+                    "adapter_type": "tool",
+                }
+            },
+            request_ids=["llm_generate_document_spec"],
+        ),
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+    validate_task = TaskRecord(
+        id=f"task-validate-{uuid.uuid4()}",
+        job_id="job-ref",
+        plan_id="plan-ref",
+        name="Validate DocumentSpec",
+        description="Validate doc spec",
+        instruction="Validate",
+        acceptance_criteria=["validated"],
+        expected_output_schema_ref="schemas/validation_report",
+        status=models.TaskStatus.ready.value,
+        deps=[generate_task.id],
+        attempts=0,
+        max_attempts=3,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        intent="validate",
+        tool_requests=["document_spec_validate"],
+        tool_inputs={
+            "document_spec_validate": {
+                "strict": True,
+                "document_spec": {
+                    "$from": "dependencies_by_name.Generate DocumentSpec.document.spec.generate.document_spec"
+                },
+            }
+        },
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+
+    monkeypatch.setattr(
+        main,
+        "_load_task_output",
+        lambda task_id: {
+            "llm_generate_document_spec": {
+                "document_spec": {"blocks": [{"type": "paragraph", "text": "hello"}]}
+            }
+        }
+        if task_id == generate_task.id
+        else {},
+    )
+
+    context = main._build_task_context(
+        validate_task.id,
+        {generate_task.id: generate_task, validate_task.id: validate_task},
+        {
+            generate_task.id: generate_task.name,
+            validate_task.id: validate_task.name,
+        },
+    )
+
+    aliased = context["dependencies_by_name"]["Generate DocumentSpec"]
+    assert "document.spec.generate" in aliased
+
+    payload = main._task_payload_from_record(validate_task, correlation_id="corr", context=context)
+    assert "tool_inputs_validation" not in payload
+    resolved = payload["tool_inputs"]["document_spec_validate"]
+    assert resolved["document_spec"]["blocks"][0]["text"] == "hello"
+
+
 def test_task_payload_from_record_resolves_output_path_alias_reference() -> None:
     now = _utcnow()
     record = TaskRecord(

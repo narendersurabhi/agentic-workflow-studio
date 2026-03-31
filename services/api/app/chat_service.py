@@ -38,6 +38,44 @@ _PENDING_CLARIFICATION_SLOT_KEYS = (
     "markdown_text",
     "target_repo",
 )
+_CLARIFICATION_INTENT_CHANGE_ARTIFACT_TOKENS = {
+    "document",
+    "doc",
+    "docx",
+    "pdf",
+    "markdown",
+    "json",
+    "report",
+    "guide",
+    "checklist",
+    "workflow",
+    "job",
+    "issue",
+    "repo",
+    "repository",
+    "file",
+    "files",
+    "summary",
+    "runbook",
+    "query",
+}
+_CLARIFICATION_INTENT_CHANGE_ACTION_TOKENS = {
+    "create",
+    "generate",
+    "write",
+    "make",
+    "render",
+    "build",
+    "draft",
+    "search",
+    "list",
+    "read",
+    "inspect",
+    "fetch",
+    "produce",
+}
+_OUTPUT_FORMAT_TOKENS = {"pdf", "docx", "markdown", "json", "word"}
+_TONE_TOKENS = {"practical", "formal", "conversational", "executive", "technical", "concise"}
 
 
 @dataclass(frozen=True)
@@ -90,6 +128,8 @@ class ChatSubmitNormalizationResult:
     goal: str | None = None
     context_json: dict[str, Any] = field(default_factory=dict)
     clarification_questions: list[str] = field(default_factory=list)
+    requires_blocking_clarification: bool = False
+    goal_intent_profile: dict[str, Any] = field(default_factory=dict)
 
 
 def _submit_normalization_failure_questions(
@@ -233,16 +273,23 @@ def _merge_clarification_state_for_persistence(
         **dict(latest_state.goal_intent_profile or {}),
         **dict(desired_state.goal_intent_profile or {}),
     }
-    merged.questions = _unique_string_list(desired_state.questions, latest_state.questions)
+    merged.current_question = (
+        str(desired_state.current_question or "").strip()
+        or str(latest_state.current_question or "").strip()
+        or None
+    )
+    merged.current_question_field = (
+        str(desired_state.current_question_field or "").strip()
+        or str(latest_state.current_question_field or "").strip()
+        or None
+    )
     merged.pending_questions = _unique_string_list(
-        desired_state.pending_questions,
-        desired_state.questions,
-        latest_state.pending_questions,
-        latest_state.questions,
+        desired_state.pending_questions or desired_state.questions,
+        latest_state.pending_questions if not desired_state.pending_questions else (),
+        latest_state.questions if not desired_state.pending_questions else (),
     )
     merged.pending_fields = _unique_string_list(
-        desired_state.pending_fields,
-        latest_state.pending_fields,
+        desired_state.pending_fields if desired_state.pending_fields else latest_state.pending_fields,
     )
     merged.required_fields = _unique_string_list(
         desired_state.required_fields,
@@ -251,6 +298,11 @@ def _merge_clarification_state_for_persistence(
     merged.known_slot_values = known_slot_values
     merged.resolved_slots = resolved_slots
     merged.slot_provenance = slot_provenance
+    merged.pending_fields = [
+        field
+        for field in merged.pending_fields
+        if str(field).strip() and str(field).strip() not in known_slot_values
+    ]
     merged.answered_fields = sorted(
         {
             *[str(value).strip() for value in latest_state.answered_fields if str(value).strip()],
@@ -258,10 +310,15 @@ def _merge_clarification_state_for_persistence(
             *[str(key).strip() for key in known_slot_values.keys() if str(key).strip()],
         }
     )
+    if not merged.current_question_field and merged.pending_fields:
+        merged.current_question_field = str(merged.pending_fields[0]).strip() or None
+    if not merged.current_question and merged.pending_questions:
+        merged.current_question = str(merged.pending_questions[0]).strip() or None
+    merged.questions = [merged.current_question] if merged.current_question else []
     merged.question_history = _unique_string_list(
         latest_state.question_history,
         desired_state.question_history,
-        merged.questions,
+        merged.pending_questions,
     )
     merged.answer_history = _unique_string_list(
         latest_state.answer_history,
@@ -275,6 +332,15 @@ def _merge_clarification_state_for_persistence(
         latest_state.auto_path_allowed or desired_state.auto_path_allowed
     )
     return merged.model_dump(mode="json", exclude_none=True)
+
+
+def _clarification_question_queue(questions: Sequence[Any] | None) -> list[str]:
+    return _unique_string_list(questions)
+
+
+def _active_clarification_questions(questions: Sequence[Any] | None) -> list[str]:
+    queue = _clarification_question_queue(questions)
+    return queue[:1]
 
 
 def _merge_session_metadata_for_persistence(
@@ -500,6 +566,8 @@ def _pending_clarification_state(
     latest_user_answer: str | None = None,
 ) -> dict[str, Any]:
     existing_state = _parse_pending_clarification_state(session_metadata)
+    question_queue = _clarification_question_queue(questions)
+    active_questions = question_queue[:1]
     original_goal = str(
         (existing_state.original_goal if existing_state is not None else "")
         or (session_metadata.get("draft_goal") if isinstance(session_metadata, Mapping) else "")
@@ -629,8 +697,10 @@ def _pending_clarification_state(
         active_segment_id=active_segment_id,
         active_capability_id=active_capability_id,
         goal_intent_profile=dict(assessment or {}),
-        questions=list(questions),
-        pending_questions=list(questions),
+        questions=active_questions,
+        pending_questions=question_queue,
+        current_question=active_questions[0] if active_questions else None,
+        current_question_field=pending_fields[0] if pending_fields else None,
         pending_fields=pending_fields,
         required_fields=required_fields,
         known_slot_values=known_slot_values,
@@ -643,6 +713,157 @@ def _pending_clarification_state(
         auto_path_allowed=bool(existing_state.auto_path_allowed) if existing_state is not None else False,
     )
     return state.model_dump(mode="json", exclude_none=True)
+
+
+def _apply_pending_clarification_mapping(
+    *,
+    db: Session,
+    runtime: ChatServiceRuntime,
+    goal: str,
+    content: str,
+    session_metadata: Mapping[str, Any],
+    merged_context: Mapping[str, Any] | None,
+    context_envelope: workflow_contracts.ContextEnvelope,
+    user_id: str | None,
+    messages: Sequence[chat_contracts.ChatMessage] | None = None,
+) -> tuple[
+    str,
+    workflow_contracts.ContextEnvelope,
+    dict[str, Any],
+    dict[str, Any],
+    ChatSubmitNormalizationResult | None,
+]:
+    pending_state = _parse_pending_clarification_state(session_metadata)
+    if pending_state is None or runtime.normalize_submit_context is None:
+        return (
+            goal,
+            context_envelope,
+            dict(merged_context or {}),
+            dict(session_metadata),
+            None,
+        )
+
+    try:
+        normalization = runtime.normalize_submit_context(
+            db=db,
+            goal=goal,
+            content=content,
+            session_metadata=session_metadata,
+            merged_context=merged_context,
+            context_envelope=context_envelope,
+            user_id=user_id,
+            messages=messages,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "chat_pending_clarification_mapping_failed",
+            extra={"session_id": session_metadata.get("id")},
+        )
+        return (
+            goal,
+            context_envelope,
+            dict(merged_context or {}),
+            dict(session_metadata),
+            None,
+        )
+
+    if normalization is None:
+        return (
+            goal,
+            context_envelope,
+            dict(merged_context or {}),
+            dict(session_metadata),
+            None,
+        )
+
+    updated_goal = str(normalization.goal or "").strip() or goal
+    updated_envelope = context_envelope
+    if updated_goal != goal or (
+        isinstance(normalization.context_json, Mapping) and normalization.context_json
+    ):
+        updated_envelope = context_service.update_chat_context_envelope(
+            context_envelope,
+            goal=updated_goal,
+            context_json=normalization.context_json,
+        )
+    updated_context = context_service.chat_submit_context_view(updated_envelope)
+    updated_metadata = dict(session_metadata)
+    updated_metadata["draft_goal"] = updated_goal
+    updated_metadata["context_json"] = updated_context
+
+    clarification_question_queue = [
+        str(question).strip()
+        for question in normalization.clarification_questions
+        if isinstance(question, str) and question.strip()
+    ]
+    assessment = (
+        dict(normalization.goal_intent_profile)
+        if isinstance(normalization.goal_intent_profile, Mapping)
+        and normalization.goal_intent_profile
+        else dict(pending_state.goal_intent_profile or {})
+    )
+    updated_metadata["pending_clarification"] = _pending_clarification_state(
+        resolved_goal=updated_goal,
+        questions=clarification_question_queue,
+        assessment=assessment,
+        session_metadata=session_metadata,
+        context_json=updated_context,
+        latest_user_answer=content,
+    )
+    return updated_goal, updated_envelope, updated_context, updated_metadata, normalization
+
+
+def _resolved_clarification_mapping_fields(
+    normalization: ChatSubmitNormalizationResult | None,
+) -> list[str]:
+    if normalization is None or not isinstance(normalization.context_json, Mapping):
+        return []
+    payload = normalization.context_json.get("clarification_normalization")
+    if not isinstance(payload, Mapping):
+        return []
+    resolved: list[str] = []
+    for raw_field in payload.get("fields") or []:
+        field = intent_contract.normalize_required_input_key(raw_field)
+        if field and field not in resolved:
+            resolved.append(field)
+    return resolved
+
+
+def _clarification_mapping_metadata(
+    *,
+    before_state: chat_contracts.ClarificationState | None,
+    after_state: chat_contracts.ClarificationState | None,
+    normalization: ChatSubmitNormalizationResult | None,
+    restarted: bool,
+) -> dict[str, Any] | None:
+    if before_state is None and not restarted:
+        return None
+    active_field_before = (
+        intent_contract.normalize_required_input_key(before_state.current_question_field)
+        if before_state is not None and before_state.current_question_field
+        else None
+    )
+    active_field_after = (
+        intent_contract.normalize_required_input_key(after_state.current_question_field)
+        if after_state is not None and after_state.current_question_field
+        else None
+    )
+    resolved_fields = _resolved_clarification_mapping_fields(normalization)
+    resolved_active_field = bool(
+        active_field_before and active_field_before in set(resolved_fields)
+    )
+    queue_advanced = bool(
+        resolved_active_field
+        and (active_field_after is None or active_field_after != active_field_before)
+    )
+    return {
+        "active_field_before": active_field_before,
+        "active_field_after": active_field_after,
+        "resolved_fields": resolved_fields,
+        "resolved_active_field": resolved_active_field,
+        "queue_advanced": queue_advanced,
+        "restarted": bool(restarted),
+    }
 
 
 def looks_like_chat_only_correction(content: str) -> bool:
@@ -704,6 +925,75 @@ def looks_like_chat_only_correction(content: str) -> bool:
         r"\binstead\b.{0,24}\b(?:chat|answer|reply|respond|here)\b",
     )
     return any(re.search(pattern, compact) for pattern in semantic_patterns)
+
+
+def _looks_like_local_clarification_field_answer(
+    content: str,
+    *,
+    current_field: str | None,
+) -> bool:
+    normalized_field = intent_contract.normalize_required_input_key(current_field)
+    lowered = str(content or "").strip().lower()
+    if not lowered or not normalized_field:
+        return False
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    if not tokens:
+        return False
+
+    if normalized_field == "output_format":
+        return bool(tokens & _OUTPUT_FORMAT_TOKENS)
+    if normalized_field == "tone":
+        return bool(tokens & _TONE_TOKENS) and len(tokens) <= 8
+    if normalized_field == "audience":
+        return not bool(tokens & _CLARIFICATION_INTENT_CHANGE_ACTION_TOKENS) and len(tokens) <= 12
+    if normalized_field in {"path", "output_path"}:
+        return bool(
+            re.search(
+                r"(\.(?:docx|pdf|md|markdown|json)\b|\b(?:workspace|folder|download|filename|path|save)\b)",
+                lowered,
+            )
+        )
+    return False
+
+
+def _looks_like_pending_clarification_intent_change(
+    content: str,
+    *,
+    pending_state: chat_contracts.ClarificationState | None,
+) -> bool:
+    if pending_state is None:
+        return False
+    lowered = str(content or "").strip().lower()
+    if not lowered:
+        return False
+    if re.search(r"\b(?:chat|answer|reply|respond|explain|here)\b", lowered) and re.search(
+        r"\b(?:instead|only|just|not|no|skip|cancel|stop|rather)\b",
+        lowered,
+    ):
+        return False
+    if _looks_like_local_clarification_field_answer(
+        content,
+        current_field=pending_state.current_question_field,
+    ):
+        return False
+    redirect_patterns = (
+        r"\bactually\b",
+        r"\binstead\b",
+        r"\brather\b",
+        r"\bstart over\b",
+        r"\brestart\b",
+        r"\bnew request\b",
+        r"\bdifferent request\b",
+        r"\bmake this\b",
+        r"\bturn this\b",
+        r"\bconvert this\b",
+    )
+    if not any(re.search(pattern, lowered) for pattern in redirect_patterns):
+        return False
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    return bool(tokens & _CLARIFICATION_INTENT_CHANGE_ARTIFACT_TOKENS) and bool(
+        tokens & _CLARIFICATION_INTENT_CHANGE_ACTION_TOKENS
+    )
 
 
 def create_session(
@@ -782,6 +1072,17 @@ def handle_turn(
     bound_user_id = _normalized_user_id(user_id) or _chat_session_user_id(session_metadata)
     if bound_user_id and not _chat_session_user_id(session_metadata):
         session_metadata[_INTERNAL_CHAT_USER_ID_KEY] = bound_user_id
+    restarted_pending_clarification = False
+    pending_state = _parse_pending_clarification_state(session_metadata)
+    pending_state_before_mapping = pending_state
+    if _looks_like_pending_clarification_intent_change(
+        content,
+        pending_state=pending_state,
+    ):
+        restarted_pending_clarification = True
+        session_metadata.pop("draft_goal", None)
+        session_metadata.pop("pending_clarification", None)
+        session_metadata.pop("pending_workflow_input", None)
     session_context = _sanitize_chat_context(_coerce_context_json(session_metadata.get("context_json")))
     turn_context = _prepare_turn_context(
         request.context_json,
@@ -789,10 +1090,14 @@ def handle_turn(
         content=content,
     )
     turn_context = _sanitize_chat_context(turn_context)
-    candidate_goal = _candidate_goal(
-        content,
-        session_metadata,
-        is_chat_only_correction=runtime.is_chat_only_correction,
+    candidate_goal = (
+        content.strip()
+        if restarted_pending_clarification
+        else _candidate_goal(
+            content,
+            session_metadata,
+            is_chat_only_correction=runtime.is_chat_only_correction,
+        )
     )
     context_envelope = context_service.build_chat_context_envelope(
         db=db,
@@ -803,7 +1108,6 @@ def handle_turn(
         user_id=bound_user_id,
     )
     merged_context = context_service.chat_submit_context_view(context_envelope)
-    route_context = context_service.chat_route_context_view(context_envelope)
 
     user_message = ChatMessageRecord(
         id=runtime.make_id(),
@@ -817,6 +1121,32 @@ def handle_turn(
     )
     messages = _message_records_for_session(db, record.id)
     chat_messages = [_message_from_record(message) for message in messages]
+    pre_route_normalization: ChatSubmitNormalizationResult | None = None
+    (
+        candidate_goal,
+        context_envelope,
+        merged_context,
+        session_metadata,
+        pre_route_normalization,
+    ) = _apply_pending_clarification_mapping(
+        db=db,
+        runtime=runtime,
+        goal=candidate_goal,
+        content=content,
+        session_metadata=session_metadata,
+        merged_context=merged_context,
+        context_envelope=context_envelope,
+        user_id=bound_user_id,
+        messages=chat_messages,
+    )
+    pending_state_after_mapping = _parse_pending_clarification_state(session_metadata)
+    clarification_mapping = _clarification_mapping_metadata(
+        before_state=pending_state_before_mapping,
+        after_state=pending_state_after_mapping,
+        normalization=pre_route_normalization,
+        restarted=restarted_pending_clarification,
+    )
+    route_context = context_service.chat_route_context_view(context_envelope)
     turn_plan = runtime.route_turn(
         content=content,
         candidate_goal=candidate_goal,
@@ -844,11 +1174,12 @@ def handle_turn(
     workflow_run: models.WorkflowRun | None = None
 
     if route_type == "ask_clarification":
-        questions = [
+        question_queue = [
             str(question).strip()
             for question in turn_plan.get("clarification_questions", assessment.get("questions", []))
             if isinstance(question, str) and question.strip()
         ]
+        questions = _active_clarification_questions(question_queue)
         if questions and not assistant_content:
             assistant_content = "\n".join(questions)
         assistant_action = chat_contracts.AssistantAction(
@@ -861,7 +1192,7 @@ def handle_turn(
         session_metadata["draft_goal"] = resolved_goal
         session_metadata["pending_clarification"] = _pending_clarification_state(
             resolved_goal=resolved_goal,
-            questions=questions,
+            questions=question_queue,
             assessment=assessment,
             session_metadata=session_metadata,
             context_json=merged_context,
@@ -869,8 +1200,8 @@ def handle_turn(
             latest_user_answer=content,
         )
     elif route_type == "submit_job":
-        normalization = None
-        if runtime.normalize_submit_context is not None:
+        normalization = pre_route_normalization
+        if normalization is None and runtime.normalize_submit_context is not None:
             try:
                 normalization = runtime.normalize_submit_context(
                     db=db,
@@ -908,12 +1239,20 @@ def handle_turn(
                     context_envelope,
                     goal=resolved_goal,
                 )
-            clarification_questions = [
+            if isinstance(normalization.goal_intent_profile, Mapping) and normalization.goal_intent_profile:
+                assessment = dict(normalization.goal_intent_profile)
+            clarification_question_queue = [
                 str(question).strip()
                 for question in normalization.clarification_questions
                 if isinstance(question, str) and question.strip()
             ]
-            if clarification_questions:
+            if normalization.requires_blocking_clarification and not clarification_question_queue:
+                clarification_question_queue = _submit_normalization_failure_questions(
+                    session_metadata=session_metadata,
+                    assessment=assessment,
+                )
+            clarification_questions = _active_clarification_questions(clarification_question_queue)
+            if clarification_questions or normalization.requires_blocking_clarification:
                 assistant_content = "\n".join(clarification_questions)
                 assistant_action = chat_contracts.AssistantAction(
                     type=chat_contracts.AssistantActionType.ask_clarification,
@@ -925,7 +1264,7 @@ def handle_turn(
                 session_metadata["draft_goal"] = resolved_goal
                 session_metadata["pending_clarification"] = _pending_clarification_state(
                     resolved_goal=resolved_goal,
-                    questions=clarification_questions,
+                    questions=clarification_question_queue,
                     assessment=assessment,
                     session_metadata=session_metadata,
                     context_json=merged_context,
@@ -1180,6 +1519,10 @@ def handle_turn(
             cleared_session_keys.update(
                 {"draft_goal", "pending_clarification", "pending_workflow_input"}
             )
+    if restarted_pending_clarification:
+        for key in ("draft_goal", "pending_clarification", "pending_workflow_input"):
+            if key not in session_metadata:
+                cleared_session_keys.add(key)
     if not assistant_content:
         assistant_content = "What should I do next?"
 
@@ -1214,6 +1557,7 @@ def handle_turn(
             direct_output,
             workflow_run,
             boundary_decision=boundary_decision,
+            clarification_mapping=clarification_mapping,
         ),
         action_json=assistant_action.model_dump(mode="json", exclude_none=True),
         job_id=created_job.id if created_job is not None else None,
@@ -1481,6 +1825,7 @@ def _assistant_metadata(
     workflow_run: models.WorkflowRun | None = None,
     *,
     boundary_decision: Mapping[str, Any] | None = None,
+    clarification_mapping: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata = {
         "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(assessment) or {}
@@ -1491,6 +1836,8 @@ def _assistant_metadata(
         metadata["workflow_run"] = workflow_run.model_dump(mode="json", exclude_none=True)
     if isinstance(boundary_decision, Mapping):
         metadata["boundary_decision"] = dict(boundary_decision)
+    if isinstance(clarification_mapping, Mapping):
+        metadata["clarification_mapping"] = dict(clarification_mapping)
     return metadata
 
 

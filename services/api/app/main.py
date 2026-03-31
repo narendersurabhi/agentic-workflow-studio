@@ -971,6 +971,11 @@ chat_clarification_family_alignment_feedback_total = Counter(
     "Explicit chat-message feedback grouped by clarification active-family alignment",
     ["alignment", "sentiment"],
 )
+chat_clarification_mapping_feedback_total = Counter(
+    "chat_clarification_mapping_feedback_total",
+    "Explicit chat-message feedback grouped by clarification mapping outcomes",
+    ["resolved_active_field", "queue_advanced", "restarted", "sentiment"],
+)
 
 
 def _intent_source_label(source: Any) -> str:
@@ -4627,7 +4632,6 @@ def _normalize_chat_submit_context(
     user_id: str | None,
     messages: Sequence[chat_contracts.ChatMessage] | None = None,
 ) -> chat_service.ChatSubmitNormalizationResult | None:
-    del content
     submit_context = (
         context_service.chat_submit_context_view(context_envelope)
         if context_envelope is not None
@@ -4640,6 +4644,11 @@ def _normalize_chat_submit_context(
         context_envelope=context_envelope,
     )
     pending_state = _pending_clarification_state_from_metadata(session_metadata)
+    preferred_field = (
+        intent_contract.normalize_required_input_key(pending_state.current_question_field)
+        if pending_state is not None and pending_state.current_question_field
+        else None
+    )
     conversation_history = _chat_submit_conversation_history(messages)
     updates: dict[str, str] = {}
     unresolved: list[str] = []
@@ -4690,6 +4699,8 @@ def _normalize_chat_submit_context(
                     provider=_chat_clarification_normalizer_provider,
                     confidence_threshold=CHAT_CLARIFICATION_NORMALIZER_CONFIDENCE_THRESHOLD,
                     conversation_history=conversation_history,
+                    preferred_field=preferred_field,
+                    latest_answer=content,
                 )
             )
         else:
@@ -4736,18 +4747,38 @@ def _normalize_chat_submit_context(
         if updated_envelope is not None
         else normalized
     )
+    refreshed_assessment = refreshed_normalized.profile.model_dump(mode="json", exclude_none=True)
+    requires_blocking_clarification = bool(
+        refreshed_normalized.profile.requires_blocking_clarification
+        or refreshed_normalized.clarification.requires_blocking_clarification
+    )
     clarification_questions = _chat_submit_clarification_questions(
         refreshed_normalized,
         goal=goal,
         unresolved_fields=unresolved,
         scoped_fields=scoped_fields,
     )
+    if requires_blocking_clarification and not clarification_questions:
+        clarification_questions = [
+            str(question).strip()
+            for question in (
+                list(refreshed_normalized.clarification.questions)
+                + list(refreshed_normalized.profile.questions)
+            )
+            if isinstance(question, str) and question.strip()
+        ]
+    if requires_blocking_clarification and not clarification_questions:
+        clarification_questions = [
+            "I still need the remaining required details before I can submit this request."
+        ]
     if not context_updates and not clarification_questions:
         return None
     return chat_service.ChatSubmitNormalizationResult(
         goal=goal,
         context_json=context_updates,
         clarification_questions=clarification_questions,
+        requires_blocking_clarification=requires_blocking_clarification,
+        goal_intent_profile=refreshed_assessment,
     )
 
 
@@ -11148,6 +11179,38 @@ def _load_task_result(task_id: str) -> dict[str, Any]:
         return {}
 
 
+def _alias_dependency_output_keys(task: models.Task | TaskRecord | None, output: Any) -> dict[str, Any]:
+    if not isinstance(output, Mapping):
+        return {}
+    aliased = dict(output)
+    if task is None:
+        return aliased
+    tool_requests = [
+        str(request_id).strip()
+        for request_id in (task.tool_requests or [])
+        if str(request_id).strip()
+    ]
+    if not tool_requests:
+        return aliased
+    raw_tool_inputs = task.tool_inputs if isinstance(task.tool_inputs, Mapping) else {}
+    bindings = _task_capability_bindings(tool_requests, raw_tool_inputs)
+    for request_id, binding in bindings.items():
+        aliases = {
+            request_id,
+            str(binding.get("capability_id") or "").strip(),
+            str(binding.get("tool_name") or "").strip(),
+        }
+        aliases = {alias for alias in aliases if alias}
+        if not aliases:
+            continue
+        value = next((aliased.get(alias) for alias in aliases if alias in aliased), None)
+        if value is None:
+            continue
+        for alias in aliases:
+            aliased.setdefault(alias, value)
+    return aliased
+
+
 def _build_task_context(
     task_id: str,
     task_map: dict[str, models.Task],
@@ -11170,7 +11233,10 @@ def _build_task_context(
             for child in dep_task.deps:
                 if child not in visited:
                     stack.append(child)
-    outputs_by_id = {dep_id: _load_task_output(dep_id) for dep_id in visited}
+    outputs_by_id = {
+        dep_id: _alias_dependency_output_keys(task_map.get(dep_id), _load_task_output(dep_id))
+        for dep_id in visited
+    }
     outputs_by_name = {
         id_to_name.get(dep_id, dep_id): output for dep_id, output in outputs_by_id.items()
     }
@@ -12585,6 +12651,21 @@ def submit_feedback(
                 alignment=family_alignment,
                 sentiment=feedback.sentiment.value,
             ).inc()
+        chat_clarification_mapping_feedback_total.labels(
+            resolved_active_field=_metrics_label(
+                dimensions.get("clarification_mapping_resolved_active_field"),
+                default="unknown",
+            ),
+            queue_advanced=_metrics_label(
+                dimensions.get("clarification_mapping_queue_advanced"),
+                default="unknown",
+            ),
+            restarted=_metrics_label(
+                dimensions.get("clarification_mapping_restarted"),
+                default="unknown",
+            ),
+            sentiment=feedback.sentiment.value,
+        ).inc()
     _emit_event("feedback.submitted", feedback.model_dump(mode="json"))
     return feedback
 

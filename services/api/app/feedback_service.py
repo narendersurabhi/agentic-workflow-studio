@@ -240,12 +240,52 @@ def _clarification_fields_from_session(
         "clarification_active_family": active_family,
         "clarification_active_capability_id": active_capability,
         "clarification_active_segment_id": active_segment_id,
+        "clarification_current_question": _non_empty_string(state.current_question),
+        "clarification_current_question_field": _non_empty_string(state.current_question_field),
         "clarification_resolved_slot_count": len(known_slot_values),
         "clarification_pending_field_count": len(pending_fields),
         "clarification_question_count": len(question_history),
         "clarification_answer_count": len(answer_history),
         "clarification_slot_loss_state": _clarification_slot_loss_state(state),
         "clarification_family_alignment": family_alignment,
+    }
+
+
+def _clarification_mapping_fields_from_message(
+    message: ChatMessageRecord | None,
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    message_metadata = (
+        dict(message.metadata_json or {})
+        if message is not None and isinstance(message.metadata_json, Mapping)
+        else {}
+    )
+    payload = message_metadata.get("clarification_mapping")
+    if not isinstance(payload, Mapping) and isinstance(snapshot, Mapping):
+        snapshot_metadata = snapshot.get("metadata")
+        if isinstance(snapshot_metadata, Mapping):
+            payload = snapshot_metadata.get("clarification_mapping")
+    mapping_payload = dict(payload) if isinstance(payload, Mapping) else {}
+    if not mapping_payload:
+        return {}
+    resolved_fields = _normalize_string_list(mapping_payload.get("resolved_fields"))
+    return {
+        "clarification_mapping_active_field_before": _non_empty_string(
+            mapping_payload.get("active_field_before")
+        ),
+        "clarification_mapping_active_field_after": _non_empty_string(
+            mapping_payload.get("active_field_after")
+        ),
+        "clarification_mapping_resolved_field_count": len(resolved_fields),
+        "clarification_mapping_resolved_active_field": (
+            "yes" if bool(mapping_payload.get("resolved_active_field")) else "no"
+        ),
+        "clarification_mapping_queue_advanced": (
+            "yes" if bool(mapping_payload.get("queue_advanced")) else "no"
+        ),
+        "clarification_mapping_restarted": (
+            "yes" if bool(mapping_payload.get("restarted")) else "no"
+        ),
     }
 
 
@@ -545,6 +585,7 @@ def derive_feedback_dimensions(
         session,
         boundary_top_family=_non_empty_string(boundary_fields.get("boundary_top_family")),
     )
+    clarification_mapping_fields = _clarification_mapping_fields_from_message(message, snapshot)
     dimensions = {
         "target_type": request.target_type.value,
         "target_id": _non_empty_string(request.target_id),
@@ -562,6 +603,7 @@ def derive_feedback_dimensions(
         "reason_count": len(reason_codes),
     }
     dimensions.update(clarification_fields)
+    dimensions.update(clarification_mapping_fields)
     if request.target_type == models.FeedbackTargetType.intent_assessment:
         dimensions.update(_intent_fields_from_snapshot(snapshot))
     return dimensions
@@ -600,6 +642,11 @@ def _feedback_dimensions(item: models.Feedback) -> dict[str, Any]:
         "clarification_active_segment_id",
         "clarification_slot_loss_state",
         "clarification_family_alignment",
+        "clarification_mapping_active_field_before",
+        "clarification_mapping_active_field_after",
+        "clarification_mapping_resolved_active_field",
+        "clarification_mapping_queue_advanced",
+        "clarification_mapping_restarted",
     ):
         if key not in normalized:
             normalized[key] = None
@@ -608,6 +655,7 @@ def _feedback_dimensions(item: models.Feedback) -> dict[str, Any]:
         "clarification_pending_field_count",
         "clarification_question_count",
         "clarification_answer_count",
+        "clarification_mapping_resolved_field_count",
     ):
         if key not in normalized:
             normalized[key] = 0
@@ -877,6 +925,18 @@ def summarize_feedback_rows(
         clarification_active_families=dimension_breakdown(items, "clarification_active_family"),
         clarification_slot_loss_states=dimension_breakdown(items, "clarification_slot_loss_state"),
         clarification_family_alignments=dimension_breakdown(items, "clarification_family_alignment"),
+        clarification_mapping_resolved_active_field_states=dimension_breakdown(
+            items,
+            "clarification_mapping_resolved_active_field",
+        ),
+        clarification_mapping_queue_advancement_states=dimension_breakdown(
+            items,
+            "clarification_mapping_queue_advanced",
+        ),
+        clarification_mapping_restart_states=dimension_breakdown(
+            items,
+            "clarification_mapping_restarted",
+        ),
         metrics={
             "chat_helpfulness_rate": _positive_rate(
                 items,
@@ -909,6 +969,24 @@ def summarize_feedback_rows(
                 target_type=models.FeedbackTargetType.chat_message,
                 dimension_key="clarification_family_alignment",
                 matches={"drift"},
+            ),
+            "clarification_mapping_resolved_active_field_feedback_rate": _dimension_rate(
+                items,
+                target_type=models.FeedbackTargetType.chat_message,
+                dimension_key="clarification_mapping_resolved_active_field",
+                matches={"yes"},
+            ),
+            "clarification_mapping_queue_advanced_feedback_rate": _dimension_rate(
+                items,
+                target_type=models.FeedbackTargetType.chat_message,
+                dimension_key="clarification_mapping_queue_advanced",
+                matches={"yes"},
+            ),
+            "clarification_mapping_restart_feedback_rate": _dimension_rate(
+                items,
+                target_type=models.FeedbackTargetType.chat_message,
+                dimension_key="clarification_mapping_restarted",
+                matches={"yes"},
             ),
         },
         correlates=collect_job_feedback_correlates(db, items),

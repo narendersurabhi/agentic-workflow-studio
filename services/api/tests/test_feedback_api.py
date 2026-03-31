@@ -218,6 +218,7 @@ def _create_chat_message_with_boundary_decision(
     action_type: str = "respond",
     boundary_decision: dict[str, Any] | None = None,
     session_metadata: dict[str, Any] | None = None,
+    message_metadata: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     session_id = str(uuid.uuid4())
     message_id = str(uuid.uuid4())
@@ -238,7 +239,10 @@ def _create_chat_message_with_boundary_decision(
                 session_id=session_id,
                 role="assistant",
                 content=content,
-                metadata_json={"boundary_decision": dict(boundary_decision or {})},
+                metadata_json={
+                    "boundary_decision": dict(boundary_decision or {}),
+                    **dict(message_metadata or {}),
+                },
                 action_json={"type": action_type},
                 job_id=None,
                 created_at=now,
@@ -481,6 +485,16 @@ def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> No
         "chat_clarification_family_alignment_feedback_total",
         {"alignment": "drift", "sentiment": "negative"},
     )
+    mapping_before = _metric_value(
+        before_metrics.text,
+        "chat_clarification_mapping_feedback_total",
+        {
+            "resolved_active_field": "yes",
+            "queue_advanced": "yes",
+            "restarted": "no",
+            "sentiment": "negative",
+        },
+    )
 
     _session_id, message_id = _create_chat_message_with_boundary_decision(
         content="Let me ask one more question.",
@@ -494,6 +508,16 @@ def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> No
                 "top_families": [{"family": "github", "score": 1.1}],
             },
         },
+        message_metadata={
+            "clarification_mapping": {
+                "active_field_before": "path",
+                "active_field_after": "tone",
+                "resolved_fields": ["path"],
+                "resolved_active_field": True,
+                "queue_advanced": True,
+                "restarted": False,
+            }
+        },
         session_metadata={
             "pending_clarification": {
                 "original_goal": "create a Kubernetes deployment guide",
@@ -501,6 +525,8 @@ def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> No
                 "active_capability_id": "document.docx.render",
                 "pending_fields": ["path"],
                 "required_fields": ["path"],
+                "current_question": "What filename should I use?",
+                "current_question_field": "path",
                 "known_slot_values": {
                     "topic": "Kubernetes deployment guide",
                     "audience": "Senior Software Engineers",
@@ -537,10 +563,19 @@ def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> No
     assert feedback_response.status_code == 200
     body = feedback_response.json()
     assert body["metadata"]["dimensions"]["clarification_active_family"] == "documents"
+    assert body["metadata"]["dimensions"]["clarification_current_question"] == (
+        "What filename should I use?"
+    )
+    assert body["metadata"]["dimensions"]["clarification_current_question_field"] == "path"
     assert body["metadata"]["dimensions"]["clarification_slot_loss_state"] == "resolved_field_still_pending"
     assert body["metadata"]["dimensions"]["clarification_family_alignment"] == "drift"
     assert body["metadata"]["dimensions"]["clarification_answer_count"] == 2
     assert body["metadata"]["dimensions"]["clarification_resolved_slot_count"] == 2
+    assert body["metadata"]["dimensions"]["clarification_mapping_active_field_before"] == "path"
+    assert body["metadata"]["dimensions"]["clarification_mapping_active_field_after"] == "tone"
+    assert body["metadata"]["dimensions"]["clarification_mapping_resolved_active_field"] == "yes"
+    assert body["metadata"]["dimensions"]["clarification_mapping_queue_advanced"] == "yes"
+    assert body["metadata"]["dimensions"]["clarification_mapping_restarted"] == "no"
 
     summary_response = client.get(
         "/feedback/summary",
@@ -560,8 +595,22 @@ def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> No
         bucket["key"] == "drift" and bucket["total"] >= 1
         for bucket in summary["clarification_family_alignments"]
     )
+    assert any(
+        bucket["key"] == "yes" and bucket["total"] >= 1
+        for bucket in summary["clarification_mapping_resolved_active_field_states"]
+    )
+    assert any(
+        bucket["key"] == "yes" and bucket["total"] >= 1
+        for bucket in summary["clarification_mapping_queue_advancement_states"]
+    )
+    assert any(
+        bucket["key"] == "no" and bucket["total"] >= 1
+        for bucket in summary["clarification_mapping_restart_states"]
+    )
     assert summary["metrics"]["clarification_slot_loss_feedback_rate"] > 0.0
     assert summary["metrics"]["clarification_family_drift_feedback_rate"] > 0.0
+    assert summary["metrics"]["clarification_mapping_resolved_active_field_feedback_rate"] > 0.0
+    assert summary["metrics"]["clarification_mapping_queue_advanced_feedback_rate"] > 0.0
 
     after_metrics = client.get("/metrics")
     assert after_metrics.status_code == 200
@@ -580,6 +629,19 @@ def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> No
             {"alignment": "drift", "sentiment": "negative"},
         )
         >= family_drift_before + 1
+    )
+    assert (
+        _metric_value(
+            after_metrics.text,
+            "chat_clarification_mapping_feedback_total",
+            {
+                "resolved_active_field": "yes",
+                "queue_advanced": "yes",
+                "restarted": "no",
+                "sentiment": "negative",
+            },
+        )
+        >= mapping_before + 1
     )
 
 
@@ -603,6 +665,8 @@ def test_chat_clarification_review_queue_returns_slot_loss_items() -> None:
                 "active_capability_id": "document.docx.render",
                 "pending_fields": ["path"],
                 "required_fields": ["path"],
+                "current_question": "What filename should I use?",
+                "current_question_field": "path",
                 "known_slot_values": {"topic": "Kubernetes deployment guide"},
                 "resolved_slots": {"topic": "Kubernetes deployment guide"},
                 "answered_fields": ["path"],
@@ -640,6 +704,10 @@ def test_chat_clarification_review_queue_returns_slot_loss_items() -> None:
     assert all(item["review_label"] == "likely_slot_loss" for item in filtered_body["items"])
     assert all(
         item["dimensions"]["clarification_active_family"] == "documents"
+        for item in filtered_body["items"]
+    )
+    assert any(
+        item["dimensions"].get("clarification_current_question_field") == "path"
         for item in filtered_body["items"]
     )
 

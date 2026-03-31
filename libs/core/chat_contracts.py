@@ -83,6 +83,8 @@ class ClarificationState(BaseModel):
     goal_intent_profile: dict[str, Any] = Field(default_factory=dict)
     questions: list[str] = Field(default_factory=list)
     pending_questions: list[str] = Field(default_factory=list)
+    current_question: str | None = None
+    current_question_field: str | None = None
     pending_fields: list[str] = Field(default_factory=list)
     required_fields: list[str] = Field(default_factory=list)
     known_slot_values: dict[str, Any] = Field(default_factory=dict)
@@ -130,10 +132,25 @@ class ClarificationState(BaseModel):
 
     @model_validator(mode="after")
     def _synchronize_state(self) -> "ClarificationState":
-        if not self.questions and self.pending_questions:
-            self.questions = list(self.pending_questions)
         if not self.pending_questions and self.questions:
             self.pending_questions = list(self.questions)
+        if not self.current_question:
+            if self.questions:
+                self.current_question = str(self.questions[0]).strip() or None
+            elif self.pending_questions:
+                self.current_question = str(self.pending_questions[0]).strip() or None
+        if not self.questions and self.current_question:
+            self.questions = [self.current_question]
+        elif self.questions and self.current_question:
+            self.questions = [self.current_question]
+        elif self.pending_questions:
+            first = str(self.pending_questions[0]).strip()
+            self.questions = [first] if first else []
+        if not self.current_question_field:
+            candidates = list(self.pending_fields or self.required_fields)
+            if candidates:
+                first_field = str(candidates[0]).strip()
+                self.current_question_field = first_field or None
         if not self.known_slot_values and self.resolved_slots:
             self.known_slot_values = dict(self.resolved_slots)
         if not self.resolved_slots and self.known_slot_values:

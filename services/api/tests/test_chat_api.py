@@ -1123,6 +1123,83 @@ def test_chat_turn_blocks_first_submit_when_selected_capability_required_fields_
     assert body["session"]["metadata"]["pending_clarification"]["questions"]
 
 
+def test_chat_turn_blocks_submit_when_post_normalization_still_requires_blocking_clarification(
+    monkeypatch,
+) -> None:
+    class _Router:
+        def generate_request_json_object(self, request):
+            return {
+                "route": "submit_job",
+                "assistant_response": "",
+                "intent": "generate",
+                "risk_level": "bounded_write",
+                "confidence": 0.97,
+            }
+
+    def _normalize_goal_intent(goal, **_kwargs):
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=False,
+                requires_blocking_clarification=False,
+                questions=[],
+                blocking_slots=[],
+                missing_slots=[],
+                slot_values={"intent_action": "generate", "risk_level": "bounded_write"},
+            ),
+            graph=main.workflow_contracts.IntentGraph(),
+            candidate_capabilities={},
+        )
+
+    def _normalize_submit_context(**kwargs):
+        return chat_service.ChatSubmitNormalizationResult(
+            goal=kwargs["goal"],
+            clarification_questions=[],
+            requires_blocking_clarification=True,
+            goal_intent_profile={
+                "intent": "render",
+                "source": "test_submit_normalizer",
+                "confidence": 0.68,
+                "risk_level": "bounded_write",
+                "threshold": 0.7,
+                "low_confidence": True,
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": ["What should the system do first (generate, transform, validate, render, or io)?"],
+                "blocking_slots": ["intent_action"],
+                "missing_slots": ["intent_action"],
+                "slot_values": {"intent_action": "render", "risk_level": "bounded_write"},
+            },
+        )
+
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "always_router")
+    monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    monkeypatch.setattr(main, "_normalize_chat_submit_context", _normalize_submit_context)
+
+    session = client.post("/chat/sessions", json={}).json()
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "create a document", "context_json": {}, "priority": 0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"] is None
+    assert body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert "what should the system do first" in body["assistant_message"]["content"].lower()
+    assert body["assistant_message"]["action"]["goal_intent_profile"][
+        "requires_blocking_clarification"
+    ]
+    assert body["session"]["metadata"]["pending_clarification"]["questions"]
+
+
 def test_chat_turn_persists_typed_pending_clarification_state_with_active_target(
     monkeypatch,
 ) -> None:
@@ -1182,6 +1259,10 @@ def test_chat_turn_persists_typed_pending_clarification_state_with_active_target
     assert response.status_code == 200
     body = response.json()
     assert body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert body["assistant_message"]["action"]["clarification_questions"] == [
+        "Who is the target audience?"
+    ]
+    assert body["assistant_message"]["content"] == "Who is the target audience?"
     pending = body["session"]["metadata"]["pending_clarification"]
     assert pending["schema_version"] == "clarification_state_v1"
     assert pending["state_version"] == 1
@@ -1192,6 +1273,450 @@ def test_chat_turn_persists_typed_pending_clarification_state_with_active_target
     assert pending["execution_frame"]["schema_version"] == "execution_frame_v1"
     assert pending["execution_frame"]["mode"] == "clarification"
     assert pending["execution_frame"]["active_capability_id"] == "document.spec.generate"
+    assert pending["questions"] == ["Who is the target audience?"]
+    assert pending["pending_questions"] == [
+        "Who is the target audience?",
+        "What tone should it use?",
+    ]
+    assert pending["current_question"] == "Who is the target audience?"
+    assert pending["current_question_field"] == "audience"
+
+
+def test_chat_turn_asks_one_submit_normalization_question_at_a_time(monkeypatch) -> None:
+    class _Router:
+        def generate_request_json_object(self, request):
+            return {
+                "route": "submit_job",
+                "assistant_response": "",
+                "intent": "generate",
+                "risk_level": "bounded_write",
+                "confidence": 0.97,
+            }
+
+    def _normalize_goal_intent(goal, **_kwargs):
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=False,
+                requires_blocking_clarification=False,
+                questions=[],
+                blocking_slots=[],
+                missing_slots=[],
+                slot_values={"intent_action": "generate", "risk_level": "bounded_write"},
+            ),
+            graph=main.workflow_contracts.IntentGraph(),
+            candidate_capabilities={},
+        )
+
+    def _normalize_submit_context(**kwargs):
+        return chat_service.ChatSubmitNormalizationResult(
+            goal=kwargs["goal"],
+            clarification_questions=[
+                "Who is the target audience?",
+                "What tone should it use?",
+            ],
+            requires_blocking_clarification=True,
+            goal_intent_profile={
+                "intent": "generate",
+                "source": "test_submit_normalizer",
+                "confidence": 0.91,
+                "risk_level": "bounded_write",
+                "threshold": 0.7,
+                "low_confidence": False,
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": [
+                    "Who is the target audience?",
+                    "What tone should it use?",
+                ],
+                "blocking_slots": ["audience", "tone"],
+                "missing_slots": ["audience", "tone"],
+                "slot_values": {"intent_action": "generate", "risk_level": "bounded_write"},
+            },
+        )
+
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "always_router")
+    monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    monkeypatch.setattr(main, "_normalize_chat_submit_context", _normalize_submit_context)
+
+    session = client.post("/chat/sessions", json={}).json()
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "create a deployment report", "context_json": {}, "priority": 0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"] is None
+    assert body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert body["assistant_message"]["action"]["clarification_questions"] == [
+        "Who is the target audience?"
+    ]
+    assert body["assistant_message"]["content"] == "Who is the target audience?"
+    pending = body["session"]["metadata"]["pending_clarification"]
+    assert pending["questions"] == ["Who is the target audience?"]
+    assert pending["pending_questions"] == [
+        "Who is the target audience?",
+        "What tone should it use?",
+    ]
+    assert pending["current_question_field"] == "audience"
+
+
+def test_chat_turn_maps_pending_answer_before_routing_and_advances_queue(
+    monkeypatch,
+) -> None:
+    route_calls = {"count": 0}
+
+    def _route_turn(**kwargs):
+        route_calls["count"] += 1
+        if route_calls["count"] == 1:
+            return {
+                "type": "ask_clarification",
+                "assistant_content": "Who is the target audience?",
+                "clarification_questions": [
+                    "Who is the target audience?",
+                    "What tone should it use?",
+                ],
+                "goal_intent_profile": {
+                    "intent": "generate",
+                    "source": "test",
+                    "confidence": 0.97,
+                    "risk_level": "bounded_write",
+                    "threshold": 0.7,
+                    "low_confidence": False,
+                    "needs_clarification": True,
+                    "requires_blocking_clarification": True,
+                    "questions": [
+                        "Who is the target audience?",
+                        "What tone should it use?",
+                    ],
+                    "blocking_slots": ["audience", "tone"],
+                    "missing_slots": ["audience", "tone"],
+                    "slot_values": {
+                        "intent_action": "generate",
+                        "risk_level": "bounded_write",
+                    },
+                },
+                "resolved_goal": kwargs["candidate_goal"],
+            }
+        assert kwargs["merged_context"]["audience"] == "Senior software engineers"
+        pending = kwargs["session_metadata"]["pending_clarification"]
+        assert pending["known_slot_values"]["audience"] == "Senior software engineers"
+        assert pending["current_question_field"] == "tone"
+        assert pending["questions"] == ["What tone should it use?"]
+        return {
+            "type": "ask_clarification",
+            "assistant_content": "What tone should it use?",
+            "clarification_questions": ["What tone should it use?"],
+            "goal_intent_profile": {
+                "intent": "generate",
+                "source": "test",
+                "confidence": 0.97,
+                "risk_level": "bounded_write",
+                "threshold": 0.7,
+                "low_confidence": False,
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": ["What tone should it use?"],
+                "blocking_slots": ["tone"],
+                "missing_slots": ["tone"],
+                "slot_values": {
+                    "intent_action": "generate",
+                    "risk_level": "bounded_write",
+                    "audience": "Senior software engineers",
+                },
+            },
+            "resolved_goal": kwargs["candidate_goal"],
+        }
+
+    def _normalize_submit_context(**kwargs):
+        pending = kwargs["session_metadata"].get("pending_clarification")
+        if not pending:
+            return None
+        return chat_service.ChatSubmitNormalizationResult(
+            goal=kwargs["goal"],
+            context_json={
+                "audience": "Senior software engineers",
+                "clarification_normalization": {
+                    "source": "chat_clarification_normalizer",
+                    "fields": ["audience"],
+                    "confidence": {"audience": 0.97},
+                },
+            },
+            clarification_questions=["What tone should it use?"],
+            requires_blocking_clarification=True,
+            goal_intent_profile={
+                "intent": "generate",
+                "source": "test_submit_normalizer",
+                "confidence": 0.97,
+                "risk_level": "bounded_write",
+                "threshold": 0.7,
+                "low_confidence": False,
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": ["What tone should it use?"],
+                "blocking_slots": ["tone"],
+                "missing_slots": ["tone"],
+                "slot_values": {
+                    "intent_action": "generate",
+                    "risk_level": "bounded_write",
+                    "audience": "Senior software engineers",
+                },
+            },
+        )
+
+    monkeypatch.setattr(main, "_route_chat_turn", _route_turn)
+    monkeypatch.setattr(main, "_normalize_chat_submit_context", _normalize_submit_context)
+
+    session = client.post("/chat/sessions", json={}).json()
+    first = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Create a deployment report", "context_json": {}, "priority": 0},
+    )
+    assert first.status_code == 200
+    assert first.json()["assistant_message"]["content"] == "Who is the target audience?"
+
+    second = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Senior software engineers", "context_json": {}, "priority": 0},
+    )
+
+    assert second.status_code == 200
+    body = second.json()
+    assert body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert body["assistant_message"]["content"] == "What tone should it use?"
+    pending = body["session"]["metadata"]["pending_clarification"]
+    assert pending["known_slot_values"]["audience"] == "Senior software engineers"
+    assert pending["current_question_field"] == "tone"
+    assert pending["questions"] == ["What tone should it use?"]
+
+
+def test_chat_turn_restarts_pending_clarification_for_execution_intent_change(
+    monkeypatch,
+) -> None:
+    route_calls = {"count": 0}
+    normalization_calls = {"count": 0}
+
+    def _route_turn(**kwargs):
+        route_calls["count"] += 1
+        if route_calls["count"] == 1:
+            return {
+                "type": "ask_clarification",
+                "assistant_content": "What tone should it use?",
+                "clarification_questions": ["What tone should it use?"],
+                "goal_intent_profile": {
+                    "intent": "generate",
+                    "source": "test",
+                    "confidence": 0.97,
+                    "risk_level": "bounded_write",
+                    "threshold": 0.7,
+                    "low_confidence": False,
+                    "needs_clarification": True,
+                    "requires_blocking_clarification": True,
+                    "questions": ["What tone should it use?"],
+                    "blocking_slots": ["tone"],
+                    "missing_slots": ["tone"],
+                    "slot_values": {
+                        "intent_action": "generate",
+                        "risk_level": "bounded_write",
+                    },
+                },
+                "resolved_goal": kwargs["candidate_goal"],
+            }
+        assert "pending_clarification" not in kwargs["session_metadata"]
+        assert kwargs["candidate_goal"] == "Actually make this a PDF checklist instead"
+        return {
+            "type": "ask_clarification",
+            "assistant_content": "Who is the target audience?",
+            "clarification_questions": ["Who is the target audience?"],
+            "goal_intent_profile": {
+                "intent": "generate",
+                "source": "test",
+                "confidence": 0.97,
+                "risk_level": "bounded_write",
+                "threshold": 0.7,
+                "low_confidence": False,
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": ["Who is the target audience?"],
+                "blocking_slots": ["audience"],
+                "missing_slots": ["audience"],
+                "slot_values": {
+                    "intent_action": "generate",
+                    "risk_level": "bounded_write",
+                    "output_format": "pdf",
+                },
+            },
+            "resolved_goal": kwargs["candidate_goal"],
+        }
+
+    def _normalize_submit_context(**_kwargs):
+        normalization_calls["count"] += 1
+        return None
+
+    monkeypatch.setattr(main, "_route_chat_turn", _route_turn)
+    monkeypatch.setattr(main, "_normalize_chat_submit_context", _normalize_submit_context)
+
+    session = client.post("/chat/sessions", json={}).json()
+    first = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Create a deployment report", "context_json": {}, "priority": 0},
+    )
+    assert first.status_code == 200
+    assert first.json()["assistant_message"]["content"] == "What tone should it use?"
+
+    second = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={
+            "content": "Actually make this a PDF checklist instead",
+            "context_json": {},
+            "priority": 0,
+        },
+    )
+
+    assert second.status_code == 200
+    body = second.json()
+    assert normalization_calls["count"] == 0
+    assert body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert body["assistant_message"]["content"] == "Who is the target audience?"
+    pending = body["session"]["metadata"]["pending_clarification"]
+    assert pending["original_goal"] == "Actually make this a PDF checklist instead"
+    assert pending["questions"] == ["Who is the target audience?"]
+
+
+def test_chat_turn_keeps_pending_clarification_for_output_format_redirect_answer(
+    monkeypatch,
+) -> None:
+    route_calls = {"count": 0}
+    normalization_calls = {"count": 0}
+
+    def _route_turn(**kwargs):
+        route_calls["count"] += 1
+        if route_calls["count"] == 1:
+            return {
+                "type": "ask_clarification",
+                "assistant_content": "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?",
+                "clarification_questions": [
+                    "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?"
+                ],
+                "goal_intent_profile": {
+                    "intent": "generate",
+                    "source": "test",
+                    "confidence": 0.97,
+                    "risk_level": "bounded_write",
+                    "threshold": 0.7,
+                    "low_confidence": False,
+                    "needs_clarification": True,
+                    "requires_blocking_clarification": True,
+                    "questions": [
+                        "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?"
+                    ],
+                    "blocking_slots": ["output_format"],
+                    "missing_slots": ["output_format"],
+                    "slot_values": {
+                        "intent_action": "generate",
+                        "risk_level": "bounded_write",
+                    },
+                },
+                "resolved_goal": kwargs["candidate_goal"],
+            }
+        assert kwargs["candidate_goal"].endswith(
+            "User clarification: Actually make it DOCX instead"
+        )
+        assert "pending_clarification" in kwargs["session_metadata"]
+        return {
+            "type": "ask_clarification",
+            "assistant_content": "What output path or filename should be used?",
+            "clarification_questions": ["What output path or filename should be used?"],
+            "goal_intent_profile": {
+                "intent": "generate",
+                "source": "test",
+                "confidence": 0.97,
+                "risk_level": "bounded_write",
+                "threshold": 0.7,
+                "low_confidence": False,
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": ["What output path or filename should be used?"],
+                "blocking_slots": ["path"],
+                "missing_slots": ["path"],
+                "slot_values": {
+                    "intent_action": "generate",
+                    "risk_level": "bounded_write",
+                    "output_format": "docx",
+                },
+            },
+            "resolved_goal": kwargs["candidate_goal"],
+        }
+
+    def _normalize_submit_context(**kwargs):
+        normalization_calls["count"] += 1
+        return chat_service.ChatSubmitNormalizationResult(
+            goal=kwargs["goal"],
+            context_json={
+                "output_format": "docx",
+                "clarification_normalization": {
+                    "source": "chat_clarification_normalizer",
+                    "fields": ["output_format"],
+                    "confidence": {"output_format": 0.96},
+                },
+            },
+            clarification_questions=["What output path or filename should be used?"],
+            requires_blocking_clarification=True,
+            goal_intent_profile={
+                "intent": "generate",
+                "source": "test_submit_normalizer",
+                "confidence": 0.96,
+                "risk_level": "bounded_write",
+                "threshold": 0.7,
+                "low_confidence": False,
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": ["What output path or filename should be used?"],
+                "blocking_slots": ["path"],
+                "missing_slots": ["path"],
+                "slot_values": {
+                    "intent_action": "generate",
+                    "risk_level": "bounded_write",
+                    "output_format": "docx",
+                },
+            },
+        )
+
+    monkeypatch.setattr(main, "_route_chat_turn", _route_turn)
+    monkeypatch.setattr(main, "_normalize_chat_submit_context", _normalize_submit_context)
+
+    session = client.post("/chat/sessions", json={}).json()
+    first = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Create a deployment report", "context_json": {}, "priority": 0},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={
+            "content": "Actually make it DOCX instead",
+            "context_json": {},
+            "priority": 0,
+        },
+    )
+
+    assert second.status_code == 200
+    body = second.json()
+    assert normalization_calls["count"] == 1
+    assert body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert body["assistant_message"]["content"] == "What output path or filename should be used?"
+    pending = body["session"]["metadata"]["pending_clarification"]
+    assert pending["original_goal"] == "Create a deployment report"
+    assert pending["known_slot_values"]["output_format"] == "docx"
 
 
 def test_chat_turn_scopes_follow_up_clarification_to_active_segment(

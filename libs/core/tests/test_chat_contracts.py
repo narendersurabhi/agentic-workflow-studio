@@ -47,6 +47,7 @@ def test_clarification_state_syncs_execution_frame_and_slot_ledger() -> None:
         active_segment_id="s1",
         active_capability_id="document.pdf.generate",
         pending_fields=["path"],
+        pending_questions=["What output path or filename should be used?"],
         known_slot_values={"tone": "practical"},
         slot_provenance={"tone": "clarification_normalized"},
     )
@@ -60,3 +61,6 @@ def test_clarification_state_syncs_execution_frame_and_slot_ledger() -> None:
     assert dumped["resolved_slots"] == {"tone": "practical"}
     assert dumped["answered_fields"] == ["tone"]
     assert dumped["slot_provenance"]["tone"] == "clarification_normalized"
+    assert dumped["current_question"] == "What output path or filename should be used?"
+    assert dumped["current_question_field"] == "path"
+    assert dumped["questions"] == ["What output path or filename should be used?"]

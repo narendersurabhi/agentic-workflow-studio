@@ -104,14 +104,29 @@ def normalize_contract_fields_with_llm(
     confidence_threshold: float,
     goal: str,
     conversation_history: Sequence[Mapping[str, Any]] | None = None,
+    preferred_field: str | None = None,
+    latest_answer: str | None = None,
 ) -> tuple[dict[str, str], list[str], dict[str, float]]:
     if not contract.missing_fields:
         return {}, [], {}
     if provider is None:
         return {}, list(contract.required_fields), {}
+    normalized_preferred_field = intent_contract.normalize_required_input_key(preferred_field)
+    prioritized_missing_fields_list: list[str] = []
+    ordered_candidates = (
+        ([normalized_preferred_field] if normalized_preferred_field in contract.missing_fields else [])
+        + [field for field in contract.missing_fields if field != normalized_preferred_field]
+    )
+    for field in ordered_candidates:
+        field_name = intent_contract.normalize_required_input_key(field)
+        if field_name and field_name not in prioritized_missing_fields_list:
+            prioritized_missing_fields_list.append(field_name)
+    prioritized_missing_fields = tuple(prioritized_missing_fields_list)
+    effective_missing_fields = prioritized_missing_fields or contract.missing_fields
 
     payload = {
         "goal_with_clarifications": goal,
+        "latest_answer": str(latest_answer or "").strip(),
         "conversation_history": [
             {
                 "role": str(item.get("role") or "").strip(),
@@ -126,7 +141,12 @@ def normalize_contract_fields_with_llm(
         "capability_description": contract.description,
         "required_inputs": list(contract.required_inputs),
         "existing_fields": {key: value for key, value in contract.existing_fields.items() if value},
-        "missing_fields": list(contract.missing_fields),
+        "missing_fields": list(effective_missing_fields),
+        "preferred_field": (
+            normalized_preferred_field
+            if normalized_preferred_field in effective_missing_fields
+            else None
+        ),
         "field_descriptions": contract.field_descriptions,
         "field_examples": {
             key: list(values)
@@ -134,9 +154,9 @@ def normalize_contract_fields_with_llm(
             if values
         },
         "response_schema": {
-            "normalized_slots": {field: "string" for field in contract.missing_fields},
-            "field_confidence": {field: "0..1" for field in contract.missing_fields},
-            "unresolved_fields": list(contract.missing_fields),
+            "normalized_slots": {field: "string" for field in effective_missing_fields},
+            "field_confidence": {field: "0..1" for field in effective_missing_fields},
+            "unresolved_fields": list(effective_missing_fields),
         },
     }
     try:
@@ -146,7 +166,10 @@ def normalize_contract_fields_with_llm(
                 system_prompt=(
                     "Normalize chat clarification text into canonical capability input fields. "
                     "Return JSON only. Use only the missing field names provided. "
-                    "Do not invent fields. If a value is unclear, leave it empty and include the field in unresolved_fields."
+                    "Do not invent fields. "
+                    "If preferred_field is present, treat the latest_answer as primarily answering that field. "
+                    "You may fill other missing fields only when they are clearly supported by the latest answer or recent conversation history. "
+                    "If a value is unclear, leave it empty and include the field in unresolved_fields."
                 ),
                 metadata={"component": "chat_clarification_normalizer"},
             )
@@ -168,7 +191,7 @@ def normalize_contract_fields_with_llm(
 
     updates: dict[str, str] = {}
     accepted_confidence: dict[str, float] = {}
-    for field_name in contract.missing_fields:
+    for field_name in effective_missing_fields:
         raw_value = slot_map.get(field_name)
         if not isinstance(raw_value, str) or not raw_value.strip():
             if field_name in contract.required_fields:
