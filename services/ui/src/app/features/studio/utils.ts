@@ -15,8 +15,8 @@ export const DAG_CANVAS_NODE_WIDTH = 248;
 export const DAG_CANVAS_NODE_HEIGHT = 96;
 export const DAG_CANVAS_PADDING = 16;
 export const DAG_CANVAS_SNAP = 8;
-export const DAG_CANVAS_MIN_WIDTH = 960;
-export const DAG_CANVAS_MIN_HEIGHT = 460;
+export const DAG_CANVAS_MIN_WIDTH = 1280;
+export const DAG_CANVAS_MIN_HEIGHT = 620;
 
 export const CHAINABLE_REQUIRED_FIELDS = new Set([
   "document_spec",

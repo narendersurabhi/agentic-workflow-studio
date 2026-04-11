@@ -109,7 +109,7 @@ type ComposerDagCanvasProps = {
 };
 
 const toolbarButtonClassName =
-  "inline-flex items-center rounded-xl border border-black/15 bg-[rgba(54,68,84,0.94)] px-3 py-1.5 text-[11px] font-semibold tracking-[0.04em] text-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-white/18 hover:bg-[rgba(61,77,95,0.98)] disabled:cursor-not-allowed disabled:opacity-40";
+  "inline-flex h-8 items-center rounded-lg border border-black/15 bg-[rgba(54,68,84,0.94)] px-2.5 text-[10px] font-semibold tracking-[0.04em] text-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-white/18 hover:bg-[rgba(61,77,95,0.98)] disabled:cursor-not-allowed disabled:opacity-40";
 
 type BlueprintPreviewNode = {
   id: string;
@@ -561,15 +561,15 @@ export default function ComposerDagCanvas({
   return (
     <div className="relative h-full overflow-hidden rounded-[18px] border border-[#7c8da3]/30 bg-[#566c80] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_16px_40px_rgba(15,23,42,0.18)]">
       {showToolbar ? (
-        <div className="pointer-events-none absolute inset-x-4 top-4 z-20 flex justify-end">
-          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-[14px] border border-black/15 bg-[rgba(53,67,83,0.88)] p-2 shadow-[0_10px_24px_rgba(15,23,42,0.18)] backdrop-blur">
+        <div className="pointer-events-none absolute right-4 top-4 z-20 flex justify-end">
+          <div className="pointer-events-auto flex items-center gap-1.5 rounded-[14px] border border-black/15 bg-[rgba(53,67,83,0.88)] p-1.5 shadow-[0_10px_24px_rgba(15,23,42,0.18)] backdrop-blur">
             <button
               className={toolbarButtonClassName}
               onClick={onZoomIn}
               disabled={zoomInDisabled}
               type="button"
             >
-              Zoom In (+)
+              + Zoom
             </button>
             <button
               className={toolbarButtonClassName}
@@ -577,9 +577,9 @@ export default function ComposerDagCanvas({
               disabled={zoomOutDisabled}
               type="button"
             >
-              Zoom Out (-)
+              - Zoom
             </button>
-            <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-1.5 text-[11px] font-semibold tracking-[0.06em] text-slate-200">
+            <div className="flex h-8 items-center rounded-lg border border-white/10 bg-black/10 px-2.5 text-[10px] font-semibold tracking-[0.06em] text-slate-200">
               {Math.round(dagCanvasZoom * 100)}%
             </div>
             <button
@@ -588,17 +588,17 @@ export default function ComposerDagCanvas({
               disabled={visualChainNodes.length === 0}
               type="button"
             >
-              Auto Layout
+              Layout
             </button>
             <button
-              className={toolbarButtonClassName}
+              className={`${toolbarButtonClassName} border-white/16 bg-[rgba(38,48,61,0.98)]`}
               onClick={() => {
                 onRunWorkflow?.();
               }}
               disabled={runWorkflowDisabled}
               type="button"
             >
-              {runWorkflowPending ? "Starting..." : "Run Workflow"}
+              {runWorkflowPending ? "Starting..." : "Run"}
             </button>
           </div>
         </div>
@@ -606,15 +606,16 @@ export default function ComposerDagCanvas({
 
       <div ref={dagCanvasViewportRef} className="h-full overflow-auto bg-[#566c80]">
         <div
-          className="relative min-h-full min-w-full"
+          className="relative min-h-full min-w-full [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.06),transparent_16%),radial-gradient(circle_at_82%_24%,rgba(255,255,255,0.05),transparent_14%),linear-gradient(180deg,rgba(26,42,57,0.16),rgba(15,24,35,0.22))] [background-size:20px_20px,20px_20px,100%_100%,100%_100%,100%_100%]"
           style={{
             width: dagCanvasSurface.width * dagCanvasZoom,
             height: dagCanvasSurface.height * dagCanvasZoom,
           }}
         >
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_14%,rgba(255,255,255,0.06),transparent_16%),radial-gradient(circle_at_74%_22%,rgba(255,255,255,0.05),transparent_14%),linear-gradient(180deg,rgba(10,18,30,0.08),rgba(10,18,30,0.22))]" />
           <div
             ref={dagCanvasRef}
-            className="relative [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.06),transparent_16%),radial-gradient(circle_at_82%_24%,rgba(255,255,255,0.05),transparent_14%),linear-gradient(180deg,rgba(26,42,57,0.16),rgba(15,24,35,0.22))] [background-size:20px_20px,20px_20px,100%_100%,100%_100%,100%_100%]"
+            className="relative"
             style={{
               width: dagCanvasSurface.width,
               height: dagCanvasSurface.height,
@@ -622,8 +623,6 @@ export default function ComposerDagCanvas({
               transformOrigin: "top left",
             }}
           >
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_14%,rgba(255,255,255,0.06),transparent_16%),radial-gradient(circle_at_74%_22%,rgba(255,255,255,0.05),transparent_14%),linear-gradient(180deg,rgba(10,18,30,0.08),rgba(10,18,30,0.22))]" />
-
           {showEmptyBlueprint ? (
             <svg
               className="pointer-events-none absolute left-0 top-0"
@@ -691,9 +690,17 @@ export default function ComposerDagCanvas({
                 >
                   <path
                     d={edge.path}
-                    stroke={isHovered ? "#bae6fd" : "rgba(148, 163, 184, 0.72)"}
-                    strokeWidth={isHovered ? "2.8" : "1.9"}
+                    stroke={isHovered ? "rgba(15,23,42,0.55)" : "rgba(15,23,42,0.34)"}
+                    strokeWidth={isHovered ? "6.4" : "5.2"}
                     fill="none"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d={edge.path}
+                    stroke={isHovered ? "#d7ecff" : "rgba(163, 187, 212, 0.9)"}
+                    strokeWidth={isHovered ? "2.9" : "2.2"}
+                    fill="none"
+                    strokeLinecap="round"
                     markerEnd="url(#composer-arrow)"
                   />
                   <path
@@ -707,21 +714,21 @@ export default function ComposerDagCanvas({
                   {edge.branchLabel ? (
                     <g>
                       <rect
-                        x={edge.midX - 28}
-                        y={edge.midY - 20}
-                        rx="9"
-                        ry="9"
-                        width="56"
-                        height="20"
-                        fill="rgba(7, 16, 29, 0.92)"
-                        stroke="rgba(125, 211, 252, 0.35)"
+                        x={edge.midX - 30}
+                        y={edge.midY - 21}
+                        rx="10"
+                        ry="10"
+                        width="60"
+                        height="22"
+                        fill="rgba(50, 63, 79, 0.94)"
+                        stroke="rgba(214, 228, 241, 0.22)"
                       />
                       <text
                         x={edge.midX}
-                        y={edge.midY - 7}
+                        y={edge.midY - 6}
                         textAnchor="middle"
                         fontSize="10"
-                        fill="#dbeafe"
+                        fill="#f8fafc"
                       >
                         {edge.branchLabel}
                       </text>
@@ -754,14 +761,24 @@ export default function ComposerDagCanvas({
               );
             })}
             {dagConnectorPreview ? (
-              <path
-                d={dagConnectorPreview.path}
-                stroke="#38bdf8"
-                strokeWidth="2.2"
-                fill="none"
-                strokeDasharray="7 5"
-                markerEnd="url(#composer-arrow)"
-              />
+              <>
+                <path
+                  d={dagConnectorPreview.path}
+                  stroke="rgba(15,23,42,0.35)"
+                  strokeWidth="5"
+                  fill="none"
+                  strokeLinecap="round"
+                />
+                <path
+                  d={dagConnectorPreview.path}
+                  stroke="#8ed3ff"
+                  strokeWidth="2.4"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeDasharray="8 5"
+                  markerEnd="url(#composer-arrow)"
+                />
+              </>
             ) : null}
           </svg>
 

@@ -273,6 +273,85 @@ const defaultBranchLabelForSourceNode = (
 const clampDagCanvasZoom = (value: number) =>
   Math.min(DAG_CANVAS_ZOOM_MAX, Math.max(DAG_CANVAS_ZOOM_MIN, Math.round(value * 100) / 100));
 
+const buildAutoLayoutPositions = (
+  nodes: ComposerDraftNode[],
+  edges: ComposerDraftEdge[]
+): Record<string, CanvasPoint> => {
+  if (nodes.length === 0) {
+    return {};
+  }
+
+  const nodeIds = nodes.map((node) => node.id);
+  const indegree = new Map<string, number>(nodeIds.map((id) => [id, 0]));
+  const outgoing = new Map<string, string[]>(nodeIds.map((id) => [id, []]));
+  const level = new Map<string, number>(nodeIds.map((id) => [id, 0]));
+
+  edges.forEach((edge) => {
+    if (!indegree.has(edge.fromNodeId) || !indegree.has(edge.toNodeId)) {
+      return;
+    }
+    outgoing.get(edge.fromNodeId)?.push(edge.toNodeId);
+    indegree.set(edge.toNodeId, (indegree.get(edge.toNodeId) || 0) + 1);
+  });
+
+  const queue = nodes
+    .filter((node) => (indegree.get(node.id) || 0) === 0)
+    .map((node) => node.id);
+  const visited: string[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    visited.push(current);
+    const currentLevel = level.get(current) || 0;
+    (outgoing.get(current) || []).forEach((nextId) => {
+      level.set(nextId, Math.max(level.get(nextId) || 0, currentLevel + 1));
+      indegree.set(nextId, (indegree.get(nextId) || 0) - 1);
+      if ((indegree.get(nextId) || 0) === 0) {
+        queue.push(nextId);
+      }
+    });
+  }
+
+  if (visited.length !== nodes.length) {
+    return Object.fromEntries(nodes.map((node, index) => [node.id, defaultDagNodePosition(index)]));
+  }
+
+  const columns = new Map<number, ComposerDraftNode[]>();
+  nodes.forEach((node) => {
+    const columnIndex = level.get(node.id) || 0;
+    const columnNodes = columns.get(columnIndex) || [];
+    columnNodes.push(node);
+    columns.set(columnIndex, columnNodes);
+  });
+
+  const sortedColumns = Array.from(columns.entries()).sort(([left], [right]) => left - right);
+  const columnGap = 128;
+  const rowGap = 92;
+  const layoutWidth =
+    sortedColumns.length * DAG_CANVAS_NODE_WIDTH + Math.max(0, sortedColumns.length - 1) * columnGap;
+  const startX = Math.max(DAG_CANVAS_PADDING + 36, Math.round((DAG_CANVAS_MIN_WIDTH - layoutWidth) / 2));
+
+  const maxRows = Math.max(...sortedColumns.map(([, columnNodes]) => columnNodes.length));
+  const layoutHeight = maxRows * DAG_CANVAS_NODE_HEIGHT + Math.max(0, maxRows - 1) * rowGap;
+  const startY = Math.max(DAG_CANVAS_PADDING + 22, Math.round((DAG_CANVAS_MIN_HEIGHT - layoutHeight) / 2));
+
+  const positions: Record<string, CanvasPoint> = {};
+  sortedColumns.forEach(([columnIndex, columnNodes]) => {
+    const columnHeight =
+      columnNodes.length * DAG_CANVAS_NODE_HEIGHT +
+      Math.max(0, columnNodes.length - 1) * rowGap;
+    const columnStartY = Math.max(startY, Math.round((DAG_CANVAS_MIN_HEIGHT - columnHeight) / 2));
+    columnNodes.forEach((node, rowIndex) => {
+      positions[node.id] = {
+        x: startX + columnIndex * (DAG_CANVAS_NODE_WIDTH + columnGap),
+        y: columnStartY + rowIndex * (DAG_CANVAS_NODE_HEIGHT + rowGap),
+      };
+    });
+  });
+
+  return positions;
+};
+
 const initialContextJson = () =>
   JSON.stringify(
     {
@@ -992,22 +1071,30 @@ export default function WorkflowStudio() {
   useEffect(() => {
     setComposerNodePositions((prev) => {
       const next = { ...prev };
-      let changed = false;
+      const missingNodeIds = visualChainNodes.filter((node) => !next[node.id]).map((node) => node.id);
+      const staleNodeIds = Object.keys(next).filter(
+        (nodeId) => !visualChainNodes.some((node) => node.id === nodeId)
+      );
+
+      if (missingNodeIds.length === 0 && staleNodeIds.length === 0) {
+        return prev;
+      }
+
+      if (Object.keys(prev).length === 0 && visualChainNodes.length > 0) {
+        return buildAutoLayoutPositions(visualChainNodes, composerDraftEdges);
+      }
+
       visualChainNodes.forEach((node, index) => {
         if (!next[node.id]) {
           next[node.id] = defaultDagNodePosition(index);
-          changed = true;
         }
       });
-      Object.keys(next).forEach((nodeId) => {
-        if (!visualChainNodes.some((node) => node.id === nodeId)) {
-          delete next[nodeId];
-          changed = true;
-        }
+      staleNodeIds.forEach((nodeId) => {
+        delete next[nodeId];
       });
-      return changed ? next : prev;
+      return next;
     });
-  }, [visualChainNodes]);
+  }, [composerDraftEdges, visualChainNodes]);
 
   useEffect(() => {
     if (!selectedDagNodeId) {
@@ -2086,11 +2173,7 @@ export default function WorkflowStudio() {
 
   const autoLayoutDagCanvas = () => {
     setComposerNodePositions(() => {
-      const next: Record<string, CanvasPoint> = {};
-      visualChainNodes.forEach((node, index) => {
-        next[node.id] = defaultDagNodePosition(index);
-      });
-      return next;
+      return buildAutoLayoutPositions(visualChainNodes, composerDraftEdges);
     });
     setStudioNotice("Auto-layout applied to canvas.");
   };
@@ -3638,10 +3721,10 @@ export default function WorkflowStudio() {
               />
             </section>
 
-            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_360px]">
+            <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.18fr)_328px]">
               <div className="space-y-4">
-                <section className="rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgba(45,57,71,0.94),rgba(39,51,64,0.98))] p-4 shadow-[0_16px_36px_rgba(15,23,42,0.14)]">
-                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.95fr)]">
+                <section className="rounded-[18px] border border-white/8 bg-[linear-gradient(180deg,rgba(51,63,77,0.62),rgba(44,56,69,0.72))] p-3.5 shadow-[0_12px_28px_rgba(15,23,42,0.10)]">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.95fr)]">
                     <div className="space-y-4">
                       <label className="block">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
@@ -3667,7 +3750,7 @@ export default function WorkflowStudio() {
                           placeholder="Workflow Studio draft"
                         />
                       </label>
-                      <div className="rounded-2xl border border-white/10 bg-slate-950/16 px-3 py-3">
+                      <div className="rounded-[18px] border border-white/8 bg-slate-950/14 px-3 py-3">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
                           Memory User ID
                         </div>
@@ -3695,7 +3778,7 @@ export default function WorkflowStudio() {
                           </div>
                         </div>
                         <textarea
-                          className="mt-1 min-h-[220px] w-full rounded-2xl border border-white/10 bg-[#233142] px-3 py-3 font-mono text-xs text-slate-100 outline-none transition placeholder:text-slate-400/40 focus:border-sky-300/40 focus:bg-[#1c2939]"
+                          className="mt-1 min-h-[210px] w-full rounded-[18px] border border-white/8 bg-[#233142] px-3 py-3 font-mono text-xs text-slate-100 outline-none transition placeholder:text-slate-400/40 focus:border-sky-300/40 focus:bg-[#1c2939]"
                           value={contextJson}
                           onChange={(event) => setContextJson(event.target.value)}
                         />
@@ -3770,7 +3853,7 @@ export default function WorkflowStudio() {
                 </div>
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-4 xl:sticky xl:top-3 xl:self-start">
                 <div id="studio-inspector-section">
                   <StudioNodeInspector
                     selectedDagNode={selectedDagNode}

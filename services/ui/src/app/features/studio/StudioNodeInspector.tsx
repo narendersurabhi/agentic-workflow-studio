@@ -145,7 +145,7 @@ const schemaPropertyDefault = (property: Record<string, unknown> | null) => {
 };
 
 const inspectorPanelClassName =
-  "rounded-[32px] border border-[#22304a] bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(9,17,27,0.96))] p-4 text-slate-100 shadow-[0_24px_60px_rgba(2,8,23,0.24)] [&_.border-slate-100]:border-white/8 [&_.border-slate-200]:border-white/10 [&_.border-slate-300]:border-white/12 [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-amber-200]:border-amber-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-white/[0.04] [&_.bg-slate-100]:bg-white/[0.07] [&_.bg-white]:bg-white/[0.05] [&_.bg-sky-50]:bg-sky-400/10 [&_.bg-sky-100]:bg-sky-400/12 [&_.bg-emerald-50]:bg-emerald-400/10 [&_.bg-emerald-100]:bg-emerald-400/12 [&_.bg-rose-50]:bg-rose-400/10 [&_.bg-rose-100]:bg-rose-400/12 [&_.bg-amber-50]:bg-amber-400/10 [&_.bg-amber-100]:bg-amber-400/12 [&_.text-slate-900]:text-white [&_.text-slate-800]:text-slate-100 [&_.text-slate-700]:text-slate-200 [&_.text-slate-600]:text-slate-300/82 [&_.text-slate-500]:text-slate-400 [&_.text-sky-700]:text-sky-100 [&_.text-emerald-700]:text-emerald-100 [&_.text-rose-700]:text-rose-100 [&_.text-amber-700]:text-amber-100 [&_.text-amber-800]:text-amber-100 [&_.text-amber-900]:text-amber-50 [&_input]:text-white [&_select]:text-white [&_textarea]:text-white [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-sky-100";
+  "rounded-[22px] border border-[#22304a] bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(9,17,27,0.96))] p-3.5 text-slate-100 shadow-[0_18px_44px_rgba(2,8,23,0.22)] [&_.border-slate-100]:border-white/8 [&_.border-slate-200]:border-white/10 [&_.border-slate-300]:border-white/12 [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-amber-200]:border-amber-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-white/[0.04] [&_.bg-slate-100]:bg-white/[0.07] [&_.bg-white]:bg-white/[0.05] [&_.bg-sky-50]:bg-sky-400/10 [&_.bg-sky-100]:bg-sky-400/12 [&_.bg-emerald-50]:bg-emerald-400/10 [&_.bg-emerald-100]:bg-emerald-400/12 [&_.bg-rose-50]:bg-rose-400/10 [&_.bg-rose-100]:bg-rose-400/12 [&_.bg-amber-50]:bg-amber-400/10 [&_.bg-amber-100]:bg-amber-400/12 [&_.text-slate-900]:text-white [&_.text-slate-800]:text-slate-100 [&_.text-slate-700]:text-slate-200 [&_.text-slate-600]:text-slate-300/82 [&_.text-slate-500]:text-slate-400 [&_.text-sky-700]:text-sky-100 [&_.text-emerald-700]:text-emerald-100 [&_.text-rose-700]:text-rose-100 [&_.text-amber-700]:text-amber-100 [&_.text-amber-800]:text-amber-100 [&_.text-amber-900]:text-amber-50 [&_input]:text-white [&_select]:text-white [&_textarea]:text-white [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-sky-100";
 
 export default function StudioNodeInspector({
   selectedDagNode,
@@ -193,7 +193,7 @@ export default function StudioNodeInspector({
 
   if (!selectedDagNode) {
     return (
-      <section className="rounded-[32px] border border-dashed border-white/12 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(9,17,27,0.94))] px-4 py-5 text-sm text-slate-300/78 shadow-[0_24px_60px_rgba(2,8,23,0.18)]">
+      <section className="rounded-[22px] border border-dashed border-white/12 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(9,17,27,0.94))] px-4 py-4 text-sm text-slate-300/78 shadow-[0_18px_44px_rgba(2,8,23,0.18)]">
         Select a node to configure its inputs, outputs, and design variables.
       </section>
     );
@@ -215,31 +215,31 @@ export default function StudioNodeInspector({
           <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/68">
             Node Inspector
           </div>
-          <h2 className="mt-1 font-display text-2xl text-white">{selectedDagNode.taskName}</h2>
+          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">{selectedDagNode.taskName}</h2>
           <div className="mt-1 text-xs text-slate-400">{selectedDagNode.capabilityId}</div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
-            className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+            className="rounded-full border border-slate-300 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
             onClick={() => autoWireNodeBindings(selectedDagNode.id)}
           >
             Auto-Wire
           </button>
           <button
-            className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+            className="rounded-full border border-slate-300 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
             onClick={() => quickFixNodeBindings(selectedDagNode.id)}
           >
             Quick Fix
           </button>
           <button
-            className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+            className="rounded-full border border-slate-300 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
             onClick={() => setSelectedDagNodeId(null)}
           >
             Close
           </button>
           {onDeleteNode ? (
             <button
-              className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] font-semibold text-rose-700"
+              className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
               onClick={() => onDeleteNode(selectedDagNode.id)}
             >
               Delete
@@ -248,7 +248,7 @@ export default function StudioNodeInspector({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3">
+      <div className="mt-3 grid gap-2.5">
         <label className="block">
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
             Task Name
@@ -295,7 +295,7 @@ export default function StudioNodeInspector({
       </div>
 
       {isControlNode ? (
-        <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/70 p-3.5">
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
             Control Flow
           </div>
@@ -441,7 +441,7 @@ export default function StudioNodeInspector({
         </div>
       ) : null}
 
-      <div className="mt-6 border-t border-slate-100 pt-4">
+      <div className="mt-5 border-t border-slate-100 pt-3.5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -461,7 +461,7 @@ export default function StudioNodeInspector({
           </div>
         </div>
 
-        <div className="mt-3 flex gap-2">
+        <div className="mt-2.5 flex gap-2">
           <input
             className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
             value={pendingInputField}
@@ -483,7 +483,7 @@ export default function StudioNodeInspector({
           </button>
         </div>
 
-        <div className="mt-3 space-y-3">
+        <div className="mt-2.5 space-y-2.5">
           {inputFields.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
               No inputs configured for this node.
@@ -512,7 +512,7 @@ export default function StudioNodeInspector({
                 ref={(element) => {
                   inspectorBindingRefs.current[`${selectedDagNode.id}::${status.field}`] = element;
                 }}
-                className={`rounded-2xl border px-3 py-3 ${
+                className={`rounded-[18px] border px-3 py-2.5 ${
                   activeComposerIssueFocus?.nodeId === selectedDagNode.id &&
                   activeComposerIssueFocus?.field === status.field
                     ? "border-sky-300 bg-sky-50"
@@ -587,7 +587,7 @@ export default function StudioNodeInspector({
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-2.5 flex items-center gap-2">
                   <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                     Mapping
                   </label>
