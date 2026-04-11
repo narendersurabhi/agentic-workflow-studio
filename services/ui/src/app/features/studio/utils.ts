@@ -11,8 +11,8 @@ import type {
   ComposerValidationIssue,
 } from "./types";
 
-export const DAG_CANVAS_NODE_WIDTH = 320;
-export const DAG_CANVAS_NODE_HEIGHT = 76;
+export const DAG_CANVAS_NODE_WIDTH = 248;
+export const DAG_CANVAS_NODE_HEIGHT = 96;
 export const DAG_CANVAS_PADDING = 16;
 export const DAG_CANVAS_SNAP = 8;
 export const DAG_CANVAS_MIN_WIDTH = 960;
@@ -244,15 +244,36 @@ export const isPathOutputReference = (sourcePath: string): boolean => {
 };
 
 export const taskNameFromCapability = (capabilityId: string) => {
-  const cleaned = capabilityId.replace(/[^a-zA-Z0-9]+/g, " ").trim();
+  const normalized = capabilityId.trim().toLowerCase();
+  const controlNames: Record<string, string> = {
+    "studio.control.if": "If",
+    "studio.control.if_else": "If/Else",
+    "studio.control.switch": "Switch",
+    "studio.control.parallel": "Parallel",
+    "workflow.control": "Conditional Check",
+  };
+  if (controlNames[normalized]) {
+    return controlNames[normalized];
+  }
+  const cleaned = capabilityId
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim();
   if (!cleaned) {
     return "Task";
   }
-  const pascal = cleaned
+  const acronyms = new Set(["ai", "api", "csv", "docx", "html", "id", "json", "llm", "pdf", "sql", "ui", "url", "xml"]);
+  const title = cleaned
     .split(/\s+/)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join("");
-  return pascal || "Task";
+    .map((segment) => {
+      const lower = segment.toLowerCase();
+      if (acronyms.has(lower)) {
+        return lower.toUpperCase();
+      }
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+  return title || "Task";
 };
 
 export const outputPathSuggestionsForCapability = (

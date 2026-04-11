@@ -98,6 +98,66 @@ const VISUAL_TONES = {
   },
 } as const;
 
+const PLATE_TONES: Record<
+  WorkflowNodeVisual["tone"],
+  { background: string; border: string; glyph: string; shadow: string }
+> = {
+  code: {
+    background: "linear-gradient(180deg, #56677f 0%, #47586f 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#f8fafc",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.12)",
+  },
+  control: {
+    background: "linear-gradient(180deg, #d39c28 0%, #bc7f14 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#fff7ed",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
+  },
+  default: {
+    background: "linear-gradient(180deg, #627a99 0%, #516882 100%)",
+    border: "rgba(255,255,255,0.16)",
+    glyph: "#f8fafc",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.12)",
+  },
+  io: {
+    background: "linear-gradient(180deg, #4aa9e5 0%, #3389cc 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#eff6ff",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
+  },
+  llm: {
+    background: "linear-gradient(180deg, #55b2ee 0%, #3e9bd9 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#eff6ff",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
+  },
+  memory: {
+    background: "linear-gradient(180deg, #5d7190 0%, #4a607d 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#eff6ff",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.12)",
+  },
+  render: {
+    background: "linear-gradient(180deg, #d9a33a 0%, #ba7e1b 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#fff7ed",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
+  },
+  transform: {
+    background: "linear-gradient(180deg, #33a773 0%, #24865c 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#ecfdf5",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
+  },
+  validate: {
+    background: "linear-gradient(180deg, #d97a8b 0%, #c55d72 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#fff1f2",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
+  },
+};
+
 const glyphForControlKind = (controlKind: string | null | undefined): WorkflowGlyph => {
   if (controlKind === "parallel") {
     return "parallel";
@@ -337,6 +397,36 @@ export function WorkflowNodeIcon({
     >
       <svg viewBox="0 0 24 24" width={Math.round(size * 0.52)} height={Math.round(size * 0.52)}>
         <GlyphPaths glyph={visual.glyph} color={visual.iconColor} />
+      </svg>
+    </span>
+  );
+}
+
+export function WorkflowNodePlateIcon({
+  className = "",
+  size = 46,
+  visual,
+}: {
+  className?: string;
+  size?: number;
+  visual: WorkflowNodeVisual;
+}) {
+  const tone = PLATE_TONES[visual.tone] || PLATE_TONES.default;
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-flex items-center justify-center rounded-[14px] border ${className}`.trim()}
+      style={{
+        width: size,
+        height: size,
+        background: tone.background,
+        borderColor: tone.border,
+        boxShadow: tone.shadow,
+      }}
+      title={visual.label}
+    >
+      <svg viewBox="0 0 24 24" width={Math.round(size * 0.56)} height={Math.round(size * 0.56)}>
+        <GlyphPaths glyph={visual.glyph} color={tone.glyph} />
       </svg>
     </span>
   );

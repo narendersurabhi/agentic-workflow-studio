@@ -71,6 +71,9 @@ import {
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
 const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
 const DEFAULT_WORKSPACE_USER_ID = "narendersurabhi";
+const DAG_CANVAS_ZOOM_MIN = 0.7;
+const DAG_CANVAS_ZOOM_MAX = 1.5;
+const DAG_CANVAS_ZOOM_STEP = 0.1;
 
 const initialStudioDraft = (): ComposerDraft => ({
   summary: "Workflow Studio draft",
@@ -141,6 +144,33 @@ const defaultControlConfig = (kind: StudioControlKind): StudioControlConfig => {
     return { expression: "", switchCases: [createStudioControlCase()] };
   }
   return { expression: "", parallelMode: "fan_out" };
+};
+
+type DagConnectorDragState = {
+  sourceNodeId: string;
+  x: number;
+  y: number;
+  branchLabel?: string;
+  sourcePortY?: number;
+};
+
+const dagNodeOutputAnchorY = (
+  node: ComposerDraftNode,
+  branchLabel?: string
+) => {
+  if (node.nodeKind !== "control") {
+    return DAG_CANVAS_NODE_HEIGHT / 2;
+  }
+  if (node.controlKind === "if_else") {
+    const normalized = String(branchLabel || "").trim().toLowerCase();
+    if (normalized.includes("false") || normalized.includes("else")) {
+      return 64;
+    }
+    if (normalized) {
+      return 40;
+    }
+  }
+  return DAG_CANVAS_NODE_HEIGHT / 2;
 };
 
 type StudioWorkbenchIconKind =
@@ -239,6 +269,9 @@ const defaultBranchLabelForSourceNode = (
   }
   return "";
 };
+
+const clampDagCanvasZoom = (value: number) =>
+  Math.min(DAG_CANVAS_ZOOM_MAX, Math.max(DAG_CANVAS_ZOOM_MIN, Math.round(value * 100) / 100));
 
 const initialContextJson = () =>
   JSON.stringify(
@@ -672,15 +705,12 @@ export default function WorkflowStudio() {
   const [composerNodePositions, setComposerNodePositions] = useState<Record<string, CanvasPoint>>({});
   const [hoveredDagEdgeKey, setHoveredDagEdgeKey] = useState<string | null>(null);
   const [dagEdgeDraftSourceNodeId, setDagEdgeDraftSourceNodeId] = useState<string | null>(null);
-  const [dagConnectorDrag, setDagConnectorDrag] = useState<{
-    sourceNodeId: string;
-    x: number;
-    y: number;
-  } | null>(null);
+  const [dagConnectorDrag, setDagConnectorDrag] = useState<DagConnectorDragState | null>(null);
   const [dagCanvasDraggingNodeId, setDagCanvasDraggingNodeId] = useState<string | null>(null);
   const [dagConnectorHoverTargetNodeId, setDagConnectorHoverTargetNodeId] = useState<string | null>(
     null
   );
+  const [dagCanvasZoom, setDagCanvasZoom] = useState(1);
 
   const dagCanvasDragOffsetRef = useRef<CanvasPoint>({ x: 0, y: 0 });
   const dagCanvasViewportRef = useRef<HTMLDivElement | null>(null);
@@ -1023,9 +1053,11 @@ export default function WorkflowStudio() {
         return;
       }
       const rect = canvas.getBoundingClientRect();
+      const pointerX = Math.max(0, (event.clientX - rect.left) / dagCanvasZoom);
+      const pointerY = Math.max(0, (event.clientY - rect.top) / dagCanvasZoom);
       if (dagCanvasDraggingNodeId) {
-        const rawX = event.clientX - rect.left - dagCanvasDragOffsetRef.current.x;
-        const rawY = event.clientY - rect.top - dagCanvasDragOffsetRef.current.y;
+        const rawX = pointerX - dagCanvasDragOffsetRef.current.x;
+        const rawY = pointerY - dagCanvasDragOffsetRef.current.y;
         const x = Math.max(0, Math.round(rawX / DAG_CANVAS_SNAP) * DAG_CANVAS_SNAP);
         const y = Math.max(0, Math.round(rawY / DAG_CANVAS_SNAP) * DAG_CANVAS_SNAP);
         setComposerNodePositions((prev) => ({
@@ -1038,8 +1070,8 @@ export default function WorkflowStudio() {
           prev
             ? {
                 ...prev,
-                x: Math.max(0, event.clientX - rect.left),
-                y: Math.max(0, event.clientY - rect.top),
+                x: pointerX,
+                y: pointerY,
               }
             : prev
         );
@@ -1063,7 +1095,7 @@ export default function WorkflowStudio() {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
     };
-  }, [dagCanvasDraggingNodeId, dagConnectorDrag]);
+  }, [dagCanvasDraggingNodeId, dagCanvasZoom, dagConnectorDrag]);
 
   const setVisualChainNodes = (
     next: ComposerDraftNode[] | ((prev: ComposerDraftNode[]) => ComposerDraftNode[])
@@ -1093,9 +1125,56 @@ export default function WorkflowStudio() {
     if (!position) {
       return;
     }
-    const left = Math.max(0, position.x - Math.max(0, viewport.clientWidth - DAG_CANVAS_NODE_WIDTH) / 2);
-    const top = Math.max(0, position.y - Math.max(0, viewport.clientHeight - DAG_CANVAS_NODE_HEIGHT) / 2);
+    const scaledNodeWidth = DAG_CANVAS_NODE_WIDTH * dagCanvasZoom;
+    const scaledNodeHeight = DAG_CANVAS_NODE_HEIGHT * dagCanvasZoom;
+    const left = Math.max(
+      0,
+      position.x * dagCanvasZoom - Math.max(0, viewport.clientWidth - scaledNodeWidth) / 2
+    );
+    const top = Math.max(
+      0,
+      position.y * dagCanvasZoom - Math.max(0, viewport.clientHeight - scaledNodeHeight) / 2
+    );
     viewport.scrollTo({ left, top, behavior: "smooth" });
+  };
+
+  const setDagCanvasZoomLevel = (nextZoom: number) => {
+    const normalizedZoom = clampDagCanvasZoom(nextZoom);
+    if (normalizedZoom === dagCanvasZoom) {
+      return;
+    }
+    const viewport = dagCanvasViewportRef.current;
+    const focusX = viewport ? (viewport.scrollLeft + viewport.clientWidth / 2) / dagCanvasZoom : null;
+    const focusY = viewport ? (viewport.scrollTop + viewport.clientHeight / 2) / dagCanvasZoom : null;
+    setDagCanvasZoom(normalizedZoom);
+    if (focusX !== null && focusY !== null) {
+      requestAnimationFrame(() => {
+        const nextViewport = dagCanvasViewportRef.current;
+        if (!nextViewport) {
+          return;
+        }
+        nextViewport.scrollTo({
+          left: Math.max(0, focusX * normalizedZoom - nextViewport.clientWidth / 2),
+          top: Math.max(0, focusY * normalizedZoom - nextViewport.clientHeight / 2),
+        });
+      });
+    }
+  };
+
+  const zoomInDagCanvas = () => {
+    const nextZoom = clampDagCanvasZoom(dagCanvasZoom + DAG_CANVAS_ZOOM_STEP);
+    setDagCanvasZoomLevel(nextZoom);
+    if (nextZoom !== dagCanvasZoom) {
+      setStudioNotice(`Canvas zoom set to ${Math.round(nextZoom * 100)}%.`);
+    }
+  };
+
+  const zoomOutDagCanvas = () => {
+    const nextZoom = clampDagCanvasZoom(dagCanvasZoom - DAG_CANVAS_ZOOM_STEP);
+    setDagCanvasZoomLevel(nextZoom);
+    if (nextZoom !== dagCanvasZoom) {
+      setStudioNotice(`Canvas zoom set to ${Math.round(nextZoom * 100)}%.`);
+    }
   };
 
   const setVisualBindingFromSource = (
@@ -1937,18 +2016,19 @@ export default function WorkflowStudio() {
     return true;
   };
 
-  const addDagEdge = (fromNodeId: string, toNodeId: string) => {
+  const addDagEdge = (fromNodeId: string, toNodeId: string, branchLabel?: string) => {
     if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) {
       return;
     }
     setComposerDraft((prev) => {
       const sourceNode = prev.nodes.find((node) => node.id === fromNodeId);
-      const branchLabel = defaultBranchLabelForSourceNode(sourceNode, prev.edges);
+      const nextBranchLabel =
+        String(branchLabel || "").trim() || defaultBranchLabelForSourceNode(sourceNode, prev.edges);
       return {
         ...prev,
         edges: normalizeComposerEdges(prev.nodes, [
           ...prev.edges,
-          { fromNodeId, toNodeId, ...(branchLabel ? { branchLabel } : {}) },
+          { fromNodeId, toNodeId, ...(nextBranchLabel ? { branchLabel: nextBranchLabel } : {}) },
         ]),
       };
     });
@@ -1976,15 +2056,16 @@ export default function WorkflowStudio() {
     const rect = canvas.getBoundingClientRect();
     const current = composerNodePositions[nodeId] || defaultDagNodePosition(0);
     dagCanvasDragOffsetRef.current = {
-      x: event.clientX - rect.left - current.x,
-      y: event.clientY - rect.top - current.y,
+      x: Math.max(0, (event.clientX - rect.left) / dagCanvasZoom) - current.x,
+      y: Math.max(0, (event.clientY - rect.top) / dagCanvasZoom) - current.y,
     };
     setDagCanvasDraggingNodeId(nodeId);
   };
 
   const beginDagConnectorDrag = (
     event: React.MouseEvent<HTMLButtonElement>,
-    sourceNodeId: string
+    sourceNodeId: string,
+    options: { branchLabel?: string; sourcePortY?: number } = {}
   ) => {
     event.preventDefault();
     const canvas = dagCanvasRef.current;
@@ -1994,8 +2075,10 @@ export default function WorkflowStudio() {
     const rect = canvas.getBoundingClientRect();
     setDagConnectorDrag({
       sourceNodeId,
-      x: Math.max(0, event.clientX - rect.left),
-      y: Math.max(0, event.clientY - rect.top),
+      x: Math.max(0, (event.clientX - rect.left) / dagCanvasZoom),
+      y: Math.max(0, (event.clientY - rect.top) / dagCanvasZoom),
+      ...(options.branchLabel ? { branchLabel: options.branchLabel } : {}),
+      sourcePortY: options.sourcePortY ?? DAG_CANVAS_NODE_HEIGHT / 2,
     });
     setDagConnectorHoverTargetNodeId(null);
     setDagEdgeDraftSourceNodeId(sourceNodeId);
@@ -2474,7 +2557,7 @@ export default function WorkflowStudio() {
           }
           const edgeKey = `${edge.fromNodeId}->${edge.toNodeId}`;
           const startX = fromEntry.position.x + DAG_CANVAS_NODE_WIDTH;
-          const startY = fromEntry.position.y + DAG_CANVAS_NODE_HEIGHT / 2;
+          const startY = fromEntry.position.y + dagNodeOutputAnchorY(fromEntry.node, edge.branchLabel);
           const endX = toEntry.position.x;
           const endY = toEntry.position.y + DAG_CANVAS_NODE_HEIGHT / 2;
           const controlX = (startX + endX) / 2;
@@ -2517,7 +2600,10 @@ export default function WorkflowStudio() {
       return null;
     }
     const startX = sourceEntry.position.x + DAG_CANVAS_NODE_WIDTH;
-    const startY = sourceEntry.position.y + DAG_CANVAS_NODE_HEIGHT / 2;
+    const startY =
+      sourceEntry.position.y +
+      (dagConnectorDrag.sourcePortY ??
+        dagNodeOutputAnchorY(sourceEntry.node, dagConnectorDrag.branchLabel));
     const endX = dagConnectorDrag.x;
     const endY = dagConnectorDrag.y;
     const controlX = (startX + endX) / 2;
@@ -3539,8 +3625,13 @@ export default function WorkflowStudio() {
                 centerDagNodeInView={centerDagNodeInView}
                 nodeWidth={DAG_CANVAS_NODE_WIDTH}
                 nodeHeight={DAG_CANVAS_NODE_HEIGHT}
+                dagCanvasZoom={dagCanvasZoom}
                 showToolbar
                 showBlueprintPreview
+                onZoomIn={zoomInDagCanvas}
+                onZoomOut={zoomOutDagCanvas}
+                zoomInDisabled={dagCanvasZoom >= DAG_CANVAS_ZOOM_MAX}
+                zoomOutDisabled={dagCanvasZoom <= DAG_CANVAS_ZOOM_MIN}
                 onRunWorkflow={runWorkflowVersion}
                 runWorkflowPending={workflowActionLoading === "run"}
                 runWorkflowDisabled={workflowActionLoading !== null}
