@@ -1012,3 +1012,18 @@ def test_llm_generate_with_context_tool_uses_request_based_provider() -> None:
         "prompt_len": len("Summarize the status"),
         "has_context": True,
     }
+
+
+def test_llm_generate_with_context_rejects_text_alias() -> None:
+    provider = _RequestOnlyProvider("generated text")
+    registry = default_registry(llm_enabled=True, llm_provider=provider)
+
+    call = registry.execute(
+        "llm_generate_with_context",
+        {"text": "Summarize the status"},
+        "id",
+        "trace",
+    )
+
+    assert call.status == "failed"
+    assert "input schema validation failed" in call.output_or_error["error"]

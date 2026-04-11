@@ -4,10 +4,10 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import ComposerDagCanvas from "../../components/composer/ComposerDagCanvas";
 import ComposerValidationPanel from "../../components/composer/ComposerValidationPanel";
-import ScreenHeader, {
-  screenHeaderPrimaryActionClassName,
-  screenHeaderSecondaryActionClassName
-} from "../../components/ScreenHeader";
+import {
+  WorkflowNodeIcon,
+  resolveWorkflowNodeVisual,
+} from "../../components/workflow/WorkflowNodeIcon";
 import StudioCapabilityPalette from "./StudioCapabilityPalette";
 import StudioCompilePanel from "./StudioCompilePanel";
 import StudioWorkflowInterfacePanel from "./StudioWorkflowInterfacePanel";
@@ -142,6 +142,77 @@ const defaultControlConfig = (kind: StudioControlKind): StudioControlConfig => {
   }
   return { expression: "", parallelMode: "fan_out" };
 };
+
+type StudioWorkbenchIconKind =
+  | "menu"
+  | "palette"
+  | "graph"
+  | "library"
+  | "inspect"
+  | "run";
+
+function StudioWorkbenchIcon({
+  kind,
+  className = "",
+}: {
+  kind: StudioWorkbenchIconKind;
+  className?: string;
+}) {
+  const sharedProps = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    strokeWidth: 1.8,
+  };
+
+  switch (kind) {
+    case "menu":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <path d="M5 7h14M5 12h9M5 17h14" {...sharedProps} />
+        </svg>
+      );
+    case "palette":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="4" width="16" height="16" rx="3.5" {...sharedProps} />
+          <path d="M7 8h10M7 12h10M7 16h7" {...sharedProps} />
+        </svg>
+      );
+    case "graph":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <circle cx="6.5" cy="17.5" r="2.5" {...sharedProps} />
+          <circle cx="12" cy="6.5" r="2.5" {...sharedProps} />
+          <circle cx="18" cy="14" r="2.5" {...sharedProps} />
+          <path d="M8.4 15.8 10.2 8.4M14.2 8.2l2.2 3.5M8.7 16.4l6.8-1.6" {...sharedProps} />
+        </svg>
+      );
+    case "library":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="5" width="6" height="14" rx="1.8" {...sharedProps} />
+          <rect x="14" y="5" width="6" height="14" rx="1.8" {...sharedProps} />
+          <path d="M8 8.5h.01M8 12h.01M8 15.5h.01M18 8.5h.01M18 12h.01M18 15.5h.01" {...sharedProps} />
+        </svg>
+      );
+    case "inspect":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="5" width="16" height="14" rx="3" {...sharedProps} />
+          <path d="M10 5v14M13.5 9h3M13.5 12h3M13.5 15h2" {...sharedProps} />
+        </svg>
+      );
+    case "run":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <path d="m9 7 8 5-8 5z" {...sharedProps} />
+          <path d="M4.5 19.5h15" {...sharedProps} />
+        </svg>
+      );
+  }
+}
 
 const defaultBranchLabelForSourceNode = (
   sourceNode: ComposerDraftNode | undefined,
@@ -3312,367 +3383,367 @@ export default function WorkflowStudio() {
   };
 
   return (
-    <div className="space-y-6">
-      <ScreenHeader
-        eyebrow="Agentic Workflow Studio"
-        title="Design DAGs before you run them."
-        description="Build visual workflows with a capability palette on the left, graph canvas in the middle, and node inspector plus compile preview on the right."
-        activeScreen="studio"
-        actions={
-          <>
-            <button
-              className={screenHeaderSecondaryActionClassName}
-              onClick={startFreshStudioDraft}
-            >
-              New Draft
-            </button>
-            <button
-              className={screenHeaderSecondaryActionClassName}
-              onClick={saveWorkflowDefinition}
-              disabled={workflowActionLoading !== null}
-            >
-              {workflowActionLoading === "save" ? "Saving..." : "Save Draft"}
-            </button>
-            <button
-              className={screenHeaderSecondaryActionClassName}
-              onClick={publishWorkflowVersion}
-              disabled={workflowActionLoading !== null}
-            >
-              {workflowActionLoading === "publish" ? "Publishing..." : "Publish Version"}
-            </button>
-            <button
-              className={screenHeaderSecondaryActionClassName}
-              onClick={runWorkflowVersion}
-              disabled={workflowActionLoading !== null}
-            >
-              {workflowActionLoading === "run" ? "Starting..." : "Run Workflow"}
-            </button>
-            <button
-              className={screenHeaderPrimaryActionClassName}
-              onClick={runChainPreflight}
-              disabled={composerCompileLoading || chainPreflightLoading || workflowActionLoading !== null}
-            >
-              {composerCompileLoading || chainPreflightLoading ? "Compiling..." : "Compile Preview"}
-            </button>
-          </>
-        }
-      >
-        <div className="mt-6 rounded-2xl border border-white/15 bg-white/10 px-4 py-4 text-white/95">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="min-w-[220px] flex-1">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100">
-                Memory User ID
+    <div className="-mx-6 -my-8 min-h-screen bg-[#56697c] text-white">
+      <div className="min-h-screen bg-[linear-gradient(180deg,#435365_0px,#435365_78px,#55697c_78px,#55697c_100%)]">
+        <header className="border-b border-white/10 bg-[linear-gradient(180deg,rgba(67,83,101,0.98),rgba(60,74,90,0.98))] px-6 py-3 shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="truncate text-[22px] font-semibold tracking-[-0.03em] text-white">
+                Workflow Studio: {composerDraft.summary.trim() || "Pipeline Alpha"}
               </div>
-              <input
-                className="mt-2 w-full rounded-2xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/45 focus:border-white/40 focus:bg-white/15"
-                value={workspaceUserId}
-                onChange={(event) => setWorkspaceUserId(event.target.value)}
-                placeholder="narendersurabhi"
-              />
-            </label>
-            <div className="max-w-xl text-xs leading-5 text-slate-200">
-              User-scoped memory bindings inherit this id automatically unless a node overrides
-              it explicitly.
-            </div>
-          </div>
-        </div>
-      </ScreenHeader>
-
-      {studioNotice ? (
-        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-          {studioNotice}
-        </div>
-      ) : null}
-
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-            <StudioCapabilityPalette
-              capabilities={paletteCapabilities}
-              groups={paletteGroups}
-          loading={capabilityLoading}
-          error={capabilityError}
-          query={paletteQuery}
-          selectedGroup={paletteGroup}
-              onQueryChange={setPaletteQuery}
-              onGroupChange={setPaletteGroup}
-              onAddCapability={addCapabilityNodeToStudio}
-              onAddControl={addControlNodeToStudio}
-            />
-
-        <div className="space-y-6">
-          <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-              <label className="block">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Goal
-                </div>
-                <input
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  value={goal}
-                  onChange={(event) => setGoal(event.target.value)}
-                  placeholder="Generate a document pipeline with validation and render output"
-                />
-              </label>
-              <label className="block">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Draft Summary
-                </div>
-                <input
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  value={composerDraft.summary}
-                  onChange={(event) =>
-                    setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
-                  }
-                  placeholder="Workflow Studio draft"
-                />
-              </label>
-            </div>
-            <label className="mt-4 block">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Context JSON
-                </div>
-                <div className="text-xs text-slate-500">
-                  {contextState.invalid ? "Invalid JSON" : "Object ready"}
-                </div>
-              </div>
-              <textarea
-                className="mt-1 min-h-[180px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-xs text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                value={contextJson}
-                onChange={(event) => setContextJson(event.target.value)}
-              />
-            </label>
-            <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
-                Steps <span className="font-semibold">{visualChainSummary.steps}</span>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
-                DAG edges <span className="font-semibold">{visualChainSummary.dagEdges}</span>
-              </div>
-              <div
-                className={`rounded-2xl border px-3 py-2 ${
-                  visualChainSummary.missingInputs > 0
-                    ? "border-rose-200 bg-rose-50 text-rose-700"
-                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                }`}
-              >
-                Missing <span className="font-semibold">{visualChainSummary.missingInputs}</span>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
-                Context hits <span className="font-semibold">{visualChainSummary.contextInputs}</span>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200/78">
+                <span>Project</span>
+                <span className="text-white/35">›</span>
+                <span>Workflows</span>
+                <span className="text-white/35">›</span>
+                <span className="text-white/95">
+                  {composerDraft.summary.trim() || "Pipeline Alpha"}
+                </span>
               </div>
             </div>
-            <ComposerValidationPanel
-              preflightResult={chainPreflightResult}
-              compileLoading={composerCompileLoading || chainPreflightLoading}
-              issues={composerIssues}
-              needsValidation={visualChainNodes.length > 0}
-              onIssueClick={focusComposerValidationIssue}
-              activeIssue={activeComposerIssueFocus}
-              formatTimestamp={formatTimestamp}
-            />
-          </section>
 
-          <StudioWorkflowInterfacePanel
-            workflowInterface={workflowInterface}
-            contextPathSuggestions={contextPathSuggestions}
-            visualChainNodes={visualChainNodes}
-            outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
-            onAddInput={addWorkflowInputDefinition}
-            onUpdateInput={updateWorkflowInputDefinition}
-            onRemoveInput={removeWorkflowInputDefinition}
-            onAddVariable={addWorkflowVariableDefinition}
-            onUpdateVariable={updateWorkflowVariableDefinition}
-            onRemoveVariable={removeWorkflowVariableDefinition}
-            onAddOutput={addWorkflowOutputDefinition}
-            onUpdateOutput={updateWorkflowOutputDefinition}
-            onRemoveOutput={removeWorkflowOutputDefinition}
-          />
-
-          <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Canvas
-                </div>
-                <h2 className="mt-1 font-display text-2xl text-slate-900">Workflow Graph</h2>
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
               <button
-                className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-900 hover:text-slate-900 disabled:opacity-50"
-                onClick={autoLayoutDagCanvas}
-                disabled={visualChainNodes.length === 0}
+                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                onClick={startFreshStudioDraft}
               >
-                Auto Layout
+                New Draft
+              </button>
+              <button
+                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={saveWorkflowDefinition}
+                disabled={workflowActionLoading !== null}
+              >
+                {workflowActionLoading === "save" ? "Saving..." : "Save"}
+              </button>
+              <button
+                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={publishWorkflowVersion}
+                disabled={workflowActionLoading !== null}
+              >
+                {workflowActionLoading === "publish" ? "Publishing..." : "Publish"}
+              </button>
+              <button
+                className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={runWorkflowVersion}
+                disabled={workflowActionLoading !== null}
+              >
+                {workflowActionLoading === "run" ? "Starting..." : "Run Workflow"}
               </button>
             </div>
+          </div>
+        </header>
 
-            <ComposerDagCanvas
-              visualChainNodes={visualChainNodes}
-              dagEdgeDraftSourceNodeId={dagEdgeDraftSourceNodeId}
-              setDagEdgeDraftSourceNodeId={setDagEdgeDraftSourceNodeId}
-              setDagConnectorDrag={setDagConnectorDrag}
-              setDagConnectorHoverTargetNodeId={setDagConnectorHoverTargetNodeId}
-              autoLayoutDagCanvas={autoLayoutDagCanvas}
-              dagCanvasViewportRef={dagCanvasViewportRef}
-              dagCanvasRef={dagCanvasRef}
-              dagCanvasSurface={dagCanvasSurface}
-              dagCanvasEdges={dagCanvasEdges}
-              hoveredDagEdgeKey={hoveredDagEdgeKey}
-              setHoveredDagEdgeKey={setHoveredDagEdgeKey}
-              removeDagEdge={removeDagEdge}
-              dagConnectorPreview={dagConnectorPreview}
-              dagCanvasNodes={dagCanvasNodes}
-              composerDraftEdges={composerDraftEdges}
-              dagNodeAdjacency={dagNodeAdjacency}
-              visualChainNodeStatusById={visualChainNodeStatusById as Map<
-                string,
-                { missingCount: number; requiredCount: number }
-              >}
-              selectedDagNodeId={selectedDagNodeId}
-              setSelectedDagNodeId={setSelectedDagNodeId}
-              dagConnectorDrag={dagConnectorDrag}
-              dagCanvasDraggingNodeId={dagCanvasDraggingNodeId}
-              dagConnectorHoverTargetNodeId={dagConnectorHoverTargetNodeId}
-              addDagEdge={addDagEdge}
-              beginDagNodeDrag={beginDagNodeDrag}
-              isInteractiveCanvasTarget={isInteractiveCanvasTarget}
-              beginDagConnectorDrag={beginDagConnectorDrag}
-              centerDagNodeInView={centerDagNodeInView}
-              nodeWidth={DAG_CANVAS_NODE_WIDTH}
-              nodeHeight={DAG_CANVAS_NODE_HEIGHT}
-            />
+        {studioNotice ? (
+          <div className="border-b border-white/8 bg-sky-400/10 px-6 py-3 text-sm text-sky-50">
+            {studioNotice}
+          </div>
+        ) : null}
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              {visualChainNodes.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                  Add capabilities from the palette to start shaping a DAG.
-                </div>
-              ) : (
-                visualChainNodes.map((node, index) => {
-                  const isSelected = selectedDagNodeId === node.id;
-                  return (
-                    <div
-                      key={`studio-node-chip-${node.id}`}
-                      className={`flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${
-                        isSelected
-                          ? "border-sky-300 bg-sky-50 text-sky-900"
-                          : "border-slate-200 bg-slate-50 text-slate-700"
-                      }`}
-                    >
-                      <button onClick={() => setSelectedDagNodeId(node.id)}>
-                        {index + 1}. {node.taskName}
-                      </button>
-                      <button
-                        className="rounded-full border border-current px-1.5 py-0 text-[11px]"
-                        onClick={() => removeVisualChainNode(node.id)}
-                        title="Remove step"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })
-              )}
+        <div className="grid min-h-[calc(100vh-78px)] grid-cols-[52px_280px_minmax(0,1fr)]">
+          <aside className="border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] px-1.5 py-3">
+            <div className="flex h-full flex-col items-center justify-between">
+              <div className="space-y-3">
+                {[
+                  { id: "menu", label: "Menu", icon: "menu" as const },
+                  { id: "studio-palette-section", label: "Palette", icon: "palette" as const },
+                  { id: "studio-graph-section", label: "Graph", icon: "graph" as const, active: true },
+                  { id: "studio-library-section", label: "Library", icon: "library" as const },
+                  { id: "studio-inspector-section", label: "Inspector", icon: "inspect" as const },
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    title={item.label}
+                    aria-label={item.label}
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl border transition ${
+                      item.active
+                        ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                        : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
+                    }`}
+                    onClick={() => {
+                      if (item.id !== "menu") {
+                        document
+                          .getElementById(item.id)
+                          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }
+                    }}
+                  >
+                    <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                title="Run workflow"
+                aria-label="Run workflow"
+                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-slate-950/18 text-slate-100 transition hover:border-white/18 hover:bg-slate-950/26"
+                onClick={runWorkflowVersion}
+              >
+                <StudioWorkbenchIcon kind="run" className="h-5 w-5" />
+              </button>
             </div>
-          </section>
-        </div>
+          </aside>
 
-        <div className="space-y-6">
-          <StudioWorkflowLibrary
-            workflowDefinitions={workflowDefinitions}
-            workflowDefinitionsLoading={workflowDefinitionsLoading}
-            workflowDefinitionsError={workflowDefinitionsError}
-            workflowVersions={workflowVersions}
-            workflowVersionsLoading={workflowVersionsLoading}
-            workflowVersionsError={workflowVersionsError}
-            workflowTriggers={workflowTriggers}
-            workflowTriggersLoading={workflowTriggersLoading}
-            workflowTriggersError={workflowTriggersError}
-            workflowRuns={workflowRuns}
-            workflowRunsLoading={workflowRunsLoading}
-            workflowRunsError={workflowRunsError}
-            activeWorkflowDefinitionId={activeWorkflowDefinitionId}
-            activeWorkflowVersionId={activeWorkflowVersionId}
-            deletingWorkflowDefinitionId={workflowDefinitionDeleteId}
-            onRefresh={() => {
-              void refreshWorkflowDefinitions();
-              if (activeWorkflowDefinitionId) {
-                void refreshWorkflowVersions(activeWorkflowDefinitionId);
-                void refreshWorkflowTriggers(activeWorkflowDefinitionId);
-                void refreshWorkflowRuns(activeWorkflowDefinitionId);
-              }
-            }}
-            onOpenDefinition={restoreWorkflowDefinition}
-            onDeleteDefinition={(definition) => {
-              void deleteWorkflowDefinition(definition);
-            }}
-            onOpenVersion={(version) => {
-              void restoreWorkflowVersion(version);
-            }}
-            onCreateManualTrigger={createManualWorkflowTrigger}
-            onInvokeTrigger={(trigger) => {
-              void invokeWorkflowTrigger(trigger);
-            }}
-          />
+          <div className="border-r border-white/10 px-2.5 py-3">
+            <div id="studio-palette-section" className="h-full">
+              <StudioCapabilityPalette
+                capabilities={paletteCapabilities}
+                groups={paletteGroups}
+                loading={capabilityLoading}
+                error={capabilityError}
+                query={paletteQuery}
+                selectedGroup={paletteGroup}
+                onQueryChange={setPaletteQuery}
+                onGroupChange={setPaletteGroup}
+                onAddCapability={addCapabilityNodeToStudio}
+                onAddControl={addControlNodeToStudio}
+              />
+            </div>
+          </div>
 
-          <StudioNodeInspector
-            selectedDagNode={selectedDagNode}
-            selectedDagNodeStatus={selectedDagNodeStatus}
-            inputFields={selectedDagNodeInspectorFields}
-            selectedCapability={selectedCapability}
-            outputSchemaFields={selectedDagNodeOutputSchemaFields}
-            activeComposerIssueFocus={activeComposerIssueFocus}
-            inspectorBindingRefs={inspectorBindingRefs}
-            visualChainNodes={visualChainNodes}
-            outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
-            contextPathSuggestions={contextPathSuggestions}
-            workflowInterface={workflowInterface}
-            autoWireNodeBindings={autoWireNodeBindings}
-            quickFixNodeBindings={quickFixNodeBindings}
-            setSelectedDagNodeId={setSelectedDagNodeId}
-            capabilityIdOptionsId="studio-capability-id-options"
-            onDeleteNode={removeVisualChainNode}
-            updateNodeBasics={updateVisualChainNode}
-            setVisualBindingMode={setVisualBindingMode}
-            clearVisualBinding={clearVisualBinding}
-            removeCustomInputField={removeCustomInputField}
-            addCustomInputField={addCustomInputField}
-            updateVisualBindingSourceNode={updateVisualBindingSourceNode}
-            updateVisualBindingPath={updateVisualBindingPath}
-            updateVisualBindingLiteral={updateVisualBindingLiteral}
-            updateVisualBindingContextPath={updateVisualBindingContextPath}
-            updateVisualBindingMemory={updateVisualBindingMemory}
-            updateVisualBindingWorkflowInput={updateVisualBindingWorkflowInput}
-            updateVisualBindingWorkflowVariable={updateVisualBindingWorkflowVariable}
-            setVisualBindingFromPrevious={setVisualBindingFromPrevious}
-            addNodeOutput={addNodeOutput}
-            upsertNodeOutputFromSchema={upsertNodeOutputFromSchema}
-            updateNodeOutput={updateNodeOutput}
-            removeNodeOutput={removeNodeOutput}
-            addNodeVariable={addNodeVariable}
-            updateNodeVariable={updateNodeVariable}
-            removeNodeVariable={removeNodeVariable}
-            updateNodeControlConfig={updateNodeControlConfig}
-            addSwitchCase={addSwitchCase}
-            updateSwitchCase={updateSwitchCase}
-            removeSwitchCase={removeSwitchCase}
-          />
+          <main className="min-w-0 overflow-auto px-3 py-3">
+            <section id="studio-graph-section" className="h-[calc(100vh-170px)] min-h-[620px] rounded-[22px] border border-white/10 bg-[rgba(57,73,89,0.32)] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+              <ComposerDagCanvas
+                visualChainNodes={visualChainNodes}
+                dagEdgeDraftSourceNodeId={dagEdgeDraftSourceNodeId}
+                setDagEdgeDraftSourceNodeId={setDagEdgeDraftSourceNodeId}
+                setDagConnectorDrag={setDagConnectorDrag}
+                setDagConnectorHoverTargetNodeId={setDagConnectorHoverTargetNodeId}
+                autoLayoutDagCanvas={autoLayoutDagCanvas}
+                dagCanvasViewportRef={dagCanvasViewportRef}
+                dagCanvasRef={dagCanvasRef}
+                dagCanvasSurface={dagCanvasSurface}
+                dagCanvasEdges={dagCanvasEdges}
+                hoveredDagEdgeKey={hoveredDagEdgeKey}
+                setHoveredDagEdgeKey={setHoveredDagEdgeKey}
+                removeDagEdge={removeDagEdge}
+                dagConnectorPreview={dagConnectorPreview}
+                dagCanvasNodes={dagCanvasNodes}
+                composerDraftEdges={composerDraftEdges}
+                dagNodeAdjacency={dagNodeAdjacency}
+                visualChainNodeStatusById={visualChainNodeStatusById as Map<
+                  string,
+                  { missingCount: number; requiredCount: number }
+                >}
+                selectedDagNodeId={selectedDagNodeId}
+                setSelectedDagNodeId={setSelectedDagNodeId}
+                dagConnectorDrag={dagConnectorDrag}
+                dagCanvasDraggingNodeId={dagCanvasDraggingNodeId}
+                dagConnectorHoverTargetNodeId={dagConnectorHoverTargetNodeId}
+                addDagEdge={addDagEdge}
+                beginDagNodeDrag={beginDagNodeDrag}
+                isInteractiveCanvasTarget={isInteractiveCanvasTarget}
+                beginDagConnectorDrag={beginDagConnectorDrag}
+                centerDagNodeInView={centerDagNodeInView}
+                nodeWidth={DAG_CANVAS_NODE_WIDTH}
+                nodeHeight={DAG_CANVAS_NODE_HEIGHT}
+                showToolbar
+                showBlueprintPreview
+                onRunWorkflow={runWorkflowVersion}
+                runWorkflowPending={workflowActionLoading === "run"}
+                runWorkflowDisabled={workflowActionLoading !== null}
+              />
+            </section>
 
-          <StudioCompilePanel
-            compileLoading={composerCompileLoading || chainPreflightLoading}
-            compileResult={composerCompileResult}
-            preflightResult={chainPreflightResult}
-            issues={composerIssues}
-            draftPayloadPreview={draftPayloadPreview}
-            onCompile={runChainPreflight}
-          />
+            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_360px]">
+              <div className="space-y-4">
+                <section className="rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgba(45,57,71,0.94),rgba(39,51,64,0.98))] p-4 shadow-[0_16px_36px_rgba(15,23,42,0.14)]">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.95fr)]">
+                    <div className="space-y-4">
+                      <label className="block">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                          Goal
+                        </div>
+                        <input
+                          className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                          value={goal}
+                          onChange={(event) => setGoal(event.target.value)}
+                          placeholder="Generate a document pipeline with validation and render output"
+                        />
+                      </label>
+                      <label className="block">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                          Draft Summary
+                        </div>
+                        <input
+                          className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                          value={composerDraft.summary}
+                          onChange={(event) =>
+                            setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
+                          }
+                          placeholder="Workflow Studio draft"
+                        />
+                      </label>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/16 px-3 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                          Memory User ID
+                        </div>
+                        <input
+                          className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                          value={workspaceUserId}
+                          onChange={(event) => setWorkspaceUserId(event.target.value)}
+                          placeholder="narendersurabhi"
+                        />
+                        <div className="mt-2 text-xs leading-5 text-slate-200/62">
+                          User-scoped memory bindings inherit this id automatically unless a node
+                          overrides it explicitly.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                            Context JSON
+                          </div>
+                          <div className="text-xs text-slate-300/55">
+                            {contextState.invalid ? "Invalid JSON" : "Object ready"}
+                          </div>
+                        </div>
+                        <textarea
+                          className="mt-1 min-h-[220px] w-full rounded-2xl border border-white/10 bg-[#233142] px-3 py-3 font-mono text-xs text-slate-100 outline-none transition placeholder:text-slate-400/40 focus:border-sky-300/40 focus:bg-[#1c2939]"
+                          value={contextJson}
+                          onChange={(event) => setContextJson(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <ComposerValidationPanel
+                    preflightResult={chainPreflightResult}
+                    compileLoading={composerCompileLoading || chainPreflightLoading}
+                    issues={composerIssues}
+                    needsValidation={visualChainNodes.length > 0}
+                    onIssueClick={focusComposerValidationIssue}
+                    activeIssue={activeComposerIssueFocus}
+                    formatTimestamp={formatTimestamp}
+                  />
+                </section>
+
+                <StudioWorkflowInterfacePanel
+                  workflowInterface={workflowInterface}
+                  contextPathSuggestions={contextPathSuggestions}
+                  visualChainNodes={visualChainNodes}
+                  outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
+                  onAddInput={addWorkflowInputDefinition}
+                  onUpdateInput={updateWorkflowInputDefinition}
+                  onRemoveInput={removeWorkflowInputDefinition}
+                  onAddVariable={addWorkflowVariableDefinition}
+                  onUpdateVariable={updateWorkflowVariableDefinition}
+                  onRemoveVariable={removeWorkflowVariableDefinition}
+                  onAddOutput={addWorkflowOutputDefinition}
+                  onUpdateOutput={updateWorkflowOutputDefinition}
+                  onRemoveOutput={removeWorkflowOutputDefinition}
+                />
+
+                <div id="studio-library-section">
+                  <StudioWorkflowLibrary
+                    workflowDefinitions={workflowDefinitions}
+                    workflowDefinitionsLoading={workflowDefinitionsLoading}
+                    workflowDefinitionsError={workflowDefinitionsError}
+                    workflowVersions={workflowVersions}
+                    workflowVersionsLoading={workflowVersionsLoading}
+                    workflowVersionsError={workflowVersionsError}
+                    workflowTriggers={workflowTriggers}
+                    workflowTriggersLoading={workflowTriggersLoading}
+                    workflowTriggersError={workflowTriggersError}
+                    workflowRuns={workflowRuns}
+                    workflowRunsLoading={workflowRunsLoading}
+                    workflowRunsError={workflowRunsError}
+                    activeWorkflowDefinitionId={activeWorkflowDefinitionId}
+                    activeWorkflowVersionId={activeWorkflowVersionId}
+                    deletingWorkflowDefinitionId={workflowDefinitionDeleteId}
+                    onRefresh={() => {
+                      void refreshWorkflowDefinitions();
+                      if (activeWorkflowDefinitionId) {
+                        void refreshWorkflowVersions(activeWorkflowDefinitionId);
+                        void refreshWorkflowTriggers(activeWorkflowDefinitionId);
+                        void refreshWorkflowRuns(activeWorkflowDefinitionId);
+                      }
+                    }}
+                    onOpenDefinition={restoreWorkflowDefinition}
+                    onDeleteDefinition={(definition) => {
+                      void deleteWorkflowDefinition(definition);
+                    }}
+                    onOpenVersion={(version) => {
+                      void restoreWorkflowVersion(version);
+                    }}
+                    onCreateManualTrigger={createManualWorkflowTrigger}
+                    onInvokeTrigger={(trigger) => {
+                      void invokeWorkflowTrigger(trigger);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div id="studio-inspector-section">
+                  <StudioNodeInspector
+                    selectedDagNode={selectedDagNode}
+                    selectedDagNodeStatus={selectedDagNodeStatus}
+                    inputFields={selectedDagNodeInspectorFields}
+                    selectedCapability={selectedCapability}
+                    outputSchemaFields={selectedDagNodeOutputSchemaFields}
+                    activeComposerIssueFocus={activeComposerIssueFocus}
+                    inspectorBindingRefs={inspectorBindingRefs}
+                    visualChainNodes={visualChainNodes}
+                    outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
+                    contextPathSuggestions={contextPathSuggestions}
+                    workflowInterface={workflowInterface}
+                    autoWireNodeBindings={autoWireNodeBindings}
+                    quickFixNodeBindings={quickFixNodeBindings}
+                    setSelectedDagNodeId={setSelectedDagNodeId}
+                    capabilityIdOptionsId="studio-capability-id-options"
+                    onDeleteNode={removeVisualChainNode}
+                    updateNodeBasics={updateVisualChainNode}
+                    setVisualBindingMode={setVisualBindingMode}
+                    clearVisualBinding={clearVisualBinding}
+                    removeCustomInputField={removeCustomInputField}
+                    addCustomInputField={addCustomInputField}
+                    updateVisualBindingSourceNode={updateVisualBindingSourceNode}
+                    updateVisualBindingPath={updateVisualBindingPath}
+                    updateVisualBindingLiteral={updateVisualBindingLiteral}
+                    updateVisualBindingContextPath={updateVisualBindingContextPath}
+                    updateVisualBindingMemory={updateVisualBindingMemory}
+                    updateVisualBindingWorkflowInput={updateVisualBindingWorkflowInput}
+                    updateVisualBindingWorkflowVariable={updateVisualBindingWorkflowVariable}
+                    setVisualBindingFromPrevious={setVisualBindingFromPrevious}
+                    addNodeOutput={addNodeOutput}
+                    upsertNodeOutputFromSchema={upsertNodeOutputFromSchema}
+                    updateNodeOutput={updateNodeOutput}
+                    removeNodeOutput={removeNodeOutput}
+                    addNodeVariable={addNodeVariable}
+                    updateNodeVariable={updateNodeVariable}
+                    removeNodeVariable={removeNodeVariable}
+                    updateNodeControlConfig={updateNodeControlConfig}
+                    addSwitchCase={addSwitchCase}
+                    updateSwitchCase={updateSwitchCase}
+                    removeSwitchCase={removeSwitchCase}
+                  />
+                </div>
+
+                <StudioCompilePanel
+                  compileLoading={composerCompileLoading || chainPreflightLoading}
+                  compileResult={composerCompileResult}
+                  preflightResult={chainPreflightResult}
+                  issues={composerIssues}
+                  draftPayloadPreview={draftPayloadPreview}
+                  onCompile={runChainPreflight}
+                />
+              </div>
+            </div>
+          </main>
+
+          <datalist id="studio-capability-id-options">
+            {availableCapabilities.map((item) => (
+              <option key={`studio-capability-id-option-${item.id}`} value={item.id} />
+            ))}
+          </datalist>
         </div>
       </div>
-
-      <datalist id="studio-capability-id-options">
-        {availableCapabilities.map((item) => (
-          <option key={`studio-capability-id-option-${item.id}`} value={item.id} />
-        ))}
-      </datalist>
     </div>
   );
 }

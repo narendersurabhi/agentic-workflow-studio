@@ -12,6 +12,7 @@ type ScreenHeaderProps = {
   activeScreen: ScreenHeaderScreen;
   actions?: ReactNode;
   children?: ReactNode;
+  compact?: boolean;
 };
 
 const NAV_ITEMS: Array<{ id: ScreenHeaderScreen; label: string; href: string }> = [
@@ -35,28 +36,53 @@ export default function ScreenHeader({
   description,
   activeScreen,
   actions,
-  children
+  children,
+  compact = false,
 }: ScreenHeaderProps) {
   return (
-    <section className="relative overflow-hidden rounded-[36px] bg-gradient-to-br from-stone-950 via-slate-900 to-sky-950 px-8 py-8 text-white shadow-2xl animate-fade-up">
-      <div className="pointer-events-none absolute -left-14 top-8 h-44 w-44 rounded-full bg-amber-300/20 blur-3xl" />
-      <div className="pointer-events-none absolute -right-12 bottom-0 h-56 w-56 rounded-full bg-sky-400/25 blur-3xl" />
-      <div className="relative space-y-6">
+    <section
+      className={`relative overflow-hidden bg-gradient-to-br from-stone-950 via-slate-900 to-sky-950 text-white shadow-2xl animate-fade-up ${
+        compact ? "rounded-[30px] px-6 py-5" : "rounded-[36px] px-8 py-8"
+      }`}
+    >
+      <div
+        className={`pointer-events-none absolute rounded-full bg-amber-300/20 blur-3xl ${
+          compact ? "-left-10 top-4 h-28 w-28" : "-left-14 top-8 h-44 w-44"
+        }`}
+      />
+      <div
+        className={`pointer-events-none absolute rounded-full bg-sky-400/25 blur-3xl ${
+          compact ? "-right-10 bottom-0 h-36 w-36" : "-right-12 bottom-0 h-56 w-56"
+        }`}
+      />
+      <div className={`relative ${compact ? "space-y-4" : "space-y-6"}`}>
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-3xl">
             <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-200">
               {eyebrow}
             </div>
-            <h1 className="mt-2 font-display text-4xl tracking-tight md:text-5xl">{title}</h1>
-            <p className="mt-3 text-sm leading-6 text-slate-200 md:text-base">{description}</p>
+            <h1
+              className={`mt-2 font-display tracking-tight ${
+                compact ? "text-3xl md:text-4xl" : "text-4xl md:text-5xl"
+              }`}
+            >
+              {title}
+            </h1>
+            <p
+              className={`text-slate-200 ${compact ? "mt-2 text-sm leading-6" : "mt-3 text-sm leading-6 md:text-base"}`}
+            >
+              {description}
+            </p>
           </div>
           <div className="flex max-w-full flex-col items-start gap-3 md:items-end">
-            <div className="flex flex-wrap items-center gap-3">
+            <div className={`flex flex-wrap items-center ${compact ? "gap-2" : "gap-3"}`}>
               {NAV_ITEMS.map((item) =>
                 item.id === activeScreen ? (
                   <div
                     key={item.id}
-                    className="rounded-full border border-white/20 bg-white px-4 py-2 text-sm font-semibold text-slate-900"
+                    className={`rounded-full border border-white/20 bg-white font-semibold text-slate-900 ${
+                      compact ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm"
+                    }`}
                   >
                     {item.label}
                   </div>
@@ -64,7 +90,9 @@ export default function ScreenHeader({
                   <Link
                     key={item.id}
                     href={item.href}
-                    className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
+                    className={`rounded-full border border-white/20 bg-white/10 font-semibold text-white transition hover:bg-white/15 ${
+                      compact ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm"
+                    }`}
                   >
                     {item.label}
                   </Link>

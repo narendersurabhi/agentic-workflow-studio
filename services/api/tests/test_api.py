@@ -3502,7 +3502,7 @@ def test_preflight_plan_endpoint_rejects_tool_intent_mismatch():
                     "intent": "io",
                     "deps": [],
                     "tool_requests": ["llm.text.generate"],
-                    "tool_inputs": {"llm.text.generate": {"text": "hello"}},
+                    "tool_inputs": {"llm.text.generate": {"prompt": "hello"}},
                     "critic_required": False,
                 }
             ],
@@ -3624,7 +3624,7 @@ def test_preflight_plan_endpoint_returns_intent_segment_slot_diagnostics() -> No
                     "intent": "generate",
                     "deps": [],
                     "tool_requests": ["llm.text.generate"],
-                    "tool_inputs": {"llm.text.generate": {"text": "hello"}},
+                    "tool_inputs": {"llm.text.generate": {"prompt": "hello"}},
                     "critic_required": False,
                 }
             ],
@@ -3676,7 +3676,7 @@ def test_preflight_plan_endpoint_accepts_normalized_envelope_without_legacy_grap
                     "intent": "generate",
                     "deps": [],
                     "tool_requests": ["llm.text.generate"],
-                    "tool_inputs": {"llm.text.generate": {"text": "hello"}},
+                    "tool_inputs": {"llm.text.generate": {"prompt": "hello"}},
                     "critic_required": False,
                 }
             ],
@@ -3732,7 +3732,7 @@ def test_preflight_plan_endpoint_accepts_intent_segment_tool_inputs_requirement(
                     "intent": "generate",
                     "deps": [],
                     "tool_requests": ["llm.text.generate"],
-                    "tool_inputs": {"llm.text.generate": {"text": "implement it"}},
+                    "tool_inputs": {"llm.text.generate": {"prompt": "implement it"}},
                     "critic_required": False,
                 }
             ],
@@ -5429,7 +5429,7 @@ def test_plan_preflight_ignores_non_matching_intent_segments_when_suggested_capa
     assert errors == {}
 
 
-def test_plan_preflight_uses_task_instruction_for_intent_segment_contract() -> None:
+def test_plan_preflight_accepts_explicit_prompt_for_llm_text_generate() -> None:
     plan = models.PlanCreate(
         planner_version="test",
         tasks_summary="abort if missing",
@@ -5463,7 +5463,14 @@ def test_plan_preflight_uses_task_instruction_for_intent_segment_contract() -> N
                 intent=models.ToolIntent.generate,
                 deps=["VerifyRepoExists"],
                 tool_requests=["llm.text.generate"],
-                tool_inputs={},
+                tool_inputs={
+                    "llm.text.generate": {
+                        "prompt": (
+                            "Inspect the VerifyRepoExists output; if the repository is not found, "
+                            "mark the plan aborted and stop execution."
+                        )
+                    }
+                },
                 critic_required=True,
             ),
         ],

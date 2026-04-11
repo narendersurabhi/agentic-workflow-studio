@@ -289,7 +289,7 @@ def build_llm_prompt(request: planner_contracts.PlanRequest) -> str:
         '      "intent": "generate",\n'
         '      "deps": [],\n'
         '      "capability_requests": ["llm.text.generate"],\n'
-        '      "tool_inputs": {"llm.text.generate": {"text": "..."}},\n'
+        '      "tool_inputs": {"llm.text.generate": {"prompt": "..."}},\n'
         '      "critic_required": false\n'
         "    }\n"
         "  ]\n"
@@ -750,12 +750,6 @@ def build_capability_validation_payload(
     payload.setdefault("tool_inputs", dict(raw_tool_inputs))
     if "instruction" not in payload and isinstance(task.instruction, str) and task.instruction.strip():
         payload["instruction"] = task.instruction.strip()
-    if request_id == "llm.text.generate":
-        has_text = isinstance(payload.get("text"), str) and bool(payload.get("text").strip())
-        has_prompt = isinstance(payload.get("prompt"), str) and bool(payload.get("prompt").strip())
-        instruction = payload.get("instruction")
-        if not has_text and not has_prompt and isinstance(instruction, str) and instruction.strip():
-            payload["prompt"] = instruction.strip()
     if task.deps:
         for key, default_value in dependency_fill_defaults().items():
             payload.setdefault(key, default_value)

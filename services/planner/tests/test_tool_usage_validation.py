@@ -731,7 +731,7 @@ def test_validate_plan_accepts_memory_backed_contract_branch() -> None:
 def test_validate_plan_rejects_tool_intent_mismatch() -> None:
     plan = _plan_with_task(
         "llm.text.generate",
-        {"text": "hello"},
+        {"prompt": "hello"},
         intent=models.ToolIntent.io,
     )
     tool = _tool(
@@ -749,6 +749,23 @@ def test_validate_plan_rejects_tool_intent_mismatch() -> None:
         "capability_intent_invalid:llm.text.generate:task-1:"
         "task_intent_mismatch:llm.text.generate:io"
     )
+
+
+def test_validate_plan_rejects_text_input_for_llm_text_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAPABILITY_MODE", "enabled")
+    monkeypatch.delenv("CAPABILITY_REGISTRY_PATH", raising=False)
+    plan = _plan_with_task(
+        "llm.text.generate",
+        {"text": "hello"},
+        intent=models.ToolIntent.generate,
+    )
+
+    valid, reason = _validate_plan(plan, [], _job())
+
+    assert not valid
+    assert reason.startswith("capability_inputs_invalid:llm.text.generate:task-1:")
 
 
 def test_validate_plan_rejects_missing_intent_segment_must_have_inputs() -> None:
@@ -782,7 +799,7 @@ def test_validate_plan_rejects_missing_intent_segment_must_have_inputs() -> None
     )
 
 
-def test_validate_plan_uses_task_instruction_for_llm_generate_intent_contract() -> None:
+def test_validate_plan_requires_explicit_prompt_for_llm_text_generate() -> None:
     plan = models.PlanCreate(
         planner_version="1",
         tasks_summary="stop branch",
@@ -820,7 +837,8 @@ def test_validate_plan_uses_task_instruction_for_llm_generate_intent_contract() 
         }
     )
     valid, reason = _validate_plan(plan, [tool], job)
-    assert valid, reason
+    assert not valid
+    assert reason.startswith("capability_inputs_invalid:llm.text.generate:StopIfRepoMissing:")
 
 
 def test_validate_plan_accepts_capability_when_segment_requires_tool_inputs(
@@ -935,6 +953,28 @@ def test_validate_plan_accepts_enabled_capability_with_valid_inputs(
     monkeypatch.setenv("CAPABILITY_REGISTRY_PATH", str(capability_registry_path))
     plan = _plan_with_task("github.repo.list", {"query": "agentic"})
     valid, reason = _validate_plan(plan, [], _job())
+    assert valid, reason
+
+
+def test_validate_plan_accepts_contextual_inputs_for_llm_text_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAPABILITY_MODE", "enabled")
+    monkeypatch.delenv("CAPABILITY_REGISTRY_PATH", raising=False)
+    plan = _plan_with_task(
+        "llm.text.generate",
+        {
+            "prompt": "Summarize the release status",
+            "context": {"repo": "demo", "branch": "main"},
+            "system_prompt": "Be concise.",
+            "temperature": 0.2,
+            "max_output_tokens": 256,
+        },
+        intent=models.ToolIntent.generate,
+    )
+
+    valid, reason = _validate_plan(plan, [], _job())
+
     assert valid, reason
 
 

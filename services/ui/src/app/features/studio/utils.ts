@@ -208,7 +208,7 @@ export const inferCapabilityOutputPath = (capabilityId: string) => {
     return "result";
   }
   if (capabilityId.includes("llm.text.generate")) {
-    return "text";
+    return "prompt";
   }
   return "result";
 };
@@ -287,7 +287,7 @@ export const outputPathSuggestionsForCapability = (
     add("data");
   }
   if (normalized.includes("llm.text.generate")) {
-    add("text");
+    add("prompt");
   }
   return [...candidates];
 };

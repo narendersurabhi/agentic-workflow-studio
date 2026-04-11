@@ -3348,6 +3348,75 @@ def test_chat_boundary_coerces_non_pending_meta_clarification_back_to_execution(
     assert calls["router"] == 1
 
 
+def test_chat_boundary_missing_document_output_format_cannot_fall_back_to_respond(
+    monkeypatch,
+) -> None:
+    calls = {"router": 0}
+
+    class _Router:
+        def generate_request_json_object(self, request):
+            calls["router"] += 1
+            return {
+                "route": "respond",
+                "assistant_response": (
+                    "# Deployment of ML Workflows on Kubernetes\n\n"
+                    "This should not be returned inline yet."
+                ),
+                "intent": "generate",
+                "risk_level": "read_only",
+                "confidence": 0.95,
+                "output_format": "plain_text",
+            }
+
+    class _Responder:
+        def generate_request_json_object(self, request):
+            payload = json.loads(request.prompt)
+            evidence = payload["boundary_evidence"]
+            assert evidence["pending_clarification"] is False
+            assert evidence["needs_clarification"] is True
+            assert evidence["missing_inputs"] == ["output_format"]
+            return {
+                "decision": "continue_pending",
+                "assistant_response": "What output format do you need, such as DOCX or PDF?",
+                "reason_code": "missing_required_input_output_format_for_document_generation",
+            }
+
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODE", "answer_or_handoff")
+    monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    monkeypatch.setattr(main, "_chat_response_provider", _Responder())
+
+    session = client.post("/chat/sessions", json={}).json()
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={
+            "content": "create a document on Deployment of ML workflows on Kubernetes.",
+            "context_json": {},
+            "priority": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"] is None
+    assert body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert body["assistant_message"]["metadata"]["boundary_decision"]["decision"] == "continue_pending"
+    assert (
+        body["assistant_message"]["metadata"]["boundary_decision"]["reason_code"]
+        == "missing_required_input_output_format_for_document_generation"
+    )
+    assert body["assistant_message"]["action"]["goal_intent_profile"]["missing_slots"] == [
+        "output_format"
+    ]
+    assert "output_format" not in body["assistant_message"]["action"]["goal_intent_profile"][
+        "slot_values"
+    ]
+    assert body["session"]["metadata"]["pending_clarification"]["original_goal"] == (
+        "create a document on Deployment of ML workflows on Kubernetes."
+    )
+    assert calls["router"] == 1
+
+
 def test_chat_route_goal_intent_profile_uses_minimal_pre_submit_slots(monkeypatch) -> None:
     monkeypatch.setattr(
         main,

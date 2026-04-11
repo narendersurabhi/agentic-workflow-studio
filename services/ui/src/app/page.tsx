@@ -14,6 +14,10 @@ import { ThinkingState } from "./components/chat/ThinkingState";
 import FeedbackControl from "./components/feedback/FeedbackControl";
 import FeedbackInsightsPanel from "./components/feedback/FeedbackInsightsPanel";
 import {
+  WorkflowNodeSvgIcon,
+  resolveWorkflowNodeVisual,
+} from "./components/workflow/WorkflowNodeIcon";
+import {
   CHAT_FEEDBACK_REASONS,
   INTENT_FEEDBACK_REASONS,
   OUTCOME_FEEDBACK_REASONS,
@@ -604,7 +608,7 @@ const outputPathSuggestionsForCapability = (
     add("data");
   }
   if (normalized.includes("llm.text.generate")) {
-    add("text");
+    add("prompt");
   }
   return [...candidates];
 };
@@ -1401,7 +1405,7 @@ const inferCapabilityOutputPath = (capabilityId: string) => {
     return "result";
   }
   if (capabilityId.includes("llm.text.generate")) {
-    return "text";
+    return "prompt";
   }
   return "result";
 };
@@ -1870,6 +1874,7 @@ type DagNode = {
   id: string;
   name: string;
   status: string;
+  toolRequests?: string[];
   x: number;
   y: number;
 };
@@ -1971,6 +1976,7 @@ const buildDagLayout = (tasks: Task[]): DagLayout => {
         id: task.id,
         name: task.name,
         status: task.status,
+        toolRequests: task.tool_requests,
         x: depth * (nodeWidth + columnGap),
         y: index * (nodeHeight + rowGap)
       });
@@ -9891,6 +9897,10 @@ const openTemplateModal = (template: Template) => {
                       })}
                       {dag.nodes.map((node) => {
                         const colors = statusColors[node.status] || statusColors.pending;
+                        const visual = resolveWorkflowNodeVisual({
+                          taskName: node.name,
+                          toolRequests: node.toolRequests,
+                        });
                         return (
                           <g key={node.id} transform={`translate(${node.x}, ${node.y})`}>
                             <rect
@@ -9901,10 +9911,11 @@ const openTemplateModal = (template: Template) => {
                               stroke={colors.stroke}
                               strokeWidth="1.5"
                             />
-                            <text x="12" y="22" fontSize="12" fill="#0f172a">
-                              {truncate(node.name, 20)}
+                            <WorkflowNodeSvgIcon visual={visual} x={28} y={28} size={30} />
+                            <text x="52" y="22" fontSize="12" fill="#0f172a">
+                              {truncate(node.name, 16)}
                             </text>
-                            <text x="12" y="40" fontSize="11" fill="#475569">
+                            <text x="52" y="40" fontSize="11" fill="#475569">
                               {node.status}
                             </text>
                           </g>

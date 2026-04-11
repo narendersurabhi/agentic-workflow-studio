@@ -3158,14 +3158,19 @@ def _route_chat_turn(
         chat_contracts.ChatBoundaryDecisionType.execution_request,
         chat_contracts.ChatBoundaryDecisionType.continue_pending,
     }:
-        return _attach_chat_boundary_decision(
-            _route_chat_turn_with_router(
+        router_turn_plan = _enforce_boundary_clarification_guard(
+            turn_plan=_route_chat_turn_with_router(
                 content=content,
                 candidate_goal=candidate_goal,
                 session_metadata=session_metadata,
                 merged_context=merged_context,
                 messages=messages,
             ),
+            boundary=boundary,
+            candidate_goal=candidate_goal,
+        )
+        return _attach_chat_boundary_decision(
+            router_turn_plan,
             boundary,
         )
     return _chat_boundary_failure_response(
@@ -3184,6 +3189,65 @@ def _attach_chat_boundary_decision(
     enriched = dict(turn_plan)
     enriched["boundary_decision"] = boundary.model_dump(mode="json", exclude_none=True)
     return enriched
+
+
+def _enforce_boundary_clarification_guard(
+    *,
+    turn_plan: Mapping[str, Any],
+    boundary: chat_contracts.ChatBoundaryDecision | None,
+    candidate_goal: str,
+) -> dict[str, Any]:
+    finalized = dict(turn_plan)
+    if boundary is None:
+        return finalized
+    route_type = str(finalized.get("type") or "").strip().lower()
+    evidence = boundary.evidence
+    if route_type != "respond" or evidence is None or not evidence.needs_clarification:
+        return finalized
+
+    missing_inputs = [
+        intent_contract.normalize_required_input_key(slot_name)
+        for slot_name in evidence.missing_inputs
+        if intent_contract.normalize_required_input_key(slot_name)
+    ]
+    if not missing_inputs:
+        return finalized
+
+    questions: list[str] = []
+    if isinstance(boundary.assistant_response, str) and boundary.assistant_response.strip():
+        questions.append(boundary.assistant_response.strip())
+    for slot_name in missing_inputs:
+        question = _slot_question(slot_name, candidate_goal).strip()
+        if question and question not in questions:
+            questions.append(question)
+
+    assessment = (
+        dict(finalized.get("goal_intent_profile"))
+        if isinstance(finalized.get("goal_intent_profile"), Mapping)
+        else {}
+    )
+    slot_values = (
+        dict(assessment.get("slot_values"))
+        if isinstance(assessment.get("slot_values"), Mapping)
+        else {}
+    )
+    for slot_name in missing_inputs:
+        slot_values.pop(slot_name, None)
+    assessment["slot_values"] = slot_values
+    assessment["needs_clarification"] = True
+    assessment["requires_blocking_clarification"] = True
+    assessment["blocking_slots"] = missing_inputs
+    assessment["missing_slots"] = missing_inputs
+    assessment["questions"] = questions
+
+    return {
+        "type": "ask_clarification",
+        "assistant_content": "\n".join(questions) if questions else boundary.assistant_response or "",
+        "clarification_questions": questions,
+        "goal_intent_profile": assessment,
+        "resolved_goal": str(finalized.get("resolved_goal") or candidate_goal or "").strip(),
+        "normalized_intent_envelope": finalized.get("normalized_intent_envelope") or {},
+    }
 
 
 def _route_chat_turn_legacy(
@@ -6080,7 +6144,7 @@ def _infer_capability_output_path(capability_id: str) -> str:
     if "json.transform" in normalized:
         return "result"
     if "llm.text.generate" in normalized:
-        return "text"
+        return "prompt"
     return "result"
 
 

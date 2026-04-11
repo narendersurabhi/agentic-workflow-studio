@@ -83,6 +83,7 @@ def register_llm_contextual_text_tool(
                         "max_output_tokens": {"type": "integer", "minimum": 1, "maximum": 16384},
                     },
                     "required": ["prompt"],
+                    "not": {"required": ["text"]},
                 },
                 output_schema={
                     "type": "object",
@@ -280,5 +281,4 @@ def register_coding_agent_tools(
                 handler=handler_publish_pr,
             )
         )
-
 

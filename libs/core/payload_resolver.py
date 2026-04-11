@@ -98,8 +98,7 @@ def resolve_tool_payload(
     payload = _promote_document_job_fields(payload, tool_name=tool_name)
     payload = _canonicalize_render_path_aliases(payload, tool_name=tool_name)
     if tool_name == "llm_generate_with_context":
-        base_prompt = payload.get("prompt") or payload.get("text") or instruction
-        normalized: dict[str, Any] = {"prompt": str(base_prompt or "")}
+        normalized: dict[str, Any] = {"prompt": str(payload.get("prompt") or "")}
         if "context" in payload:
             normalized["context"] = payload.get("context")
         elif context:

@@ -1189,41 +1189,22 @@ capabilities:
         arg_map: {}
         enabled: true
   - id: llm.text.generate
-    description: Generate free-form text with the configured LLM.
+    description: Generate free-form text from a prompt with optional context and generation controls.
     risk_tier: read_only
     idempotency: read
     group: llm
     subgroup: text
     input_schema_ref: llm_text_generate_capability_input
-    output_schema_ref: ""
+    output_schema_ref: llm_text_generate_capability_output
     tags:
       - llm
       - text
-      - generation
-      - high_cost
-    planner_hints:
-      task_intents: [generate]
-    enabled: true
-    adapters:
-      - type: tool
-        server_id: local_worker
-        tool_name: llm_generate
-        arg_map: {}
-        enabled: true
-  - id: llm.prompt.generate
-    description: Generate free-form text from an explicit prompt and context payload.
-    risk_tier: read_only
-    idempotency: read
-    group: llm
-    subgroup: prompt
-    input_schema_ref: llm_prompt_generate_capability_input
-    output_schema_ref: llm_prompt_generate_capability_output
-    tags:
-      - llm
       - prompt
       - context
       - generation
       - high_cost
+    planner_hints:
+      task_intents: [generate]
     enabled: true
     adapters:
       - type: tool

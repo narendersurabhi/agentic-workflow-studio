@@ -1329,7 +1329,7 @@ def _llm_generate(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, A
 
 
 def _llm_generate_with_context(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:
-    prompt = str(payload.get("prompt") or payload.get("text") or "").strip()
+    prompt = str(payload.get("prompt") or "").strip()
     if not prompt:
         raise ToolExecutionError("missing_prompt")
     context_value = payload.get("context")
