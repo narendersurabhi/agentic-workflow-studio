@@ -1,11 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import ScreenHeader, {
-  screenHeaderPrimaryActionClassName,
-  screenHeaderSecondaryActionClassName,
-} from "../../components/ScreenHeader";
+import ScreenHeader from "../../components/ScreenHeader";
+import StudioWorkbenchIcon from "../studio/StudioWorkbenchIcon";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
 const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
@@ -121,12 +120,12 @@ function RagModeButton({
       onClick={onClick}
       className={`rounded-2xl border px-4 py-3 text-left transition ${
         active
-          ? "border-slate-900 bg-slate-900 text-white shadow-lg"
-          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+          ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+          : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
       }`}
     >
       <div className="text-sm font-semibold">{label}</div>
-      <div className={`mt-1 text-xs leading-5 ${active ? "text-slate-200" : "text-slate-500"}`}>
+      <div className={`mt-1 text-xs leading-5 ${active ? "text-sky-100/78" : "text-slate-300/68"}`}>
         {description}
       </div>
     </button>
@@ -483,20 +482,27 @@ export default function RagKnowledgeScreen() {
   };
 
   return (
-    <main className="relative">
-      <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
-      <div className="pointer-events-none absolute top-48 -left-16 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl animate-float-soft" />
-      <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-        <ScreenHeader
-          eyebrow="Agentic Workflow Studio"
-          title="RAG Knowledge Base"
-          description="Index markdown, text, workspace files, and directories into the vector store. Browse indexed documents, inspect stored chunks, replace stale content, and remove documents cleanly."
-          activeScreen="rag"
-          actions={
-            <>
+    <div className="-mx-6 -my-8 min-h-screen bg-[#56697c] text-white">
+      <div className="min-h-screen bg-[linear-gradient(180deg,#435365_0px,#435365_78px,#55697c_78px,#55697c_100%)]">
+        <header className="border-b border-white/10 bg-[linear-gradient(180deg,rgba(67,83,101,0.98),rgba(60,74,90,0.98))] px-6 py-3 shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="truncate text-[22px] font-semibold tracking-[-0.03em] text-white">
+                RAG Knowledge Base
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200/78">
+                <Link href="/project" className="transition hover:text-white">
+                  Project
+                </Link>
+                <span className="text-white/35">›</span>
+                <span className="text-white/95">RAG</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                className={screenHeaderSecondaryActionClassName}
+                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => void refreshDocuments()}
                 disabled={documentsLoading}
               >
@@ -504,7 +510,73 @@ export default function RagKnowledgeScreen() {
               </button>
               <button
                 type="button"
-                className={screenHeaderPrimaryActionClassName}
+                className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => void submitIndex()}
+                disabled={indexing}
+              >
+                {indexing ? "Indexing..." : "Index Now"}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div className="grid min-h-[calc(100vh-78px)] grid-cols-[52px_minmax(0,1fr)]">
+          <aside className="border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] px-1.5 py-3">
+            <div className="flex h-full flex-col items-center justify-between">
+              <div className="space-y-3">
+                {[
+                  { href: "/project", label: "Project", icon: "menu" as const },
+                  { href: "/studio", label: "Studio", icon: "graph" as const },
+                  { href: "/memory", label: "Memory", icon: "inspect" as const },
+                  { href: "/rag", label: "RAG", icon: "library" as const, active: true },
+                ].map((item) => (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    title={item.label}
+                    aria-label={item.label}
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl border transition ${
+                      item.active
+                        ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                        : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
+                    }`}
+                  >
+                    <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
+                  </Link>
+                ))}
+              </div>
+
+              <Link
+                href="/rag"
+                title="Open RAG"
+                aria-label="Open RAG"
+                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-slate-950/18 text-slate-100 transition hover:border-white/18 hover:bg-slate-950/26"
+              >
+                <StudioWorkbenchIcon kind="run" className="h-5 w-5" />
+              </Link>
+            </div>
+          </aside>
+
+          <main className="min-w-0 overflow-auto px-4 py-4">
+        <ScreenHeader
+          eyebrow="Agentic Workflow Studio"
+          title="RAG Knowledge Base"
+          description="Index markdown, text, workspace files, and directories into the vector store. Browse indexed documents, inspect stored chunks, replace stale content, and remove documents cleanly."
+          activeScreen="rag"
+          theme="studio"
+          actions={
+            <>
+              <button
+                type="button"
+                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => void refreshDocuments()}
+                disabled={documentsLoading}
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => void submitIndex()}
                 disabled={indexing}
               >
@@ -519,7 +591,7 @@ export default function RagKnowledgeScreen() {
               <input
                 value={collectionName}
                 onChange={(event) => setCollectionName(event.target.value)}
-                className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-white placeholder:text-slate-300 focus:border-white/40 focus:outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                 placeholder="rag_default"
               />
             </label>
@@ -528,7 +600,7 @@ export default function RagKnowledgeScreen() {
               <input
                 value={namespace}
                 onChange={(event) => setNamespace(event.target.value)}
-                className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-white placeholder:text-slate-300 focus:border-white/40 focus:outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                 placeholder="docs"
               />
             </label>
@@ -537,7 +609,7 @@ export default function RagKnowledgeScreen() {
               <input
                 value={userId}
                 onChange={(event) => setUserId(event.target.value)}
-                className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-white placeholder:text-slate-300 focus:border-white/40 focus:outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                 placeholder="default-user"
               />
             </label>
@@ -546,7 +618,7 @@ export default function RagKnowledgeScreen() {
               <input
                 value={workspaceId}
                 onChange={(event) => setWorkspaceId(event.target.value)}
-                className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-white placeholder:text-slate-300 focus:border-white/40 focus:outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                 placeholder="optional"
               />
             </label>
@@ -555,7 +627,7 @@ export default function RagKnowledgeScreen() {
               <input
                 value={tenantId}
                 onChange={(event) => setTenantId(event.target.value)}
-                className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-white placeholder:text-slate-300 focus:border-white/40 focus:outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                 placeholder="optional"
               />
             </label>
@@ -565,12 +637,12 @@ export default function RagKnowledgeScreen() {
                 <input
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-white placeholder:text-slate-300 focus:border-white/40 focus:outline-none"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                   placeholder="document, source, metadata..."
                 />
                 <button
                   type="button"
-                  className={screenHeaderSecondaryActionClassName}
+                  className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
                   onClick={() => void refreshDocuments()}
                 >
                   Go
@@ -582,7 +654,7 @@ export default function RagKnowledgeScreen() {
             {scopeSummary.map((item) => (
               <div
                 key={item}
-                className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-semibold text-slate-100"
+                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-slate-100"
               >
                 {item}
               </div>
@@ -591,21 +663,21 @@ export default function RagKnowledgeScreen() {
         </ScreenHeader>
 
         <div className="mt-8 grid gap-6 xl:grid-cols-[1.2fr,1fr,1fr]">
-          <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
+          <section className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-6 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100/68">
                   Index New
                 </div>
-                <h2 className="mt-2 font-display text-3xl text-slate-950">Manual Indexing</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
+                <h2 className="mt-2 font-display text-3xl text-white">Manual Indexing</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300/78">
                   Choose a source mode, attach scope, then index new content or replace the currently
                   selected document.
                 </p>
               </div>
               <button
                 type="button"
-                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-white/16 hover:bg-white/[0.08]"
                 onClick={clearForm}
               >
                 Clear Form
@@ -625,57 +697,57 @@ export default function RagKnowledgeScreen() {
             </div>
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <label className="space-y-2 text-sm text-slate-700">
-                <span className="font-semibold text-slate-900">Document ID</span>
+              <label className="space-y-2 text-sm text-slate-200">
+                <span className="font-semibold text-white">Document ID</span>
                 <input
                   value={documentIdInput}
                   onChange={(event) => setDocumentIdInput(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                   placeholder="docs/user-guide.md"
                 />
               </label>
-              <label className="space-y-2 text-sm text-slate-700">
-                <span className="font-semibold text-slate-900">Source URI</span>
+              <label className="space-y-2 text-sm text-slate-200">
+                <span className="font-semibold text-white">Source URI</span>
                 <input
                   value={sourceUriInput}
                   onChange={(event) => setSourceUriInput(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                   placeholder="docs/user-guide.md"
                 />
               </label>
             </div>
 
             {indexMode === "markdown" ? (
-              <label className="mt-4 block space-y-2 text-sm text-slate-700">
-                <span className="font-semibold text-slate-900">Markdown Content</span>
+              <label className="mt-4 block space-y-2 text-sm text-slate-200">
+                <span className="font-semibold text-white">Markdown Content</span>
                 <textarea
                   value={markdownText}
                   onChange={(event) => setMarkdownText(event.target.value)}
-                  className="h-64 w-full rounded-3xl border border-slate-200 px-4 py-4 font-mono text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+                  className="h-64 w-full rounded-3xl border border-white/10 bg-slate-950/18 px-4 py-4 font-mono text-sm text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                   placeholder="# User Guide&#10;&#10;Paste markdown content here."
                 />
               </label>
             ) : null}
 
             {indexMode === "text" ? (
-              <label className="mt-4 block space-y-2 text-sm text-slate-700">
-                <span className="font-semibold text-slate-900">Plain Text</span>
+              <label className="mt-4 block space-y-2 text-sm text-slate-200">
+                <span className="font-semibold text-white">Plain Text</span>
                 <textarea
                   value={plainText}
                   onChange={(event) => setPlainText(event.target.value)}
-                  className="h-64 w-full rounded-3xl border border-slate-200 px-4 py-4 font-mono text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+                  className="h-64 w-full rounded-3xl border border-white/10 bg-slate-950/18 px-4 py-4 font-mono text-sm text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                   placeholder="Paste plain text content here."
                 />
               </label>
             ) : null}
 
             {indexMode === "workspace_file" ? (
-              <label className="mt-4 block space-y-2 text-sm text-slate-700">
-                <span className="font-semibold text-slate-900">Workspace File Path</span>
+              <label className="mt-4 block space-y-2 text-sm text-slate-200">
+                <span className="font-semibold text-white">Workspace File Path</span>
                 <input
                   value={workspacePath}
                   onChange={(event) => setWorkspacePath(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                   placeholder="docs/rag-playbook.md"
                 />
               </label>
@@ -683,33 +755,33 @@ export default function RagKnowledgeScreen() {
 
             {indexMode === "workspace_directory" ? (
               <div className="mt-4 grid gap-4 md:grid-cols-[1fr,auto]">
-                <label className="space-y-2 text-sm text-slate-700">
-                  <span className="font-semibold text-slate-900">Workspace Directory</span>
+                <label className="space-y-2 text-sm text-slate-200">
+                  <span className="font-semibold text-white">Workspace Directory</span>
                   <input
                     value={directoryPath}
                     onChange={(event) => setDirectoryPath(event.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
                     placeholder="docs"
                   />
                 </label>
-                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800">
+                <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-sm font-semibold text-slate-100">
                   <input
                     type="checkbox"
                     checked={recursiveDirectory}
                     onChange={(event) => setRecursiveDirectory(event.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300"
+                    className="h-4 w-4 rounded border-white/20"
                   />
                   Recursive
                 </label>
               </div>
             ) : null}
 
-            <label className="mt-4 block space-y-2 text-sm text-slate-700">
-              <span className="font-semibold text-slate-900">Metadata JSON</span>
+            <label className="mt-4 block space-y-2 text-sm text-slate-200">
+              <span className="font-semibold text-white">Metadata JSON</span>
               <textarea
                 value={metadataText}
                 onChange={(event) => setMetadataText(event.target.value)}
-                className="h-44 w-full rounded-3xl border border-slate-200 px-4 py-4 font-mono text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+                className="h-44 w-full rounded-3xl border border-white/10 bg-slate-950/18 px-4 py-4 font-mono text-sm text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none"
               />
             </label>
 
@@ -727,7 +799,7 @@ export default function RagKnowledgeScreen() {
             <div className="mt-6 flex flex-wrap gap-3">
               <button
                 type="button"
-                className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-full border border-slate-200/18 bg-slate-950/25 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => void submitIndex()}
                 disabled={indexing}
               >
@@ -735,7 +807,7 @@ export default function RagKnowledgeScreen() {
               </button>
               <button
                 type="button"
-                className="rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-full border border-white/10 bg-white/[0.05] px-5 py-3 text-sm font-semibold text-slate-100 transition hover:border-white/16 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => void replaceSelectedDocument()}
                 disabled={replacing || !selectedDocumentId}
               >
@@ -744,23 +816,23 @@ export default function RagKnowledgeScreen() {
             </div>
           </section>
 
-          <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
+          <section className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-6 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100/68">
                   Documents
                 </div>
-                <h2 className="mt-2 font-display text-3xl text-slate-950">Indexed Inventory</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
+                <h2 className="mt-2 font-display text-3xl text-white">Indexed Inventory</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300/78">
                   Review indexed documents in the active scope, then open one to inspect its stored
                   chunks.
                 </p>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-right">
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+              <div className="rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-right">
+                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-300/68">
                   Loaded
                 </div>
-                <div className="mt-1 text-xl font-semibold text-slate-950">{documents.length}</div>
+                <div className="mt-1 text-xl font-semibold text-white">{documents.length}</div>
               </div>
             </div>
 
@@ -772,11 +844,11 @@ export default function RagKnowledgeScreen() {
 
             <div className="mt-6 space-y-3">
               {documentsLoading ? (
-                <div className="rounded-3xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
+                <div className="rounded-3xl border border-dashed border-white/12 bg-slate-950/18 px-4 py-12 text-center text-sm text-slate-300/74">
                   Loading indexed documents...
                 </div>
               ) : documents.length === 0 ? (
-                <div className="rounded-3xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
+                <div className="rounded-3xl border border-dashed border-white/12 bg-slate-950/18 px-4 py-12 text-center text-sm text-slate-300/74">
                   No indexed documents match the current scope.
                 </div>
               ) : (
@@ -792,8 +864,8 @@ export default function RagKnowledgeScreen() {
                       }}
                       className={`w-full rounded-3xl border p-4 text-left transition ${
                         selected
-                          ? "border-slate-900 bg-slate-950 text-white shadow-lg"
-                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                          ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                          : "border-white/10 bg-slate-950/18 text-slate-100 hover:border-white/16 hover:bg-slate-950/26"
                       }`}
                     >
                       <div className="flex items-start justify-between gap-4">
@@ -803,7 +875,7 @@ export default function RagKnowledgeScreen() {
                           </div>
                           <div
                             className={`mt-1 truncate text-sm ${
-                              selected ? "text-slate-300" : "text-slate-500"
+                              selected ? "text-sky-100/78" : "text-slate-300/68"
                             }`}
                           >
                             {document.source_uri}
@@ -813,7 +885,7 @@ export default function RagKnowledgeScreen() {
                           className={`rounded-full px-3 py-1 text-xs font-semibold ${
                             selected
                               ? "bg-white/15 text-white"
-                              : "bg-slate-100 text-slate-700"
+                              : "bg-white/[0.05] text-slate-200"
                           }`}
                         >
                           {document.chunk_count} chunks
@@ -824,8 +896,8 @@ export default function RagKnowledgeScreen() {
                           <div
                             className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
                               selected
-                                ? "bg-white/10 text-slate-200"
-                                : "bg-slate-100 text-slate-600"
+                                ? "bg-white/10 text-slate-100"
+                                : "bg-white/[0.05] text-slate-200"
                             }`}
                           >
                             {document.namespace}
@@ -835,8 +907,8 @@ export default function RagKnowledgeScreen() {
                           <div
                             className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
                               selected
-                                ? "bg-white/10 text-slate-200"
-                                : "bg-slate-100 text-slate-600"
+                                ? "bg-white/10 text-slate-100"
+                                : "bg-white/[0.05] text-slate-200"
                             }`}
                           >
                             {document.chunking_strategy}
@@ -846,8 +918,8 @@ export default function RagKnowledgeScreen() {
                           <div
                             className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
                               selected
-                                ? "bg-white/10 text-slate-200"
-                                : "bg-slate-100 text-slate-600"
+                                ? "bg-white/10 text-slate-100"
+                                : "bg-white/[0.05] text-slate-200"
                             }`}
                           >
                             {document.content_type}
@@ -856,7 +928,7 @@ export default function RagKnowledgeScreen() {
                       </div>
                       <div
                         className={`mt-4 text-xs ${
-                          selected ? "text-slate-300" : "text-slate-500"
+                          selected ? "text-sky-100/78" : "text-slate-300/68"
                         }`}
                       >
                         Indexed {formatTimestamp(document.indexed_at)}
@@ -868,21 +940,21 @@ export default function RagKnowledgeScreen() {
             </div>
           </section>
 
-          <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
+          <section className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-6 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100/68">
                   Inspector
                 </div>
-                <h2 className="mt-2 font-display text-3xl text-slate-950">Document Details</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
+                <h2 className="mt-2 font-display text-3xl text-white">Document Details</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300/78">
                   Inspect document metadata and chunk payloads before you rerank or generate against
                   them.
                 </p>
               </div>
               <button
                 type="button"
-                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-white/16 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => selectedDocumentId && void loadDocumentChunks(selectedDocumentId)}
                 disabled={!selectedDocumentId || chunksLoading}
               >
@@ -897,44 +969,44 @@ export default function RagKnowledgeScreen() {
             ) : null}
 
             {!selectedDocument ? (
-              <div className="mt-6 rounded-3xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
+              <div className="mt-6 rounded-3xl border border-dashed border-white/12 bg-slate-950/18 px-4 py-12 text-center text-sm text-slate-300/74">
                 Select a document to inspect its stored chunks and lifecycle actions.
               </div>
             ) : (
               <>
-                <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-lg font-semibold text-slate-950">
+                <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/18 p-4">
+                  <div className="text-lg font-semibold text-white">
                     {selectedDocument.filename || selectedDocument.document_id}
                   </div>
-                  <div className="mt-2 break-all text-sm text-slate-600">
+                  <div className="mt-2 break-all text-sm text-slate-300/74">
                     {selectedDocument.source_uri}
                   </div>
                   <dl className="mt-4 grid gap-3 text-sm md:grid-cols-2">
                     <div>
-                      <dt className="font-semibold text-slate-900">Document ID</dt>
-                      <dd className="mt-1 break-all text-slate-600">
+                      <dt className="font-semibold text-white">Document ID</dt>
+                      <dd className="mt-1 break-all text-slate-300/74">
                         {selectedDocument.document_id}
                       </dd>
                     </div>
                     <div>
-                      <dt className="font-semibold text-slate-900">Indexed</dt>
-                      <dd className="mt-1 text-slate-600">
+                      <dt className="font-semibold text-white">Indexed</dt>
+                      <dd className="mt-1 text-slate-300/74">
                         {formatTimestamp(selectedDocument.indexed_at)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="font-semibold text-slate-900">Namespace</dt>
-                      <dd className="mt-1 text-slate-600">{selectedDocument.namespace || "—"}</dd>
+                      <dt className="font-semibold text-white">Namespace</dt>
+                      <dd className="mt-1 text-slate-300/74">{selectedDocument.namespace || "—"}</dd>
                     </div>
                     <div>
-                      <dt className="font-semibold text-slate-900">Chunk Count</dt>
-                      <dd className="mt-1 text-slate-600">{selectedDocument.chunk_count}</dd>
+                      <dt className="font-semibold text-white">Chunk Count</dt>
+                      <dd className="mt-1 text-slate-300/74">{selectedDocument.chunk_count}</dd>
                     </div>
                   </dl>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <button
                       type="button"
-                      className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-full border border-rose-300/20 bg-rose-300/10 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:border-rose-300/30 hover:bg-rose-300/14 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => void deleteSelectedDocument()}
                       disabled={deleting}
                     >
@@ -942,7 +1014,7 @@ export default function RagKnowledgeScreen() {
                     </button>
                     <button
                       type="button"
-                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-white/16 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => void replaceSelectedDocument()}
                       disabled={replacing || (indexMode !== "markdown" && indexMode !== "text")}
                     >
@@ -953,29 +1025,29 @@ export default function RagKnowledgeScreen() {
 
                 <div className="mt-6">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-slate-900">Stored Chunks</div>
-                    <div className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                    <div className="text-sm font-semibold text-white">Stored Chunks</div>
+                    <div className="text-xs uppercase tracking-[0.24em] text-slate-300/68">
                       {chunkResponse?.chunks.length ?? 0} loaded
                     </div>
                   </div>
                   <div className="mt-3 space-y-3">
                     {chunksLoading ? (
-                      <div className="rounded-3xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+                      <div className="rounded-3xl border border-dashed border-white/12 bg-slate-950/18 px-4 py-10 text-center text-sm text-slate-300/74">
                         Loading chunks...
                       </div>
                     ) : (
                       chunkResponse?.chunks.map((chunk) => (
                         <article
                           key={chunk.chunk_id}
-                          className="rounded-3xl border border-slate-200 bg-white p-4"
+                          className="rounded-3xl border border-white/10 bg-slate-950/18 p-4"
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-semibold text-slate-900">
+                            <div className="text-sm font-semibold text-white">
                               Chunk {chunk.chunk_index ?? "—"}
                             </div>
-                            <div className="truncate text-xs text-slate-500">{chunk.chunk_id}</div>
+                            <div className="truncate text-xs text-slate-300/68">{chunk.chunk_id}</div>
                           </div>
-                          <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                          <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
                             {chunk.text}
                           </div>
                           {Object.keys(chunk.metadata || {}).length > 0 ? (
@@ -992,7 +1064,9 @@ export default function RagKnowledgeScreen() {
             )}
           </section>
         </div>
+          </main>
+        </div>
       </div>
-    </main>
+    </div>
   );
 }

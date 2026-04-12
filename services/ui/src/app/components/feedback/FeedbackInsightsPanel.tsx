@@ -12,6 +12,7 @@ type FeedbackInsightsPanelProps = {
   loading?: boolean;
   error?: string | null;
   onRefresh?: () => void;
+  theme?: "default" | "studio";
 };
 
 const renderBucketList = (
@@ -62,24 +63,38 @@ export default function FeedbackInsightsPanel({
   summary,
   loading = false,
   error = null,
-  onRefresh
+  onRefresh,
+  theme = "default",
 }: FeedbackInsightsPanelProps) {
+  const isStudioTheme = theme === "studio";
   const total = summary?.total ?? 0;
   const terminalStatuses = summary?.correlates?.terminal_statuses ?? [];
 
   return (
-    <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm animate-fade-up">
+    <section
+      className={`animate-fade-up rounded-2xl p-6 ${
+        isStudioTheme
+          ? "border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+          : "border border-slate-100 bg-white shadow-sm"
+      }`}
+    >
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="font-display text-xl">Feedback Insights</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <h2 className={`font-display text-xl ${isStudioTheme ? "text-white" : "text-slate-900"}`}>
+            Feedback Insights
+          </h2>
+          <p className={`mt-1 text-xs ${isStudioTheme ? "text-slate-300/74" : "text-slate-500"}`}>
             Read-only quality signals from explicit user feedback and linked runtime context.
           </p>
         </div>
         {onRefresh ? (
           <button
             type="button"
-            className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+            className={`rounded-full px-3 py-1 text-xs transition ${
+              isStudioTheme
+                ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                : "border border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900"
+            }`}
             onClick={onRefresh}
           >
             Refresh
@@ -88,13 +103,25 @@ export default function FeedbackInsightsPanel({
       </div>
 
       {loading && !summary ? (
-        <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+        <div
+          className={`mt-4 rounded-xl p-6 text-sm ${
+            isStudioTheme
+              ? "border border-dashed border-white/12 bg-slate-950/18 text-slate-300/74"
+              : "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
+          }`}
+        >
           Loading feedback analytics...
         </div>
       ) : null}
 
       {error ? (
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div
+          className={`mt-4 rounded-xl px-4 py-3 text-sm ${
+            isStudioTheme
+              ? "border border-amber-300/20 bg-amber-300/10 text-amber-100"
+              : "border border-amber-200 bg-amber-50 text-amber-800"
+          }`}
+        >
           {error}
         </div>
       ) : null}

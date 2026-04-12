@@ -797,6 +797,7 @@ type FloatingStudioPanelResizeDirection =
 type FloatingStudioPanelResizeState = {
   id: FloatingStudioPanelId;
   direction: FloatingStudioPanelResizeDirection;
+  mode: StudioPanelMode;
   startX: number;
   startY: number;
   startLeft: number;
@@ -1146,12 +1147,42 @@ const pickFloatingStudioPanelSnapTarget = (
 
 const resizeFloatingStudioPanelLayout = (
   layout: FloatingStudioPanelLayout,
+  panelId: FloatingStudioPanelId,
   resizeState: FloatingStudioPanelResizeState,
   pointerX: number,
   pointerY: number,
   stageWidth: number,
   stageHeight: number
 ): FloatingStudioPanelLayout => {
+  if (layout.mode === "docked") {
+    if (layout.dockZone !== "left" && layout.dockZone !== "right") {
+      return layout;
+    }
+    const padding = FLOATING_STUDIO_PANEL_STAGE_PADDING;
+    const maxSideWidth = Math.max(
+      FLOATING_STUDIO_PANEL_MIN_WIDTH,
+      stageWidth - padding * 2 - 220
+    );
+    const deltaX = pointerX - resizeState.startX;
+    const width = clampNumber(
+      resizeState.startWidth + (layout.dockZone === "left" ? deltaX : -deltaX),
+      FLOATING_STUDIO_PANEL_MIN_WIDTH,
+      maxSideWidth
+    );
+    const defaults = createInitialFloatingStudioPanelLayouts(stageWidth, stageHeight);
+    return clampDockedStudioPanelLayout(
+      {
+        ...layout,
+        width,
+      },
+      layout.dockZone === defaults[panelId].dockZone
+        ? defaults[panelId]
+        : { ...defaults[panelId], dockZone: layout.dockZone },
+      stageWidth,
+      stageHeight
+    );
+  }
+
   const stageMinX = FLOATING_STUDIO_PANEL_STAGE_PADDING;
   const stageMinY = FLOATING_STUDIO_PANEL_STAGE_PADDING;
   const stageMaxX = Math.max(stageMinX, stageWidth - FLOATING_STUDIO_PANEL_STAGE_PADDING);
@@ -2253,10 +2284,39 @@ export default function WorkflowStudio() {
       const stageRect = stage.getBoundingClientRect();
       setFloatingStudioPanels((prev) => {
         const current = prev[floatingStudioPanelResize.id];
+        if (
+          floatingStudioPanelResize.mode === "docked" &&
+          current.mode === "docked" &&
+          (current.dockZone === "left" || current.dockZone === "right")
+        ) {
+          const resizedLayout = resizeFloatingStudioPanelLayout(
+            current,
+            floatingStudioPanelResize.id,
+            floatingStudioPanelResize,
+            event.clientX,
+            event.clientY,
+            stageRect.width,
+            stageRect.height
+          );
+          return FLOATING_STUDIO_PANEL_IDS.reduce<
+            Record<FloatingStudioPanelId, FloatingStudioPanelLayout>
+          >((acc, panelId) => {
+            const panel = prev[panelId];
+            acc[panelId] =
+              panel.mode === "docked" && panel.dockZone === current.dockZone
+                ? {
+                    ...panel,
+                    width: resizedLayout.width,
+                  }
+                : panel;
+            return acc;
+          }, {} as Record<FloatingStudioPanelId, FloatingStudioPanelLayout>);
+        }
         return {
           ...prev,
           [floatingStudioPanelResize.id]: resizeFloatingStudioPanelLayout(
             current,
+            floatingStudioPanelResize.id,
             floatingStudioPanelResize,
             event.clientX,
             event.clientY,
@@ -5574,15 +5634,22 @@ export default function WorkflowStudio() {
   ) => {
     const panel = floatingStudioPanelRefs.current[panelId];
     const layout = floatingStudioPanels[panelId];
-    if (!panel || layout.mode !== "floating") {
+    const canResizeDockedPanel =
+      layout.mode === "docked" &&
+      (layout.dockZone === "left" || layout.dockZone === "right") &&
+      (direction === "e" || direction === "w");
+    if ((layout.mode === "floating" && !panel) || (layout.mode !== "floating" && !canResizeDockedPanel)) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    bringFloatingStudioPanelToFront(panelId);
+    if (layout.mode === "floating") {
+      bringFloatingStudioPanelToFront(panelId);
+    }
     setFloatingStudioPanelResize({
       id: panelId,
       direction,
+      mode: layout.mode,
       startX: event.clientX,
       startY: event.clientY,
       startLeft: layout.x,
@@ -6313,6 +6380,13 @@ export default function WorkflowStudio() {
                         height: leftDockRect.height,
                       }}
                     >
+                      <div
+                        className="absolute inset-y-0 right-0 z-20 w-2 cursor-ew-resize transition hover:bg-white/[0.08]"
+                        onMouseDown={(event) =>
+                          beginFloatingStudioPanelResize(dockedLeftPanelIds[0], "e", event)
+                        }
+                        title="Resize left dock"
+                      />
                       {dockedLeftPanelIds.map((panelId) => (
                         <div
                           key={`docked-left-panel-${panelId}`}
@@ -6337,6 +6411,13 @@ export default function WorkflowStudio() {
                         height: rightDockRect.height,
                       }}
                     >
+                      <div
+                        className="absolute inset-y-0 left-0 z-20 w-2 cursor-ew-resize transition hover:bg-white/[0.08]"
+                        onMouseDown={(event) =>
+                          beginFloatingStudioPanelResize(dockedRightPanelIds[0], "w", event)
+                        }
+                        title="Resize right dock"
+                      />
                       {dockedRightPanelIds.map((panelId) => (
                         <div
                           key={`docked-right-panel-${panelId}`}

@@ -1,11 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import ScreenHeader, {
-  screenHeaderPrimaryActionClassName,
-  screenHeaderSecondaryActionClassName,
-} from "../../components/ScreenHeader";
+import ScreenHeader from "../../components/ScreenHeader";
+import StudioWorkbenchIcon from "../studio/StudioWorkbenchIcon";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
 const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
@@ -271,30 +270,112 @@ export default function GlobalMemoryScreen() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="-mx-6 -my-8 min-h-screen bg-[#56697c] text-white">
+      <div className="min-h-screen bg-[linear-gradient(180deg,#435365_0px,#435365_78px,#55697c_78px,#55697c_100%)]">
+        <header className="border-b border-white/10 bg-[linear-gradient(180deg,rgba(67,83,101,0.98),rgba(60,74,90,0.98))] px-6 py-3 shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="truncate text-[22px] font-semibold tracking-[-0.03em] text-white">
+                Global Memory
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200/78">
+                <Link href="/project" className="transition hover:text-white">
+                  Project
+                </Link>
+                <span className="text-white/35">›</span>
+                <span className="text-white/95">Memory</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={resetEditor}
+                disabled={saving || deleting}
+              >
+                New Entry
+              </button>
+              <button
+                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => void refreshEntries()}
+                disabled={entriesLoading}
+              >
+                {entriesLoading ? "Refreshing..." : "Refresh"}
+              </button>
+              <button
+                className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={saveEntry}
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Save Memory"}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div className="grid min-h-[calc(100vh-78px)] grid-cols-[52px_minmax(0,1fr)]">
+          <aside className="border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] px-1.5 py-3">
+            <div className="flex h-full flex-col items-center justify-between">
+              <div className="space-y-3">
+                {[
+                  { href: "/project", label: "Project", icon: "menu" as const },
+                  { href: "/studio", label: "Studio", icon: "graph" as const },
+                  { href: "/rag", label: "RAG", icon: "library" as const },
+                  { href: "/memory", label: "Memory", icon: "inspect" as const, active: true },
+                ].map((item) => (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    title={item.label}
+                    aria-label={item.label}
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl border transition ${
+                      item.active
+                        ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                        : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
+                    }`}
+                  >
+                    <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
+                  </Link>
+                ))}
+              </div>
+
+              <Link
+                href="/memory"
+                title="Open Memory"
+                aria-label="Open Memory"
+                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-slate-950/18 text-slate-100 transition hover:border-white/18 hover:bg-slate-950/26"
+              >
+                <StudioWorkbenchIcon kind="run" className="h-5 w-5" />
+              </Link>
+            </div>
+          </aside>
+
+          <main className="min-w-0 overflow-auto px-4 py-4">
+            <div className="space-y-6">
       <ScreenHeader
         eyebrow="Global Memory"
         title="Manage user-scoped memory."
         description="View, create, update, and delete stable user memory entries without going through a workflow run."
         activeScreen="memory"
+        theme="studio"
         actions={
           <>
             <button
-              className={screenHeaderSecondaryActionClassName}
+              className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
               onClick={resetEditor}
               disabled={saving || deleting}
             >
               New Entry
             </button>
             <button
-              className={screenHeaderSecondaryActionClassName}
+              className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void refreshEntries()}
               disabled={entriesLoading}
             >
               {entriesLoading ? "Refreshing..." : "Refresh"}
             </button>
             <button
-              className={screenHeaderPrimaryActionClassName}
+              className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
               onClick={saveEntry}
               disabled={saving}
             >
@@ -305,35 +386,35 @@ export default function GlobalMemoryScreen() {
       />
 
       {notice ? (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <div className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-100">
           {notice}
         </div>
       ) : null}
       {editorError ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+        <div className="rounded-2xl border border-rose-300/20 bg-rose-300/10 px-4 py-3 text-sm text-rose-100">
           {editorError}
         </div>
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
             Browser + Scope
           </div>
           <div className="mt-4 space-y-4">
             <label className="block">
-              <div className="text-sm font-medium text-slate-700">User ID</div>
+              <div className="text-sm font-medium text-white">User ID</div>
               <input
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white shadow-sm outline-none transition placeholder:text-slate-400/70 focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/20"
                 value={userId}
                 onChange={(event) => setUserId(event.target.value)}
                 placeholder={DEFAULT_USER_ID}
               />
             </label>
             <label className="block">
-              <div className="text-sm font-medium text-slate-700">Memory Type</div>
+              <div className="text-sm font-medium text-white">Memory Type</div>
               <select
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white shadow-sm outline-none transition focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/20"
                 value={selectedName}
                 onChange={(event) => {
                   setSelectedName(event.target.value);
@@ -347,30 +428,30 @@ export default function GlobalMemoryScreen() {
                 ))}
               </select>
             </label>
-            {specsLoading ? <div className="text-sm text-slate-500">Loading memory types...</div> : null}
+            {specsLoading ? <div className="text-sm text-slate-300/74">Loading memory types...</div> : null}
             {specsError ? <div className="text-sm text-rose-600">{specsError}</div> : null}
             {selectedSpec ? (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                <div className="font-semibold text-slate-800">{selectedSpec.name}</div>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-sm text-slate-300/78">
+                <div className="font-semibold text-white">{selectedSpec.name}</div>
                 <div className="mt-1">{selectedSpec.description}</div>
-                <div className="mt-2 text-xs text-slate-500">
+                <div className="mt-2 text-xs text-slate-300/68">
                   Scope: {selectedSpec.scope} {selectedSpec.ttl_seconds ? `· TTL ${selectedSpec.ttl_seconds}s` : "· no TTL"}
                 </div>
               </div>
             ) : null}
           </div>
 
-          <div className="mt-6">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            <div className="mt-6">
+              <div className="flex items-center justify-between gap-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100/68">
                 Entries
               </div>
-              <div className="text-xs text-slate-500">{entries.length} loaded</div>
+              <div className="text-xs text-slate-300/68">{entries.length} loaded</div>
             </div>
             {entriesError ? <div className="mt-3 text-sm text-rose-600">{entriesError}</div> : null}
             <div className="mt-3 space-y-2">
               {entries.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                <div className="rounded-2xl border border-dashed border-white/12 bg-slate-950/18 px-4 py-6 text-sm text-slate-300/74">
                   No entries found for this user and memory type.
                 </div>
               ) : (
@@ -381,18 +462,18 @@ export default function GlobalMemoryScreen() {
                       key={entry.id}
                       className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
                         selected
-                          ? "border-slate-900 bg-slate-900 text-white"
-                          : "border-slate-200 bg-white text-slate-800 hover:border-slate-300"
+                          ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                          : "border-white/10 bg-slate-950/18 text-slate-100 hover:border-white/16 hover:bg-slate-950/26"
                       }`}
                       onClick={() => loadEntryIntoEditor(entry)}
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="font-semibold">{entry.key || "(no key)"}</div>
-                        <div className={`text-[11px] ${selected ? "text-slate-300" : "text-slate-500"}`}>
+                        <div className={`text-[11px] ${selected ? "text-sky-100/78" : "text-slate-300/68"}`}>
                           {formatTimestamp(entry.updated_at)}
                         </div>
                       </div>
-                      <div className={`mt-2 line-clamp-3 text-xs ${selected ? "text-slate-200" : "text-slate-500"}`}>
+                      <div className={`mt-2 line-clamp-3 text-xs ${selected ? "text-sky-100/78" : "text-slate-300/68"}`}>
                         {prettyJson(entry.payload)}
                       </div>
                     </button>
@@ -403,18 +484,18 @@ export default function GlobalMemoryScreen() {
           </div>
         </section>
 
-        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100/68">
                 Editor
               </div>
-              <h2 className="mt-1 font-display text-2xl text-slate-900">
+              <h2 className="mt-1 font-display text-2xl text-white">
                 {selectedEntry ? "Update Memory Entry" : "Create Memory Entry"}
               </h2>
             </div>
             <button
-              className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-full border border-rose-300/20 bg-rose-300/10 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:border-rose-300/30 hover:bg-rose-300/14 disabled:cursor-not-allowed disabled:opacity-50"
               onClick={deleteEntry}
               disabled={deleting || saving}
             >
@@ -424,32 +505,36 @@ export default function GlobalMemoryScreen() {
 
           <div className="mt-5 grid gap-4">
             <label className="block">
-              <div className="text-sm font-medium text-slate-700">Key</div>
+              <div className="text-sm font-medium text-white">Key</div>
               <input
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white shadow-sm outline-none transition placeholder:text-slate-400/70 focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/20"
                 value={editorKey}
                 onChange={(event) => setEditorKey(event.target.value)}
                 placeholder="preferences"
               />
             </label>
             <label className="block">
-              <div className="text-sm font-medium text-slate-700">Payload JSON</div>
+              <div className="text-sm font-medium text-white">Payload JSON</div>
               <textarea
-                className="mt-1 min-h-[220px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-xs text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                className="mt-1 min-h-[220px] w-full rounded-2xl border border-white/10 bg-slate-950/18 px-3 py-3 font-mono text-xs text-white outline-none transition placeholder:text-slate-400/70 focus:border-sky-300/40 focus:bg-slate-950/24"
                 value={payloadText}
                 onChange={(event) => setPayloadText(event.target.value)}
               />
             </label>
             <label className="block">
-              <div className="text-sm font-medium text-slate-700">Metadata JSON</div>
+              <div className="text-sm font-medium text-white">Metadata JSON</div>
               <textarea
-                className="mt-1 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-xs text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                className="mt-1 min-h-[120px] w-full rounded-2xl border border-white/10 bg-slate-950/18 px-3 py-3 font-mono text-xs text-white outline-none transition placeholder:text-slate-400/70 focus:border-sky-300/40 focus:bg-slate-950/24"
                 value={metadataText}
                 onChange={(event) => setMetadataText(event.target.value)}
               />
             </label>
           </div>
         </section>
+      </div>
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );

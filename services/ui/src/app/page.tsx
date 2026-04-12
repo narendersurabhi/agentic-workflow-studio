@@ -13,6 +13,7 @@ import ComposerValidationPanel from "./components/composer/ComposerValidationPan
 import { ThinkingState } from "./components/chat/ThinkingState";
 import FeedbackControl from "./components/feedback/FeedbackControl";
 import FeedbackInsightsPanel from "./components/feedback/FeedbackInsightsPanel";
+import StudioWorkbenchIcon from "./features/studio/StudioWorkbenchIcon";
 import {
   WorkflowNodeSvgIcon,
   resolveWorkflowNodeVisual,
@@ -6652,139 +6653,353 @@ const openTemplateModal = (template: Template) => {
     }
   };
 
+  const welcomeSurfaceCards = [
+    {
+      href: "/compose",
+      eyebrow: "Compose",
+      title: "Build from structured inputs.",
+      description:
+        "Fill in goal, context, templates, and intent details before submitting a workflow.",
+      cta: "Open Compose",
+      badge: "inputs",
+      accentClassName: "text-sky-100/72",
+      marker: "C",
+    },
+    {
+      href: "/chat",
+      eyebrow: "Chat",
+      title: "Talk to the operator.",
+      description:
+        "Stay conversational until a tool call or workflow is actually needed.",
+      cta: "Open Chat",
+      badge: "dialogue",
+      accentClassName: "text-emerald-100/72",
+      marker: "H",
+    },
+    {
+      href: "/studio",
+      eyebrow: "Workflow Studio",
+      title: "Author DAGs visually.",
+      description:
+        "Build explicit flow graphs with capabilities, control nodes, and compile preview.",
+      cta: "Open Studio",
+      badge: "graph",
+      accentClassName: "text-amber-100/78",
+      marker: "S",
+    },
+    {
+      href: "/memory",
+      eyebrow: "Memory",
+      title: "Manage global user memory.",
+      description:
+        "Inspect and edit user-scoped memory entries like profile data and semantic facts.",
+      cta: "Open Memory",
+      badge: "state",
+      accentClassName: "text-fuchsia-100/72",
+      marker: "M",
+    },
+    {
+      href: "/rag",
+      eyebrow: "RAG",
+      title: "Manage indexed knowledge.",
+      description:
+        "Index markdown, text, and workspace content into the vector store, then inspect and update stored documents.",
+      cta: "Open RAG",
+      badge: "retrieval",
+      accentClassName: "text-cyan-100/72",
+      marker: "R",
+    },
+  ] as const;
+
   if (showWelcomeScreen) {
     return (
-      <main className="relative">
-        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
-        <div className="pointer-events-none absolute top-48 -left-16 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl animate-float-soft" />
-        <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-          <ScreenHeader
-            eyebrow="Agentic Workflow Studio"
-            title="Welcome"
-            description="Choose the surface you want to work in. Compose, Chat, Workflow Studio, RAG, and Memory each open as dedicated screens in the same planner-executor workflow platform."
-            activeScreen="home"
-          >
-            <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-5">
+      <div className="-mx-6 -my-8 min-h-screen bg-[#56697c] text-white">
+        <div className="min-h-screen bg-[linear-gradient(180deg,#435365_0px,#435365_78px,#55697c_78px,#55697c_100%)]">
+          <header className="border-b border-white/10 bg-[linear-gradient(180deg,rgba(67,83,101,0.98),rgba(60,74,90,0.98))] px-6 py-3 shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="truncate text-[22px] font-semibold tracking-[-0.03em] text-white">
+                  Agentic Workflow Studio
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200/78">
+                  <span className="text-white/95">Welcome</span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
                 <Link
-                  href="/compose"
-                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
+                  href="/project"
+                  className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
                 >
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-200">Compose</div>
-                  <h2 className="mt-4 font-display text-2xl text-white">Build a job from structured inputs.</h2>
-                  <p className="mt-3 text-sm text-slate-200">
-                    Fill in goal, context, templates, and intent details before submitting a workflow.
-                  </p>
-                  <div className="mt-6 text-sm font-semibold text-white">Open Compose</div>
+                  Project
                 </Link>
                 <Link
-                  href="/chat"
-                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
+                  href="/workflows"
+                  className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
                 >
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-200">Chat</div>
-                  <h2 className="mt-4 font-display text-2xl text-white">Talk to the operator.</h2>
-                  <p className="mt-3 text-sm text-slate-200">
-                    Stay conversational until a tool call or workflow is actually needed.
-                  </p>
-                  <div className="mt-6 text-sm font-semibold text-white">Open Chat</div>
+                  Workflows
                 </Link>
                 <Link
                   href="/studio"
-                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
+                  className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
                 >
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-200">
-                    Workflow Studio
-                  </div>
-                  <h2 className="mt-4 font-display text-2xl text-white">Author DAGs visually.</h2>
-                  <p className="mt-3 text-sm text-slate-200">
-                    Build explicit flow graphs with capabilities, control nodes, and compile preview.
-                  </p>
-                  <div className="mt-6 text-sm font-semibold text-white">Open Studio</div>
+                  Open Studio
                 </Link>
-                <Link
-                  href="/memory"
-                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
-                >
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-fuchsia-200">
-                    Memory
-                  </div>
-                  <h2 className="mt-4 font-display text-2xl text-white">Manage global user memory.</h2>
-                  <p className="mt-3 text-sm text-slate-200">
-                    Inspect and edit user-scoped memory entries like profile data and semantic facts.
-                  </p>
-                  <div className="mt-6 text-sm font-semibold text-white">Open Memory</div>
-                </Link>
-                <Link
-                  href="/rag"
-                  className="group rounded-3xl border border-white/15 bg-white/10 p-6 transition hover:bg-white/15"
-                >
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-200">
-                    RAG
-                  </div>
-                  <h2 className="mt-4 font-display text-2xl text-white">
-                    Manage indexed knowledge.
-                  </h2>
-                  <p className="mt-3 text-sm text-slate-200">
-                    Index markdown, text, and workspace content into the vector store, then inspect
-                    and update stored documents.
-                  </p>
-                  <div className="mt-6 text-sm font-semibold text-white">Open RAG</div>
-                </Link>
+              </div>
             </div>
-          </ScreenHeader>
+          </header>
+
+          <div className="grid min-h-[calc(100vh-78px)] grid-cols-[52px_minmax(0,1fr)]">
+            <aside className="border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] px-1.5 py-3">
+              <div className="flex h-full flex-col items-center justify-between">
+                <div className="space-y-3">
+                  {[
+                    { href: "/", label: "Welcome", icon: "menu" as const, active: true },
+                    { href: "/project", label: "Project", icon: "library" as const },
+                    { href: "/studio", label: "Studio", icon: "graph" as const },
+                    { href: "/workflows", label: "Workflows", icon: "inspect" as const },
+                  ].map((item) => (
+                    <Link
+                      key={item.label}
+                      href={item.href}
+                      title={item.label}
+                      aria-label={item.label}
+                      className={`flex h-11 w-11 items-center justify-center rounded-xl border transition ${
+                        item.active
+                          ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                          : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
+                      }`}
+                    >
+                      <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
+                    </Link>
+                  ))}
+                </div>
+
+                <Link
+                  href="/studio"
+                  title="Run workflow"
+                  aria-label="Run workflow"
+                  className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-slate-950/18 text-slate-100 transition hover:border-white/18 hover:bg-slate-950/26"
+                >
+                  <StudioWorkbenchIcon kind="run" className="h-5 w-5" />
+                </Link>
+              </div>
+            </aside>
+
+            <main className="min-w-0 overflow-auto px-4 py-4">
+              <section className="relative">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+                      Welcome
+                    </div>
+                    <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
+                      Choose Your Workspace Surface
+                    </h2>
+                    <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
+                      Compose, Chat, Workflow Studio, RAG, and Memory now share the same workspace
+                      chrome. Pick the surface you want to work in without leaving the studio visual
+                      language.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      compose
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      chat
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      studio
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      memory
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      rag
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {welcomeSurfaceCards.map((card) => (
+                    <Link
+                      key={card.href}
+                      href={card.href}
+                      className="group rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-[linear-gradient(180deg,rgba(71,88,106,0.66),rgba(42,56,70,0.86))]"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div
+                            className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${card.accentClassName}`}
+                          >
+                            {card.eyebrow}
+                          </div>
+                          <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-white">
+                            {card.title}
+                          </h3>
+                        </div>
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/18 text-sm font-semibold uppercase tracking-[0.18em] text-slate-100">
+                          {card.marker}
+                        </div>
+                      </div>
+                      <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300/82">
+                        {card.description}
+                      </p>
+                      <div className="mt-5 flex items-center justify-between gap-3">
+                        <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-100">
+                          {card.badge}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition group-hover:border-sky-300/30 group-hover:bg-white/[0.08]">
+                          {card.cta}
+                        </span>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            </main>
+          </div>
         </div>
-      </main>
+      </div>
     );
   }
 
+  const useStudioSurfaceTheme = showChatScreen || showComposeScreen;
+  const studioSurfacePrimarySectionClassName = useStudioSurfaceTheme
+    ? "rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+    : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm";
+  const studioSurfaceSecondarySectionClassName = useStudioSurfaceTheme
+    ? "rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(37,49,61,0.86),rgba(16,24,34,0.9))] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+    : "rounded-2xl border border-white/15 bg-white/10 text-white/95";
+  const composeModePrimarySectionClassName = showComposeScreen
+    ? `${studioSurfacePrimarySectionClassName} [&_.compose-copy]:text-slate-300/74 [&_.compose-copy-strong]:text-white [&_.compose-copy-muted]:text-slate-300/68 [&_.compose-soft-surface]:border-white/10 [&_.compose-soft-surface]:bg-slate-950/18 [&_.compose-soft-surface]:text-slate-200 [&_.compose-chip]:border-white/10 [&_.compose-chip]:bg-white/[0.05] [&_.compose-chip]:text-slate-100`
+    : "rounded-2xl bg-white/95 p-6 text-slate-900 shadow-lg ring-1 ring-white/30";
+  const studioSurfaceCardClassName = useStudioSurfaceTheme
+    ? "border border-white/10 bg-slate-950/18"
+    : "border border-slate-200 bg-slate-50";
+  const studioSurfaceInnerCardClassName = useStudioSurfaceTheme
+    ? "border border-white/10 bg-slate-950/24"
+    : "border border-slate-200 bg-white";
+  const studioSurfaceFieldClassName = useStudioSurfaceTheme
+    ? "border border-white/10 bg-slate-950/24 text-white placeholder:text-slate-400/68 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+    : "border border-slate-200 bg-white text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200";
+  const studioSurfaceButtonClassName = useStudioSurfaceTheme
+    ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+    : "border border-slate-300 text-slate-700 hover:border-slate-400";
+  const studioSurfacePrimaryButtonClassName = useStudioSurfaceTheme
+    ? "border border-white/10 bg-slate-950/28 text-white hover:border-white/16 hover:bg-slate-950/38"
+    : "bg-slate-900 text-white hover:bg-slate-800";
+  const studioSurfaceDestructiveButtonClassName = useStudioSurfaceTheme
+    ? "border border-rose-400/20 bg-rose-400/10 text-rose-100 hover:border-rose-300/30 hover:bg-rose-400/14"
+    : "border border-rose-200 text-rose-600 hover:border-rose-300 hover:text-rose-700";
+  const studioSurfaceWarningButtonClassName = useStudioSurfaceTheme
+    ? "border border-amber-300/20 bg-amber-300/10 text-amber-100 hover:border-amber-200/30 hover:bg-amber-300/14"
+    : "border border-amber-200 text-amber-700 hover:border-amber-300 hover:text-amber-800";
+  const studioSurfaceTextClassName = useStudioSurfaceTheme ? "text-white" : "text-slate-800";
+  const studioSurfaceMutedTextClassName = useStudioSurfaceTheme
+    ? "text-slate-300/68"
+    : "text-slate-500";
+  const studioSurfaceLabelClassName = useStudioSurfaceTheme
+    ? "text-slate-200"
+    : "text-slate-700";
+  const studioSurfaceChipClassName = useStudioSurfaceTheme
+    ? "border border-white/10 bg-white/[0.05] text-slate-200"
+    : "border border-slate-200 bg-slate-100 text-slate-600";
+  const sidebarToggleTopClassName = useStudioSurfaceTheme ? "top-[92px]" : "top-4";
+
   return (
-    <main className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
-      <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
-      <div className="pointer-events-none absolute top-48 -left-16 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl animate-float-soft" />
+    <main
+      className={`relative${
+        useStudioSurfaceTheme ? " -mx-6 -my-8 min-h-screen bg-[#56697c] text-white" : ""
+      }${isResizing || isCapabilityResizing ? " select-none" : ""}`}
+    >
+      {!useStudioSurfaceTheme ? (
+        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
+      ) : null}
+      {!useStudioSurfaceTheme ? (
+        <div className="pointer-events-none absolute top-48 -left-16 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl animate-float-soft" />
+      ) : null}
       <button
-        className="fixed left-4 top-4 z-40 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-md lg:hidden"
+        className={`fixed left-4 ${sidebarToggleTopClassName} z-40 px-3 py-2 text-xs font-semibold lg:hidden ${
+          useStudioSurfaceTheme
+            ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+            : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
+        }`}
         onClick={() => setSidebarOpen(true)}
       >
         Templates
       </button>
       {!sidebarOpen ? (
         <button
-          className="fixed left-4 top-4 z-40 hidden rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-md lg:inline-flex"
+          className={`fixed left-4 ${sidebarToggleTopClassName} z-40 hidden px-3 py-2 text-xs font-semibold lg:inline-flex ${
+            useStudioSurfaceTheme
+              ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+              : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
+          }`}
           onClick={() => setSidebarOpen(true)}
         >
           Show templates
         </button>
       ) : null}
       <button
-        className="fixed right-4 top-4 z-40 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-md lg:hidden"
+        className={`fixed right-4 ${sidebarToggleTopClassName} z-40 px-3 py-2 text-xs font-semibold lg:hidden ${
+          useStudioSurfaceTheme
+            ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+            : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
+        }`}
         onClick={() => setCapabilitySidebarOpen(true)}
       >
         Capabilities
       </button>
       {!capabilitySidebarOpen ? (
         <button
-          className="fixed right-4 top-4 z-40 hidden rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-md lg:inline-flex"
+          className={`fixed right-4 ${sidebarToggleTopClassName} z-40 hidden px-3 py-2 text-xs font-semibold lg:inline-flex ${
+            useStudioSurfaceTheme
+              ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+              : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
+          }`}
           onClick={() => setCapabilitySidebarOpen(true)}
         >
           Show capabilities
         </button>
       ) : null}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 transform bg-white/95 shadow-xl transition-transform duration-300 ${
+        className={`fixed inset-y-0 left-0 z-50 transform transition-transform duration-300 ${
+          useStudioSurfaceTheme
+            ? "border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
+            : "bg-white/95 shadow-xl"
+        } ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
         style={{ width: isDesktop && sidebarOpen ? sidebarLayout.left : sidebarWidth }}
       >
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <div className="font-display text-lg text-slate-900">Template Vault</div>
+        <div
+          className={`flex items-center justify-between px-5 py-4 ${
+            useStudioSurfaceTheme ? "border-b border-white/10" : "border-b border-slate-100"
+          }`}
+        >
+          <div className={`font-display text-lg ${useStudioSurfaceTheme ? "text-white" : "text-slate-900"}`}>
+            Template Vault
+          </div>
           <div className="flex items-center gap-2">
             <button
-              className="rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 lg:hidden"
+              className={`rounded-full px-2 py-1 text-xs lg:hidden ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  : "border border-slate-200 text-slate-600"
+              }`}
               onClick={() => setSidebarOpen(false)}
             >
               Close
             </button>
             <button
-              className="hidden rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 lg:inline-flex"
+              className={`hidden rounded-full px-2 py-1 text-xs lg:inline-flex ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  : "border border-slate-200 text-slate-600"
+              }`}
               onClick={() => setSidebarOpen(false)}
             >
               Collapse
@@ -6792,7 +7007,9 @@ const openTemplateModal = (template: Template) => {
           </div>
         </div>
         <div
-          className="absolute right-0 top-0 hidden h-full w-2 cursor-col-resize bg-transparent transition hover:bg-slate-200/50 lg:block"
+          className={`absolute right-0 top-0 hidden h-full w-2 cursor-col-resize bg-transparent transition lg:block ${
+            useStudioSurfaceTheme ? "hover:bg-white/[0.08]" : "hover:bg-slate-200/50"
+          }`}
           onMouseDown={(event) => {
             event.preventDefault();
             setIsResizing(true);
@@ -6863,17 +7080,25 @@ const openTemplateModal = (template: Template) => {
                   ) : null}
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">{template.name}</div>
+                      <div className={`text-sm font-semibold ${studioSurfaceTextClassName}`}>
+                        {template.name}
+                      </div>
                       {template.description ? (
-                        <div className="mt-1 text-xs text-slate-600">
+                        <div className={`mt-1 text-xs ${studioSurfaceLabelClassName}`}>
                           {template.description}
                         </div>
                       ) : null}
-                      <div className="mt-1 text-xs text-slate-500">
+                      <div className={`mt-1 text-xs ${studioSurfaceMutedTextClassName}`}>
                         {truncate(template.goal, 90)}
                       </div>
                       {template.builtIn ? (
-                        <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                        <span
+                          className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] ${
+                            useStudioSurfaceTheme
+                              ? "border border-white/10 bg-white/[0.05] text-slate-200"
+                              : "bg-slate-100 text-slate-500"
+                          }`}
+                        >
                           Built-in
                         </span>
                       ) : null}
@@ -6882,14 +7107,14 @@ const openTemplateModal = (template: Template) => {
                       {isReorderMode ? (
                         <div className="flex flex-col gap-2">
                           <button
-                            className="rounded-lg bg-slate-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+                            className={`rounded-lg px-3 py-1 text-xs font-semibold transition disabled:opacity-40 ${studioSurfacePrimaryButtonClassName}`}
                             onClick={() => moveTemplate(template.id, "up")}
                             disabled={index === 0}
                           >
                             Up
                           </button>
                           <button
-                            className="rounded-lg bg-slate-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+                            className={`rounded-lg px-3 py-1 text-xs font-semibold transition disabled:opacity-40 ${studioSurfacePrimaryButtonClassName}`}
                             onClick={() => moveTemplate(template.id, "down")}
                             disabled={index === templates.length - 1}
                           >
@@ -6899,7 +7124,7 @@ const openTemplateModal = (template: Template) => {
                       ) : (
                         <>
                           <button
-                            className="rounded-lg bg-slate-900 px-3 py-1 text-xs font-semibold text-white"
+                            className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${studioSurfacePrimaryButtonClassName}`}
                             onClick={() => {
                               openTemplateModal(template);
                               setSidebarOpen(false);
@@ -6908,7 +7133,7 @@ const openTemplateModal = (template: Template) => {
                             Use
                           </button>
                           <button
-                            className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                            className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${studioSurfaceButtonClassName}`}
                             onClick={() => {
                               editTemplate(template);
                               setSidebarOpen(false);
@@ -6920,7 +7145,7 @@ const openTemplateModal = (template: Template) => {
                       )}
                       {!template.builtIn ? (
                         <button
-                          className="text-[11px] text-rose-500 underline decoration-rose-200/60 underline-offset-4"
+                          className={`rounded-lg px-2 py-1 text-[11px] transition ${studioSurfaceDestructiveButtonClassName}`}
                           onClick={() => deleteTemplate(template.id)}
                         >
                           Delete
@@ -6933,36 +7158,44 @@ const openTemplateModal = (template: Template) => {
             </div>
           </section>
 
-          <section className="mt-6 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
-            <div className="text-sm font-semibold text-slate-800">Save current prompt</div>
+          <section
+            className={`mt-6 rounded-2xl p-4 ${
+              showComposeScreen
+                ? "border border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                : "border border-slate-200/70 bg-white shadow-sm"
+            }`}
+          >
+            <div className={`text-sm font-semibold ${studioSurfaceTextClassName}`}>
+              Save current prompt
+            </div>
             <div className="mt-3 flex flex-col gap-2">
               <input
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                className={`w-full rounded-lg px-3 py-2 text-xs ${studioSurfaceFieldClassName}`}
                 placeholder="Template name"
                 value={templateName}
                 onChange={(event) => setTemplateName(event.target.value)}
               />
               {templateError ? <div className="text-xs text-rose-500">{templateError}</div> : null}
               <button
-                className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${studioSurfacePrimaryButtonClassName}`}
                 onClick={saveTemplate}
               >
                 Save Template
               </button>
             </div>
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className={`mt-4 rounded-lg p-3 ${studioSurfaceCardClassName}`}>
               <div className="flex items-center justify-between">
-                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                <div className={`text-xs font-semibold uppercase tracking-[0.2em] ${studioSurfaceMutedTextClassName}`}>
                   Variables
                 </div>
                 <button
-                  className="rounded-full border border-slate-300 px-3 py-1 text-[11px] text-slate-600"
+                  className={`rounded-full px-3 py-1 text-[11px] transition ${studioSurfaceButtonClassName}`}
                   onClick={addCustomVariable}
                 >
                   Add variable
                 </button>
               </div>
-              <label className="mt-3 inline-flex items-center gap-2 text-[11px] text-slate-500">
+              <label className={`mt-3 inline-flex items-center gap-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
                 <input
                   type="checkbox"
                   checked={showRawPlaceholders}
@@ -6971,17 +7204,20 @@ const openTemplateModal = (template: Template) => {
                 Show raw placeholders in preview
               </label>
               {customVariables.length === 0 ? (
-                <p className="mt-2 text-xs text-slate-500">
+                <p className={`mt-2 text-xs ${studioSurfaceMutedTextClassName}`}>
                   Optional. Use keys like <span className="font-semibold">company</span> and
                   reference them as <span className="font-semibold">{"{{company}}"}</span>.
                 </p>
               ) : (
                 <div className="mt-3 space-y-3">
                   {customVariables.map((variable, index) => (
-                    <div key={variable.id || `var-${index}`} className="rounded-lg bg-white p-3">
+                    <div
+                      key={variable.id || `var-${index}`}
+                      className={`rounded-lg border p-3 ${studioSurfaceInnerCardClassName}`}
+                    >
                       <div className="grid gap-2 md:grid-cols-[1.1fr,1fr]">
                         <input
-                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                          className={`rounded-md px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                           placeholder="Key (e.g. company)"
                           value={variable.key}
                           onChange={(event) =>
@@ -6989,7 +7225,7 @@ const openTemplateModal = (template: Template) => {
                           }
                         />
                         <input
-                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                          className={`rounded-md px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                           placeholder="Label (e.g. Company)"
                           value={variable.label}
                           onChange={(event) =>
@@ -6999,7 +7235,7 @@ const openTemplateModal = (template: Template) => {
                       </div>
                       <div className="mt-2 grid gap-2 md:grid-cols-[1.2fr,0.8fr,0.6fr]">
                         <input
-                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                          className={`rounded-md px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                           placeholder="Placeholder"
                           value={variable.placeholder || ""}
                           onChange={(event) =>
@@ -7007,7 +7243,7 @@ const openTemplateModal = (template: Template) => {
                           }
                         />
                         <select
-                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                          className={`rounded-md px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                           value={variable.scope}
                           onChange={(event) =>
                             updateCustomVariable(index, {
@@ -7018,7 +7254,7 @@ const openTemplateModal = (template: Template) => {
                           <option value="per_run">Per run</option>
                           <option value="default">Saved default</option>
                         </select>
-                        <label className="flex items-center gap-2 text-xs text-slate-600">
+                        <label className={`flex items-center gap-2 text-xs ${studioSurfaceLabelClassName}`}>
                           <input
                             type="checkbox"
                             checked={variable.required || false}
@@ -7031,7 +7267,7 @@ const openTemplateModal = (template: Template) => {
                       </div>
                       <div className="mt-2 flex justify-end">
                         <button
-                          className="text-[11px] text-rose-500 underline decoration-rose-200/60 underline-offset-4"
+                          className={`rounded-lg px-2 py-1 text-[11px] transition ${studioSurfaceDestructiveButtonClassName}`}
                           onClick={() => removeCustomVariable(index)}
                         >
                           Remove
@@ -7049,11 +7285,17 @@ const openTemplateModal = (template: Template) => {
             />
           </section>
 
-          <section className="mt-6 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
+          <section
+            className={`mt-6 rounded-2xl p-4 ${
+              showComposeScreen
+                ? "border border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                : "border border-slate-200/70 bg-white shadow-sm"
+            }`}
+          >
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-800">Saved defaults</div>
+              <div className={`text-sm font-semibold ${studioSurfaceTextClassName}`}>Saved defaults</div>
               <select
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                className={`rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                 value={defaultsTemplateId}
                 onChange={(event) => setDefaultsTemplateId(event.target.value)}
               >
@@ -7071,11 +7313,11 @@ const openTemplateModal = (template: Template) => {
                   ?.filter((variable) => variable.scope === "default")
                   .map((variable) => (
                     <div key={variable.key}>
-                      <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                      <label className={`text-[11px] uppercase tracking-[0.2em] ${studioSurfaceMutedTextClassName}`}>
                         {variable.label}
                       </label>
                       <textarea
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900"
+                        className={`mt-1 w-full rounded-lg px-3 py-2 text-xs ${studioSurfaceFieldClassName}`}
                         rows={2}
                         placeholder={variable.placeholder}
                         value={templateDefaults[variable.key] || ""}
@@ -7087,7 +7329,7 @@ const openTemplateModal = (template: Template) => {
                   ))}
               </div>
             ) : (
-              <p className="mt-3 text-xs text-slate-500">
+              <p className={`mt-3 text-xs ${studioSurfaceMutedTextClassName}`}>
                 Choose a template to edit your saved defaults.
               </p>
             )}
@@ -7096,24 +7338,42 @@ const openTemplateModal = (template: Template) => {
       </aside>
 
       <aside
-        className={`fixed inset-y-0 right-0 z-50 transform bg-white/95 shadow-xl transition-transform duration-300 ${
+        className={`fixed inset-y-0 right-0 z-50 transform transition-transform duration-300 ${
+          useStudioSurfaceTheme
+            ? "border-l border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
+            : "bg-white/95 shadow-xl"
+        } ${
           capabilitySidebarOpen ? "translate-x-0" : "translate-x-full"
         }`}
         style={{
           width: isDesktop && capabilitySidebarOpen ? sidebarLayout.right : capabilitySidebarWidth
         }}
       >
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <div className="font-display text-lg text-slate-900">Capability Catalog</div>
+        <div
+          className={`flex items-center justify-between px-5 py-4 ${
+            useStudioSurfaceTheme ? "border-b border-white/10" : "border-b border-slate-100"
+          }`}
+        >
+          <div className={`font-display text-lg ${useStudioSurfaceTheme ? "text-white" : "text-slate-900"}`}>
+            Capability Catalog
+          </div>
           <div className="flex items-center gap-2">
             <button
-              className="rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 lg:hidden"
+              className={`rounded-full px-2 py-1 text-xs lg:hidden ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  : "border border-slate-200 text-slate-600"
+              }`}
               onClick={() => setCapabilitySidebarOpen(false)}
             >
               Close
             </button>
             <button
-              className="hidden rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 lg:inline-flex"
+              className={`hidden rounded-full px-2 py-1 text-xs lg:inline-flex ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  : "border border-slate-200 text-slate-600"
+              }`}
               onClick={() => setCapabilitySidebarOpen(false)}
             >
               Collapse
@@ -7121,17 +7381,25 @@ const openTemplateModal = (template: Template) => {
           </div>
         </div>
         <div
-          className="absolute left-0 top-0 hidden h-full w-2 cursor-col-resize bg-transparent transition hover:bg-slate-200/50 lg:block"
+          className={`absolute left-0 top-0 hidden h-full w-2 cursor-col-resize bg-transparent transition lg:block ${
+            useStudioSurfaceTheme ? "hover:bg-white/[0.08]" : "hover:bg-slate-200/50"
+          }`}
           onMouseDown={(event) => {
             event.preventDefault();
             setIsCapabilityResizing(true);
           }}
         />
         <div className="h-full overflow-y-auto px-5 pb-8 pt-4">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+          <div
+            className={`rounded-xl px-3 py-3 ${
+              showComposeScreen
+                ? "border border-white/10 bg-slate-950/18"
+                : "border border-slate-200 bg-slate-50"
+            }`}
+          >
             <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-medium text-slate-700">Available Capabilities</div>
-              <div className="text-[11px] text-slate-500">
+              <div className={`text-sm font-medium ${studioSurfaceTextClassName}`}>Available Capabilities</div>
+              <div className={`text-[11px] ${studioSurfaceMutedTextClassName}`}>
                 Mode: {capabilityCatalog?.mode || "unknown"}
               </div>
             </div>
@@ -7139,14 +7407,16 @@ const openTemplateModal = (template: Template) => {
               <div className="mt-2 text-xs text-rose-600">{capabilityError}</div>
             ) : null}
             {capabilitiesByGroup.length === 0 ? (
-              <div className="mt-2 text-xs text-slate-500">Capability catalog unavailable.</div>
+              <div className={`mt-2 text-xs ${studioSurfaceMutedTextClassName}`}>
+                Capability catalog unavailable.
+              </div>
             ) : (
               <div className="mt-2 space-y-3">
                 {capabilitiesByGroup.map((group) => (
                   <div key={group.groupName}>
                     <button
                       type="button"
-                      className="mb-1 flex w-full items-center justify-between rounded-md bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+                      className={`mb-1 flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.2em] ${studioSurfaceChipClassName}`}
                       onClick={() => toggleCapabilityGroup(group.groupName)}
                     >
                       <span>{group.groupName}</span>
@@ -7158,10 +7428,10 @@ const openTemplateModal = (template: Template) => {
                           const subgroupKey = `${group.groupName}::${subgroup.subgroupName}`;
                           const isSubgroupCollapsed = collapsedCapabilitySubgroups.has(subgroupKey);
                           return (
-                            <div key={subgroupKey} className="rounded-lg border border-slate-200 bg-slate-100/60 p-2">
+                            <div key={subgroupKey} className={`rounded-lg p-2 ${studioSurfaceCardClassName}`}>
                               <button
                                 type="button"
-                                className="flex w-full items-center justify-between rounded-md bg-white px-2 py-1 text-left text-[11px] font-semibold text-slate-600"
+                                className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-[11px] font-semibold ${studioSurfaceInnerCardClassName} ${useStudioSurfaceTheme ? "text-slate-200" : "text-slate-600"}`}
                                 onClick={() =>
                                   toggleCapabilitySubgroup(group.groupName, subgroup.subgroupName)
                                 }
@@ -7178,25 +7448,25 @@ const openTemplateModal = (template: Template) => {
                                     return (
                                       <div
                                         key={item.id}
-                                        className="rounded-lg border border-slate-200 bg-white px-3 py-2"
+                                        className={`rounded-lg px-3 py-2 ${studioSurfaceInnerCardClassName}`}
                                       >
                                         <div className="flex flex-wrap items-center justify-between gap-2">
-                                          <div className="text-xs font-semibold text-slate-800">{item.id}</div>
+                                          <div className={`text-xs font-semibold ${studioSurfaceTextClassName}`}>{item.id}</div>
                                           <div className="flex flex-wrap items-center gap-2">
                                             <button
-                                              className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                              className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                                               onClick={() => appendCapabilityToGoal(item.id)}
                                             >
                                               Add to Goal
                                             </button>
                                             <button
-                                              className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                              className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                                               onClick={() => addCapabilityNodeToVisualChain(item.id)}
                                             >
                                               Add Step
                                             </button>
                                             <button
-                                              className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
+                                              className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition disabled:opacity-40 ${studioSurfaceButtonClassName}`}
                                               onClick={() => insertCapabilityTemplate(item)}
                                               disabled={!hasTemplate}
                                             >
@@ -7204,21 +7474,21 @@ const openTemplateModal = (template: Template) => {
                                             </button>
                                           </div>
                                         </div>
-                                        <div className="mt-1 text-xs text-slate-600">{item.description}</div>
+                                        <div className={`mt-1 text-xs ${studioSurfaceLabelClassName}`}>{item.description}</div>
                                         {required.length > 0 ? (
                                           <div className="mt-2 space-y-2">
                                             <div className="flex flex-wrap gap-2">
                                               {required.map((field) => (
                                                 <span
                                                   key={`${item.id}-required-${field}`}
-                                                  className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-700"
+                                                  className={`rounded-full px-2 py-1 text-[11px] ${useStudioSurfaceTheme ? "border border-white/10 bg-white/[0.05] text-slate-200" : "bg-slate-100 text-slate-700"}`}
                                                 >
                                                   required: {field}
                                                 </span>
                                               ))}
                                             </div>
                                             {required.includes("job") ? (
-                                              <div className="text-[11px] text-slate-500">
+                                              <div className={`text-[11px] ${studioSurfaceMutedTextClassName}`}>
                                                 <code>job</code> should be an object (for example:
                                                 <code className="ml-1">instruction</code>,
                                                 <code className="ml-1">topic</code>,
@@ -7229,14 +7499,16 @@ const openTemplateModal = (template: Template) => {
                                               </div>
                                             ) : null}
                                             {item.id === "github.repo.list" ? (
-                                              <div className="text-[11px] text-slate-500">
+                                              <div className={`text-[11px] ${studioSurfaceMutedTextClassName}`}>
                                                 Example:{" "}
                                                 <code>{'{"query":"user:octocat sort:updated-desc","perPage":10}'}</code>
                                               </div>
                                             ) : null}
                                           </div>
                                         ) : (
-                                          <div className="mt-2 text-[11px] text-slate-500">No required inputs.</div>
+                                          <div className={`mt-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
+                                            No required inputs.
+                                          </div>
                                         )}
                                       </div>
                                     );
@@ -7253,27 +7525,33 @@ const openTemplateModal = (template: Template) => {
               </div>
             )}
           </div>
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+          <div
+            className={`mt-4 rounded-xl px-3 py-3 ${
+              showComposeScreen
+                ? "border border-white/10 bg-slate-950/18"
+                : "border border-slate-200 bg-slate-50"
+            }`}
+          >
             <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-700">Chaining Composer</div>
+              <div className={`text-sm font-medium ${studioSurfaceTextClassName}`}>Chaining Composer</div>
               <button
-                className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                 onClick={appendChainingRuleToGoal}
               >
                 Add Rule to Goal
               </button>
             </div>
-            <div className="mt-2 text-[11px] text-slate-500">
+            <div className={`mt-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
               Build a DAG visually, set explicit step dependencies, wire outputs to downstream inputs,
               then apply the chain to Goal + Context in one step.
             </div>
-            <div className="mt-3 rounded-lg border border-slate-200 bg-white px-2 py-2">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            <div className={`mt-3 rounded-lg px-2 py-2 ${studioSurfaceInnerCardClassName}`}>
+              <div className={`text-[11px] font-semibold uppercase tracking-[0.2em] ${studioSurfaceMutedTextClassName}`}>
                 Guided Starter
               </div>
               <div className="mt-2 grid gap-2 sm:grid-cols-3">
                 <select
-                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  className={`rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                   value={guidedStarterTemplate}
                   onChange={(event) =>
                     setGuidedStarterTemplate(event.target.value as GuidedStarterTemplateId)
@@ -7286,7 +7564,7 @@ const openTemplateModal = (template: Template) => {
                   ))}
                 </select>
                 <select
-                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                  className={`rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                   value={guidedStarterFormat}
                   onChange={(event) => setGuidedStarterFormat(event.target.value as "docx" | "pdf")}
                 >
@@ -7294,14 +7572,14 @@ const openTemplateModal = (template: Template) => {
                   <option value="pdf">PDF output</option>
                 </select>
                 <button
-                  className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                  className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                   onClick={applyGuidedStarterTemplate}
                 >
                   Apply Starter (replace chain)
                 </button>
               </div>
               <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                <label className={`flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] ${studioSurfaceInnerCardClassName} ${studioSurfaceLabelClassName}`}>
                   <input
                     type="checkbox"
                     className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900"
@@ -7315,7 +7593,7 @@ const openTemplateModal = (template: Template) => {
                   />
                   Iterative generation
                 </label>
-                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                <label className={`flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] ${studioSurfaceInnerCardClassName} ${studioSurfaceLabelClassName}`}>
                   <input
                     type="checkbox"
                     className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900"
@@ -7324,19 +7602,19 @@ const openTemplateModal = (template: Template) => {
                   />
                   Strict validation
                 </label>
-                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                <label className={`flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] ${studioSurfaceInnerCardClassName} ${studioSurfaceLabelClassName}`}>
                   <span>Max iterations</span>
                   <input
                     type="number"
                     min={1}
                     max={10}
-                    className="w-16 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-900"
+                    className={`w-16 rounded px-1.5 py-0.5 text-[11px] ${studioSurfaceFieldClassName}`}
                     value={guidedStarterMaxIterations}
                     onChange={(event) => setGuidedStarterMaxIterations(event.target.value)}
                   />
                 </label>
               </div>
-              <div className="mt-2 text-[11px] text-slate-500">
+              <div className={`mt-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
                 {
                   GUIDED_STARTER_TEMPLATES.find((item) => item.id === guidedStarterTemplate)
                     ?.description
@@ -8310,19 +8588,28 @@ const openTemplateModal = (template: Template) => {
               : "Stay conversational until the operator needs a tool call or workflow, then track the resulting jobs in the same workspace."
           }
           activeScreen={showComposeScreen ? "compose" : "chat"}
+          theme={useStudioSurfaceTheme ? "studio" : "default"}
           actions={
             <>
               {showComposeScreen ? (
                 <>
                   <button
-                    className={screenHeaderSecondaryActionClassName}
+                    className={
+                      useStudioSurfaceTheme
+                        ? "rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                        : screenHeaderSecondaryActionClassName
+                    }
                     onClick={() => analyzeIntentGraph(goal)}
                     disabled={!goal.trim() || intentGraphLoading}
                   >
                     {intentGraphLoading ? "Analyzing..." : "Analyze Intent"}
                   </button>
                   <button
-                    className={screenHeaderPrimaryActionClassName}
+                    className={
+                      useStudioSurfaceTheme
+                        ? "rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+                        : screenHeaderPrimaryActionClassName
+                    }
                     onClick={submitJob}
                     disabled={isSubmitDisabled}
                     title={submitDisabledReason || ""}
@@ -8333,7 +8620,11 @@ const openTemplateModal = (template: Template) => {
               ) : null}
               {showChatScreen ? (
                 <button
-                  className={screenHeaderSecondaryActionClassName}
+                  className={
+                    showChatScreen
+                      ? "rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                      : screenHeaderSecondaryActionClassName
+                  }
                   onClick={resetChatSession}
                   disabled={chatLoading}
                 >
@@ -8343,20 +8634,38 @@ const openTemplateModal = (template: Template) => {
             </>
           }
         >
-            <div className="mt-6 rounded-2xl border border-white/15 bg-white/10 px-4 py-4 text-white/95">
+            <div
+              className={`mt-6 px-4 py-4 ${
+                useStudioSurfaceTheme
+                  ? "rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(37,49,61,0.86),rgba(16,24,34,0.9))] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+                  : "rounded-2xl border border-white/15 bg-white/10 text-white/95"
+              }`}
+            >
               <div className="flex flex-wrap items-end gap-3">
                 <label className="min-w-[220px] flex-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100">
+                  <div
+                    className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                      useStudioSurfaceTheme ? "text-sky-100/72" : "text-sky-100"
+                    }`}
+                  >
                     Memory User ID
                   </div>
                   <input
-                    className="mt-2 w-full rounded-2xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/45 focus:border-white/40 focus:bg-white/15"
+                    className={`mt-2 w-full rounded-2xl px-3 py-2 text-sm outline-none transition ${
+                      useStudioSurfaceTheme
+                        ? "border border-white/10 bg-slate-950/18 text-white placeholder:text-slate-400/52 focus:border-sky-300/40 focus:bg-slate-950/28"
+                        : "border border-white/15 bg-white/10 text-white placeholder:text-white/45 focus:border-white/40 focus:bg-white/15"
+                    }`}
                     value={workspaceUserId}
                     onChange={(event) => setWorkspaceUserId(event.target.value)}
                     placeholder="narendersurabhi"
                   />
                 </label>
-                <div className="max-w-xl text-xs leading-5 text-slate-200">
+                <div
+                  className={`max-w-xl text-xs leading-5 ${
+                    useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-200"
+                  }`}
+                >
                   Chat, Compose, and direct memory reads will use this user id by default unless a
                   request overrides it explicitly.
                 </div>
@@ -8364,45 +8673,63 @@ const openTemplateModal = (template: Template) => {
             </div>
             <div className={`mt-6 grid gap-6 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
               {showComposeScreen ? (
-              <div className="rounded-2xl bg-white/95 p-6 text-slate-900 shadow-lg ring-1 ring-white/30">
+              <div className={composeModePrimarySectionClassName}>
                 <div className="flex items-center justify-between">
-                  <h2 className="font-display text-xl">Compose Job</h2>
-                  <span className="text-xs text-slate-500">Live orchestration</span>
+                  <h2 className={`font-display text-xl ${showComposeScreen ? "text-white" : ""}`}>Compose Job</h2>
+                  <span className={`text-xs ${showComposeScreen ? "text-slate-300/68" : "text-slate-500"}`}>
+                    Live orchestration
+                  </span>
                 </div>
-                <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                <div
+                  className={`mt-3 rounded-xl px-3 py-2 text-xs ${
+                    showComposeScreen
+                      ? "border border-white/10 bg-slate-950/18 text-slate-300/68"
+                      : "border border-slate-100 bg-slate-50 text-slate-500"
+                  }`}
+                >
                   Tip: Use templates for repeatable workflows. Defaults are remembered for you.
                 </div>
                 {submitError ? (
                   <div className="mt-3 text-sm text-rose-600">{submitError}</div>
                 ) : null}
                 {intentClarificationLoading ? (
-                  <div className="mt-3 text-xs text-slate-500">Checking goal intent clarity...</div>
+                  <div className={`mt-3 text-xs ${showComposeScreen ? "text-slate-300/68" : "text-slate-500"}`}>
+                    Checking goal intent clarity...
+                  </div>
                 ) : null}
                 {jobSubmitLoading ? (
-                  <div className="mt-3 text-xs text-slate-500">Submitting job...</div>
+                  <div className={`mt-3 text-xs ${showComposeScreen ? "text-slate-300/68" : "text-slate-500"}`}>
+                    Submitting job...
+                  </div>
                 ) : null}
                 <div className="mt-4 grid gap-4">
                   <div>
-                    <label className="text-sm font-medium text-slate-700">Goal</label>
+                    <label className={`text-sm font-medium ${showComposeScreen ? "text-white" : "text-slate-700"}`}>
+                      Goal
+                    </label>
                     <input
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                      className={`mt-1 w-full rounded-xl px-3 py-2 text-sm shadow-sm ${
+                        showComposeScreen
+                          ? "border border-white/10 bg-slate-950/18 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                          : "border border-slate-200 bg-white focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                      }`}
                       value={goal}
                       onChange={(event) => setGoal(event.target.value)}
                       placeholder="Generate an implementation checklist"
                     />
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className={`rounded-xl px-3 py-3 ${studioSurfaceCardClassName}`}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="text-sm font-medium text-slate-700">Intent Graph</div>
+                      <div className={`text-sm font-medium ${studioSurfaceTextClassName}`}>Intent Graph</div>
                       <div className="flex items-center gap-2">
                         <button
-                          className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                          className={`rounded-md px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                           onClick={() => setIntentGraphCollapsed((previous) => !previous)}
                         >
                           {intentGraphCollapsed ? "Expand" : "Collapse"}
                         </button>
                         <button
-                          className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
+                          className={`rounded-md px-2 py-1 text-[11px] font-semibold transition disabled:opacity-50 ${studioSurfaceButtonClassName}`}
                           onClick={() => analyzeIntentGraph(goal)}
                           disabled={!goal.trim() || intentGraphLoading}
                         >
@@ -8411,7 +8738,7 @@ const openTemplateModal = (template: Template) => {
                       </div>
                     </div>
                     {intentGraphCollapsed ? (
-                      <div className="mt-2 text-[11px] text-slate-500">
+                      <div className={`mt-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
                         Collapsed. Click Expand to view intent segments.
                       </div>
                     ) : (
@@ -8422,34 +8749,36 @@ const openTemplateModal = (template: Template) => {
                           </div>
                         ) : null}
                         {!intentGraphError && intentGraphLoading ? (
-                          <div className="mt-2 text-[11px] text-slate-500">Inferring intent graph from goal...</div>
+                          <div className={`mt-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
+                            Inferring intent graph from goal...
+                          </div>
                         ) : null}
                         {!intentGraphError && !intentGraphLoading && intentGraph ? (
                           <div className="mt-2 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
-                              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                            <div className={`flex flex-wrap items-center gap-2 text-[11px] ${studioSurfaceLabelClassName}`}>
+                              <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                 segments: {intentGraph.summary.segment_count}
                               </span>
-                              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                              <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                 confidence: {intentGraph.overall_confidence.toFixed(2)}
                               </span>
-                              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                              <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                 source goal: {intentGraphGoal === goal.trim() ? "current" : "stale"}
                               </span>
-                              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                              <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                 summaries: {intentGraph.summary.has_interaction_summaries ? "yes" : "no"}
                               </span>
                               {intentGraph.summary.fact_candidates > 0 ? (
-                                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                                <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                   fact support: {(intentGraph.summary.fact_support_rate * 100).toFixed(0)}%
                                 </span>
                               ) : null}
                               {intentGraph.summary.capability_suggestions_total > 0 ? (
-                                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                                <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                   cap match: {(intentGraph.summary.capability_match_rate * 100).toFixed(0)}%
                                 </span>
                               ) : null}
-                              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                              <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                 cap selected: {intentGraph.summary.capability_suggestions_selected}
                               </span>
                               {intentGraph.summary.capability_suggestions_autofilled > 0 ? (
@@ -8457,7 +8786,7 @@ const openTemplateModal = (template: Template) => {
                                   cap autofilled: {intentGraph.summary.capability_suggestions_autofilled}
                                 </span>
                               ) : null}
-                              <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                              <div className={`flex flex-wrap items-center gap-1 text-[10px] ${studioSurfaceMutedTextClassName}`}>
                                 <span>Sources:</span>
                                 {["semantic_search", "llm", "heuristic", "fallback_segment"].map((source) => (
                                   <span
@@ -8473,16 +8802,16 @@ const openTemplateModal = (template: Template) => {
                               {intentGraph.segments.map((segment) => (
                                 <div
                                   key={`intent-segment-${segment.id}`}
-                                  className="rounded-lg border border-slate-200 bg-white px-2 py-2"
+                                  className={`rounded-lg px-2 py-2 ${studioSurfaceInnerCardClassName}`}
                                 >
                                   <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div className="text-xs font-semibold text-slate-800">
+                                    <div className={`text-xs font-semibold ${studioSurfaceTextClassName}`}>
                                       {segment.id}: {segment.intent}
                                     </div>
                                     <div className="flex items-center gap-2">
                                       {segment.suggested_capabilities.length > 1 ? (
                                         <button
-                                          className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:border-slate-400"
+                                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition ${studioSurfaceButtonClassName}`}
                                           onClick={() =>
                                             addTopSuggestedCapabilitiesToVisualChain(
                                               segment.suggested_capabilities,
@@ -8494,21 +8823,23 @@ const openTemplateModal = (template: Template) => {
                                           Add top 3
                                         </button>
                                       ) : null}
-                                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+                                      <span className={`rounded-full px-2 py-0.5 text-[10px] ${studioSurfaceChipClassName}`}>
                                         confidence {segment.confidence.toFixed(2)}
                                       </span>
                                     </div>
                                   </div>
                                   {segment.objective ? (
-                                    <div className="mt-1 text-[11px] text-slate-600">{segment.objective}</div>
+                                    <div className={`mt-1 text-[11px] ${studioSurfaceLabelClassName}`}>{segment.objective}</div>
                                   ) : null}
-                                  <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-slate-500">
+                                  <div className={`mt-1 flex flex-wrap gap-1 text-[10px] ${studioSurfaceMutedTextClassName}`}>
                                     {segment.depends_on.length > 0 ? (
-                                      <span className="rounded-full bg-slate-100 px-2 py-0.5">
+                                      <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
                                         depends_on: {segment.depends_on.join(", ")}
                                       </span>
                                     ) : (
-                                      <span className="rounded-full bg-slate-100 px-2 py-0.5">depends_on: none</span>
+                                      <span className={`rounded-full px-2 py-0.5 ${studioSurfaceChipClassName}`}>
+                                        depends_on: none
+                                      </span>
                                     )}
                                     {segment.required_inputs.slice(0, 4).map((entry) => (
                                       <span
@@ -8571,7 +8902,7 @@ const openTemplateModal = (template: Template) => {
                           </div>
                         ) : null}
                         {!intentGraphError && !intentGraphLoading && !intentGraph ? (
-                          <div className="mt-2 text-[11px] text-slate-500">
+                          <div className={`mt-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
                             Enter a goal and click Analyze to view segmented intent flow.
                           </div>
                         ) : null}
@@ -8617,25 +8948,25 @@ const openTemplateModal = (template: Template) => {
                       </div>
                     </div>
                   ) : null}
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className={`rounded-xl px-3 py-3 ${studioSurfaceCardClassName}`}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <label className="text-sm font-medium text-slate-700">Context Builder</label>
+                      <label className={`text-sm font-medium ${studioSurfaceTextClassName}`}>Context Builder</label>
                       <div className="flex items-center gap-2">
                         <button
-                          className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                          className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                           onClick={() => setShowRawContextPreview((prev) => !prev)}
                         >
                           {showRawContextPreview ? "Hide Raw" : "Show Raw"}
                         </button>
                         <button
-                          className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                          className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                           onClick={resetContextBuilderFieldEditor}
                         >
                           New Field
                         </button>
                       </div>
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">
+                    <div className={`mt-1 text-xs ${studioSurfaceMutedTextClassName}`}>
                       Use form fields instead of editing JSON directly.
                     </div>
                     {contextBuilderSnapshot.invalid ? (
@@ -8653,12 +8984,12 @@ const openTemplateModal = (template: Template) => {
                         const inputType = field.inputType || "text";
                         return (
                           <div key={`context-core-${field.key}`} className="space-y-1">
-                            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                            <div className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${studioSurfaceMutedTextClassName}`}>
                               {field.label}
                             </div>
                             {field.multiline ? (
                               <textarea
-                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                className={`w-full rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                                 rows={3}
                                 placeholder={field.placeholder}
                                 value={currentValue}
@@ -8672,7 +9003,7 @@ const openTemplateModal = (template: Template) => {
                               />
                             ) : (
                               <input
-                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                className={`w-full rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                                 type={inputType}
                                 placeholder={field.placeholder}
                                 value={currentValue}
@@ -8690,12 +9021,12 @@ const openTemplateModal = (template: Template) => {
                       })}
                     </div>
 
-                    <div className="mt-4 border-t border-slate-200 pt-3">
-                      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    <div className={`mt-4 border-t pt-3 ${useStudioSurfaceTheme ? "border-white/10" : "border-slate-200"}`}>
+                      <div className={`text-xs font-semibold uppercase tracking-[0.12em] ${studioSurfaceMutedTextClassName}`}>
                         Additional Fields
                       </div>
                       {contextBuilderExtraFields.length === 0 ? (
-                        <div className="mt-2 text-xs text-slate-500">
+                        <div className={`mt-2 text-xs ${studioSurfaceMutedTextClassName}`}>
                           No additional fields yet.
                         </div>
                       ) : (
@@ -8703,28 +9034,28 @@ const openTemplateModal = (template: Template) => {
                           {contextBuilderExtraFields.map((entry) => (
                             <div
                               key={`context-extra-${entry.key}`}
-                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1"
+                              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg px-2 py-1 ${studioSurfaceInnerCardClassName}`}
                             >
                               <div className="min-w-0">
-                                <span className="text-xs font-semibold text-slate-700">
+                                <span className={`text-xs font-semibold ${studioSurfaceTextClassName}`}>
                                   {entry.key}
                                 </span>
-                                <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+                                <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] ${studioSurfaceChipClassName}`}>
                                   {entry.schemaType}
                                 </span>
-                                <div className="truncate text-[11px] text-slate-500">
+                                <div className={`truncate text-[11px] ${studioSurfaceMutedTextClassName}`}>
                                   {entry.valuePreview}
                                 </div>
                               </div>
                               <div className="flex items-center gap-1">
                                 <button
-                                  className="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700"
+                                  className={`rounded-md px-2 py-0.5 text-[11px] transition ${studioSurfaceButtonClassName}`}
                                   onClick={() => editContextBuilderField(entry.key)}
                                 >
                                   Edit
                                 </button>
                                 <button
-                                  className="rounded-md border border-rose-300 px-2 py-0.5 text-[11px] text-rose-700"
+                                  className={`rounded-md px-2 py-0.5 text-[11px] transition ${studioSurfaceDestructiveButtonClassName}`}
                                   onClick={() => removeContextBuilderField(entry.key)}
                                 >
                                   Remove
@@ -8737,7 +9068,7 @@ const openTemplateModal = (template: Template) => {
 
                       <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[1.5fr_0.8fr]">
                         <input
-                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                          className={`w-full rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                           placeholder="field_name"
                           value={contextBuilderFieldEditor.key}
                           onChange={(event) =>
@@ -8748,7 +9079,7 @@ const openTemplateModal = (template: Template) => {
                           }
                         />
                         <select
-                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                          className={`w-full rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                           value={contextBuilderFieldEditor.schemaType}
                           onChange={(event) =>
                             setContextBuilderFieldEditor((prev) => ({
@@ -8766,7 +9097,7 @@ const openTemplateModal = (template: Template) => {
                         </select>
                       </div>
                       <textarea
-                        className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                        className={`mt-2 w-full rounded-lg px-2 py-1 text-xs ${studioSurfaceFieldClassName}`}
                         rows={2}
                         placeholder="value"
                         value={contextBuilderFieldEditor.value}
@@ -8779,13 +9110,13 @@ const openTemplateModal = (template: Template) => {
                       />
                       <div className="mt-2 flex items-center gap-2">
                         <button
-                          className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                          className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                           onClick={applyContextBuilderFieldEditor}
                         >
                           Save Field
                         </button>
                         <button
-                          className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                          className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                           onClick={resetContextBuilderFieldEditor}
                         >
                           Clear Editor
@@ -8794,33 +9125,33 @@ const openTemplateModal = (template: Template) => {
                     </div>
 
                     {showRawContextPreview ? (
-                      <pre className="mt-3 max-h-44 overflow-auto rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-600">
+                      <pre className={`mt-3 max-h-44 overflow-auto rounded-lg px-2 py-2 text-[11px] ${studioSurfaceInnerCardClassName} ${studioSurfaceLabelClassName}`}>
                         {contextJson}
                       </pre>
                     ) : null}
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className={`rounded-xl px-3 py-3 ${studioSurfaceCardClassName}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium text-slate-700">
+                      <div className={`text-sm font-medium ${studioSurfaceTextClassName}`}>
                         Capability Context Forms
                       </div>
                       <div className="flex items-center gap-2">
                         <button
-                          className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                          className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${studioSurfaceButtonClassName}`}
                           onClick={fillContextFromDetectedCapabilities}
                         >
                           Fill Missing in Context
                         </button>
-                        <div className="text-[11px] text-slate-500">
+                        <div className={`text-[11px] ${studioSurfaceMutedTextClassName}`}>
                           Mode: {capabilityCatalog?.mode || "unknown"}
                         </div>
                       </div>
                     </div>
                     {composeNotice ? (
-                      <div className="mt-2 text-[11px] text-slate-600">{composeNotice}</div>
+                      <div className={`mt-2 text-[11px] ${studioSurfaceLabelClassName}`}>{composeNotice}</div>
                     ) : null}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <label className="inline-flex items-center gap-2 text-[11px] text-slate-600">
+                      <label className={`inline-flex items-center gap-2 text-[11px] ${studioSurfaceLabelClassName}`}>
                         <input
                           type="checkbox"
                           className="h-3 w-3"
@@ -8833,7 +9164,7 @@ const openTemplateModal = (template: Template) => {
                       </label>
                     </div>
                     {requiredContextCapabilities.length === 0 ? (
-                      <div className="mt-2 text-xs text-slate-500">
+                      <div className={`mt-2 text-xs ${studioSurfaceMutedTextClassName}`}>
                         Mention a capability id in Goal (for example: <code>github.repo.list</code>)
                         or add steps in Chaining Composer to see required Context JSON fields.
                       </div>
@@ -8848,9 +9179,9 @@ const openTemplateModal = (template: Template) => {
                               ).sort((a, b) => a.localeCompare(b))
                             : required;
                           return (
-                            <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                              <div className="text-xs font-semibold text-slate-800">{item.id}</div>
-                              <div className="mt-1 text-xs text-slate-600">{item.description}</div>
+                            <div key={item.id} className={`rounded-lg px-3 py-2 ${studioSurfaceInnerCardClassName}`}>
+                              <div className={`text-xs font-semibold ${studioSurfaceTextClassName}`}>{item.id}</div>
+                              <div className={`mt-1 text-xs ${studioSurfaceLabelClassName}`}>{item.description}</div>
                               {editableFields.length > 0 ? (
                                 <div className="mt-2 space-y-2">
                                   <div className="flex flex-wrap gap-2">
@@ -8900,12 +9231,12 @@ const openTemplateModal = (template: Template) => {
                                       return (
                                         <div
                                           key={`${item.id}-${field}-editor`}
-                                          className="rounded-md border border-slate-200 bg-slate-50 px-2 py-2"
+                                          className={`rounded-md px-2 py-2 ${studioSurfaceCardClassName}`}
                                         >
                                           <div className="flex items-center justify-between gap-2">
-                                            <div className="text-[11px] font-semibold text-slate-700">
+                                            <div className={`text-[11px] font-semibold ${studioSurfaceLabelClassName}`}>
                                               {field}
-                                              <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
+                                              <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] ${studioSurfaceChipClassName}`}>
                                                 {isRequiredField ? "required" : "optional"}
                                               </span>
                                             </div>
@@ -8920,14 +9251,14 @@ const openTemplateModal = (template: Template) => {
                                             </span>
                                           </div>
                                           {description ? (
-                                            <div className="mt-1 text-[11px] text-slate-500">
+                                            <div className={`mt-1 text-[11px] ${studioSurfaceMutedTextClassName}`}>
                                               {description}
                                             </div>
                                           ) : null}
                                           <div className="mt-2 space-y-2">
                                             {isBoolean ? (
                                               <select
-                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                className={`w-full rounded-md px-2 py-1 text-[11px] ${studioSurfaceFieldClassName}`}
                                                 value={currentValue}
                                                 onChange={(event) =>
                                                   applyCapabilityInputValue(
@@ -8944,7 +9275,7 @@ const openTemplateModal = (template: Template) => {
                                             ) : isStructured ? (
                                               <textarea
                                                 key={`${item.id}-${field}-structured-${currentValue}`}
-                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                className={`w-full rounded-md px-2 py-1 text-[11px] ${studioSurfaceFieldClassName}`}
                                                 rows={3}
                                                 defaultValue={currentValue}
                                                 onBlur={(event) =>
@@ -8961,7 +9292,7 @@ const openTemplateModal = (template: Template) => {
                                             ) : (
                                               <input
                                                 key={`${item.id}-${field}-scalar-${currentValue}`}
-                                                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-900"
+                                                className={`w-full rounded-md px-2 py-1 text-[11px] ${studioSurfaceFieldClassName}`}
                                                 defaultValue={currentValue}
                                                 onBlur={(event) =>
                                                   applyCapabilityInputValue(
@@ -8975,7 +9306,7 @@ const openTemplateModal = (template: Template) => {
                                             )}
                                             <div className="flex flex-wrap gap-2">
                                               <button
-                                                className="rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-700"
+                                                className={`rounded-md px-2 py-1 text-[11px] transition ${studioSurfaceButtonClassName}`}
                                                 onClick={() => clearCapabilityInputField(field)}
                                               >
                                                 Clear
@@ -8987,13 +9318,13 @@ const openTemplateModal = (template: Template) => {
                                     })}
                                   </div>
                                   {item.id === "github.repo.list" ? (
-                                    <div className="text-[11px] text-slate-500">
+                                    <div className={`text-[11px] ${studioSurfaceMutedTextClassName}`}>
                                       Example: <code>{'{"query":"user:octocat sort:updated-desc","perPage":10}'}</code>
                                     </div>
                                   ) : null}
                                 </div>
                               ) : (
-                                <div className="mt-2 text-[11px] text-slate-500">
+                                <div className={`mt-2 text-[11px] ${studioSurfaceMutedTextClassName}`}>
                                   No schema fields found for this capability.
                                 </div>
                               )}
@@ -9004,24 +9335,48 @@ const openTemplateModal = (template: Template) => {
                     )}
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-700">Priority</label>
+                    <label className={`text-sm font-medium ${showComposeScreen ? "text-white" : "text-slate-700"}`}>
+                      Priority
+                    </label>
                     <input
                       type="number"
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                      className={`mt-1 w-full rounded-xl px-3 py-2 text-sm shadow-sm ${
+                        showComposeScreen
+                          ? "border border-white/10 bg-slate-950/18 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                          : "border border-slate-200 bg-white focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                      }`}
                       value={priority}
                       onChange={(event) => setPriority(Number(event.target.value))}
                     />
                   </div>
-                  <div className="grid gap-2 text-xs text-slate-500 md:grid-cols-2">
-                    <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                  <div className={`grid gap-2 text-xs md:grid-cols-2 ${
+                    showComposeScreen ? "text-slate-300/68" : "text-slate-500"
+                  }`}>
+                    <div
+                      className={`rounded-lg px-3 py-2 ${
+                        showComposeScreen
+                          ? "border border-white/10 bg-slate-950/18"
+                          : "border border-slate-100 bg-slate-50"
+                      }`}
+                    >
                       Saved templates live in your browser only.
                     </div>
-                    <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                    <div
+                      className={`rounded-lg px-3 py-2 ${
+                        showComposeScreen
+                          ? "border border-white/10 bg-slate-950/18"
+                          : "border border-slate-100 bg-slate-50"
+                      }`}
+                    >
                       Priority helps the planner sequence jobs.
                     </div>
                   </div>
                   <button
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-md transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    className={`rounded-xl px-4 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      showComposeScreen
+                        ? "border border-slate-200/18 bg-slate-950/25 hover:border-white/30 hover:bg-slate-950/35"
+                        : "bg-slate-900 shadow-md hover:bg-slate-800"
+                    }`}
                     onClick={submitJob}
                     disabled={isSubmitDisabled}
                     title={submitDisabledReason || ""}
@@ -9029,7 +9384,13 @@ const openTemplateModal = (template: Template) => {
                     {jobSubmitLoading ? "Submitting..." : "Submit Job"}
                   </button>
                   {submitDisabledReason ? (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <div
+                      className={`rounded-lg px-3 py-2 text-xs ${
+                        showComposeScreen
+                          ? "border border-amber-300/20 bg-amber-300/10 text-amber-100"
+                          : "border border-amber-200 bg-amber-50 text-amber-800"
+                      }`}
+                    >
                       {submitDisabledReason}
                     </div>
                   ) : null}
@@ -9037,27 +9398,27 @@ const openTemplateModal = (template: Template) => {
               </div>
               ) : null}
               {showChatScreen ? (
-              <div className="rounded-2xl bg-slate-950/90 p-6 text-white shadow-lg ring-1 ring-white/10">
+              <div className={studioSurfacePrimarySectionClassName}>
                 <div>
-                  <h2 className="font-display text-xl">Chat Operator</h2>
-                  <p className="mt-1 text-xs text-slate-300">
+                  <h2 className="font-display text-xl text-white">Chat Operator</h2>
+                  <p className="mt-1 text-xs text-slate-300/78">
                     Chat submits normal jobs through the existing planner and worker pipeline.
                   </p>
                 </div>
                 <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
-                  <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
                     {chatSession ? `Session ${chatSession.id.slice(0, 8)}` : "No session yet"}
                   </span>
-                  <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-emerald-200">
+                  <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-emerald-100">
                     {chatSession?.active_job_id ? `Active job ${chatSession.active_job_id.slice(0, 8)}` : "Ready"}
                   </span>
                 </div>
                 <div
                   ref={chatTranscriptRef}
-                  className="mt-4 max-h-[26rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/20 p-4"
+                  className="mt-4 max-h-[26rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-[24px] border border-white/10 bg-slate-950/24 p-4"
                 >
                   {chatMessages.length === 0 ? (
-                    <div className="flex h-full min-h-[15rem] items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/5 px-4 text-center text-sm text-slate-300">
+                    <div className="flex h-full min-h-[15rem] items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/[0.05] px-4 text-center text-sm text-slate-300/82">
                       Start with a plain request like “Create a DOCX from this markdown” or
                       “Open a PR for the generated repository”.
                     </div>
@@ -9139,7 +9500,7 @@ const openTemplateModal = (template: Template) => {
                     </>
                   )}
                 </div>
-                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
+                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs text-slate-300">
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
@@ -9168,7 +9529,7 @@ const openTemplateModal = (template: Template) => {
                 ) : null}
                 <div className="mt-4 space-y-3">
                   <textarea
-                    className="min-h-[8rem] w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder:text-slate-400 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                    className="min-h-[8rem] w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-sm text-white placeholder:text-slate-400 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
                     value={chatInput}
                     onChange={(event) => setChatInput(event.target.value)}
                     onKeyDown={(event) => {
@@ -9180,13 +9541,13 @@ const openTemplateModal = (template: Template) => {
                     placeholder="Ask for work in natural language. Cmd/Ctrl+Enter sends."
                   />
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-[11px] text-slate-400">
+                    <div className="text-[11px] text-slate-300/68">
                       {chatSession?.metadata?.pending_clarification
                         ? "Pending clarification is remembered in this session."
                         : "Chat stays thin: it creates jobs, it does not bypass workflow controls."}
                     </div>
                     <button
-                      className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-950 shadow-md transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-4 py-2 text-sm font-semibold text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={submitChatTurn}
                       disabled={chatLoading || !chatInput.trim()}
                     >
@@ -9203,25 +9564,42 @@ const openTemplateModal = (template: Template) => {
         loading={feedbackSummaryLoading}
         error={feedbackSummaryError}
         onRefresh={() => void loadFeedbackSummary()}
+        theme={useStudioSurfaceTheme ? "studio" : "default"}
       />
 
-        <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm animate-fade-up-delayed">
+        <section
+          className={`animate-fade-up-delayed ${
+            useStudioSurfaceTheme
+              ? "rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
+          }`}
+        >
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="font-display text-xl">Jobs</h2>
-            <p className="mt-1 text-xs text-slate-500">
+            <h2 className={`font-display text-xl ${useStudioSurfaceTheme ? "text-white" : ""}`}>Jobs</h2>
+            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-500"}`}>
               Track submitted goals and manage their lifecycle.
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+            <div
+              className={`rounded-full px-3 py-1 text-xs ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-white/[0.05] text-slate-200"
+                  : "bg-slate-100 text-slate-500"
+              }`}
+            >
               {showAllJobs
                 ? `${jobs.length} total`
                 : `Showing ${jobsToShow.length} of ${jobs.length}`}
             </div>
             {jobs.length > 1 ? (
               <button
-                className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                className={`rounded-full px-3 py-1 text-xs transition ${
+                  useStudioSurfaceTheme
+                    ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                    : "border border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                }`}
                 onClick={() => setShowAllJobs((prev) => !prev)}
               >
                 {showAllJobs ? "Show recent only" : "Show all jobs"}
@@ -9230,7 +9608,13 @@ const openTemplateModal = (template: Template) => {
           </div>
         </div>
         {jobs.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+          <div
+            className={`mt-4 rounded-xl p-6 text-sm ${
+              useStudioSurfaceTheme
+                ? "border border-dashed border-white/12 bg-slate-950/18 text-slate-300/74"
+                : "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
+            }`}
+          >
             No jobs yet. Submit a goal above to start planning.
           </div>
         ) : (
@@ -9238,26 +9622,40 @@ const openTemplateModal = (template: Template) => {
             {jobsToShow.map((job, index) => (
               <li
                 key={job.id}
-                className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm transition hover:border-slate-200 hover:shadow-md animate-fade-up"
+                className={`animate-fade-up rounded-xl p-4 transition ${
+                  useStudioSurfaceTheme
+                    ? "border border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-white/16 hover:bg-slate-950/26"
+                    : "border border-slate-100 bg-white shadow-sm hover:border-slate-200 hover:shadow-md"
+                }`}
                 style={{ animationDelay: `${index * 0.06}s` }}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900 break-words">
+                    <div
+                      className={`break-words text-sm font-semibold ${
+                        useStudioSurfaceTheme ? "text-white" : "text-slate-900"
+                      }`}
+                    >
                       {expandedJobGoals.has(job.id)
                         ? job.goal
                         : truncate(job.goal, JOB_GOAL_PREVIEW_LENGTH)}
                     </div>
                     {job.goal.length > JOB_GOAL_PREVIEW_LENGTH ? (
                       <button
-                        className="mt-1 text-xs font-medium text-slate-600 transition hover:text-slate-900"
+                        className={`mt-1 text-xs font-medium transition ${
+                          useStudioSurfaceTheme
+                            ? "text-slate-300/74 hover:text-white"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
                         onClick={() => toggleJobGoalExpanded(job.id)}
                       >
                         {expandedJobGoals.has(job.id) ? "Show less" : "Show more"}
                       </button>
                     ) : null}
-                    <div className="mt-1 text-xs text-slate-500 break-words">{job.id}</div>
-                    <div className="mt-1 text-xs text-slate-500">
+                    <div className={`mt-1 break-words text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                      {job.id}
+                    </div>
+                    <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
                       Run: {formatTimestamp(job.updated_at || job.created_at)}
                     </div>
                     {(() => {
@@ -9269,56 +9667,62 @@ const openTemplateModal = (template: Template) => {
                         typeof job.metadata?.llm_model === "string" ? job.metadata.llm_model : "";
                       if (!provider && !model) return null;
                       return (
-                        <div className="mt-1 text-xs text-slate-500">
+                        <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
                           LLM: {provider || "unknown"}
                           {model ? ` / ${model}` : ""}
                         </div>
                       );
                     })()}
                   </div>
-                  <span className="shrink-0 self-start rounded-full bg-slate-100 px-2 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                  <span
+                    className={`shrink-0 self-start rounded-full px-2 py-1 text-[11px] uppercase tracking-[0.2em] ${
+                      useStudioSurfaceTheme
+                        ? "border border-white/10 bg-white/[0.05] text-slate-200"
+                        : "bg-slate-100 text-slate-500"
+                    }`}
+                  >
                     {job.status}
                   </span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs">
                   <button
-                    className="rounded-full border border-slate-200 px-3 py-1 text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                    className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}
                     onClick={() => loadJobDetails(job.id)}
                   >
                     Details
                   </button>
                   <button
-                    className="rounded-full border border-slate-200 px-3 py-1 text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                    className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}
                     onClick={() => stopJob(job.id)}
                   >
                     Stop
                   </button>
                   <button
-                    className="rounded-full border border-slate-200 px-3 py-1 text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                    className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}
                     onClick={() => resumeExecution(job.id)}
                   >
                     Resume Run
                   </button>
                   <button
-                    className="rounded-full border border-slate-200 px-3 py-1 text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                    className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}
                     onClick={() => retryJob(job.id)}
                   >
                     Retry
                   </button>
                   <button
-                    className="rounded-full border border-amber-200 px-3 py-1 text-amber-700 transition hover:border-amber-300 hover:text-amber-800"
+                    className={`rounded-full px-3 py-1 transition ${studioSurfaceWarningButtonClassName}`}
                     onClick={() => retryFailedTasks(job.id)}
                   >
                     Retry failed
                   </button>
                   <button
-                    className="rounded-full border border-slate-200 px-3 py-1 text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                    className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}
                     onClick={() => replanJob(job.id)}
                   >
                     Replan
                   </button>
                   <button
-                    className="rounded-full border border-rose-200 px-3 py-1 text-rose-600 transition hover:border-rose-300 hover:text-rose-700"
+                    className={`rounded-full px-3 py-1 transition ${studioSurfaceDestructiveButtonClassName}`}
                     onClick={() => clearJob(job.id)}
                   >
                     Clear
@@ -9330,17 +9734,29 @@ const openTemplateModal = (template: Template) => {
         )}
       </section>
 
-        <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm animate-fade-up-delayed-more">
+        <section
+          className={`animate-fade-up-delayed-more ${
+            useStudioSurfaceTheme
+              ? "rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
+          }`}
+        >
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="font-display text-xl">Job Details</h2>
-            <p className="mt-1 text-xs text-slate-500">
+            <h2 className={`font-display text-xl ${useStudioSurfaceTheme ? "text-white" : ""}`}>
+              Job Details
+            </h2>
+            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-500"}`}>
               Explore plan summaries, task dependencies, and the live DAG.
             </p>
           </div>
           {selectedJobId ? (
             <button
-              className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+              className={`rounded-full px-3 py-1 text-xs transition ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                  : "border border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900"
+              }`}
               onClick={closeDetails}
             >
               Close
@@ -9348,16 +9764,30 @@ const openTemplateModal = (template: Template) => {
           ) : null}
         </div>
         {!selectedJobId ? (
-          <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+          <div
+            className={`mt-4 rounded-xl p-6 text-sm ${
+              useStudioSurfaceTheme
+                ? "border border-dashed border-white/12 bg-slate-950/18 text-slate-300/74"
+                : "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
+            }`}
+          >
             Select a job to view its plan, tasks, and DAG.
           </div>
         ) : detailsLoading ? (
-          <p className="mt-3 text-sm text-slate-600">Loading job details...</p>
+          <p className={`mt-3 text-sm ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-600"}`}>
+            Loading job details...
+          </p>
         ) : detailsError ? (
           <p className="mt-3 text-sm text-rose-600">{detailsError}</p>
         ) : (
             <div className="mt-4 space-y-4">
-            <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700">
+            <div
+              className={`rounded-xl p-4 text-sm ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-slate-950/18 text-slate-200"
+                  : "border border-slate-100 bg-slate-50 text-slate-700"
+              }`}
+            >
               <div className="font-medium">Job ID</div>
               <div className="break-all text-xs text-slate-500">{selectedJobId}</div>
               <div className="mt-2 text-xs text-slate-600">
