@@ -56,10 +56,14 @@ from .models import (
     ChatMessageRecord,
     ChatSessionRecord,
     EventOutboxRecord,
+    ExecutionRequestRecord,
     InvocationRecord,
     JobRecord,
     PlanRecord,
+    RunRecord,
     RunEventRecord,
+    RunStepRecord,
+    StepCheckpointRecord,
     StepAttemptRecord,
     TaskRecord,
     TaskResultRecord,
@@ -1043,15 +1047,17 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def _job_from_record(record: JobRecord) -> models.Job:
+    metadata = record.metadata_json if isinstance(record.metadata_json, dict) else {}
     return models.Job(
         id=record.id,
+        run_id=_run_id_from_metadata(metadata, record.id),
         goal=record.goal,
         context_json=record.context_json or {},
         status=record.status,
         created_at=record.created_at,
         updated_at=record.updated_at,
         priority=record.priority or 0,
-        metadata=record.metadata_json or {},
+        metadata=metadata,
     )
 
 
@@ -1065,6 +1071,15 @@ def _plan_from_record(record: PlanRecord) -> models.Plan:
         dag_edges=record.dag_edges or [],
         policy_decision=record.policy_decision or None,
     )
+
+
+def _run_id_from_metadata(metadata: Mapping[str, Any] | None, job_id: str) -> str:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    for key in ("canonical_run_id", "workflow_run_id"):
+        candidate = str(normalized.get(key) or "").strip()
+        if candidate:
+            return candidate
+    return job_id
 
 
 def _workflow_definition_from_record(
@@ -1237,10 +1252,174 @@ def _workflow_run_from_record(
             if isinstance(latest_task_failure, Mapping) and latest_task_failure.get("error")
             else None
         ),
+        run_id=record.id,
         user_id=record.user_id,
         metadata=record.metadata_json or {},
         created_at=record.created_at,
         updated_at=updated_at,
+    )
+
+
+def _run_kind_from_records(
+    job_record: JobRecord,
+    *,
+    workflow_run_record: WorkflowRunRecord | None = None,
+) -> models.RunKind:
+    metadata = job_record.metadata_json if isinstance(job_record.metadata_json, dict) else {}
+    raw_kind = str(metadata.get("run_kind") or "").strip()
+    try:
+        if raw_kind:
+            return models.RunKind(raw_kind)
+    except ValueError:
+        pass
+    workflow_source = str(metadata.get("workflow_source") or "").strip().lower()
+    if workflow_run_record is not None or workflow_source == "studio":
+        trigger_id = (
+            workflow_run_record.trigger_id
+            if workflow_run_record is not None
+            else str(metadata.get("workflow_trigger_id") or "").strip() or None
+        )
+        return models.RunKind.trigger if trigger_id else models.RunKind.studio
+    if workflow_source == "chat_direct":
+        return models.RunKind.chat_direct
+    if workflow_source == "api":
+        return models.RunKind.api
+    return models.RunKind.planner
+
+
+def _run_from_record(
+    record: RunRecord,
+    *,
+    job_record: JobRecord | None = None,
+    latest_task_failure: Mapping[str, Any] | None = None,
+) -> models.Run:
+    metadata = record.metadata_json if isinstance(record.metadata_json, dict) else {}
+    job_status: models.JobStatus | None = None
+    job_error: str | None = None
+    updated_at = record.updated_at
+    if job_record is not None:
+        try:
+            job_status = models.JobStatus(job_record.status)
+        except ValueError:
+            job_status = None
+        job_error = _job_error_from_metadata(
+            job_record.metadata_json if isinstance(job_record.metadata_json, dict) else {}
+        )
+        if isinstance(job_record.updated_at, datetime) and job_record.updated_at > updated_at:
+            updated_at = job_record.updated_at
+    try:
+        status = models.JobStatus(record.status)
+    except ValueError:
+        status = job_status or models.JobStatus.queued
+    return models.Run(
+        id=record.id,
+        kind=models.RunKind(record.kind),
+        title=record.title,
+        goal=record.goal or "",
+        requested_context_json=record.requested_context_json or {},
+        status=status,
+        job_id=record.job_id,
+        plan_id=record.plan_id,
+        workflow_run_id=record.workflow_run_id,
+        source_definition_id=record.source_definition_id,
+        source_version_id=record.source_version_id,
+        source_trigger_id=record.source_trigger_id,
+        job_status=job_status,
+        job_error=job_error,
+        latest_step_id=(
+            str(latest_task_failure.get("task_id"))
+            if isinstance(latest_task_failure, Mapping) and latest_task_failure.get("task_id")
+            else None
+        ),
+        latest_step_name=(
+            str(latest_task_failure.get("task_name"))
+            if isinstance(latest_task_failure, Mapping) and latest_task_failure.get("task_name")
+            else None
+        ),
+        latest_step_error=(
+            str(latest_task_failure.get("error"))
+            if isinstance(latest_task_failure, Mapping) and latest_task_failure.get("error")
+            else None
+        ),
+        user_id=record.user_id,
+        run_spec=record.run_spec_json or {},
+        metadata=metadata,
+        created_at=record.created_at,
+        updated_at=updated_at,
+    )
+
+
+def _run_step_from_record(
+    record: RunStepRecord,
+    *,
+    task_record: TaskRecord | None = None,
+) -> models.RunStep:
+    status_value = task_record.status if task_record is not None else record.status
+    try:
+        status = models.TaskStatus(status_value)
+    except ValueError:
+        status = models.TaskStatus.pending
+    intent_value = task_record.intent if task_record is not None else record.intent
+    try:
+        intent = models.ToolIntent(intent_value) if intent_value else None
+    except ValueError:
+        intent = None
+    return models.RunStep(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        plan_id=record.plan_id,
+        task_id=record.id,
+        spec_step_id=record.spec_step_id,
+        name=record.name,
+        description=record.description,
+        instruction=record.instruction or "",
+        status=status,
+        intent=intent,
+        capability_request_id=record.capability_request_id,
+        execution_request_id=record.execution_request_id,
+        capability_id=record.capability_id,
+        input_bindings=record.input_bindings_json or {},
+        execution_gate=record.execution_gate_json or None,
+        retry_policy=record.retry_policy_json or {},
+        acceptance_policy=record.acceptance_policy_json or {},
+        depends_on=record.depends_on_json or [],
+        metadata=record.metadata_json or {},
+        created_at=record.created_at,
+        updated_at=task_record.updated_at if task_record is not None else record.updated_at,
+    )
+
+
+def _execution_request_from_record(record: ExecutionRequestRecord) -> models.ExecutionRequest:
+    return models.ExecutionRequest(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        step_id=record.step_id,
+        step_attempt_id=record.step_attempt_id,
+        attempt_number=record.attempt_number,
+        status=record.status,
+        request=record.request_json or {},
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _step_checkpoint_from_record(record: StepCheckpointRecord) -> models.StepCheckpoint:
+    return models.StepCheckpoint(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        step_id=record.step_id,
+        step_attempt_id=record.step_attempt_id,
+        checkpoint_key=record.checkpoint_key,
+        payload=record.payload_json or {},
+        input_digest=record.input_digest,
+        replay_count=record.replay_count or 0,
+        source=record.source,
+        outcome=record.outcome,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -9329,6 +9508,14 @@ def _handle_plan_created(envelope: dict) -> None:
                 metadata["run_spec"] = planner_run_spec.model_dump(mode="json")
                 job.metadata_json = metadata
                 job.updated_at = now
+            if job:
+                _sync_shadow_run(
+                    db,
+                    job_record=job,
+                    plan_record=existing,
+                    plan=plan,
+                    run_spec=planner_run_spec,
+                )
             db.commit()
             _dispatch_ready_work_for_job(job_id, plan_id, envelope.get("correlation_id"))
             _refresh_job_status(job_id)
@@ -9413,7 +9600,14 @@ def _handle_plan_created(envelope: dict) -> None:
                 job.metadata_json = metadata
             _set_job_status(job, models.JobStatus.planning)
             job.updated_at = now
-        db.commit()
+            _sync_shadow_run(
+                db,
+                job_record=job,
+                plan_record=record,
+                plan=plan,
+                run_spec=planner_run_spec,
+            )
+            db.commit()
     for capability_id in selected_capabilities:
         planner_capability_selection_total.labels(capability=capability_id).inc()
     _dispatch_ready_work_for_job(job_id, plan_record_id, envelope.get("correlation_id"))
@@ -9437,6 +9631,7 @@ def _handle_plan_failed(envelope: dict) -> None:
             metadata["plan_error"] = error_message
             job.metadata_json = metadata
         job.updated_at = now
+        _sync_shadow_run_status(db, job)
         db.commit()
 
 
@@ -9461,6 +9656,14 @@ def _handle_task_completed(envelope: dict) -> None:
             payload=payload,
             status=models.TaskStatus.completed.value,
             occurred_at=occurred_at,
+        )
+        _update_execution_request_status(
+            db,
+            job=job,
+            task=task,
+            payload=payload,
+            status=models.TaskStatus.completed.value,
+            step_attempt_id=attempt.id,
         )
         _replace_attempt_invocations(db, attempt=attempt, task=task, payload=payload)
         for capability_id in task.tool_requests or []:
@@ -9501,6 +9704,14 @@ def _handle_task_failed(envelope: dict) -> None:
             status=models.TaskStatus.failed.value,
             occurred_at=occurred_at,
         )
+        _update_execution_request_status(
+            db,
+            job=job,
+            task=task,
+            payload=payload,
+            status=models.TaskStatus.failed.value,
+            step_attempt_id=attempt.id,
+        )
         _replace_attempt_invocations(db, attempt=attempt, task=task, payload=payload)
         for capability_id in task.tool_requests or []:
             normalized_capability = str(capability_id or "").strip()
@@ -9525,6 +9736,7 @@ def _handle_task_failed(envelope: dict) -> None:
         if job:
             _set_job_status(job, models.JobStatus.failed)
             job.updated_at = now
+            _sync_shadow_run_status(db, job)
         db.commit()
 
 
@@ -9594,16 +9806,25 @@ def _handle_task_started(envelope: dict) -> None:
             task.attempts = max(0, attempts)
         task.updated_at = now
         job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
-        _upsert_step_attempt_started(
+        attempt = _upsert_step_attempt_started(
             db,
             task=task,
             job=job,
             payload=payload,
             occurred_at=occurred_at,
         )
+        _update_execution_request_status(
+            db,
+            job=job,
+            task=task,
+            payload=payload,
+            status=models.TaskStatus.running.value,
+            step_attempt_id=attempt.id,
+        )
         if job:
             _set_job_status(job, models.JobStatus.running)
             job.updated_at = now
+            _sync_shadow_run_status(db, job)
         db.commit()
 
 
@@ -9659,6 +9880,14 @@ def _handle_task_accepted(envelope: dict) -> None:
             task=task,
             status=models.TaskStatus.accepted.value,
         )
+        _update_execution_request_status(
+            db,
+            job=db.query(JobRecord).filter(JobRecord.id == task.job_id).first(),
+            task=task,
+            payload=payload,
+            status=models.TaskStatus.accepted.value,
+            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+        )
         db.commit()
         job_id = task.job_id
         plan_id = task.plan_id
@@ -9680,6 +9909,14 @@ def _handle_task_rework(envelope: dict) -> None:
             db,
             task=task,
             status=models.TaskStatus.rework_requested.value,
+        )
+        _update_execution_request_status(
+            db,
+            job=db.query(JobRecord).filter(JobRecord.id == task.job_id).first(),
+            task=task,
+            payload=payload,
+            status=models.TaskStatus.rework_requested.value,
+            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
         )
         task.rework_count = (task.rework_count or 0) + 1
         if _limit_exceeded(task.rework_count, task.max_reworks):
@@ -9959,7 +10196,7 @@ def _task_payload_from_record(
     goal_text: str = "",
     intent_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return dispatch_service.task_payload_from_record(
+    payload = dispatch_service.task_payload_from_record(
         record,
         correlation_id,
         context=context,
@@ -9968,6 +10205,9 @@ def _task_payload_from_record(
         config=_dispatch_runtime().config,
         callbacks=_dispatch_callbacks(),
     )
+    if correlation_id:
+        _sync_execution_request_snapshot(payload)
+    return payload
 
 
 def _task_payload_with_error(
@@ -11404,6 +11644,7 @@ def _refresh_job_status(job_id: str) -> None:
                 status=next_status,
             )
         job.updated_at = now
+        _sync_shadow_run_status(db, job)
         db.commit()
 
 
@@ -11931,8 +12172,414 @@ def _extract_error_from_task_result(result: dict[str, Any]) -> str | None:
 
 def _durable_run_id(job: JobRecord | None, job_id: str) -> str:
     metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
-    workflow_run_id = str(metadata.get("workflow_run_id") or "").strip()
-    return workflow_run_id or job_id
+    return _run_id_from_metadata(metadata, job_id)
+
+
+def _delay_shadow_run_creation(metadata: Mapping[str, Any] | None) -> bool:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    workflow_source = str(normalized.get("workflow_source") or "").strip().lower()
+    run_kind = str(normalized.get("run_kind") or "").strip().lower()
+    return workflow_source == "studio" and run_kind not in {
+        models.RunKind.chat_direct.value,
+        models.RunKind.api.value,
+    }
+
+
+def _coerce_shadow_run_spec(
+    job_record: JobRecord,
+    *,
+    workflow_run_record: WorkflowRunRecord | None = None,
+    plan: models.PlanCreate | None = None,
+    run_spec: models.RunSpec | Mapping[str, Any] | None = None,
+) -> models.RunSpec | None:
+    parsed = run_specs.parse_run_spec(run_spec)
+    if parsed is not None:
+        return parsed
+    metadata = job_record.metadata_json if isinstance(job_record.metadata_json, dict) else {}
+    parsed = run_specs.parse_run_spec(metadata.get("run_spec"))
+    if parsed is not None:
+        return parsed
+    if plan is None:
+        return None
+    try:
+        return run_specs.plan_to_run_spec(
+            plan,
+            kind=_run_kind_from_records(job_record, workflow_run_record=workflow_run_record),
+        )
+    except ValueError as exc:
+        logger.warning(
+            "shadow_run_spec_coercion_failed",
+            extra={"job_id": job_record.id, "error": str(exc)},
+        )
+        return None
+
+
+def _sync_shadow_run_status(db: Session, job_record: JobRecord) -> None:
+    run_id = _durable_run_id(job_record, job_record.id)
+    record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if record is None:
+        return
+    record.status = job_record.status
+    if isinstance(job_record.updated_at, datetime):
+        record.updated_at = job_record.updated_at
+
+
+def _upsert_shadow_run(
+    db: Session,
+    *,
+    job_record: JobRecord,
+    plan_record: PlanRecord | None = None,
+    workflow_run_record: WorkflowRunRecord | None = None,
+    plan: models.PlanCreate | None = None,
+    run_spec: models.RunSpec | Mapping[str, Any] | None = None,
+) -> RunRecord:
+    run_id = (
+        workflow_run_record.id
+        if workflow_run_record is not None
+        else _durable_run_id(job_record, job_record.id)
+    )
+    record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if record is None:
+        record = RunRecord(
+            id=run_id,
+            kind=_run_kind_from_records(
+                job_record, workflow_run_record=workflow_run_record
+            ).value,
+            title=(
+                workflow_run_record.title
+                if workflow_run_record is not None
+                else str(job_record.goal or "Run")
+            ),
+            goal=(
+                workflow_run_record.goal
+                if workflow_run_record is not None
+                else str(job_record.goal or "")
+            ),
+            requested_context_json=(
+                workflow_run_record.requested_context_json
+                if workflow_run_record is not None
+                else (job_record.context_json or {})
+            ),
+            status=job_record.status,
+            job_id=job_record.id,
+            workflow_run_id=workflow_run_record.id if workflow_run_record is not None else None,
+            plan_id=plan_record.id if plan_record is not None else None,
+            source_definition_id=(
+                workflow_run_record.definition_id
+                if workflow_run_record is not None
+                else str(
+                    (job_record.metadata_json or {}).get("workflow_definition_id") or ""
+                ).strip()
+                or None
+            ),
+            source_version_id=(
+                workflow_run_record.version_id
+                if workflow_run_record is not None
+                else str((job_record.metadata_json or {}).get("workflow_version_id") or "").strip()
+                or None
+            ),
+            source_trigger_id=(
+                workflow_run_record.trigger_id
+                if workflow_run_record is not None
+                else str((job_record.metadata_json or {}).get("workflow_trigger_id") or "").strip()
+                or None
+            ),
+            user_id=(
+                workflow_run_record.user_id
+                if workflow_run_record is not None
+                else str((job_record.metadata_json or {}).get("semantic_user_id") or "").strip()
+                or None
+            ),
+            run_spec_json={},
+            metadata_json={},
+            created_at=(
+                workflow_run_record.created_at
+                if workflow_run_record is not None
+                else job_record.created_at
+            ),
+            updated_at=(
+                workflow_run_record.updated_at
+                if workflow_run_record is not None
+                else job_record.updated_at
+            ),
+        )
+        db.add(record)
+
+    parsed_run_spec = _coerce_shadow_run_spec(
+        job_record,
+        workflow_run_record=workflow_run_record,
+        plan=plan,
+        run_spec=run_spec,
+    )
+    metadata = dict(record.metadata_json or {})
+    metadata["legacy_job_id"] = job_record.id
+    if workflow_run_record is not None:
+        metadata["legacy_workflow_run_id"] = workflow_run_record.id
+    record.kind = _run_kind_from_records(
+        job_record, workflow_run_record=workflow_run_record
+    ).value
+    record.title = (
+        workflow_run_record.title
+        if workflow_run_record is not None
+        else str(job_record.goal or "Run")
+    )
+    record.goal = (
+        workflow_run_record.goal
+        if workflow_run_record is not None
+        else str(job_record.goal or "")
+    )
+    record.requested_context_json = (
+        workflow_run_record.requested_context_json
+        if workflow_run_record is not None
+        else (job_record.context_json or {})
+    )
+    record.status = job_record.status
+    record.job_id = job_record.id
+    record.workflow_run_id = (
+        workflow_run_record.id
+        if workflow_run_record is not None
+        else str((job_record.metadata_json or {}).get("workflow_run_id") or "").strip() or None
+    )
+    record.plan_id = (
+        plan_record.id if plan_record is not None else record.plan_id
+    )
+    record.source_definition_id = (
+        workflow_run_record.definition_id
+        if workflow_run_record is not None
+        else str((job_record.metadata_json or {}).get("workflow_definition_id") or "").strip()
+        or None
+    )
+    record.source_version_id = (
+        workflow_run_record.version_id
+        if workflow_run_record is not None
+        else str((job_record.metadata_json or {}).get("workflow_version_id") or "").strip()
+        or None
+    )
+    record.source_trigger_id = (
+        workflow_run_record.trigger_id
+        if workflow_run_record is not None
+        else str((job_record.metadata_json or {}).get("workflow_trigger_id") or "").strip()
+        or None
+    )
+    record.user_id = (
+        workflow_run_record.user_id
+        if workflow_run_record is not None
+        else str((job_record.metadata_json or {}).get("semantic_user_id") or "").strip()
+        or None
+    )
+    if parsed_run_spec is not None:
+        record.run_spec_json = parsed_run_spec.model_dump(mode="json")
+    record.metadata_json = metadata
+    if isinstance(job_record.updated_at, datetime):
+        record.updated_at = job_record.updated_at
+
+    job_metadata = dict(job_record.metadata_json or {})
+    if job_metadata.get("canonical_run_id") != run_id:
+        job_metadata["canonical_run_id"] = run_id
+        job_record.metadata_json = job_metadata
+    return record
+
+
+def _sync_shadow_run_steps(
+    db: Session,
+    *,
+    run_record: RunRecord,
+    plan_record: PlanRecord,
+    run_spec: models.RunSpec | None,
+) -> None:
+    if run_spec is None:
+        return
+    db.flush()
+    task_records = (
+        db.query(TaskRecord)
+        .filter(TaskRecord.plan_id == plan_record.id)
+        .all()
+    )
+    task_by_name = {task.name: task for task in task_records}
+    spec_task_ids = {
+        step.step_id: task_by_name[step.name].id
+        for step in run_spec.steps
+        if step.name in task_by_name
+    }
+    existing = {
+        record.id: record
+        for record in db.query(RunStepRecord).filter(RunStepRecord.run_id == run_record.id).all()
+    }
+    seen: set[str] = set()
+    for step in run_spec.steps:
+        task = task_by_name.get(step.name)
+        if task is None:
+            continue
+        seen.add(task.id)
+        record = existing.get(task.id)
+        if record is None:
+            record = RunStepRecord(
+                id=task.id,
+                run_id=run_record.id,
+                job_id=run_record.job_id,
+                plan_id=plan_record.id,
+                spec_step_id=step.step_id,
+                name=step.name,
+                description=step.description,
+                instruction=step.instruction or "",
+                status=task.status,
+                intent=task.intent,
+                capability_request_id=step.capability_request.request_id,
+                execution_request_id=step.capability_request.execution_request_id,
+                capability_id=step.capability_request.capability_id,
+                input_bindings_json={},
+                execution_gate_json=None,
+                retry_policy_json={},
+                acceptance_policy_json={},
+                depends_on_json=[],
+                metadata_json={},
+                created_at=task.created_at,
+                updated_at=task.updated_at,
+            )
+            db.add(record)
+        record.run_id = run_record.id
+        record.job_id = run_record.job_id
+        record.plan_id = plan_record.id
+        record.spec_step_id = step.step_id
+        record.name = step.name
+        record.description = step.description
+        record.instruction = step.instruction or ""
+        record.status = task.status
+        record.intent = task.intent
+        record.capability_request_id = step.capability_request.request_id
+        record.execution_request_id = step.capability_request.execution_request_id
+        record.capability_id = step.capability_request.capability_id
+        record.input_bindings_json = dict(step.input_bindings or {})
+        record.execution_gate_json = (
+            dict(step.execution_gate) if isinstance(step.execution_gate, Mapping) else None
+        )
+        record.retry_policy_json = step.retry_policy.model_dump(mode="json")
+        record.acceptance_policy_json = step.acceptance_policy.model_dump(mode="json")
+        record.depends_on_json = [
+            spec_task_ids.get(dep_id, dep_id) for dep_id in step.depends_on
+        ]
+        record.metadata_json = dict(step.routing_hints or {})
+        record.created_at = task.created_at
+        record.updated_at = task.updated_at
+    stale_ids = [record_id for record_id in existing if record_id not in seen]
+    if stale_ids:
+        db.query(RunStepRecord).filter(RunStepRecord.id.in_(stale_ids)).delete(
+            synchronize_session=False
+        )
+
+
+def _sync_shadow_run(
+    db: Session,
+    *,
+    job_record: JobRecord,
+    plan_record: PlanRecord | None = None,
+    workflow_run_record: WorkflowRunRecord | None = None,
+    plan: models.PlanCreate | None = None,
+    run_spec: models.RunSpec | Mapping[str, Any] | None = None,
+) -> RunRecord:
+    record = _upsert_shadow_run(
+        db,
+        job_record=job_record,
+        plan_record=plan_record,
+        workflow_run_record=workflow_run_record,
+        plan=plan,
+        run_spec=run_spec,
+    )
+    if plan_record is not None:
+        parsed_run_spec = _coerce_shadow_run_spec(
+            job_record,
+            workflow_run_record=workflow_run_record,
+            plan=plan,
+            run_spec=run_spec,
+        )
+        _sync_shadow_run_steps(
+            db,
+            run_record=record,
+            plan_record=plan_record,
+            run_spec=parsed_run_spec,
+        )
+    return record
+
+
+def _execution_request_record_id(run_id: str, step_id: str, attempt_number: int) -> str:
+    return f"{run_id}:{step_id}:{max(1, int(attempt_number))}"
+
+
+def _sync_execution_request_snapshot(
+    task_payload: Mapping[str, Any] | None,
+) -> None:
+    if not isinstance(task_payload, Mapping):
+        return
+    task_id = str(task_payload.get("task_id") or "").strip()
+    job_id = str(task_payload.get("job_id") or "").strip()
+    if not task_id or not job_id:
+        return
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
+        if task is None:
+            return
+        job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+        if job is None:
+            return
+        run_id = _durable_run_id(job, job_id)
+        attempts = int(task_payload.get("attempts") or 1)
+        execution_request = execution_contracts.build_task_execution_request(task_payload)
+        record_id = _execution_request_record_id(run_id, task_id, attempts)
+        record = (
+            db.query(ExecutionRequestRecord)
+            .filter(ExecutionRequestRecord.id == record_id)
+            .first()
+        )
+        now = _utcnow()
+        status = "invalid" if task_payload.get("tool_inputs_validation") else "prepared"
+        if record is None:
+            record = ExecutionRequestRecord(
+                id=record_id,
+                run_id=run_id,
+                job_id=job_id,
+                step_id=task_id,
+                step_attempt_id=None,
+                attempt_number=attempts,
+                status=status,
+                request_json={},
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(record)
+        record.run_id = run_id
+        record.job_id = job_id
+        record.step_id = task_id
+        record.attempt_number = attempts
+        record.status = status
+        record.request_json = execution_request.model_dump(mode="json", exclude_none=True)
+        record.updated_at = now
+        db.commit()
+
+
+def _update_execution_request_status(
+    db: Session,
+    *,
+    job: JobRecord | None,
+    task: TaskRecord,
+    payload: Mapping[str, Any] | None,
+    status: str,
+    step_attempt_id: str | None = None,
+) -> None:
+    attempts = _payload_attempt_number(payload)
+    if attempts is None:
+        attempts = max(int(task.attempts or 0), 1)
+    run_id = _durable_run_id(job, task.job_id)
+    record_id = _execution_request_record_id(run_id, task.id, attempts)
+    record = (
+        db.query(ExecutionRequestRecord)
+        .filter(ExecutionRequestRecord.id == record_id)
+        .first()
+    )
+    if record is None:
+        return
+    record.status = status
+    record.step_attempt_id = step_attempt_id
+    record.updated_at = _utcnow()
 
 
 def _payload_attempt_number(payload: Mapping[str, Any] | None) -> int | None:
@@ -13039,6 +13686,8 @@ def _create_job_internal(
         metadata["goal_intent_graph"] = goal_intent_graph.model_dump(mode="json", exclude_none=True)
     if isinstance(metadata_overrides, Mapping):
         metadata.update(dict(metadata_overrides))
+    if not _delay_shadow_run_creation(metadata):
+        metadata["canonical_run_id"] = job_id
     record = JobRecord(
         id=job_id,
         goal=job.goal,
@@ -13050,6 +13699,8 @@ def _create_job_internal(
         metadata_json=metadata,
     )
     db.add(record)
+    if not _delay_shadow_run_creation(metadata):
+        _upsert_shadow_run(db, job_record=record)
     db.commit()
     jobs_created_total.inc()
     if interaction_summaries_raw:
@@ -13292,6 +13943,7 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
     normalization_fields = _normalization_response_fields(metadata, goal=job.goal or "")
     return models.JobDetails(
         job_id=job_id,
+        run_id=_run_id_from_metadata(metadata, job_id),
         job_status=models.JobStatus(job.status),
         job_error=_job_error_from_metadata(metadata),
         plan=_plan_from_record(plan_record) if plan_record else None,
@@ -13472,6 +14124,287 @@ def get_job_event_outbox(
     }
 
 
+def _run_debugger_payload(
+    run_record: RunRecord,
+    *,
+    db: Session,
+    limit: int,
+) -> dict[str, Any]:
+    job = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="run_job_not_found")
+    plan_record = (
+        db.query(PlanRecord).filter(PlanRecord.id == run_record.plan_id).first()
+        if isinstance(run_record.plan_id, str) and run_record.plan_id
+        else db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+    )
+    step_records = (
+        db.query(RunStepRecord)
+        .filter(RunStepRecord.run_id == run_record.id)
+        .order_by(RunStepRecord.created_at.asc(), RunStepRecord.name.asc())
+        .all()
+    )
+    task_records = (
+        db.query(TaskRecord)
+        .filter(TaskRecord.id.in_([record.id for record in step_records]))
+        .all()
+        if step_records
+        else db.query(TaskRecord).filter(TaskRecord.job_id == job.id).all()
+    )
+    task_by_id = {record.id: record for record in task_records}
+    timeline = [
+        _debugger_timeline_entry_from_run_event(row)
+        for row in (
+            db.query(RunEventRecord)
+            .filter(RunEventRecord.run_id == run_record.id)
+            .order_by(RunEventRecord.occurred_at.asc())
+            .limit(limit)
+            .all()
+        )
+    ]
+    timeline_by_task: dict[str, list[dict[str, Any]]] = {}
+    for entry in timeline:
+        task_id = entry.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            timeline_by_task.setdefault(task_id, []).append(entry)
+    step_attempts = [
+        attempt
+        for attempt in _list_step_attempts_for_job(db, job.id)
+        if attempt.run_id == run_record.id
+    ]
+    invocations = [
+        invocation
+        for invocation in _list_invocations_for_job(db, job.id)
+        if invocation.run_id == run_record.id
+    ]
+    invocations_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for invocation in invocations:
+        invocations_by_attempt.setdefault(invocation.step_attempt_id, []).append(
+            invocation.model_dump(mode="json")
+        )
+    attempts_by_task: dict[str, list[dict[str, Any]]] = {}
+    for attempt in step_attempts:
+        payload = attempt.model_dump(mode="json")
+        payload["invocations"] = invocations_by_attempt.get(attempt.id, [])
+        attempts_by_task.setdefault(attempt.step_id, []).append(payload)
+    execution_requests = (
+        db.query(ExecutionRequestRecord)
+        .filter(ExecutionRequestRecord.run_id == run_record.id)
+        .order_by(
+            ExecutionRequestRecord.created_at.asc(),
+            ExecutionRequestRecord.attempt_number.asc(),
+        )
+        .all()
+    )
+    execution_requests_by_step: dict[str, list[dict[str, Any]]] = {}
+    for request in execution_requests:
+        execution_requests_by_step.setdefault(request.step_id, []).append(
+            _execution_request_from_record(request).model_dump(mode="json")
+        )
+    checkpoints = (
+        db.query(StepCheckpointRecord)
+        .filter(StepCheckpointRecord.run_id == run_record.id)
+        .order_by(StepCheckpointRecord.created_at.asc())
+        .all()
+    )
+    checkpoints_by_step: dict[str, list[dict[str, Any]]] = {}
+    for checkpoint in checkpoints:
+        checkpoints_by_step.setdefault(checkpoint.step_id, []).append(
+            _step_checkpoint_from_record(checkpoint).model_dump(mode="json")
+        )
+    latest_failure = _latest_task_failures_for_jobs(db, [job.id]).get(job.id)
+    steps_payload: list[dict[str, Any]] = []
+    for step_record in step_records:
+        task_record = task_by_id.get(step_record.id)
+        latest_result = _load_task_result(step_record.id)
+        latest_error = _extract_error_from_task_result(latest_result)
+        if not latest_error:
+            for entry in reversed(timeline_by_task.get(step_record.id, [])):
+                error = entry.get("error")
+                if isinstance(error, str) and error:
+                    latest_error = error
+                    break
+        steps_payload.append(
+            {
+                "step": _run_step_from_record(
+                    step_record,
+                    task_record=task_record,
+                ).model_dump(mode="json"),
+                "latest_result": latest_result,
+                "execution_requests": execution_requests_by_step.get(step_record.id, []),
+                "checkpoints": checkpoints_by_step.get(step_record.id, []),
+                "attempts": attempts_by_task.get(step_record.id, []),
+                "timeline": timeline_by_task.get(step_record.id, []),
+                "error": _classify_task_error(latest_error),
+            }
+        )
+    return {
+        "run": _run_from_record(
+            run_record,
+            job_record=job,
+            latest_task_failure=latest_failure,
+        ).model_dump(mode="json"),
+        "job": _job_from_record(job).model_dump(mode="json"),
+        "plan": _plan_from_record(plan_record).model_dump(mode="json") if plan_record else None,
+        "generated_at": _utcnow().isoformat(),
+        "steps": steps_payload,
+        "attempts": [attempt.model_dump(mode="json") for attempt in step_attempts],
+        "invocations": [invocation.model_dump(mode="json") for invocation in invocations],
+        "events": timeline,
+        "execution_requests": [
+            _execution_request_from_record(request).model_dump(mode="json")
+            for request in execution_requests
+        ],
+        "checkpoints": [
+            _step_checkpoint_from_record(checkpoint).model_dump(mode="json")
+            for checkpoint in checkpoints
+        ],
+    }
+
+
+@app.get("/runs", response_model=List[models.Run])
+def list_runs(
+    limit: int = Query(20, ge=1, le=100),
+    kind: models.RunKind | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[models.Run]:
+    query = db.query(RunRecord)
+    if kind is not None:
+        query = query.filter(RunRecord.kind == kind.value)
+    records = query.order_by(RunRecord.created_at.desc()).limit(limit).all()
+    job_ids = [record.job_id for record in records if isinstance(record.job_id, str)]
+    job_map = (
+        {job.id: job for job in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()}
+        if job_ids
+        else {}
+    )
+    latest_failures = _latest_task_failures_for_jobs(db, job_ids)
+    return [
+        _run_from_record(
+            record,
+            job_record=job_map.get(record.job_id),
+            latest_task_failure=latest_failures.get(record.job_id),
+        )
+        for record in records
+    ]
+
+
+@app.get("/runs/{run_id}", response_model=models.Run)
+def get_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
+    record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    job = db.query(JobRecord).filter(JobRecord.id == record.job_id).first()
+    latest_failure = _latest_task_failures_for_jobs(db, [record.job_id]).get(record.job_id)
+    return _run_from_record(record, job_record=job, latest_task_failure=latest_failure)
+
+
+@app.get("/runs/{run_id}/steps", response_model=List[models.RunStep])
+def list_run_steps(run_id: str, db: Session = Depends(get_db)) -> List[models.RunStep]:
+    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if run_record is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    records = (
+        db.query(RunStepRecord)
+        .filter(RunStepRecord.run_id == run_id)
+        .order_by(RunStepRecord.created_at.asc(), RunStepRecord.name.asc())
+        .all()
+    )
+    task_map = {
+        task.id: task
+        for task in (
+            db.query(TaskRecord)
+            .filter(TaskRecord.id.in_([record.id for record in records]))
+            .all()
+            if records
+            else []
+        )
+    }
+    return [
+        _run_step_from_record(record, task_record=task_map.get(record.id))
+        for record in records
+    ]
+
+
+@app.get("/runs/{run_id}/debugger")
+def get_run_debugger(
+    run_id: str,
+    limit: int = Query(400, ge=50, le=2000),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if run_record is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    return _run_debugger_payload(run_record, db=db, limit=limit)
+
+
+@app.post("/runs/{run_id}/cancel", response_model=models.Run)
+def cancel_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
+    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if run_record is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    job = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="run_job_not_found")
+    if not state_machine.validate_job_transition(
+        models.JobStatus(job.status), models.JobStatus.canceled
+    ):
+        raise HTTPException(status_code=400, detail="Invalid state transition")
+    job.status = models.JobStatus.canceled.value
+    job.updated_at = _utcnow()
+    _sync_shadow_run_status(db, job)
+    db.commit()
+    _emit_event("job.canceled", {"job_id": job.id, "correlation_id": str(uuid.uuid4())})
+    return _run_from_record(run_record, job_record=job)
+
+
+@app.post("/runs/{run_id}/resume", response_model=models.Run)
+def resume_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
+    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if run_record is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    job = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="run_job_not_found")
+    if models.JobStatus(job.status) != models.JobStatus.canceled:
+        raise HTTPException(status_code=400, detail="Job is not canceled")
+    _set_job_status(job, models.JobStatus.planning)
+    job.updated_at = _utcnow()
+    _sync_shadow_run_status(db, job)
+    db.commit()
+    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+    if plan is not None:
+        _dispatch_ready_work_for_job(job.id, plan.id, None)
+    return _run_from_record(run_record, job_record=job)
+
+
+@app.post("/runs/{run_id}/retry", response_model=models.Run)
+def retry_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
+    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if run_record is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    job = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="run_job_not_found")
+    if models.JobStatus(job.status) not in {models.JobStatus.failed, models.JobStatus.canceled}:
+        raise HTTPException(status_code=400, detail="Job is not retryable")
+    now = _utcnow()
+    tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job.id).all()
+    for task in tasks:
+        task.status = models.TaskStatus.pending.value
+        task.attempts = 0
+        task.rework_count = 0
+        task.updated_at = now
+    _set_job_status(job, models.JobStatus.planning)
+    job.updated_at = now
+    _sync_shadow_run_status(db, job)
+    db.commit()
+    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+    if plan is not None:
+        _dispatch_ready_work_for_job(job.id, plan.id, None)
+    return _run_from_record(run_record, job_record=job)
+
+
 @app.get("/tasks/{task_id}", response_model=models.Task)
 def get_task(task_id: str, db: Session = Depends(get_db)) -> models.Task:
     task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
@@ -13495,6 +14428,7 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
         raise HTTPException(status_code=400, detail="Invalid state transition")
     job.status = models.JobStatus.canceled.value
     job.updated_at = _utcnow()
+    _sync_shadow_run_status(db, job)
     db.commit()
     _emit_event("job.canceled", {"job_id": job_id, "correlation_id": str(uuid.uuid4())})
     return _job_from_record(job)
@@ -13509,6 +14443,7 @@ def resume_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
         raise HTTPException(status_code=400, detail="Job is not canceled")
     _set_job_status(job, models.JobStatus.planning)
     job.updated_at = _utcnow()
+    _sync_shadow_run_status(db, job)
     db.commit()
     plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
     if plan:
@@ -13532,6 +14467,7 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
         task.updated_at = now
     _set_job_status(job, models.JobStatus.planning)
     job.updated_at = now
+    _sync_shadow_run_status(db, job)
     db.commit()
     plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
     if plan:
@@ -13562,6 +14498,7 @@ def retry_failed_tasks(job_id: str, db: Session = Depends(get_db)) -> models.Job
         task.updated_at = now
     _set_job_status(job, models.JobStatus.planning)
     job.updated_at = now
+    _sync_shadow_run_status(db, job)
     db.commit()
     plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
     if plan:
@@ -13593,6 +14530,7 @@ def retry_task(
     task.updated_at = now
     _set_job_status(job, models.JobStatus.planning)
     job.updated_at = now
+    _sync_shadow_run_status(db, job)
     db.commit()
     stream_id = payload.get("stream_id")
     if isinstance(stream_id, str) and stream_id:
@@ -13622,8 +14560,22 @@ def replan_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     job.metadata_json = metadata
     job.status = models.JobStatus.planning.value
     job.updated_at = _utcnow()
+    run_id = _durable_run_id(job, job.id)
     db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete(synchronize_session=False)
     db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete(synchronize_session=False)
+    db.query(RunStepRecord).filter(RunStepRecord.run_id == run_id).delete(synchronize_session=False)
+    db.query(ExecutionRequestRecord).filter(
+        ExecutionRequestRecord.run_id == run_id
+    ).delete(synchronize_session=False)
+    db.query(StepCheckpointRecord).filter(
+        StepCheckpointRecord.run_id == run_id
+    ).delete(synchronize_session=False)
+    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if run_record is not None:
+        run_record.plan_id = None
+        run_record.run_spec_json = {}
+        run_record.status = job.status
+        run_record.updated_at = job.updated_at
     db.commit()
     _emit_event("job.created", _job_from_record(job).model_dump())
     return _job_from_record(job)
@@ -13634,6 +14586,11 @@ def clear_job(job_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    run_id = _durable_run_id(job, job.id)
+    db.query(RunStepRecord).filter(RunStepRecord.run_id == run_id).delete()
+    db.query(ExecutionRequestRecord).filter(ExecutionRequestRecord.run_id == run_id).delete()
+    db.query(StepCheckpointRecord).filter(StepCheckpointRecord.run_id == run_id).delete()
+    db.query(RunRecord).filter(RunRecord.id == run_id).delete()
     db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete()
     db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete()
     db.query(JobRecord).filter(JobRecord.id == job_id).delete()
@@ -14961,10 +15918,19 @@ def _run_workflow_version_internal(
     if job_record is not None:
         job_metadata = dict(job_record.metadata_json or {})
         job_metadata["workflow_run_id"] = run_record.id
+        job_metadata["canonical_run_id"] = run_record.id
         if trigger is not None:
             job_metadata["workflow_trigger_id"] = trigger.id
         job_record.metadata_json = job_metadata
         job_record.updated_at = now
+        _sync_shadow_run(
+            db,
+            job_record=job_record,
+            plan_record=db.query(PlanRecord).filter(PlanRecord.id == plan_record.id).first(),
+            workflow_run_record=run_record,
+            plan=compiled_plan,
+            run_spec=run_spec,
+        )
     db.commit()
     db.refresh(run_record)
     if use_postgres_scheduler:
@@ -15358,6 +16324,15 @@ def _create_plan_internal(
     if job:
         _merge_task_intent_profiles_into_job_metadata(job, task_intent_profiles)
         job.updated_at = now
+        if not _delay_shadow_run_creation(
+            job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        ):
+            _sync_shadow_run(
+                db,
+                job_record=job,
+                plan_record=record,
+                plan=plan,
+            )
     db.commit()
     if emit_plan_created_event:
         payload = _plan_created_payload(plan, job_id)

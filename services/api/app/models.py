@@ -154,6 +154,38 @@ class WorkflowRunRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime)
 
 
+class RunRecord(Base):
+    __tablename__ = "runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str] = mapped_column(String)
+    goal: Mapped[str] = mapped_column(String, default="")
+    requested_context_json: Mapped[Dict[str, Any]] = mapped_column(
+        "requested_context", JSON, default=dict
+    )
+    status: Mapped[str] = mapped_column(String, index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_runs.id"), nullable=True, index=True
+    )
+    plan_id: Mapped[str | None] = mapped_column(ForeignKey("plans.id"), nullable=True, index=True)
+    source_definition_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_definitions.id"), nullable=True, index=True
+    )
+    source_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_versions.id"), nullable=True, index=True
+    )
+    source_trigger_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_triggers.id"), nullable=True, index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    run_spec_json: Mapped[Dict[str, Any]] = mapped_column("run_spec", JSON, default=dict)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
 class PlanRecord(Base):
     __tablename__ = "plans"
 
@@ -197,6 +229,36 @@ class TaskRecord(Base):
     plan: Mapped[PlanRecord] = relationship("PlanRecord", back_populates="tasks")
 
 
+class RunStepRecord(Base):
+    __tablename__ = "run_steps"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    plan_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    spec_step_id: Mapped[str] = mapped_column(String, index=True)
+    name: Mapped[str] = mapped_column(String)
+    description: Mapped[str] = mapped_column(String)
+    instruction: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, index=True)
+    intent: Mapped[str | None] = mapped_column(String, nullable=True)
+    capability_request_id: Mapped[str] = mapped_column(String)
+    execution_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    capability_id: Mapped[str] = mapped_column(String, index=True)
+    input_bindings_json: Mapped[Dict[str, Any]] = mapped_column("input_bindings", JSON, default=dict)
+    execution_gate_json: Mapped[Dict[str, Any] | None] = mapped_column(
+        "execution_gate", JSON, nullable=True
+    )
+    retry_policy_json: Mapped[Dict[str, Any]] = mapped_column("retry_policy", JSON, default=dict)
+    acceptance_policy_json: Mapped[Dict[str, Any]] = mapped_column(
+        "acceptance_policy", JSON, default=dict
+    )
+    depends_on_json: Mapped[List[str]] = mapped_column("depends_on", JSON, default=list)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
 class TaskResultRecord(Base):
     __tablename__ = "task_results"
 
@@ -226,6 +288,47 @@ class StepAttemptRecord(Base):
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     retry_classification: Mapped[str | None] = mapped_column(String, nullable=True)
     result_summary_json: Mapped[Dict[str, Any]] = mapped_column("result_summary", JSON, default=dict)
+
+
+class ExecutionRequestRecord(Base):
+    __tablename__ = "execution_requests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    step_id: Mapped[str] = mapped_column(String, index=True)
+    step_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("step_attempts.id"),
+        nullable=True,
+        index=True,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String, default="", index=True)
+    request_json: Mapped[Dict[str, Any]] = mapped_column("request", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class StepCheckpointRecord(Base):
+    __tablename__ = "step_checkpoints"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    step_id: Mapped[str] = mapped_column(String, index=True)
+    step_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("step_attempts.id"),
+        nullable=True,
+        index=True,
+    )
+    checkpoint_key: Mapped[str] = mapped_column(String, index=True)
+    payload_json: Mapped[Dict[str, Any]] = mapped_column("payload", JSON, default=dict)
+    input_digest: Mapped[str | None] = mapped_column(String, nullable=True)
+    replay_count: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
 class InvocationRecord(Base):

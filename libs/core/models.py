@@ -253,6 +253,7 @@ class EventEnvelope(BaseModel):
 
 class Job(BaseModel):
     id: str
+    run_id: Optional[str] = None
     goal: str
     context_json: Dict[str, Any] = Field(default_factory=dict)
     status: JobStatus
@@ -302,6 +303,7 @@ class Task(BaseModel):
 
 class JobDetails(BaseModel):
     job_id: str
+    run_id: Optional[str] = None
     job_status: Optional[JobStatus] = None
     job_error: Optional[str] = None
     plan: Optional[Plan] = None
@@ -407,6 +409,85 @@ class RunSpec(BaseModel):
     dag_edges: List[List[str]] = Field(default_factory=list)
     capability_requests: List[CapabilityRequestSpec] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class Run(BaseModel):
+    id: str
+    kind: RunKind
+    title: str
+    goal: str = ""
+    requested_context_json: Dict[str, Any] = Field(default_factory=dict)
+    status: JobStatus
+    job_id: str
+    plan_id: Optional[str] = None
+    workflow_run_id: Optional[str] = None
+    source_definition_id: Optional[str] = None
+    source_version_id: Optional[str] = None
+    source_trigger_id: Optional[str] = None
+    job_status: Optional[JobStatus] = None
+    job_error: Optional[str] = None
+    latest_step_id: Optional[str] = None
+    latest_step_name: Optional[str] = None
+    latest_step_error: Optional[str] = None
+    user_id: Optional[str] = None
+    run_spec: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class RunStep(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    plan_id: Optional[str] = None
+    task_id: str
+    spec_step_id: str
+    name: str
+    description: str
+    instruction: str = ""
+    status: TaskStatus
+    intent: Optional[ToolIntent] = None
+    capability_request_id: str
+    execution_request_id: Optional[str] = None
+    capability_id: str
+    input_bindings: Dict[str, Any] = Field(default_factory=dict)
+    execution_gate: Optional[Dict[str, Any]] = None
+    retry_policy: Dict[str, Any] = Field(default_factory=dict)
+    acceptance_policy: Dict[str, Any] = Field(default_factory=dict)
+    depends_on: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExecutionRequest(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    step_id: str
+    step_attempt_id: Optional[str] = None
+    attempt_number: int = 1
+    status: str = ""
+    request: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class StepCheckpoint(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    step_id: str
+    step_attempt_id: Optional[str] = None
+    checkpoint_key: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    input_digest: Optional[str] = None
+    replay_count: int = 0
+    source: Optional[str] = None
+    outcome: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class StepAttempt(BaseModel):
@@ -729,6 +810,7 @@ class WorkflowTrigger(BaseModel):
 
 class WorkflowRun(BaseModel):
     id: str
+    run_id: Optional[str] = None
     definition_id: str
     version_id: str
     trigger_id: Optional[str] = None

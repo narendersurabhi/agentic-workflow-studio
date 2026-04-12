@@ -6,6 +6,109 @@ body {
   @apply bg-slate-50 text-slate-900;
 }
 
+.app-shell-light {
+  background-color: #eaf1f7;
+  color: rgb(15 23 42);
+}
+
+.app-shell-light [class*="text-white/"] {
+  color: rgb(30 41 59 / 0.82);
+}
+
+.app-shell-light [class*="text-white"],
+.app-shell-light [class*="text-slate-50"],
+.app-shell-light [class*="text-slate-100"] {
+  color: rgb(15 23 42 / 0.96);
+}
+
+.app-shell-light [class*="text-slate-200"] {
+  color: rgb(51 65 85 / 0.86);
+}
+
+.app-shell-light [class*="text-slate-300"] {
+  color: rgb(71 85 105 / 0.82);
+}
+
+.app-shell-light [class*="text-slate-400"],
+.app-shell-light [class*="text-slate-500"] {
+  color: rgb(100 116 139 / 0.9);
+}
+
+.app-shell-light [class*="text-sky-50"],
+.app-shell-light [class*="text-sky-100"],
+.app-shell-light [class*="text-sky-200"] {
+  color: rgb(3 105 161 / 0.92);
+}
+
+.app-shell-light [class*="text-emerald-100"] {
+  color: rgb(6 95 70 / 0.94);
+}
+
+.app-shell-light [class*="text-rose-100"] {
+  color: rgb(159 18 57 / 0.94);
+}
+
+.app-shell-light [class*="text-amber-100"] {
+  color: rgb(146 64 14 / 0.94);
+}
+
+.app-shell-light [class*="placeholder:text-white/"]::placeholder,
+.app-shell-light [class*="placeholder:text-slate-400/"]::placeholder,
+.app-shell-light [class*="placeholder:text-slate-300/"]::placeholder {
+  color: rgb(100 116 139 / 0.72);
+}
+
+.app-shell-light [class*="border-white/"] {
+  border-color: rgb(203 213 225 / 0.88);
+}
+
+.app-shell-light [class*="bg-white/"] {
+  background-color: rgb(255 255 255 / 0.84);
+}
+
+.app-shell-light [class*="bg-slate-950/"] {
+  background-color: rgb(255 255 255 / 0.78);
+}
+
+.app-shell-light [class*="bg-sky-300/"],
+.app-shell-light [class*="bg-sky-400/"] {
+  background-color: rgb(14 165 233 / 0.12);
+}
+
+.app-shell-light [class*="bg-emerald-300/"],
+.app-shell-light [class*="bg-emerald-400/"] {
+  background-color: rgb(16 185 129 / 0.12);
+}
+
+.app-shell-light [class*="bg-rose-300/"],
+.app-shell-light [class*="bg-rose-400/"] {
+  background-color: rgb(244 63 94 / 0.12);
+}
+
+.app-shell-light [class*="bg-amber-300/"],
+.app-shell-light [class*="bg-amber-400/"] {
+  background-color: rgb(245 158 11 / 0.14);
+}
+
+.app-shell-light
+  [class*="bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))]"],
+.app-shell-light
+  [class*="bg-[linear-gradient(180deg,rgba(63,79,95,0.54),rgba(47,60,74,0.68))]"],
+.app-shell-light
+  [class*="bg-[linear-gradient(180deg,rgba(37,49,61,0.86),rgba(16,24,34,0.9))]"],
+.app-shell-light
+  [class*="bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(9,17,27,0.96))]"],
+.app-shell-light
+  [class*="bg-[linear-gradient(180deg,rgba(26,36,48,0.78),rgba(35,46,59,0.86))]"] {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.98));
+}
+
+.app-shell-light [class*="shadow-[0_24px_60px_rgba(15,23,42,0.18)"] {
+  box-shadow:
+    0 18px 44px rgba(148, 163, 184, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
 .app-shell-dark {
   background-color: #4f6274;
   color: rgb(248 250 252);
