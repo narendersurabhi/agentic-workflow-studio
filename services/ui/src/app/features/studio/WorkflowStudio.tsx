@@ -1,6 +1,8 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import ComposerDagCanvas from "../../components/composer/ComposerDagCanvas";
 import ComposerValidationPanel from "../../components/composer/ComposerValidationPanel";
@@ -10,6 +12,7 @@ import {
 } from "../../components/workflow/WorkflowNodeIcon";
 import StudioCapabilityPalette from "./StudioCapabilityPalette";
 import StudioCompilePanel from "./StudioCompilePanel";
+import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
 import StudioWorkflowInterfacePanel from "./StudioWorkflowInterfacePanel";
 import StudioNodeInspector from "./StudioNodeInspector";
 import StudioWorkflowLibrary from "./StudioWorkflowLibrary";
@@ -173,76 +176,77 @@ const dagNodeOutputAnchorY = (
   return DAG_CANVAS_NODE_HEIGHT / 2;
 };
 
-type StudioWorkbenchIconKind =
-  | "menu"
-  | "palette"
-  | "graph"
-  | "library"
-  | "inspect"
-  | "run";
+const normalizeDagBranchLabel = (branchLabel?: string) =>
+  String(branchLabel || "").trim().toLowerCase();
 
-function StudioWorkbenchIcon({
-  kind,
-  className = "",
+const buildDagEdgeRoute = ({
+  startX,
+  startY,
+  endX,
+  endY,
+  branchLabel,
 }: {
-  kind: StudioWorkbenchIconKind;
-  className?: string;
-}) {
-  const sharedProps = {
-    fill: "none",
-    stroke: "currentColor",
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    strokeWidth: 1.8,
-  };
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  branchLabel?: string;
+}) => {
+  const normalizedBranchLabel = normalizeDagBranchLabel(branchLabel);
+  const deltaX = endX - startX;
+  const deltaY = endY - startY;
+  const horizontalDistance = Math.max(Math.abs(deltaX), 1);
+  const branchDirection =
+    normalizedBranchLabel.includes("false") || normalizedBranchLabel.includes("else")
+      ? 1
+      : normalizedBranchLabel
+        ? -1
+        : 0;
 
-  switch (kind) {
-    case "menu":
-      return (
-        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-          <path d="M5 7h14M5 12h9M5 17h14" {...sharedProps} />
-        </svg>
-      );
-    case "palette":
-      return (
-        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-          <rect x="4" y="4" width="16" height="16" rx="3.5" {...sharedProps} />
-          <path d="M7 8h10M7 12h10M7 16h7" {...sharedProps} />
-        </svg>
-      );
-    case "graph":
-      return (
-        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-          <circle cx="6.5" cy="17.5" r="2.5" {...sharedProps} />
-          <circle cx="12" cy="6.5" r="2.5" {...sharedProps} />
-          <circle cx="18" cy="14" r="2.5" {...sharedProps} />
-          <path d="M8.4 15.8 10.2 8.4M14.2 8.2l2.2 3.5M8.7 16.4l6.8-1.6" {...sharedProps} />
-        </svg>
-      );
-    case "library":
-      return (
-        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-          <rect x="4" y="5" width="6" height="14" rx="1.8" {...sharedProps} />
-          <rect x="14" y="5" width="6" height="14" rx="1.8" {...sharedProps} />
-          <path d="M8 8.5h.01M8 12h.01M8 15.5h.01M18 8.5h.01M18 12h.01M18 15.5h.01" {...sharedProps} />
-        </svg>
-      );
-    case "inspect":
-      return (
-        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-          <rect x="4" y="5" width="16" height="14" rx="3" {...sharedProps} />
-          <path d="M10 5v14M13.5 9h3M13.5 12h3M13.5 15h2" {...sharedProps} />
-        </svg>
-      );
-    case "run":
-      return (
-        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-          <path d="m9 7 8 5-8 5z" {...sharedProps} />
-          <path d="M4.5 19.5h15" {...sharedProps} />
-        </svg>
-      );
+  if (deltaX <= 72) {
+    const controlPull = Math.max(42, Math.min(112, horizontalDistance * 0.45));
+    const labelOffsetY = branchDirection < 0 ? -18 : 20;
+    return {
+      path: `M ${startX} ${startY} C ${startX + controlPull} ${startY}, ${endX - controlPull} ${endY}, ${endX} ${endY}`,
+      midX: startX + deltaX / 2,
+      midY: startY + deltaY / 2,
+      labelX: startX + deltaX / 2,
+      labelY: startY + deltaY / 2 + labelOffsetY,
+    };
   }
-}
+
+  if (!normalizedBranchLabel) {
+    const startLead = Math.min(96, Math.max(58, horizontalDistance * 0.24));
+    const endLead = Math.min(118, Math.max(70, horizontalDistance * 0.3));
+    return {
+      path: `M ${startX} ${startY} C ${startX + startLead} ${startY}, ${endX - endLead} ${endY}, ${endX} ${endY}`,
+      midX: startX + deltaX / 2,
+      midY: startY + deltaY / 2,
+      labelX: startX + deltaX / 2,
+      labelY: startY + deltaY / 2,
+    };
+  }
+
+  const branchOffset = Math.min(54, Math.max(28, Math.abs(deltaY) * 0.16 + 18));
+  const branchY = startY + branchDirection * branchOffset;
+  const splitX = startX + Math.min(78, Math.max(48, horizontalDistance * 0.16));
+  const settleX = startX + Math.min(168, Math.max(112, horizontalDistance * 0.34));
+  const arriveX = endX - Math.min(116, Math.max(62, horizontalDistance * 0.22));
+  const labelOffsetY = branchDirection < 0 ? -18 : 20;
+
+  return {
+    path: [
+      `M ${startX} ${startY}`,
+      `C ${startX + 26} ${startY}, ${splitX - 16} ${startY}, ${splitX} ${branchY}`,
+      `S ${settleX - 22} ${branchY}, ${settleX} ${branchY}`,
+      `C ${settleX + 44} ${branchY}, ${arriveX} ${endY}, ${endX} ${endY}`,
+    ].join(" "),
+    midX: settleX + (endX - settleX) * 0.44,
+    midY: branchY + (endY - branchY) * 0.56,
+    labelX: splitX + (settleX - splitX) * 0.42,
+    labelY: branchY + labelOffsetY,
+  };
+};
 
 const defaultBranchLabelForSourceNode = (
   sourceNode: ComposerDraftNode | undefined,
@@ -740,6 +744,266 @@ const restorePersistedWorkflowDraft = (
   };
 };
 
+type FloatingStudioPanelId =
+  | "palette"
+  | "compile"
+  | "setup"
+  | "interface"
+  | "library"
+  | "inspector";
+
+type FloatingStudioPanelLayout = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  minimized: boolean;
+};
+
+type FloatingStudioPanelDragState = {
+  id: FloatingStudioPanelId;
+  offsetX: number;
+  offsetY: number;
+};
+
+type FloatingStudioPanelResizeDirection =
+  | "n"
+  | "e"
+  | "s"
+  | "w"
+  | "ne"
+  | "nw"
+  | "se"
+  | "sw";
+
+type FloatingStudioPanelResizeState = {
+  id: FloatingStudioPanelId;
+  direction: FloatingStudioPanelResizeDirection;
+  startX: number;
+  startY: number;
+  startLeft: number;
+  startTop: number;
+  startWidth: number;
+  startHeight: number;
+};
+
+const FLOATING_STUDIO_PANEL_IDS: FloatingStudioPanelId[] = [
+  "palette",
+  "compile",
+  "setup",
+  "interface",
+  "library",
+  "inspector",
+];
+
+const FLOATING_STUDIO_PANEL_HEADER_HEIGHT = 44;
+const FLOATING_STUDIO_PANEL_MIN_WIDTH = 280;
+const FLOATING_STUDIO_PANEL_MIN_HEIGHT = 180;
+const FLOATING_STUDIO_PANEL_STAGE_PADDING = 18;
+
+const FLOATING_STUDIO_PANEL_RESIZE_HANDLES: {
+  direction: FloatingStudioPanelResizeDirection;
+  className: string;
+}[] = [
+  {
+    direction: "n",
+    className: "absolute inset-x-3 top-0 z-20 h-2 cursor-ns-resize",
+  },
+  {
+    direction: "s",
+    className: "absolute inset-x-3 bottom-0 z-20 h-2 cursor-ns-resize",
+  },
+  {
+    direction: "w",
+    className: "absolute inset-y-3 left-0 z-20 w-2 cursor-ew-resize",
+  },
+  {
+    direction: "e",
+    className: "absolute inset-y-3 right-0 z-20 w-2 cursor-ew-resize",
+  },
+  {
+    direction: "nw",
+    className: "absolute left-0 top-0 z-20 h-3 w-3 cursor-nwse-resize",
+  },
+  {
+    direction: "ne",
+    className: "absolute right-0 top-0 z-20 h-3 w-3 cursor-nesw-resize",
+  },
+  {
+    direction: "sw",
+    className: "absolute bottom-0 left-0 z-20 h-3 w-3 cursor-nesw-resize",
+  },
+  {
+    direction: "se",
+    className: "absolute bottom-0 right-0 z-20 h-3 w-3 cursor-nwse-resize",
+  },
+];
+
+const clampFloatingStudioPanelLayout = (
+  layout: FloatingStudioPanelLayout,
+  stageWidth: number,
+  stageHeight: number,
+  measuredWidth?: number,
+  measuredHeight?: number
+): FloatingStudioPanelLayout => {
+  const padding = FLOATING_STUDIO_PANEL_STAGE_PADDING;
+  const maxPanelWidth = Math.max(FLOATING_STUDIO_PANEL_MIN_WIDTH, stageWidth - padding * 2);
+  const maxPanelHeight = Math.max(FLOATING_STUDIO_PANEL_MIN_HEIGHT, stageHeight - padding * 2);
+  const panelWidth = Math.min(
+    maxPanelWidth,
+    Math.max(FLOATING_STUDIO_PANEL_MIN_WIDTH, layout.width)
+  );
+  const panelHeight = Math.min(
+    maxPanelHeight,
+    Math.max(FLOATING_STUDIO_PANEL_MIN_HEIGHT, layout.height)
+  );
+  const activeHeight = layout.minimized ? FLOATING_STUDIO_PANEL_HEADER_HEIGHT : panelHeight;
+  const maxX = Math.max(padding, stageWidth - panelWidth - padding);
+  const maxY = Math.max(padding, stageHeight - activeHeight - padding);
+  return {
+    ...layout,
+    width: panelWidth,
+    height: panelHeight,
+    x: Math.min(maxX, Math.max(padding, layout.x)),
+    y: Math.min(maxY, Math.max(padding, layout.y)),
+  };
+};
+
+const resizeFloatingStudioPanelLayout = (
+  layout: FloatingStudioPanelLayout,
+  resizeState: FloatingStudioPanelResizeState,
+  pointerX: number,
+  pointerY: number,
+  stageWidth: number,
+  stageHeight: number
+): FloatingStudioPanelLayout => {
+  const stageMinX = FLOATING_STUDIO_PANEL_STAGE_PADDING;
+  const stageMinY = FLOATING_STUDIO_PANEL_STAGE_PADDING;
+  const stageMaxX = Math.max(stageMinX, stageWidth - FLOATING_STUDIO_PANEL_STAGE_PADDING);
+  const stageMaxY = Math.max(stageMinY, stageHeight - FLOATING_STUDIO_PANEL_STAGE_PADDING);
+  const deltaX = pointerX - resizeState.startX;
+  const deltaY = pointerY - resizeState.startY;
+  const startRight = resizeState.startLeft + resizeState.startWidth;
+  const startBottom = resizeState.startTop + resizeState.startHeight;
+  let left = resizeState.startLeft;
+  let top = resizeState.startTop;
+  let right = startRight;
+  let bottom = startBottom;
+
+  if (resizeState.direction.includes("w")) {
+    left = Math.max(
+      stageMinX,
+      Math.min(startRight - FLOATING_STUDIO_PANEL_MIN_WIDTH, resizeState.startLeft + deltaX)
+    );
+  }
+
+  if (resizeState.direction.includes("e")) {
+    right = Math.min(
+      stageMaxX,
+      Math.max(resizeState.startLeft + FLOATING_STUDIO_PANEL_MIN_WIDTH, startRight + deltaX)
+    );
+  }
+
+  if (resizeState.direction.includes("n")) {
+    top = Math.max(
+      stageMinY,
+      Math.min(startBottom - FLOATING_STUDIO_PANEL_MIN_HEIGHT, resizeState.startTop + deltaY)
+    );
+  }
+
+  if (resizeState.direction.includes("s")) {
+    bottom = Math.min(
+      stageMaxY,
+      Math.max(resizeState.startTop + FLOATING_STUDIO_PANEL_MIN_HEIGHT, startBottom + deltaY)
+    );
+  }
+
+  return clampFloatingStudioPanelLayout(
+    {
+      ...layout,
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top,
+      minimized: false,
+    },
+    stageWidth,
+    stageHeight
+  );
+};
+
+const createInitialFloatingStudioPanelLayouts = (
+  stageWidth: number,
+  stageHeight: number
+): Record<FloatingStudioPanelId, FloatingStudioPanelLayout> => {
+  const padding = 24;
+  const paletteWidth = Math.min(296, Math.max(260, stageWidth * 0.24));
+  const rightRailWidth = Math.min(344, Math.max(304, stageWidth * 0.25));
+  const interfaceWidth = Math.min(446, Math.max(360, stageWidth * 0.34));
+  const libraryWidth = Math.min(430, Math.max(360, stageWidth * 0.32));
+  const inspectorWidth = Math.min(390, Math.max(340, stageWidth * 0.29));
+  const topY = 58;
+  const lowerY = Math.max(440, stageHeight - 430 - padding);
+  const lowerYRight = Math.max(400, stageHeight - 500 - padding);
+  const rightRailX = Math.max(padding, stageWidth - rightRailWidth - 140);
+  const inspectorX = Math.max(padding, stageWidth - inspectorWidth - 140);
+  const centerLibraryX = Math.max(
+    padding,
+    Math.min((stageWidth - libraryWidth) / 2, stageWidth - libraryWidth - padding)
+  );
+  return {
+    palette: {
+      x: padding,
+      y: topY,
+      width: paletteWidth,
+      height: 470,
+      zIndex: 2,
+      minimized: false,
+    },
+    compile: {
+      x: rightRailX,
+      y: topY,
+      width: rightRailWidth,
+      height: 248,
+      zIndex: 4,
+      minimized: false,
+    },
+    setup: {
+      x: rightRailX,
+      y: 324,
+      width: rightRailWidth,
+      height: 418,
+      zIndex: 3,
+      minimized: false,
+    },
+    interface: {
+      x: padding,
+      y: lowerY,
+      width: interfaceWidth,
+      height: 412,
+      zIndex: 2,
+      minimized: false,
+    },
+    library: {
+      x: centerLibraryX,
+      y: Math.max(470, stageHeight - 460 - padding),
+      width: libraryWidth,
+      height: 454,
+      zIndex: 2,
+      minimized: false,
+    },
+    inspector: {
+      x: inspectorX,
+      y: lowerYRight,
+      width: inspectorWidth,
+      height: 520,
+      zIndex: 2,
+      minimized: false,
+    },
+  };
+};
+
 export default function WorkflowStudio() {
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState(initialContextJson);
@@ -790,11 +1054,37 @@ export default function WorkflowStudio() {
     null
   );
   const [dagCanvasZoom, setDagCanvasZoom] = useState(1);
+  const [workflowSetupExpanded, setWorkflowSetupExpanded] = useState(false);
+  const [floatingStudioPanelDrag, setFloatingStudioPanelDrag] =
+    useState<FloatingStudioPanelDragState | null>(null);
+  const [floatingStudioPanelResize, setFloatingStudioPanelResize] =
+    useState<FloatingStudioPanelResizeState | null>(null);
+  const [studioWorkspaceStageSize, setStudioWorkspaceStageSize] = useState({
+    width: 0,
+    height: 0,
+  });
+  const [floatingStudioPanels, setFloatingStudioPanels] = useState<
+    Record<FloatingStudioPanelId, FloatingStudioPanelLayout>
+  >(() => createInitialFloatingStudioPanelLayouts(1440, 1040));
 
   const dagCanvasDragOffsetRef = useRef<CanvasPoint>({ x: 0, y: 0 });
   const dagCanvasViewportRef = useRef<HTMLDivElement | null>(null);
   const dagCanvasRef = useRef<HTMLDivElement | null>(null);
   const inspectorBindingRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const studioWorkspaceStageRef = useRef<HTMLDivElement | null>(null);
+  const floatingStudioPanelRefs = useRef<Record<FloatingStudioPanelId, HTMLDivElement | null>>({
+    palette: null,
+    compile: null,
+    setup: null,
+    interface: null,
+    library: null,
+    inspector: null,
+  });
+  const floatingStudioPanelsInitializedRef = useRef(false);
+  const searchParams = useSearchParams();
+  const requestedWorkflowDefinitionId = String(searchParams.get("definition") || "").trim();
+  const requestedWorkflowVersionId = String(searchParams.get("version") || "").trim();
+  const handledStudioRouteSelectionRef = useRef("");
 
   const deferredPaletteQuery = useDeferredValue(paletteQuery);
   const visualChainNodes = composerDraft.nodes;
@@ -834,6 +1124,12 @@ export default function WorkflowStudio() {
   );
   const activeWorkflowDefinitionId = savedWorkflowDefinition?.id || null;
   const activeWorkflowVersionId = loadedWorkflowVersionId || publishedWorkflowVersion?.id || null;
+
+  useEffect(() => {
+    if (contextState.invalid) {
+      setWorkflowSetupExpanded(true);
+    }
+  }, [contextState.invalid]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1183,6 +1479,136 @@ export default function WorkflowStudio() {
       window.removeEventListener("mouseup", handleUp);
     };
   }, [dagCanvasDraggingNodeId, dagCanvasZoom, dagConnectorDrag]);
+
+  useEffect(() => {
+    const stage = studioWorkspaceStageRef.current;
+    if (!stage || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const updateSize = () => {
+      const rect = stage.getBoundingClientRect();
+      setStudioWorkspaceStageSize({
+        width: rect.width,
+        height: rect.height,
+      });
+    };
+    updateSize();
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+    observer.observe(stage);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!studioWorkspaceStageSize.width || !studioWorkspaceStageSize.height) {
+      return;
+    }
+    setFloatingStudioPanels((prev) => {
+      const seeded = floatingStudioPanelsInitializedRef.current
+        ? prev
+        : createInitialFloatingStudioPanelLayouts(
+            studioWorkspaceStageSize.width,
+            studioWorkspaceStageSize.height
+          );
+      floatingStudioPanelsInitializedRef.current = true;
+      return FLOATING_STUDIO_PANEL_IDS.reduce<
+        Record<FloatingStudioPanelId, FloatingStudioPanelLayout>
+      >((acc, panelId) => {
+        const measured = floatingStudioPanelRefs.current[panelId];
+        acc[panelId] = clampFloatingStudioPanelLayout(
+          seeded[panelId],
+          studioWorkspaceStageSize.width,
+          studioWorkspaceStageSize.height,
+          measured?.offsetWidth,
+          measured?.offsetHeight
+        );
+        return acc;
+      }, {} as Record<FloatingStudioPanelId, FloatingStudioPanelLayout>);
+    });
+  }, [studioWorkspaceStageSize.height, studioWorkspaceStageSize.width]);
+
+  useEffect(() => {
+    if (!floatingStudioPanelDrag) {
+      return;
+    }
+    const handleMove = (event: MouseEvent) => {
+      const stage = studioWorkspaceStageRef.current;
+      if (!stage) {
+        return;
+      }
+      const stageRect = stage.getBoundingClientRect();
+      setFloatingStudioPanels((prev) => {
+        const current = prev[floatingStudioPanelDrag.id];
+        const measured = floatingStudioPanelRefs.current[floatingStudioPanelDrag.id];
+        return {
+          ...prev,
+          [floatingStudioPanelDrag.id]: clampFloatingStudioPanelLayout(
+            {
+              ...current,
+              x: event.clientX - stageRect.left - floatingStudioPanelDrag.offsetX,
+              y: event.clientY - stageRect.top - floatingStudioPanelDrag.offsetY,
+            },
+            stageRect.width,
+            stageRect.height,
+            measured?.offsetWidth,
+            measured?.offsetHeight
+          ),
+        };
+      });
+    };
+
+    const handleUp = () => {
+      setFloatingStudioPanelDrag(null);
+    };
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+  }, [floatingStudioPanelDrag]);
+
+  useEffect(() => {
+    if (!floatingStudioPanelResize) {
+      return;
+    }
+    const handleMove = (event: MouseEvent) => {
+      const stage = studioWorkspaceStageRef.current;
+      if (!stage) {
+        return;
+      }
+      const stageRect = stage.getBoundingClientRect();
+      setFloatingStudioPanels((prev) => {
+        const current = prev[floatingStudioPanelResize.id];
+        return {
+          ...prev,
+          [floatingStudioPanelResize.id]: resizeFloatingStudioPanelLayout(
+            current,
+            floatingStudioPanelResize,
+            event.clientX,
+            event.clientY,
+            stageRect.width,
+            stageRect.height
+          ),
+        };
+      });
+    };
+
+    const handleUp = () => {
+      setFloatingStudioPanelResize(null);
+    };
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+  }, [floatingStudioPanelResize]);
 
   const setVisualChainNodes = (
     next: ComposerDraftNode[] | ((prev: ComposerDraftNode[]) => ComposerDraftNode[])
@@ -2643,17 +3069,23 @@ export default function WorkflowStudio() {
           const startY = fromEntry.position.y + dagNodeOutputAnchorY(fromEntry.node, edge.branchLabel);
           const endX = toEntry.position.x;
           const endY = toEntry.position.y + DAG_CANVAS_NODE_HEIGHT / 2;
-          const controlX = (startX + endX) / 2;
-          const midX = controlX;
-          const midY = (startY + endY) / 2;
+          const route = buildDagEdgeRoute({
+            startX,
+            startY,
+            endX,
+            endY,
+            branchLabel: edge.branchLabel,
+          });
           return {
             ...edge,
             edgeKey,
             fromTaskName: fromEntry.node.taskName,
             toTaskName: toEntry.node.taskName,
-            path: `M ${startX} ${startY} C ${controlX} ${startY}, ${controlX} ${endY}, ${endX} ${endY}`,
-            midX,
-            midY,
+            path: route.path,
+            midX: route.midX,
+            midY: route.midY,
+            labelX: route.labelX,
+            labelY: route.labelY,
           };
         })
         .filter(
@@ -2668,6 +3100,8 @@ export default function WorkflowStudio() {
             path: string;
             midX: number;
             midY: number;
+            labelX: number;
+            labelY: number;
             branchLabel?: string;
           } => item !== null
         ),
@@ -2689,9 +3123,15 @@ export default function WorkflowStudio() {
         dagNodeOutputAnchorY(sourceEntry.node, dagConnectorDrag.branchLabel));
     const endX = dagConnectorDrag.x;
     const endY = dagConnectorDrag.y;
-    const controlX = (startX + endX) / 2;
+    const route = buildDagEdgeRoute({
+      startX,
+      startY,
+      endX,
+      endY,
+      branchLabel: dagConnectorDrag.branchLabel,
+    });
     return {
-      path: `M ${startX} ${startY} C ${controlX} ${startY}, ${controlX} ${endY}, ${endX} ${endY}`,
+      path: route.path,
     };
   }, [dagCanvasNodeById, dagConnectorDrag]);
 
@@ -2954,6 +3394,118 @@ export default function WorkflowStudio() {
     resetStudioTransientState();
     setStudioNotice(`Restored workflow version v${version.version_number}.`);
   };
+
+  useEffect(() => {
+    const routeKey = `${requestedWorkflowDefinitionId}::${requestedWorkflowVersionId}`;
+    if (!requestedWorkflowDefinitionId && !requestedWorkflowVersionId) {
+      handledStudioRouteSelectionRef.current = "";
+      return;
+    }
+    if (handledStudioRouteSelectionRef.current === routeKey) {
+      return;
+    }
+
+    let cancelled = false;
+    const loadRouteSelection = async () => {
+      try {
+        if (requestedWorkflowVersionId) {
+          const definitionId = requestedWorkflowDefinitionId;
+          if (!definitionId) {
+            throw new Error("Workflow version links must include a definition id.");
+          }
+
+          let definition =
+            workflowDefinitions.find((item) => item.id === definitionId) || null;
+          if (!definition) {
+            const definitionResponse = await fetch(
+              `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}`
+            );
+            const definitionBody = (await definitionResponse.json()) as
+              | WorkflowDefinition
+              | { detail?: unknown };
+            if (!definitionResponse.ok) {
+              const detail = (definitionBody as { detail?: unknown }).detail;
+              throw new Error(
+                typeof detail === "string"
+                  ? detail
+                  : `Workflow definition request failed (${definitionResponse.status}).`
+              );
+            }
+            definition = definitionBody as WorkflowDefinition;
+          }
+
+          const versionsResponse = await fetch(
+            `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}/versions`
+          );
+          const versionsBody = (await versionsResponse.json()) as
+            | WorkflowVersion[]
+            | { detail?: unknown };
+          if (!versionsResponse.ok) {
+            const detail = (versionsBody as { detail?: unknown }).detail;
+            throw new Error(
+              typeof detail === "string"
+                ? detail
+                : `Workflow version history request failed (${versionsResponse.status}).`
+            );
+          }
+          const matchingVersion = (Array.isArray(versionsBody) ? versionsBody : []).find(
+            (item) => item.id === requestedWorkflowVersionId
+          );
+          if (!matchingVersion) {
+            throw new Error("Requested workflow version could not be found.");
+          }
+          if (!cancelled) {
+            handledStudioRouteSelectionRef.current = routeKey;
+            await restoreWorkflowVersion(matchingVersion);
+          }
+          return;
+        }
+
+        const definitionId = requestedWorkflowDefinitionId;
+        if (!definitionId) {
+          return;
+        }
+        let definition = workflowDefinitions.find((item) => item.id === definitionId) || null;
+        if (!definition) {
+          const response = await fetch(
+            `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}`
+          );
+          const body = (await response.json()) as WorkflowDefinition | { detail?: unknown };
+          if (!response.ok) {
+            const detail = (body as { detail?: unknown }).detail;
+            throw new Error(
+              typeof detail === "string"
+                ? detail
+                : `Workflow definition request failed (${response.status}).`
+            );
+          }
+          definition = body as WorkflowDefinition;
+        }
+        if (!cancelled) {
+          handledStudioRouteSelectionRef.current = routeKey;
+          restoreWorkflowDefinition(definition);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          handledStudioRouteSelectionRef.current = routeKey;
+          setStudioNotice(
+            error instanceof Error ? error.message : "Failed to load workflow route selection."
+          );
+        }
+      }
+    };
+
+    void loadRouteSelection();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    requestedWorkflowDefinitionId,
+    requestedWorkflowVersionId,
+    restoreWorkflowDefinition,
+    restoreWorkflowVersion,
+    workflowDefinitions,
+  ]);
 
   const saveWorkflowDefinition = async () => {
     if (contextState.invalid) {
@@ -3551,6 +4103,408 @@ export default function WorkflowStudio() {
     );
   };
 
+  const workflowSetupPanel = (
+    <section className="rounded-[18px] border border-white/8 bg-[linear-gradient(180deg,rgba(48,60,74,0.54),rgba(41,52,65,0.68))] p-3 shadow-[0_16px_34px_rgba(15,23,42,0.12)]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100/68">
+            Workflow Setup
+          </div>
+          <h2 className="mt-1 text-base font-semibold tracking-[-0.02em] text-white">
+            Goal, context, and validation
+          </h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+              goal.trim()
+                ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-200"
+                : "border-white/10 bg-white/[0.05] text-slate-200"
+            }`}
+          >
+            {goal.trim() ? "goal set" : "goal empty"}
+          </span>
+          <span
+            className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+              contextState.invalid
+                ? "border-rose-300/25 bg-rose-400/12 text-rose-200"
+                : "border-sky-300/25 bg-sky-400/12 text-sky-100"
+            }`}
+          >
+            {contextState.invalid ? "json invalid" : "json ready"}
+          </span>
+          <button
+            type="button"
+            className="rounded-full border border-white/10 bg-slate-950/16 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-white/16 hover:bg-slate-950/24"
+            onClick={() => setWorkflowSetupExpanded((prev) => !prev)}
+          >
+            {workflowSetupExpanded ? "Hide Setup" : "Expand Setup"}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+            Goal
+          </div>
+          <div className="mt-1 line-clamp-2 text-sm text-slate-100">
+            {goal.trim() || "Set the workflow objective."}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+            Draft
+          </div>
+          <div className="mt-1 line-clamp-2 text-sm text-slate-100">
+            {composerDraft.summary.trim() || "Workflow Studio draft"}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+            Memory User
+          </div>
+          <div className="mt-1 truncate text-sm text-slate-100">
+            {workspaceUserId.trim() || "Not set"}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+            Context Paths
+          </div>
+          <div className="mt-1 text-sm text-slate-100">
+            {contextState.invalid ? "Unavailable" : `${contextPathSuggestions.length} detected`}
+          </div>
+        </div>
+      </div>
+
+      {workflowSetupExpanded ? (
+        <div className="mt-3 space-y-3 border-t border-white/8 pt-3">
+          <div className="grid gap-3 lg:grid-cols-3">
+            <label className="block">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                Goal
+              </div>
+              <input
+                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                value={goal}
+                onChange={(event) => setGoal(event.target.value)}
+                placeholder="Generate a document pipeline with validation and render output"
+              />
+            </label>
+            <label className="block">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                Draft Summary
+              </div>
+              <input
+                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                value={composerDraft.summary}
+                onChange={(event) =>
+                  setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
+                }
+                placeholder="Workflow Studio draft"
+              />
+            </label>
+            <label className="block">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                Memory User ID
+              </div>
+              <input
+                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                value={workspaceUserId}
+                onChange={(event) => setWorkspaceUserId(event.target.value)}
+                placeholder="narendersurabhi"
+              />
+              <div className="mt-2 text-xs leading-5 text-slate-200/62">
+                User-scoped memory bindings inherit this id automatically unless a node overrides it
+                explicitly.
+              </div>
+            </label>
+          </div>
+
+          <label className="block">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                Context JSON
+              </div>
+              <div className="text-xs text-slate-300/55">
+                {contextState.invalid ? "Invalid JSON" : "Object ready"}
+              </div>
+            </div>
+            <textarea
+              className="mt-1 min-h-[180px] w-full rounded-[18px] border border-white/8 bg-[#233142] px-3 py-3 font-mono text-xs text-slate-100 outline-none transition placeholder:text-slate-400/40 focus:border-sky-300/40 focus:bg-[#1c2939]"
+              value={contextJson}
+              onChange={(event) => setContextJson(event.target.value)}
+            />
+          </label>
+        </div>
+      ) : null}
+
+      <ComposerValidationPanel
+        preflightResult={chainPreflightResult}
+        compileLoading={composerCompileLoading || chainPreflightLoading}
+        issues={composerIssues}
+        needsValidation={visualChainNodes.length > 0}
+        onIssueClick={focusComposerValidationIssue}
+        activeIssue={activeComposerIssueFocus}
+        formatTimestamp={formatTimestamp}
+      />
+    </section>
+  );
+
+  const nodeInspectorPanel = (
+    <StudioNodeInspector
+      selectedDagNode={selectedDagNode}
+      selectedDagNodeStatus={selectedDagNodeStatus}
+      inputFields={selectedDagNodeInspectorFields}
+      selectedCapability={selectedCapability}
+      outputSchemaFields={selectedDagNodeOutputSchemaFields}
+      activeComposerIssueFocus={activeComposerIssueFocus}
+      inspectorBindingRefs={inspectorBindingRefs}
+      visualChainNodes={visualChainNodes}
+      outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
+      contextPathSuggestions={contextPathSuggestions}
+      workflowInterface={workflowInterface}
+      autoWireNodeBindings={autoWireNodeBindings}
+      quickFixNodeBindings={quickFixNodeBindings}
+      setSelectedDagNodeId={setSelectedDagNodeId}
+      capabilityIdOptionsId="studio-capability-id-options"
+      onDeleteNode={removeVisualChainNode}
+      updateNodeBasics={updateVisualChainNode}
+      setVisualBindingMode={setVisualBindingMode}
+      clearVisualBinding={clearVisualBinding}
+      removeCustomInputField={removeCustomInputField}
+      addCustomInputField={addCustomInputField}
+      updateVisualBindingSourceNode={updateVisualBindingSourceNode}
+      updateVisualBindingPath={updateVisualBindingPath}
+      updateVisualBindingLiteral={updateVisualBindingLiteral}
+      updateVisualBindingContextPath={updateVisualBindingContextPath}
+      updateVisualBindingMemory={updateVisualBindingMemory}
+      updateVisualBindingWorkflowInput={updateVisualBindingWorkflowInput}
+      updateVisualBindingWorkflowVariable={updateVisualBindingWorkflowVariable}
+      setVisualBindingFromPrevious={setVisualBindingFromPrevious}
+      addNodeOutput={addNodeOutput}
+      upsertNodeOutputFromSchema={upsertNodeOutputFromSchema}
+      updateNodeOutput={updateNodeOutput}
+      removeNodeOutput={removeNodeOutput}
+      addNodeVariable={addNodeVariable}
+      updateNodeVariable={updateNodeVariable}
+      removeNodeVariable={removeNodeVariable}
+      updateNodeControlConfig={updateNodeControlConfig}
+      addSwitchCase={addSwitchCase}
+      updateSwitchCase={updateSwitchCase}
+      removeSwitchCase={removeSwitchCase}
+    />
+  );
+
+  useEffect(() => {
+    if (!selectedDagNodeId) {
+      return;
+    }
+    bringFloatingStudioPanelToFront("inspector");
+    if (!studioWorkspaceStageSize.width || !studioWorkspaceStageSize.height) {
+      return;
+    }
+    setFloatingStudioPanels((prev) => ({
+      ...prev,
+      inspector: clampFloatingStudioPanelLayout(
+        {
+          ...prev.inspector,
+          minimized: false,
+        },
+        studioWorkspaceStageSize.width,
+        studioWorkspaceStageSize.height
+      ),
+    }));
+  }, [selectedDagNodeId, studioWorkspaceStageSize.height, studioWorkspaceStageSize.width]);
+
+  const bringFloatingStudioPanelToFront = (panelId: FloatingStudioPanelId) => {
+    setFloatingStudioPanels((prev) => {
+      const nextZIndex =
+        Math.max(...FLOATING_STUDIO_PANEL_IDS.map((candidateId) => prev[candidateId].zIndex)) + 1;
+      return {
+        ...prev,
+        [panelId]: {
+          ...prev[panelId],
+          zIndex: nextZIndex,
+        },
+      };
+    });
+  };
+
+  const toggleFloatingStudioPanelMinimized = (panelId: FloatingStudioPanelId) => {
+    if (!studioWorkspaceStageSize.width || !studioWorkspaceStageSize.height) {
+      setFloatingStudioPanels((prev) => ({
+        ...prev,
+        [panelId]: {
+          ...prev[panelId],
+          minimized: !prev[panelId].minimized,
+        },
+      }));
+      return;
+    }
+    setFloatingStudioPanels((prev) => ({
+      ...prev,
+      [panelId]: clampFloatingStudioPanelLayout(
+        {
+          ...prev[panelId],
+          minimized: !prev[panelId].minimized,
+        },
+        studioWorkspaceStageSize.width,
+        studioWorkspaceStageSize.height
+      ),
+    }));
+  };
+
+  const restoreFloatingStudioPanel = (panelId: FloatingStudioPanelId) => {
+    const stageWidth = studioWorkspaceStageSize.width || 1440;
+    const stageHeight = studioWorkspaceStageSize.height || 1040;
+    const defaults = createInitialFloatingStudioPanelLayouts(stageWidth, stageHeight);
+    setFloatingStudioPanels((prev) => {
+      const nextZIndex =
+        Math.max(...FLOATING_STUDIO_PANEL_IDS.map((candidateId) => prev[candidateId].zIndex)) + 1;
+      return {
+        ...prev,
+        [panelId]: {
+          ...defaults[panelId],
+          zIndex: nextZIndex,
+          minimized: false,
+        },
+      };
+    });
+  };
+
+  const beginFloatingStudioPanelDrag = (
+    panelId: FloatingStudioPanelId,
+    event: React.MouseEvent<HTMLDivElement>
+  ) => {
+    const panel = floatingStudioPanelRefs.current[panelId];
+    if (!panel) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const panelRect = panel.getBoundingClientRect();
+    bringFloatingStudioPanelToFront(panelId);
+    setFloatingStudioPanelDrag({
+      id: panelId,
+      offsetX: event.clientX - panelRect.left,
+      offsetY: event.clientY - panelRect.top,
+    });
+  };
+
+  const beginFloatingStudioPanelResize = (
+    panelId: FloatingStudioPanelId,
+    direction: FloatingStudioPanelResizeDirection,
+    event: React.MouseEvent<HTMLDivElement>
+  ) => {
+    const panel = floatingStudioPanelRefs.current[panelId];
+    const layout = floatingStudioPanels[panelId];
+    if (!panel) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    bringFloatingStudioPanelToFront(panelId);
+    setFloatingStudioPanelResize({
+      id: panelId,
+      direction,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: layout.x,
+      startTop: layout.y,
+      startWidth: layout.width,
+      startHeight: layout.height,
+    });
+  };
+
+  const renderFloatingStudioPanel = (
+    panelId: FloatingStudioPanelId,
+    title: string,
+    content: ReactNode,
+    options: { bodyClassName?: string; badge?: string; panelDomId?: string } = {}
+  ) => {
+    const layout = floatingStudioPanels[panelId];
+    const isMinimized = layout.minimized;
+    return (
+      <div
+        id={options.panelDomId}
+        ref={(node) => {
+          floatingStudioPanelRefs.current[panelId] = node;
+        }}
+        key={`floating-studio-panel-${panelId}`}
+        className="pointer-events-auto absolute flex flex-col overflow-hidden rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(40,53,67,0.62),rgba(19,28,39,0.72))] shadow-[0_28px_64px_rgba(15,23,42,0.34)] backdrop-blur-xl"
+        style={{
+          left: layout.x,
+          top: layout.y,
+          width: layout.width,
+          height: isMinimized ? FLOATING_STUDIO_PANEL_HEADER_HEIGHT : layout.height,
+          zIndex: layout.zIndex,
+        }}
+        onMouseDown={() => bringFloatingStudioPanelToFront(panelId)}
+      >
+        <div
+          className="flex cursor-grab items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.38)] px-3 py-2 active:cursor-grabbing"
+          onMouseDown={(event) => beginFloatingStudioPanelDrag(panelId, event)}
+        >
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                aria-label={isMinimized ? `Open ${title}` : `Minimize ${title}`}
+                title={isMinimized ? "Open panel" : "Minimize panel"}
+                className="h-3 w-3 rounded-full bg-[#f6cf58] shadow-[inset_0_1px_0_rgba(255,255,255,0.34),0_0_0_1px_rgba(125,77,0,0.2)] transition hover:brightness-105"
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={() => toggleFloatingStudioPanelMinimized(panelId)}
+              />
+              <button
+                type="button"
+                aria-label={`Restore ${title}`}
+                title="Restore panel"
+                className="h-3 w-3 rounded-full bg-[#50d16e] shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_0_0_1px_rgba(6,95,70,0.2)] transition hover:brightness-105"
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={() => restoreFloatingStudioPanel(panelId)}
+              />
+            </div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-100">
+              {title}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {options.badge ? (
+              <div className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+                {options.badge}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {!isMinimized ? (
+          <div className={`min-h-0 flex-1 overflow-auto p-1.5 ${options.bodyClassName || ""}`.trim()}>
+            {content}
+          </div>
+        ) : null}
+        {!isMinimized ? (
+          <>
+            {FLOATING_STUDIO_PANEL_RESIZE_HANDLES.map((handle) => (
+              <div
+                key={`${panelId}-${handle.direction}`}
+                className={`${handle.className} transition hover:bg-white/[0.06]`.trim()}
+                onMouseDown={(event) =>
+                  beginFloatingStudioPanelResize(panelId, handle.direction, event)
+                }
+                title="Resize panel"
+              />
+            ))}
+          </>
+        ) : null}
+      </div>
+    );
+  };
+
   return (
     <div className="-mx-6 -my-8 min-h-screen bg-[#56697c] text-white">
       <div className="min-h-screen bg-[linear-gradient(180deg,#435365_0px,#435365_78px,#55697c_78px,#55697c_100%)]">
@@ -3561,12 +4515,16 @@ export default function WorkflowStudio() {
                 Workflow Studio: {composerDraft.summary.trim() || "Pipeline Alpha"}
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200/78">
-                <span>Project</span>
+                <Link href="/project" className="transition hover:text-white">
+                  Project
+                </Link>
                 <span className="text-white/35">›</span>
-                <span>Workflows</span>
+                <Link href="/workflows" className="transition hover:text-white">
+                  Workflows
+                </Link>
                 <span className="text-white/35">›</span>
                 <span className="text-white/95">
-                  {composerDraft.summary.trim() || "Pipeline Alpha"}
+                  {composerDraft.summary.trim() || "Workflow Studio draft"}
                 </span>
               </div>
             </div>
@@ -3609,37 +4567,49 @@ export default function WorkflowStudio() {
           </div>
         ) : null}
 
-        <div className="grid min-h-[calc(100vh-78px)] grid-cols-[52px_280px_minmax(0,1fr)]">
+        <div className="grid min-h-[calc(100vh-78px)] grid-cols-[52px_minmax(0,1fr)]">
           <aside className="border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] px-1.5 py-3">
             <div className="flex h-full flex-col items-center justify-between">
               <div className="space-y-3">
                 {[
-                  { id: "menu", label: "Menu", icon: "menu" as const },
+                  { href: "/project", label: "Project", icon: "menu" as const },
                   { id: "studio-palette-section", label: "Palette", icon: "palette" as const },
                   { id: "studio-graph-section", label: "Graph", icon: "graph" as const, active: true },
-                  { id: "studio-library-section", label: "Library", icon: "library" as const },
+                  { href: "/workflows", label: "Workflows", icon: "library" as const },
                   { id: "studio-inspector-section", label: "Inspector", icon: "inspect" as const },
                 ].map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    title={item.label}
-                    aria-label={item.label}
-                    className={`flex h-11 w-11 items-center justify-center rounded-xl border transition ${
-                      item.active
-                        ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
-                        : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
-                    }`}
-                    onClick={() => {
-                      if (item.id !== "menu") {
-                        document
-                          .getElementById(item.id)
-                          ?.scrollIntoView({ behavior: "smooth", block: "start" });
-                      }
-                    }}
-                  >
-                    <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
-                  </button>
+                  item.href ? (
+                    <Link
+                      key={item.label}
+                      href={item.href}
+                      title={item.label}
+                      aria-label={item.label}
+                      className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-slate-950/18 text-slate-200 transition hover:border-white/18 hover:bg-slate-950/26"
+                    >
+                      <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
+                    </Link>
+                  ) : (
+                    <button
+                      key={item.label}
+                      type="button"
+                      title={item.label}
+                      aria-label={item.label}
+                      className={`flex h-11 w-11 items-center justify-center rounded-xl border transition ${
+                        item.active
+                          ? "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                          : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
+                      }`}
+                      onClick={() => {
+                        if (item.id) {
+                          document
+                            .getElementById(item.id)
+                            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }
+                      }}
+                    >
+                      <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
+                    </button>
+                  )
                 ))}
               </div>
 
@@ -3655,260 +4625,221 @@ export default function WorkflowStudio() {
             </div>
           </aside>
 
-          <div className="border-r border-white/10 px-2.5 py-3">
-            <div id="studio-palette-section" className="h-full">
-              <StudioCapabilityPalette
-                capabilities={paletteCapabilities}
-                groups={paletteGroups}
-                loading={capabilityLoading}
-                error={capabilityError}
-                query={paletteQuery}
-                selectedGroup={paletteGroup}
-                onQueryChange={setPaletteQuery}
-                onGroupChange={setPaletteGroup}
-                onAddCapability={addCapabilityNodeToStudio}
-                onAddControl={addControlNodeToStudio}
-              />
-            </div>
-          </div>
-
-          <main className="min-w-0 overflow-auto px-3 py-3">
-            <section id="studio-graph-section" className="h-[calc(100vh-170px)] min-h-[620px] rounded-[22px] border border-white/10 bg-[rgba(57,73,89,0.32)] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-              <ComposerDagCanvas
-                visualChainNodes={visualChainNodes}
-                dagEdgeDraftSourceNodeId={dagEdgeDraftSourceNodeId}
-                setDagEdgeDraftSourceNodeId={setDagEdgeDraftSourceNodeId}
-                setDagConnectorDrag={setDagConnectorDrag}
-                setDagConnectorHoverTargetNodeId={setDagConnectorHoverTargetNodeId}
-                autoLayoutDagCanvas={autoLayoutDagCanvas}
-                dagCanvasViewportRef={dagCanvasViewportRef}
-                dagCanvasRef={dagCanvasRef}
-                dagCanvasSurface={dagCanvasSurface}
-                dagCanvasEdges={dagCanvasEdges}
-                hoveredDagEdgeKey={hoveredDagEdgeKey}
-                setHoveredDagEdgeKey={setHoveredDagEdgeKey}
-                removeDagEdge={removeDagEdge}
-                dagConnectorPreview={dagConnectorPreview}
-                dagCanvasNodes={dagCanvasNodes}
-                composerDraftEdges={composerDraftEdges}
-                dagNodeAdjacency={dagNodeAdjacency}
-                visualChainNodeStatusById={visualChainNodeStatusById as Map<
-                  string,
-                  { missingCount: number; requiredCount: number }
-                >}
-                selectedDagNodeId={selectedDagNodeId}
-                setSelectedDagNodeId={setSelectedDagNodeId}
-                dagConnectorDrag={dagConnectorDrag}
-                dagCanvasDraggingNodeId={dagCanvasDraggingNodeId}
-                dagConnectorHoverTargetNodeId={dagConnectorHoverTargetNodeId}
-                addDagEdge={addDagEdge}
-                beginDagNodeDrag={beginDagNodeDrag}
-                isInteractiveCanvasTarget={isInteractiveCanvasTarget}
-                beginDagConnectorDrag={beginDagConnectorDrag}
-                centerDagNodeInView={centerDagNodeInView}
-                nodeWidth={DAG_CANVAS_NODE_WIDTH}
-                nodeHeight={DAG_CANVAS_NODE_HEIGHT}
-                dagCanvasZoom={dagCanvasZoom}
-                showToolbar
-                showBlueprintPreview
-                onZoomIn={zoomInDagCanvas}
-                onZoomOut={zoomOutDagCanvas}
-                zoomInDisabled={dagCanvasZoom >= DAG_CANVAS_ZOOM_MAX}
-                zoomOutDisabled={dagCanvasZoom <= DAG_CANVAS_ZOOM_MIN}
-                onRunWorkflow={runWorkflowVersion}
-                runWorkflowPending={workflowActionLoading === "run"}
-                runWorkflowDisabled={workflowActionLoading !== null}
-              />
-            </section>
-
-            <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.18fr)_328px]">
-              <div className="space-y-4">
-                <section className="rounded-[18px] border border-white/8 bg-[linear-gradient(180deg,rgba(51,63,77,0.62),rgba(44,56,69,0.72))] p-3.5 shadow-[0_12px_28px_rgba(15,23,42,0.10)]">
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.95fr)]">
-                    <div className="space-y-4">
-                      <label className="block">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
-                          Goal
-                        </div>
-                        <input
-                          className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
-                          value={goal}
-                          onChange={(event) => setGoal(event.target.value)}
-                          placeholder="Generate a document pipeline with validation and render output"
-                        />
-                      </label>
-                      <label className="block">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
-                          Draft Summary
-                        </div>
-                        <input
-                          className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
-                          value={composerDraft.summary}
-                          onChange={(event) =>
-                            setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
-                          }
-                          placeholder="Workflow Studio draft"
-                        />
-                      </label>
-                      <div className="rounded-[18px] border border-white/8 bg-slate-950/14 px-3 py-3">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
-                          Memory User ID
-                        </div>
-                        <input
-                          className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
-                          value={workspaceUserId}
-                          onChange={(event) => setWorkspaceUserId(event.target.value)}
-                          placeholder="narendersurabhi"
-                        />
-                        <div className="mt-2 text-xs leading-5 text-slate-200/62">
-                          User-scoped memory bindings inherit this id automatically unless a node
-                          overrides it explicitly.
-                        </div>
-                      </div>
+          <main className="min-w-0 overflow-auto px-4 py-4">
+            <section className="relative">
+              <div className="relative">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+                      Studio Workspace
                     </div>
-
-                    <div>
-                      <label className="block">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
-                            Context JSON
-                          </div>
-                          <div className="text-xs text-slate-300/55">
-                            {contextState.invalid ? "Invalid JSON" : "Object ready"}
-                          </div>
-                        </div>
-                        <textarea
-                          className="mt-1 min-h-[210px] w-full rounded-[18px] border border-white/8 bg-[#233142] px-3 py-3 font-mono text-xs text-slate-100 outline-none transition placeholder:text-slate-400/40 focus:border-sky-300/40 focus:bg-[#1c2939]"
-                          value={contextJson}
-                          onChange={(event) => setContextJson(event.target.value)}
-                        />
-                      </label>
-                    </div>
+                    <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
+                      Floating Workflow Workbench
+                    </h2>
+                    <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
+                      The graph now owns the whole workspace surface. Drag the panel headers to move
+                      Node Palette, Compile Preview, Workflow Setup, Interface, Library, and Inspector
+                      anywhere on top of it.
+                    </p>
                   </div>
 
-                  <ComposerValidationPanel
-                    preflightResult={chainPreflightResult}
-                    compileLoading={composerCompileLoading || chainPreflightLoading}
-                    issues={composerIssues}
-                    needsValidation={visualChainNodes.length > 0}
-                    onIssueClick={focusComposerValidationIssue}
-                    activeIssue={activeComposerIssueFocus}
-                    formatTimestamp={formatTimestamp}
-                  />
-                </section>
-
-                <StudioWorkflowInterfacePanel
-                  workflowInterface={workflowInterface}
-                  contextPathSuggestions={contextPathSuggestions}
-                  visualChainNodes={visualChainNodes}
-                  outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
-                  onAddInput={addWorkflowInputDefinition}
-                  onUpdateInput={updateWorkflowInputDefinition}
-                  onRemoveInput={removeWorkflowInputDefinition}
-                  onAddVariable={addWorkflowVariableDefinition}
-                  onUpdateVariable={updateWorkflowVariableDefinition}
-                  onRemoveVariable={removeWorkflowVariableDefinition}
-                  onAddOutput={addWorkflowOutputDefinition}
-                  onUpdateOutput={updateWorkflowOutputDefinition}
-                  onRemoveOutput={removeWorkflowOutputDefinition}
-                />
-
-                <div id="studio-library-section">
-                  <StudioWorkflowLibrary
-                    workflowDefinitions={workflowDefinitions}
-                    workflowDefinitionsLoading={workflowDefinitionsLoading}
-                    workflowDefinitionsError={workflowDefinitionsError}
-                    workflowVersions={workflowVersions}
-                    workflowVersionsLoading={workflowVersionsLoading}
-                    workflowVersionsError={workflowVersionsError}
-                    workflowTriggers={workflowTriggers}
-                    workflowTriggersLoading={workflowTriggersLoading}
-                    workflowTriggersError={workflowTriggersError}
-                    workflowRuns={workflowRuns}
-                    workflowRunsLoading={workflowRunsLoading}
-                    workflowRunsError={workflowRunsError}
-                    activeWorkflowDefinitionId={activeWorkflowDefinitionId}
-                    activeWorkflowVersionId={activeWorkflowVersionId}
-                    deletingWorkflowDefinitionId={workflowDefinitionDeleteId}
-                    onRefresh={() => {
-                      void refreshWorkflowDefinitions();
-                      if (activeWorkflowDefinitionId) {
-                        void refreshWorkflowVersions(activeWorkflowDefinitionId);
-                        void refreshWorkflowTriggers(activeWorkflowDefinitionId);
-                        void refreshWorkflowRuns(activeWorkflowDefinitionId);
-                      }
-                    }}
-                    onOpenDefinition={restoreWorkflowDefinition}
-                    onDeleteDefinition={(definition) => {
-                      void deleteWorkflowDefinition(definition);
-                    }}
-                    onOpenVersion={(version) => {
-                      void restoreWorkflowVersion(version);
-                    }}
-                    onCreateManualTrigger={createManualWorkflowTrigger}
-                    onInvokeTrigger={(trigger) => {
-                      void invokeWorkflowTrigger(trigger);
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-4 xl:sticky xl:top-3 xl:self-start">
-                <div id="studio-inspector-section">
-                  <StudioNodeInspector
-                    selectedDagNode={selectedDagNode}
-                    selectedDagNodeStatus={selectedDagNodeStatus}
-                    inputFields={selectedDagNodeInspectorFields}
-                    selectedCapability={selectedCapability}
-                    outputSchemaFields={selectedDagNodeOutputSchemaFields}
-                    activeComposerIssueFocus={activeComposerIssueFocus}
-                    inspectorBindingRefs={inspectorBindingRefs}
-                    visualChainNodes={visualChainNodes}
-                    outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
-                    contextPathSuggestions={contextPathSuggestions}
-                    workflowInterface={workflowInterface}
-                    autoWireNodeBindings={autoWireNodeBindings}
-                    quickFixNodeBindings={quickFixNodeBindings}
-                    setSelectedDagNodeId={setSelectedDagNodeId}
-                    capabilityIdOptionsId="studio-capability-id-options"
-                    onDeleteNode={removeVisualChainNode}
-                    updateNodeBasics={updateVisualChainNode}
-                    setVisualBindingMode={setVisualBindingMode}
-                    clearVisualBinding={clearVisualBinding}
-                    removeCustomInputField={removeCustomInputField}
-                    addCustomInputField={addCustomInputField}
-                    updateVisualBindingSourceNode={updateVisualBindingSourceNode}
-                    updateVisualBindingPath={updateVisualBindingPath}
-                    updateVisualBindingLiteral={updateVisualBindingLiteral}
-                    updateVisualBindingContextPath={updateVisualBindingContextPath}
-                    updateVisualBindingMemory={updateVisualBindingMemory}
-                    updateVisualBindingWorkflowInput={updateVisualBindingWorkflowInput}
-                    updateVisualBindingWorkflowVariable={updateVisualBindingWorkflowVariable}
-                    setVisualBindingFromPrevious={setVisualBindingFromPrevious}
-                    addNodeOutput={addNodeOutput}
-                    upsertNodeOutputFromSchema={upsertNodeOutputFromSchema}
-                    updateNodeOutput={updateNodeOutput}
-                    removeNodeOutput={removeNodeOutput}
-                    addNodeVariable={addNodeVariable}
-                    updateNodeVariable={updateNodeVariable}
-                    removeNodeVariable={removeNodeVariable}
-                    updateNodeControlConfig={updateNodeControlConfig}
-                    addSwitchCase={addSwitchCase}
-                    updateSwitchCase={updateSwitchCase}
-                    removeSwitchCase={removeSwitchCase}
-                  />
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      steps {visualChainSummary.steps}
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      edges {visualChainSummary.dagEdges}
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                      zoom {Math.round(dagCanvasZoom * 100)}%
+                    </span>
+                    <span
+                      className={`rounded-full border px-3 py-1 ${
+                        visualChainSummary.missingInputs > 0
+                          ? "border-rose-300/25 bg-rose-400/12 text-rose-100"
+                          : "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
+                      }`}
+                    >
+                      {visualChainSummary.missingInputs > 0
+                        ? `missing ${visualChainSummary.missingInputs}`
+                        : "inputs ready"}
+                    </span>
+                  </div>
                 </div>
 
-                <StudioCompilePanel
-                  compileLoading={composerCompileLoading || chainPreflightLoading}
-                  compileResult={composerCompileResult}
-                  preflightResult={chainPreflightResult}
-                  issues={composerIssues}
-                  draftPayloadPreview={draftPayloadPreview}
-                  onCompile={runChainPreflight}
-                />
+                <div
+                  ref={studioWorkspaceStageRef}
+                  id="studio-graph-section"
+                  className="relative mt-4 h-[calc(100vh-184px)] min-h-[980px] overflow-hidden rounded-[34px] border border-white/12 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+                >
+                  <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-full border border-white/10 bg-slate-950/26 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100">
+                    Drag panel headers to rearrange the workspace
+                  </div>
+
+                  <div className="absolute inset-0">
+                    <ComposerDagCanvas
+                      visualChainNodes={visualChainNodes}
+                      dagEdgeDraftSourceNodeId={dagEdgeDraftSourceNodeId}
+                      setDagEdgeDraftSourceNodeId={setDagEdgeDraftSourceNodeId}
+                      setDagConnectorDrag={setDagConnectorDrag}
+                      setDagConnectorHoverTargetNodeId={setDagConnectorHoverTargetNodeId}
+                      autoLayoutDagCanvas={autoLayoutDagCanvas}
+                      dagCanvasViewportRef={dagCanvasViewportRef}
+                      dagCanvasRef={dagCanvasRef}
+                      dagCanvasSurface={dagCanvasSurface}
+                      dagCanvasEdges={dagCanvasEdges}
+                      hoveredDagEdgeKey={hoveredDagEdgeKey}
+                      setHoveredDagEdgeKey={setHoveredDagEdgeKey}
+                      removeDagEdge={removeDagEdge}
+                      dagConnectorPreview={dagConnectorPreview}
+                      dagCanvasNodes={dagCanvasNodes}
+                      composerDraftEdges={composerDraftEdges}
+                      dagNodeAdjacency={dagNodeAdjacency}
+                      visualChainNodeStatusById={visualChainNodeStatusById as Map<
+                        string,
+                        { missingCount: number; requiredCount: number }
+                      >}
+                      selectedDagNodeId={selectedDagNodeId}
+                      setSelectedDagNodeId={setSelectedDagNodeId}
+                      dagConnectorDrag={dagConnectorDrag}
+                      dagCanvasDraggingNodeId={dagCanvasDraggingNodeId}
+                      dagConnectorHoverTargetNodeId={dagConnectorHoverTargetNodeId}
+                      addDagEdge={addDagEdge}
+                      beginDagNodeDrag={beginDagNodeDrag}
+                      isInteractiveCanvasTarget={isInteractiveCanvasTarget}
+                      beginDagConnectorDrag={beginDagConnectorDrag}
+                      centerDagNodeInView={centerDagNodeInView}
+                      nodeWidth={DAG_CANVAS_NODE_WIDTH}
+                      nodeHeight={DAG_CANVAS_NODE_HEIGHT}
+                      dagCanvasZoom={dagCanvasZoom}
+                      showToolbar
+                      showBlueprintPreview
+                      onZoomIn={zoomInDagCanvas}
+                      onZoomOut={zoomOutDagCanvas}
+                      zoomInDisabled={dagCanvasZoom >= DAG_CANVAS_ZOOM_MAX}
+                      zoomOutDisabled={dagCanvasZoom <= DAG_CANVAS_ZOOM_MIN}
+                      onRunWorkflow={runWorkflowVersion}
+                      runWorkflowPending={workflowActionLoading === "run"}
+                      runWorkflowDisabled={workflowActionLoading !== null}
+                    />
+                  </div>
+
+                  {renderFloatingStudioPanel(
+                    "palette",
+                    "Node Palette",
+                    <div className="h-full">
+                      <StudioCapabilityPalette
+                        capabilities={paletteCapabilities}
+                        groups={paletteGroups}
+                        loading={capabilityLoading}
+                        error={capabilityError}
+                        query={paletteQuery}
+                        selectedGroup={paletteGroup}
+                        onQueryChange={setPaletteQuery}
+                        onGroupChange={setPaletteGroup}
+                        onAddCapability={addCapabilityNodeToStudio}
+                        onAddControl={addControlNodeToStudio}
+                      />
+                    </div>,
+                    {
+                      panelDomId: "studio-palette-section",
+                      bodyClassName: "overflow-hidden p-0",
+                    }
+                  )}
+
+                  {renderFloatingStudioPanel(
+                    "compile",
+                    "Compile Preview",
+                    <StudioCompilePanel
+                      compileLoading={composerCompileLoading || chainPreflightLoading}
+                      compileResult={composerCompileResult}
+                      preflightResult={chainPreflightResult}
+                      issues={composerIssues}
+                      draftPayloadPreview={draftPayloadPreview}
+                      onCompile={runChainPreflight}
+                    />,
+                    {
+                      badge: composerCompileLoading || chainPreflightLoading ? "busy" : "ready",
+                    }
+                  )}
+
+                  {renderFloatingStudioPanel("setup", "Workflow Setup", workflowSetupPanel)}
+
+                  {renderFloatingStudioPanel(
+                    "interface",
+                    "Workflow Interface",
+                    <StudioWorkflowInterfacePanel
+                      workflowInterface={workflowInterface}
+                      contextPathSuggestions={contextPathSuggestions}
+                      visualChainNodes={visualChainNodes}
+                      outputPathSuggestionsForNode={studioOutputPathSuggestionsForNode}
+                      onAddInput={addWorkflowInputDefinition}
+                      onUpdateInput={updateWorkflowInputDefinition}
+                      onRemoveInput={removeWorkflowInputDefinition}
+                      onAddVariable={addWorkflowVariableDefinition}
+                      onUpdateVariable={updateWorkflowVariableDefinition}
+                      onRemoveVariable={removeWorkflowVariableDefinition}
+                      onAddOutput={addWorkflowOutputDefinition}
+                      onUpdateOutput={updateWorkflowOutputDefinition}
+                      onRemoveOutput={removeWorkflowOutputDefinition}
+                    />,
+                    {
+                      badge: `${workflowInterface.inputs.length}/${workflowInterface.outputs.length}`,
+                    }
+                  )}
+
+                  {renderFloatingStudioPanel(
+                    "library",
+                    "Workflow Library",
+                    <StudioWorkflowLibrary
+                      workflowDefinitions={workflowDefinitions}
+                      workflowDefinitionsLoading={workflowDefinitionsLoading}
+                      workflowDefinitionsError={workflowDefinitionsError}
+                      workflowVersions={workflowVersions}
+                      workflowVersionsLoading={workflowVersionsLoading}
+                      workflowVersionsError={workflowVersionsError}
+                      workflowTriggers={workflowTriggers}
+                      workflowTriggersLoading={workflowTriggersLoading}
+                      workflowTriggersError={workflowTriggersError}
+                      workflowRuns={workflowRuns}
+                      workflowRunsLoading={workflowRunsLoading}
+                      workflowRunsError={workflowRunsError}
+                      activeWorkflowDefinitionId={activeWorkflowDefinitionId}
+                      activeWorkflowVersionId={activeWorkflowVersionId}
+                      deletingWorkflowDefinitionId={workflowDefinitionDeleteId}
+                      onRefresh={() => {
+                        void refreshWorkflowDefinitions();
+                        if (activeWorkflowDefinitionId) {
+                          void refreshWorkflowVersions(activeWorkflowDefinitionId);
+                          void refreshWorkflowTriggers(activeWorkflowDefinitionId);
+                          void refreshWorkflowRuns(activeWorkflowDefinitionId);
+                        }
+                      }}
+                      onOpenDefinition={restoreWorkflowDefinition}
+                      onDeleteDefinition={(definition) => {
+                        void deleteWorkflowDefinition(definition);
+                      }}
+                      onOpenVersion={(version) => {
+                        void restoreWorkflowVersion(version);
+                      }}
+                      onCreateManualTrigger={createManualWorkflowTrigger}
+                      onInvokeTrigger={(trigger) => {
+                        void invokeWorkflowTrigger(trigger);
+                      }}
+                    />,
+                    {
+                      panelDomId: "studio-library-section",
+                    }
+                  )}
+
+                  {selectedDagNode
+                    ? renderFloatingStudioPanel("inspector", "Node Inspector", nodeInspectorPanel, {
+                        panelDomId: "studio-inspector-section",
+                      })
+                    : null}
+                </div>
               </div>
-            </div>
+            </section>
           </main>
 
           <datalist id="studio-capability-id-options">

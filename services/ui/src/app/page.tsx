@@ -4816,7 +4816,9 @@ function HomeContent() {
           toTaskName: toEntry.node.taskName,
           path: `M ${startX} ${startY} C ${controlX} ${startY}, ${controlX} ${endY}, ${endX} ${endY}`,
           midX,
-          midY
+          midY,
+          labelX: midX,
+          labelY: midY
         };
       })
       .filter(
@@ -4831,6 +4833,8 @@ function HomeContent() {
           path: string;
           midX: number;
           midY: number;
+          labelX: number;
+          labelY: number;
         } =>
           item !== null
       );

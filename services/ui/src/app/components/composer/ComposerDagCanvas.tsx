@@ -3,9 +3,14 @@
 import type React from "react";
 
 import {
-  WorkflowNodePlateIcon,
   resolveWorkflowNodeVisual,
 } from "../workflow/WorkflowNodeIcon";
+import WorkflowNodeCard, {
+  type WorkflowNodeCardPortTone,
+  type WorkflowNodeCardTone,
+  workflowNodeCardToneForVisual,
+  workflowNodeCardToneStyles,
+} from "../workflow/WorkflowNodeCard";
 
 type CanvasPoint = {
   x: number;
@@ -36,6 +41,8 @@ type DagCanvasEdge = {
   path: string;
   midX: number;
   midY: number;
+  labelX: number;
+  labelY: number;
   branchLabel?: string;
 };
 
@@ -118,7 +125,7 @@ type BlueprintPreviewNode = {
   title: string;
   subtitle: string;
   caption?: string;
-  tone: "slate" | "sky" | "emerald" | "amber" | "rose" | "steel";
+  tone: WorkflowNodeCardTone;
   capabilityId: string;
   nodeKind?: "capability" | "control";
   controlKind?: "if" | "if_else" | "switch" | "parallel" | null;
@@ -133,136 +140,12 @@ type BlueprintPreviewEdge = {
   labelY?: number;
 };
 
-const hexToRgba = (hex: string, alpha: number) => {
-  const normalized = hex.replace("#", "");
-  const expanded =
-    normalized.length === 3
-      ? normalized
-          .split("")
-          .map((char) => `${char}${char}`)
-          .join("")
-      : normalized;
-  const value = Number.parseInt(expanded, 16);
-  if (!Number.isFinite(value)) {
-    return `rgba(148, 163, 184, ${alpha})`;
-  }
-  const r = (value >> 16) & 255;
-  const g = (value >> 8) & 255;
-  const b = value & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-};
-
-const blueprintToneStyles: Record<
-  BlueprintPreviewNode["tone"],
-  {
-    border: string;
-    background: string;
-    caption: string;
-    shadow: string;
-    subtitle: string;
-    title: string;
-  }
-> = {
-  slate: {
-    border: "#93abc8",
-    background: "linear-gradient(180deg, #a6bbd6 0%, #8096b6 100%)",
-    caption: "rgba(241,245,249,0.9)",
-    shadow: "0 14px 28px rgba(30, 41, 59, 0.28)",
-    subtitle: "rgba(241,245,249,0.92)",
-    title: "#f8fafc",
-  },
-  sky: {
-    border: "#4da9ea",
-    background: "linear-gradient(180deg, #c9ecff 0%, #9fd6ff 100%)",
-    caption: "rgba(71,85,105,0.9)",
-    shadow: "0 14px 28px rgba(59, 130, 246, 0.18)",
-    subtitle: "rgba(30,41,59,0.88)",
-    title: "#0f172a",
-  },
-  emerald: {
-    border: "#33a26f",
-    background: "linear-gradient(180deg, #b6efd3 0%, #7ee1b6 100%)",
-    caption: "rgba(22,101,52,0.88)",
-    shadow: "0 14px 28px rgba(16, 185, 129, 0.16)",
-    subtitle: "rgba(20,83,45,0.86)",
-    title: "#052e16",
-  },
-  amber: {
-    border: "#d69a2a",
-    background: "linear-gradient(180deg, #ffd783 0%, #ffc45a 100%)",
-    caption: "rgba(120,53,15,0.86)",
-    shadow: "0 14px 28px rgba(217, 119, 6, 0.16)",
-    subtitle: "rgba(120,53,15,0.86)",
-    title: "#111827",
-  },
-  rose: {
-    border: "#d87484",
-    background: "linear-gradient(180deg, #f8c5cf 0%, #f3a7b7 100%)",
-    caption: "rgba(127,29,29,0.86)",
-    shadow: "0 14px 28px rgba(244, 63, 94, 0.14)",
-    subtitle: "rgba(127,29,29,0.84)",
-    title: "#111827",
-  },
-  steel: {
-    border: "#94a9c7",
-    background: "linear-gradient(180deg, #a4b8d5 0%, #7c94b6 100%)",
-    caption: "rgba(241,245,249,0.9)",
-    shadow: "0 14px 28px rgba(51, 65, 85, 0.24)",
-    subtitle: "rgba(241,245,249,0.92)",
-    title: "#f8fafc",
-  },
-};
-
-type ComposerPortTone = "default" | "success" | "danger";
-
 type ComposerNodePort = {
   key: string;
   label: string;
   branchLabel?: string;
-  tone: ComposerPortTone;
+  tone: WorkflowNodeCardPortTone;
   y: number;
-};
-
-const portToneStyles: Record<
-  ComposerPortTone,
-  { background: string; border: string; text: string }
-> = {
-  default: {
-    background: "#d7e9fb",
-    border: "#6fb7ea",
-    text: "#215e90",
-  },
-  success: {
-    background: "#93ecac",
-    border: "#2fa85b",
-    text: "#14532d",
-  },
-  danger: {
-    background: "#f7a6b1",
-    border: "#d65c71",
-    text: "#881337",
-  },
-};
-
-const toneForVisual = (
-  visual: ReturnType<typeof resolveWorkflowNodeVisual>
-): BlueprintPreviewNode["tone"] => {
-  if (visual.tone === "llm" || visual.tone === "io") {
-    return "sky";
-  }
-  if (visual.tone === "transform") {
-    return "emerald";
-  }
-  if (visual.tone === "validate") {
-    return "rose";
-  }
-  if (visual.tone === "memory") {
-    return "steel";
-  }
-  if (visual.tone === "control" || visual.tone === "render") {
-    return "amber";
-  }
-  return "slate";
 };
 
 const subtitleForNode = (
@@ -373,6 +256,29 @@ const outputPortsForNode = (
     return [{ key: "state", label: "State", tone: "default", y: nodeHeight / 2 }];
   }
   return [{ key: "output", label: "Output", tone: "default", y: nodeHeight / 2 }];
+};
+
+const dagBranchTheme = (branchLabel?: string) => {
+  const normalized = String(branchLabel || "").trim().toLowerCase();
+  if (normalized.includes("false") || normalized.includes("else")) {
+    return {
+      background: "rgba(95, 31, 52, 0.94)",
+      border: "rgba(251, 113, 133, 0.4)",
+      text: "#ffe4e6",
+    };
+  }
+  if (normalized) {
+    return {
+      background: "rgba(31, 74, 60, 0.94)",
+      border: "rgba(74, 222, 128, 0.38)",
+      text: "#dcfce7",
+    };
+  }
+  return {
+    background: "rgba(50, 63, 79, 0.94)",
+    border: "rgba(214, 228, 241, 0.22)",
+    text: "#f8fafc",
+  };
 };
 
 const emptyBlueprintNodes: BlueprintPreviewNode[] = [
@@ -557,9 +463,21 @@ export default function ComposerDagCanvas({
   runWorkflowDisabled = false,
 }: ComposerDagCanvasProps) {
   const showEmptyBlueprint = showBlueprintPreview && visualChainNodes.length === 0;
+  const clearSelectedNodeFromCanvas = (
+    event: React.MouseEvent<HTMLDivElement>
+  ) => {
+    if (isInteractiveCanvasTarget(event.target)) {
+      return;
+    }
+    const target = event.target;
+    if (target instanceof Element && target.closest("[data-composer-node='true']")) {
+      return;
+    }
+    setSelectedDagNodeId(null);
+  };
 
   return (
-    <div className="relative h-full overflow-hidden rounded-[18px] border border-[#7c8da3]/30 bg-[#566c80] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_16px_40px_rgba(15,23,42,0.18)]">
+    <div className="relative h-full">
       {showToolbar ? (
         <div className="pointer-events-none absolute right-4 top-4 z-20 flex justify-end">
           <div className="pointer-events-auto flex items-center gap-1.5 rounded-[14px] border border-black/15 bg-[rgba(53,67,83,0.88)] p-1.5 shadow-[0_10px_24px_rgba(15,23,42,0.18)] backdrop-blur">
@@ -604,15 +522,19 @@ export default function ComposerDagCanvas({
         </div>
       ) : null}
 
-      <div ref={dagCanvasViewportRef} className="h-full overflow-auto bg-[#566c80]">
+      <div
+        ref={dagCanvasViewportRef}
+        className="relative h-full overflow-auto bg-[#506478] [background-image:linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_82%_24%,rgba(125,211,252,0.08),transparent_14%),linear-gradient(180deg,rgba(24,36,49,0.2),rgba(9,16,27,0.34))] [background-size:24px_24px,24px_24px,100%_100%,100%_100%,100%_100%]"
+        onMouseDown={clearSelectedNodeFromCanvas}
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(191,219,254,0.08),transparent_12%),radial-gradient(circle_at_84%_22%,rgba(103,232,249,0.06),transparent_11%),radial-gradient(circle_at_50%_100%,rgba(15,23,42,0.14),transparent_40%)]" />
         <div
-          className="relative min-h-full min-w-full [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.06),transparent_16%),radial-gradient(circle_at_82%_24%,rgba(255,255,255,0.05),transparent_14%),linear-gradient(180deg,rgba(26,42,57,0.16),rgba(15,24,35,0.22))] [background-size:20px_20px,20px_20px,100%_100%,100%_100%,100%_100%]"
+          className="relative min-h-full min-w-full"
           style={{
             width: dagCanvasSurface.width * dagCanvasZoom,
             height: dagCanvasSurface.height * dagCanvasZoom,
           }}
         >
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_14%,rgba(255,255,255,0.06),transparent_16%),radial-gradient(circle_at_74%_22%,rgba(255,255,255,0.05),transparent_14%),linear-gradient(180deg,rgba(10,18,30,0.08),rgba(10,18,30,0.22))]" />
           <div
             ref={dagCanvasRef}
             className="relative"
@@ -680,6 +602,8 @@ export default function ComposerDagCanvas({
             </defs>
             {dagCanvasEdges.map((edge) => {
               const isHovered = hoveredDagEdgeKey === edge.edgeKey;
+              const labelTheme = dagBranchTheme(edge.branchLabel);
+              const labelWidth = Math.max(52, edge.branchLabel ? edge.branchLabel.length * 8 + 18 : 0);
               return (
                 <g
                   key={`composer-edge-${edge.edgeKey}`}
@@ -690,15 +614,15 @@ export default function ComposerDagCanvas({
                 >
                   <path
                     d={edge.path}
-                    stroke={isHovered ? "rgba(15,23,42,0.55)" : "rgba(15,23,42,0.34)"}
-                    strokeWidth={isHovered ? "6.4" : "5.2"}
+                    stroke={isHovered ? "rgba(15,23,42,0.5)" : "rgba(15,23,42,0.32)"}
+                    strokeWidth={isHovered ? "6.2" : "5"}
                     fill="none"
                     strokeLinecap="round"
                   />
                   <path
                     d={edge.path}
-                    stroke={isHovered ? "#d7ecff" : "rgba(163, 187, 212, 0.9)"}
-                    strokeWidth={isHovered ? "2.9" : "2.2"}
+                    stroke={isHovered ? "#e7f3ff" : "rgba(182, 205, 227, 0.88)"}
+                    strokeWidth={isHovered ? "2.8" : "2.1"}
                     fill="none"
                     strokeLinecap="round"
                     markerEnd="url(#composer-arrow)"
@@ -714,21 +638,21 @@ export default function ComposerDagCanvas({
                   {edge.branchLabel ? (
                     <g>
                       <rect
-                        x={edge.midX - 30}
-                        y={edge.midY - 21}
+                        x={edge.labelX - labelWidth / 2}
+                        y={edge.labelY - 15}
                         rx="10"
                         ry="10"
-                        width="60"
+                        width={labelWidth}
                         height="22"
-                        fill="rgba(50, 63, 79, 0.94)"
-                        stroke="rgba(214, 228, 241, 0.22)"
+                        fill={labelTheme.background}
+                        stroke={labelTheme.border}
                       />
                       <text
-                        x={edge.midX}
-                        y={edge.midY - 6}
+                        x={edge.labelX}
+                        y={edge.labelY - 1}
                         textAnchor="middle"
                         fontSize="10"
-                        fill="#f8fafc"
+                        fill={labelTheme.text}
                       >
                         {edge.branchLabel}
                       </text>
@@ -784,7 +708,6 @@ export default function ComposerDagCanvas({
 
           {showEmptyBlueprint
             ? emptyBlueprintNodes.map((node) => {
-                const tone = blueprintToneStyles[node.tone];
                 const visual = resolveWorkflowNodeVisual({
                   capabilityId: node.capabilityId,
                   controlKind: node.controlKind,
@@ -803,83 +726,37 @@ export default function ComposerDagCanvas({
                 return (
                   <div
                     key={`empty-blueprint-node-${node.id}`}
-                    className="pointer-events-none absolute rounded-[18px] border"
+                    className="pointer-events-none absolute"
                     style={{
                       left: node.x,
                       top: node.y,
-                      width: 248,
-                      height: 96,
-                      borderColor: tone.border,
-                      background: tone.background,
-                      boxShadow: tone.shadow,
                     }}
                   >
-                    <div
-                      className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold"
-                      style={{
+                    <WorkflowNodeCard
+                      title={node.title}
+                      subtitle={node.subtitle}
+                      caption={node.caption}
+                      visual={visual}
+                      tone={node.tone}
+                      width={248}
+                      height={96}
+                      borderColor={workflowNodeCardToneStyles[node.tone].border}
+                      shadow={workflowNodeCardToneStyles[node.tone].shadow}
+                      badge={{
                         background:
                           node.tone === "rose"
                             ? "rgba(220, 38, 38, 0.92)"
                             : "rgba(37, 99, 235, 0.84)",
                         color: node.tone === "rose" ? "#fff1f2" : "#eff6ff",
+                        label: node.tone === "rose" ? "!" : "✓",
                       }}
-                    >
-                      {node.tone === "rose" ? "!" : "✓"}
-                    </div>
-                    <div className="flex h-full flex-col px-4 py-3">
-                      <div className="flex items-start gap-3 pr-16">
-                        <WorkflowNodePlateIcon visual={visual} size={46} />
-                        <div className="min-w-0 flex-1">
-                          <div
-                            className="truncate text-[13px] font-semibold"
-                            style={{ color: tone.title }}
-                          >
-                            {node.title}
-                          </div>
-                          <div
-                            className="mt-0.5 truncate text-[11px] leading-5"
-                            style={{ color: tone.subtitle }}
-                          >
-                            {node.subtitle}
-                          </div>
-                        </div>
-                      </div>
-                      {node.caption ? (
-                        <div
-                          className="mt-auto pr-16 text-center text-[11px] font-medium"
-                          style={{ color: tone.caption }}
-                        >
-                          {node.caption}
-                        </div>
-                      ) : null}
-                    </div>
-                    {ports.map((port) => {
-                      const portTone = portToneStyles[port.tone];
-                      return (
-                        <div
-                          key={`empty-blueprint-port-${node.id}-${port.key}`}
-                          className="absolute right-3 flex items-center gap-2"
-                          style={{ top: port.y, transform: "translateY(-50%)" }}
-                        >
-                          <span
-                            className="text-[11px] font-medium"
-                            style={{ color: portTone.text }}
-                          >
-                            {port.label}
-                          </span>
-                          <span
-                            className="flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold"
-                            style={{
-                              borderColor: portTone.border,
-                              background: portTone.background,
-                              color: portTone.text,
-                            }}
-                          >
-                            +
-                          </span>
-                        </div>
-                      );
-                    })}
+                      ports={ports.map((port) => ({
+                        key: `${node.id}-${port.key}`,
+                        label: port.label,
+                        tone: port.tone,
+                        top: port.y,
+                      }))}
+                    />
                   </div>
                 );
               })
@@ -896,7 +773,7 @@ export default function ComposerDagCanvas({
               nodeKind: node.nodeKind,
               taskName: node.taskName,
             });
-            const tone = blueprintToneStyles[toneForVisual(visual)];
+            const tone = workflowNodeCardToneStyles[workflowNodeCardToneForVisual(visual)];
             const status = statusForNode(node, missingCount, requiredCount);
             const ports = outputPortsForNode(node, visual, nodeHeight);
             const isConnectorHoverTarget =
@@ -907,9 +784,9 @@ export default function ComposerDagCanvas({
               ? "#22c55e"
               : dagEdgeDraftSourceNodeId === node.id
                 ? "#d97706"
-              : isSelected
-                ? "#2563eb"
-                : tone.border;
+                : isSelected
+                  ? "#2563eb"
+                  : tone.border;
             const cardShadow = isSelected
               ? `${tone.shadow}, 0 0 0 2px rgba(37, 99, 235, 0.22)`
               : dagEdgeDraftSourceNodeId === node.id
@@ -918,16 +795,12 @@ export default function ComposerDagCanvas({
             return (
               <div
                 key={`composer-node-${node.id}`}
-                className="absolute rounded-[18px] border"
+                data-composer-node="true"
+                className="absolute"
                 style={{
                   left: position.x,
                   top: position.y,
-                  width: nodeWidth,
-                  height: nodeHeight,
                   cursor: dagCanvasDraggingNodeId === node.id ? "grabbing" : "grab",
-                  borderColor,
-                  background: tone.background,
-                  boxShadow: cardShadow,
                 }}
                 onClick={() => setSelectedDagNodeId(node.id)}
                 onMouseEnter={() => {
@@ -960,98 +833,41 @@ export default function ComposerDagCanvas({
                   beginDagNodeDrag(event, node.id);
                 }}
               >
-                <div
-                  className="absolute -left-[6px] top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border"
-                  style={{
-                    borderColor: isConnectorHoverTarget ? "#22c55e" : "rgba(255,255,255,0.54)",
-                    background: isConnectorHoverTarget
-                      ? "#86efac"
-                      : "rgba(241, 245, 249, 0.88)",
-                    boxShadow: isConnectorHoverTarget
-                      ? "0 0 0 4px rgba(34, 197, 94, 0.14)"
-                      : "0 0 0 4px rgba(15, 23, 42, 0.08)",
-                  }}
-                />
-                <div
-                  className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold"
-                  style={{
+                <WorkflowNodeCard
+                  title={node.taskName}
+                  subtitle={subtitleForNode(node, visual)}
+                  caption={status.label}
+                  visual={visual}
+                  tone={workflowNodeCardToneForVisual(visual)}
+                  width={nodeWidth}
+                  height={nodeHeight}
+                  borderColor={borderColor}
+                  shadow={cardShadow}
+                  inputActive={Boolean(isConnectorHoverTarget)}
+                  badge={{
                     background: status.badgeBackground,
                     color: status.badgeColor,
+                    label: status.badgeLabel,
+                    title: status.label,
                   }}
-                  title={status.label}
-                >
-                  {status.badgeLabel}
-                </div>
-
-                <div className="flex h-full flex-col px-4 py-3">
-                  <div className="flex items-start gap-3 pr-16">
-                    <WorkflowNodePlateIcon visual={visual} size={46} />
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className="truncate text-[13px] font-semibold"
-                        style={{ color: tone.title }}
-                      >
-                        {node.taskName}
-                      </div>
-                      <div
-                        className="mt-0.5 truncate text-[11px] leading-5"
-                        style={{ color: tone.subtitle }}
-                      >
-                        {subtitleForNode(node, visual)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div
-                    className="mt-auto pr-16 text-center text-[11px] font-medium"
-                    style={{ color: tone.caption }}
-                  >
-                    {status.label}
-                  </div>
-                </div>
-
-                {ports.map((port) => {
-                  const portTone = portToneStyles[port.tone];
-                  const isActivePort =
-                    dagConnectorDrag?.sourceNodeId === node.id &&
-                    (dagConnectorDrag.branchLabel || "") === (port.branchLabel || "");
-                  return (
-                    <div
-                      key={`composer-port-${node.id}-${port.key}`}
-                      className="absolute right-3 flex items-center gap-2"
-                      style={{ top: port.y, transform: "translateY(-50%)" }}
-                    >
-                      <span
-                        className="text-[11px] font-medium"
-                        style={{ color: portTone.text }}
-                      >
-                        {port.label}
-                      </span>
-                      <button
-                        type="button"
-                        className="flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition"
-                        style={{
-                          borderColor: isActivePort ? "#111827" : portTone.border,
-                          background: isActivePort ? portTone.border : portTone.background,
-                          color: isActivePort ? "#ffffff" : portTone.text,
-                          boxShadow: isActivePort
-                            ? `0 0 0 4px ${hexToRgba(portTone.border, 0.24)}`
-                            : "none",
-                        }}
-                        title={`Drag ${port.label} connector`}
-                        onMouseDown={(event) => {
-                          event.stopPropagation();
-                          beginDagConnectorDrag(event, node.id, {
-                            branchLabel: port.branchLabel,
-                            sourcePortY: port.y,
-                          });
-                        }}
-                      >
-                        +
-                      </button>
-                    </div>
-                  );
-                })}
+                  ports={ports.map((port) => ({
+                    key: `${node.id}-${port.key}`,
+                    label: port.label,
+                    tone: port.tone,
+                    top: port.y,
+                    active:
+                      dagConnectorDrag?.sourceNodeId === node.id &&
+                      (dagConnectorDrag.branchLabel || "") === (port.branchLabel || ""),
+                    title: `Drag ${port.label} connector`,
+                    onMouseDown: (event) => {
+                      event.stopPropagation();
+                      beginDagConnectorDrag(event, node.id, {
+                        branchLabel: port.branchLabel,
+                        sourcePortY: port.y,
+                      });
+                    },
+                  }))}
+                />
               </div>
             );
           })}

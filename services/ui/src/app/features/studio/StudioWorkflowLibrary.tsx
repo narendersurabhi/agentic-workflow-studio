@@ -25,9 +25,13 @@ type StudioWorkflowLibraryProps = {
   activeWorkflowVersionId: string | null;
   deletingWorkflowDefinitionId: string | null;
   onRefresh: () => void;
+  onSelectDefinition?: (definition: WorkflowDefinition) => void;
   onOpenDefinition: (definition: WorkflowDefinition) => void;
   onDeleteDefinition: (definition: WorkflowDefinition) => void;
+  openDefinitionLabel?: string;
+  onSelectVersion?: (version: WorkflowVersion) => void;
   onOpenVersion: (version: WorkflowVersion) => void;
+  openVersionLabel?: string;
   onCreateManualTrigger: () => void;
   onInvokeTrigger: (trigger: WorkflowTrigger) => void;
 };
@@ -52,9 +56,13 @@ export default function StudioWorkflowLibrary({
   activeWorkflowVersionId,
   deletingWorkflowDefinitionId,
   onRefresh,
+  onSelectDefinition,
   onOpenDefinition,
   onDeleteDefinition,
+  openDefinitionLabel = "Open Draft",
+  onSelectVersion,
   onOpenVersion,
+  openVersionLabel = "Restore Version",
   onCreateManualTrigger,
   onInvokeTrigger,
 }: StudioWorkflowLibraryProps) {
@@ -107,7 +115,10 @@ export default function StudioWorkflowLibrary({
                     isActive
                       ? "border-sky-200 bg-sky-50/80"
                       : "border-slate-200 bg-slate-50/70"
-                  }`}
+                  } ${onSelectDefinition ? "cursor-pointer transition hover:border-sky-300/35" : ""}`}
+                  onClick={() => {
+                    onSelectDefinition?.(definition);
+                  }}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -137,13 +148,19 @@ export default function StudioWorkflowLibrary({
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-900 hover:text-slate-900"
-                      onClick={() => onOpenDefinition(definition)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenDefinition(definition);
+                      }}
                     >
-                      Open Draft
+                      {openDefinitionLabel}
                     </button>
                     <button
                       className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-400 hover:text-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => onDeleteDefinition(definition)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteDefinition(definition);
+                      }}
                       disabled={deletingWorkflowDefinitionId === definition.id}
                     >
                       {deletingWorkflowDefinitionId === definition.id ? "Deleting..." : "Delete"}
@@ -257,7 +274,10 @@ export default function StudioWorkflowLibrary({
                     isActive
                       ? "border-emerald-200 bg-emerald-50/80"
                       : "border-slate-200 bg-slate-50/70"
-                  }`}
+                  } ${onSelectVersion ? "cursor-pointer transition hover:border-emerald-300/35" : ""}`}
+                  onClick={() => {
+                    onSelectVersion?.(version);
+                  }}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -280,9 +300,12 @@ export default function StudioWorkflowLibrary({
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-900 hover:text-slate-900"
-                      onClick={() => onOpenVersion(version)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenVersion(version);
+                      }}
                     >
-                      Restore Version
+                      {openVersionLabel}
                     </button>
                   </div>
                 </article>
