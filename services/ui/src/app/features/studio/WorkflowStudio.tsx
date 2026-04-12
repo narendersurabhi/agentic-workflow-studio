@@ -44,6 +44,7 @@ import type {
   WorkflowTrigger,
   WorkflowVariableDefinition,
   WorkflowVersion,
+  WorkbenchWorkflowPromotionDraft,
 } from "./types";
 import {
   CHAINABLE_REQUIRED_FIELDS,
@@ -1606,6 +1607,8 @@ export default function WorkflowStudio() {
   const [workflowActionLoading, setWorkflowActionLoading] = useState<
     "save" | "publish" | "run" | null
   >(null);
+  const [pendingWorkbenchWorkflowDraft, setPendingWorkbenchWorkflowDraft] =
+    useState<WorkbenchWorkflowPromotionDraft | null>(null);
   const [activeComposerIssueFocus, setActiveComposerIssueFocus] = useState<ComposerIssueFocus | null>(
     null
   );
@@ -4307,16 +4310,52 @@ export default function WorkflowStudio() {
     router,
   ]);
 
-  const switchStudioSurface = (nextSurface: StudioSurface) => {
+  const switchStudioSurface = (
+    nextSurface: StudioSurface,
+    options?: { clearWorkflowSelection?: boolean }
+  ) => {
     const params = new URLSearchParams(searchParams.toString());
     if (nextSurface === "workbench") {
       params.set("surface", "workbench");
     } else {
       params.delete("surface");
     }
+    if (options?.clearWorkflowSelection) {
+      params.delete("definition");
+      params.delete("version");
+      params.delete("mode");
+    }
     const nextUrl = params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
     router.replace(nextUrl, { scroll: false });
   };
+
+  useEffect(() => {
+    if (!pendingWorkbenchWorkflowDraft) {
+      return;
+    }
+    setGoal(pendingWorkbenchWorkflowDraft.goal);
+    setContextJson(pendingWorkbenchWorkflowDraft.contextJsonText);
+    setComposerDraft({
+      summary: pendingWorkbenchWorkflowDraft.summary,
+      nodes: pendingWorkbenchWorkflowDraft.nodes,
+      edges: normalizeComposerEdges(
+        pendingWorkbenchWorkflowDraft.nodes,
+        pendingWorkbenchWorkflowDraft.edges
+      ),
+    });
+    setWorkflowInterface(pendingWorkbenchWorkflowDraft.workflowInterface);
+    setComposerNodePositions(pendingWorkbenchWorkflowDraft.nodePositions);
+    setSavedWorkflowDefinition(null);
+    setPublishedWorkflowVersion(null);
+    setLoadedWorkflowVersionId(null);
+    setWorkflowVersions([]);
+    setWorkflowTriggers([]);
+    setWorkflowRuns([]);
+    resetStudioTransientState();
+    setStudioNotice(pendingWorkbenchWorkflowDraft.notice || "Imported from workbench run.");
+    switchStudioSurface("workflow", { clearWorkflowSelection: true });
+    setPendingWorkbenchWorkflowDraft(null);
+  }, [pendingWorkbenchWorkflowDraft]);
 
   const saveWorkflowDefinition = async () => {
     if (contextState.invalid) {
@@ -6571,6 +6610,7 @@ export default function WorkflowStudio() {
         <StudioWorkbenchSurface
           active={activeStudioSurface === "workbench"}
           workspaceUserId={workspaceUserId}
+          onPromoteWorkflowDraft={setPendingWorkbenchWorkflowDraft}
         />
       ) : null}
 

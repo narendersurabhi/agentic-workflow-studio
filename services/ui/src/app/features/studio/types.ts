@@ -207,6 +207,116 @@ export type StudioPersistedWorkflowDraft = {
   workflowInterface?: WorkflowInterface;
 };
 
+export type WorkbenchConversionDiagnostic = {
+  code: string;
+  message: string;
+  stepId?: string;
+  field?: string;
+};
+
+export type ReplayableCapabilityDraft = {
+  sourceRunId: string;
+  sourceStepId: string;
+  title: string;
+  goal: string;
+  userId: string;
+  contextJson: Record<string, unknown>;
+  capabilityId: string;
+  inputs: Record<string, unknown>;
+  retryPolicy: Record<string, unknown>;
+  notice: string;
+};
+
+export type WorkbenchReplayResult =
+  | {
+      replayable: true;
+      draft: ReplayableCapabilityDraft;
+    }
+  | {
+      replayable: false;
+      reason: string;
+      diagnostics: WorkbenchConversionDiagnostic[];
+    };
+
+export type WorkbenchForkTargetMode =
+  | "capability"
+  | "agent_structured"
+  | "agent_raw";
+
+export type WorkbenchAgentStructuredStepDraft = {
+  stepId: string;
+  name: string;
+  description: string;
+  instruction: string;
+  capabilityId: string;
+  dependsOn: string[];
+  inputBindings: Record<string, unknown>;
+  retryPolicy: Record<string, unknown>;
+};
+
+export type WorkbenchAgentStructuredDraft = {
+  sourceRunId: string;
+  title: string;
+  goal: string;
+  userId: string;
+  contextJson: Record<string, unknown>;
+  steps: WorkbenchAgentStructuredStepDraft[];
+  notice: string;
+};
+
+export type WorkbenchAgentRawDraft = {
+  sourceRunId: string;
+  title: string;
+  goal: string;
+  userId: string;
+  contextJson: Record<string, unknown>;
+  runSpec: Record<string, unknown>;
+  reason: string;
+  notice: string;
+};
+
+export type WorkbenchForkResult =
+  | {
+      mode: "capability";
+      draft: ReplayableCapabilityDraft;
+      diagnostics: WorkbenchConversionDiagnostic[];
+    }
+  | {
+      mode: "agent_structured";
+      draft: WorkbenchAgentStructuredDraft;
+      diagnostics: WorkbenchConversionDiagnostic[];
+    }
+  | {
+      mode: "agent_raw";
+      draft: WorkbenchAgentRawDraft;
+      diagnostics: WorkbenchConversionDiagnostic[];
+    };
+
+export type WorkbenchWorkflowPromotionDraft = StudioPersistedWorkflowDraft & {
+  summary: string;
+  goal: string;
+  contextJsonText: string;
+  nodePositions: Record<string, CanvasPoint>;
+  nodes: ComposerDraftNode[];
+  edges: ComposerDraftEdge[];
+  workflowInterface: WorkflowInterface;
+  sourceRunId: string;
+  sourceTitle: string;
+  notice: string;
+};
+
+export type WorkbenchWorkflowPromotionResult =
+  | {
+      promotable: true;
+      draft: WorkbenchWorkflowPromotionDraft;
+      diagnostics: WorkbenchConversionDiagnostic[];
+    }
+  | {
+      promotable: false;
+      reason: string;
+      diagnostics: WorkbenchConversionDiagnostic[];
+    };
+
 export type ComposerCompileDiagnostic = {
   code: string;
   message: string;

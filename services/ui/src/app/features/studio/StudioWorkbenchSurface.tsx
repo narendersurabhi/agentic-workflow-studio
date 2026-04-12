@@ -13,7 +13,13 @@ import {
   type WorkbenchDebuggerData,
   type WorkbenchRunLaunchResponse,
 } from "./studioApi";
-import type { CapabilityItem, StudioSurface } from "./types";
+import { mapDebuggerStepToReplayDraft, mapRunToWorkbenchFork, mapRunToWorkflowPromotion } from "./studioWorkbenchMappings";
+import type {
+  CapabilityItem,
+  ReplayableCapabilityDraft,
+  StudioSurface,
+  WorkbenchWorkflowPromotionDraft,
+} from "./types";
 
 type WorkbenchMode = "capability" | "agent";
 type AgentEditorMode = "structured" | "raw";
@@ -41,6 +47,11 @@ const DEFAULT_RETRY_POLICY_PREVIEW = {
   backoff_seconds: 0,
   backoff_multiplier: 1,
   jitter_seconds: 0,
+};
+
+type WorkbenchBanner = {
+  tone: "info" | "warning";
+  message: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -185,6 +196,99 @@ function collectArtifacts(debuggerData: WorkbenchDebuggerData | null): Record<st
   return artifacts;
 }
 
+function capabilityEditorStateFromInputs(
+  capability: CapabilityItem | null,
+  inputs: Record<string, unknown>
+): {
+  inputDraft: CapabilityInputDraft;
+  rawOverrideEnabled: boolean;
+  rawOverrideText: string;
+} {
+  const rawOverrideText = formatJson(inputs);
+  if (!capability) {
+    return {
+      inputDraft: {},
+      rawOverrideEnabled: true,
+      rawOverrideText,
+    };
+  }
+  const properties = capability.input_schema?.properties;
+  if (!isRecord(properties)) {
+    return {
+      inputDraft: {},
+      rawOverrideEnabled: true,
+      rawOverrideText,
+    };
+  }
+  const schemaEntries = Object.entries(properties).filter((entry): entry is [string, Record<string, unknown>] =>
+    isRecord(entry[1])
+  );
+  if (schemaEntries.length === 0) {
+    return {
+      inputDraft: {},
+      rawOverrideEnabled: Object.keys(inputs).length > 0,
+      rawOverrideText,
+    };
+  }
+  const structuredDraft: CapabilityInputDraft = {};
+  let requiresRawOverride = false;
+  const knownFieldNames = new Set(schemaEntries.map(([fieldName]) => fieldName));
+  Object.keys(inputs).forEach((fieldName) => {
+    if (!knownFieldNames.has(fieldName)) {
+      requiresRawOverride = true;
+    }
+  });
+  schemaEntries.forEach(([fieldName, schema]) => {
+    const value = inputs[fieldName];
+    if (value === undefined) {
+      return;
+    }
+    const fieldType = normalizeSchemaType(schema);
+    if (fieldType === "boolean") {
+      if (typeof value === "boolean") {
+        structuredDraft[fieldName] = value;
+        return;
+      }
+      if (typeof value === "string" && (value === "true" || value === "false")) {
+        structuredDraft[fieldName] = value === "true";
+        return;
+      }
+      requiresRawOverride = true;
+      return;
+    }
+    if (fieldType === "object" || fieldType === "array") {
+      if (typeof value === "string") {
+        structuredDraft[fieldName] = value;
+        return;
+      }
+      if (Array.isArray(value) || isRecord(value)) {
+        structuredDraft[fieldName] = formatJson(value);
+        return;
+      }
+      requiresRawOverride = true;
+      return;
+    }
+    if (fieldType === "integer" || fieldType === "number") {
+      if (typeof value === "number" || typeof value === "string") {
+        structuredDraft[fieldName] = String(value);
+        return;
+      }
+      requiresRawOverride = true;
+      return;
+    }
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      structuredDraft[fieldName] = String(value);
+      return;
+    }
+    requiresRawOverride = true;
+  });
+  return {
+    inputDraft: structuredDraft,
+    rawOverrideEnabled: requiresRawOverride,
+    rawOverrideText,
+  };
+}
+
 function SurfacePanel({
   title,
   subtitle,
@@ -245,9 +349,11 @@ function JsonPreview({
 export default function StudioWorkbenchSurface({
   active,
   workspaceUserId,
+  onPromoteWorkflowDraft,
 }: {
   active: boolean;
   workspaceUserId: string;
+  onPromoteWorkflowDraft?: (draft: WorkbenchWorkflowPromotionDraft) => void;
 }) {
   const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("capability");
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -283,6 +389,7 @@ export default function StudioWorkbenchSurface({
   const [debuggerLoading, setDebuggerLoading] = useState(false);
   const [debuggerError, setDebuggerError] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [workbenchBanner, setWorkbenchBanner] = useState<WorkbenchBanner | null>(null);
 
   const deferredCatalogQuery = useDeferredValue(catalogQuery);
 
@@ -673,6 +780,116 @@ export default function StudioWorkbenchSurface({
     launchResponse?.run?.status ||
     null;
 
+  const replayResultsByStep = useMemo(() => {
+    const next = new Map<string, ReturnType<typeof mapDebuggerStepToReplayDraft>>();
+    if (!debuggerData) {
+      return next;
+    }
+    debuggerData.steps.forEach((stepPayload) => {
+      next.set(stepPayload.step.id, mapDebuggerStepToReplayDraft(debuggerData, stepPayload.step.id));
+    });
+    return next;
+  }, [debuggerData]);
+
+  const forkResult = useMemo(
+    () => (debuggerData ? mapRunToWorkbenchFork(debuggerData) : null),
+    [debuggerData]
+  );
+
+  const workflowPromotionResult = useMemo(
+    () => (debuggerData ? mapRunToWorkflowPromotion(debuggerData) : null),
+    [debuggerData]
+  );
+
+  const applyCapabilityReplayDraft = (draft: ReplayableCapabilityDraft) => {
+    const targetCapability = catalog.find((item) => item.id === draft.capabilityId) ?? null;
+    const nextCapabilityState = capabilityEditorStateFromInputs(targetCapability, draft.inputs);
+    setWorkbenchMode("capability");
+    setSelectedCapabilityId(draft.capabilityId);
+    setCapabilityTitle(draft.title || `Capability run: ${draft.capabilityId}`);
+    setCapabilityGoal(draft.goal);
+    setCapabilityUserId(draft.userId || workspaceUserId);
+    setCapabilityContextJsonText(formatJson(draft.contextJson));
+    setCapabilityRetryPolicyText(
+      draft.retryPolicy && Object.keys(draft.retryPolicy).length > 0
+        ? formatJson(draft.retryPolicy)
+        : ""
+    );
+    setCapabilityInputDraft(nextCapabilityState.inputDraft);
+    setCapabilityRawOverrideEnabled(nextCapabilityState.rawOverrideEnabled);
+    setCapabilityRawOverrideText(nextCapabilityState.rawOverrideText);
+    setLaunchError(null);
+    setWorkbenchBanner({
+      tone: nextCapabilityState.rawOverrideEnabled ? "warning" : "info",
+      message: nextCapabilityState.rawOverrideEnabled
+        ? `${draft.notice} Some inputs stayed in raw JSON because the current capability schema could not represent them as structured fields.`
+        : draft.notice,
+    });
+  };
+
+  const applyForkResult = () => {
+    if (!forkResult) {
+      return;
+    }
+    if (forkResult.mode === "capability") {
+      applyCapabilityReplayDraft(forkResult.draft);
+      return;
+    }
+    setWorkbenchMode("agent");
+    setAgentTitle(forkResult.draft.title || "Agent workbench run");
+    setAgentGoal(forkResult.draft.goal);
+    setAgentUserId(forkResult.draft.userId || workspaceUserId);
+    setAgentContextJsonText(formatJson(forkResult.draft.contextJson));
+    setLaunchError(null);
+    if (forkResult.mode === "agent_structured") {
+      setAgentEditorMode("structured");
+      setAgentSteps(
+        forkResult.draft.steps.length > 0
+          ? forkResult.draft.steps.map((step) => ({
+              localId: `forked-step-${step.stepId}-${Math.random().toString(36).slice(2, 8)}`,
+              stepId: step.stepId,
+              name: step.name,
+              description: step.description,
+              instruction: step.instruction,
+              capabilityId: step.capabilityId,
+              dependsOnText: step.dependsOn.join(", "),
+              inputJsonText: formatJson(step.inputBindings),
+              retryPolicyText:
+                step.retryPolicy && Object.keys(step.retryPolicy).length > 0
+                  ? formatJson(step.retryPolicy)
+                  : "",
+            }))
+          : [createAgentStepDraft()]
+      );
+      setWorkbenchBanner({
+        tone: "info",
+        message: forkResult.draft.notice,
+      });
+      return;
+    }
+    setAgentEditorMode("raw");
+    setAgentRawRunSpecText(formatJson(forkResult.draft.runSpec));
+    setWorkbenchBanner({
+      tone: "warning",
+      message: forkResult.draft.notice,
+    });
+  };
+
+  const handleReplayStep = (stepId: string) => {
+    const replayResult = replayResultsByStep.get(stepId);
+    if (!replayResult || !replayResult.replayable) {
+      return;
+    }
+    applyCapabilityReplayDraft(replayResult.draft);
+  };
+
+  const handlePromoteWorkflowDraft = () => {
+    if (!workflowPromotionResult?.promotable || !onPromoteWorkflowDraft) {
+      return;
+    }
+    onPromoteWorkflowDraft(workflowPromotionResult.draft);
+  };
+
   useEffect(() => {
     if (!active || !activeRunId) {
       return;
@@ -717,11 +934,13 @@ export default function StudioWorkbenchSurface({
     setWorkbenchMode("capability");
     setSelectedCapabilityId(item.id);
     setCapabilityTitle(`Capability run: ${item.id}`);
+    setWorkbenchBanner(null);
   };
 
   const handleAgentInsert = (item: CapabilityItem) => {
     setWorkbenchMode("agent");
     setAgentSteps((current) => [...current, createAgentStepDraft(item.id)]);
+    setWorkbenchBanner(null);
   };
 
   const updateAgentStep = (
@@ -736,6 +955,7 @@ export default function StudioWorkbenchSurface({
     setLaunchError(null);
     setDebuggerError(null);
     setDebuggerData(null);
+    setWorkbenchBanner(null);
 
     try {
       let response: WorkbenchRunLaunchResponse;
@@ -837,6 +1057,18 @@ export default function StudioWorkbenchSurface({
             ) : null}
           </div>
         </div>
+
+        {workbenchBanner ? (
+          <div
+            className={`mt-4 rounded-[24px] border px-4 py-3 text-sm ${
+              workbenchBanner.tone === "warning"
+                ? "border-amber-300/18 bg-amber-400/12 text-amber-50"
+                : "border-sky-300/15 bg-sky-400/10 text-sky-50"
+            }`}
+          >
+            {workbenchBanner.message}
+          </div>
+        ) : null}
 
         <div className="mt-4 overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(75,92,109,0.58),rgba(45,57,71,0.72))] p-4 shadow-[0_22px_56px_rgba(15,23,42,0.16)]">
           <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
@@ -987,7 +1219,10 @@ export default function StudioWorkbenchSurface({
                         ? "border-sky-300/35 bg-sky-400/18 text-sky-50"
                         : "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
                     }`}
-                    onClick={() => setWorkbenchMode(mode)}
+                    onClick={() => {
+                      setWorkbenchMode(mode);
+                      setWorkbenchBanner(null);
+                    }}
                   >
                     {mode === "capability" ? "Capability Sandbox" : "Agent Sandbox"}
                   </button>
@@ -1226,7 +1461,10 @@ export default function StudioWorkbenchSurface({
                             ? "border-sky-300/35 bg-sky-400/18 text-sky-50"
                             : "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
                         }`}
-                        onClick={() => setAgentEditorMode(mode)}
+                        onClick={() => {
+                          setAgentEditorMode(mode);
+                          setWorkbenchBanner(null);
+                        }}
                       >
                         {mode === "structured" ? "Structured Builder" : "Raw RunSpec"}
                       </button>
@@ -1526,18 +1764,53 @@ export default function StudioWorkbenchSurface({
                   Canonical run status, step progression, execution requests, attempts, artifacts, and debugger events.
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.14em]">
-                <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                  status {currentRunStatus || "idle"}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                  mode {launchWorkbenchModeLabel}
-                </span>
-                {activeRunId ? (
-                  <span className="rounded-full border border-sky-300/28 bg-sky-400/14 px-3 py-1 text-sky-50">
-                    run {activeRunId}
-                  </span>
+              <div className="flex flex-col items-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={applyForkResult}
+                    disabled={!forkResult}
+                  >
+                    Fork Run
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-xl border border-sky-300/26 bg-sky-400/16 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-50 transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={handlePromoteWorkflowDraft}
+                    disabled={!workflowPromotionResult?.promotable || !onPromoteWorkflowDraft}
+                  >
+                    Promote to Workflow
+                  </button>
+                </div>
+                {!onPromoteWorkflowDraft ? (
+                  <div className="max-w-[420px] text-right text-[11px] text-amber-100/90">
+                    Workflow promotion handoff is unavailable in the current Studio shell.
+                  </div>
                 ) : null}
+                {forkResult?.mode === "agent_raw" ? (
+                  <div className="max-w-[420px] text-right text-[11px] text-amber-100/90">
+                    Fork will open the raw RunSpec editor: {forkResult.draft.reason}
+                  </div>
+                ) : null}
+                {workflowPromotionResult && !workflowPromotionResult.promotable ? (
+                  <div className="max-w-[420px] text-right text-[11px] text-amber-100/90">
+                    Promote unavailable: {workflowPromotionResult.reason}
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap items-center justify-end gap-2 text-[10px] uppercase tracking-[0.14em]">
+                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                    status {currentRunStatus || "idle"}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                    mode {launchWorkbenchModeLabel}
+                  </span>
+                  {activeRunId ? (
+                    <span className="rounded-full border border-sky-300/28 bg-sky-400/14 px-3 py-1 text-sky-50">
+                      run {activeRunId}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
             <div className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
@@ -1592,39 +1865,55 @@ export default function StudioWorkbenchSurface({
                     Steps
                   </div>
                   <div className="mt-3 space-y-2">
-                    {debuggerData?.steps.map((stepPayload) => (
-                      <div
-                        key={stepPayload.step.id}
-                        className="rounded-2xl border border-white/8 bg-slate-950/40 px-3 py-3"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold text-white">
-                              {stepPayload.step.name}
+                    {debuggerData?.steps.map((stepPayload) => {
+                      const replayResult = replayResultsByStep.get(stepPayload.step.id);
+                      return (
+                        <div
+                          key={stepPayload.step.id}
+                          className="rounded-2xl border border-white/8 bg-slate-950/40 px-3 py-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-white">
+                                {stepPayload.step.name}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-300/74">
+                                {stepPayload.step.capability_id}
+                              </div>
                             </div>
-                            <div className="mt-1 text-xs text-slate-300/74">
-                              {stepPayload.step.capability_id}
+                            <div className="flex flex-wrap items-center justify-end gap-2 text-[10px] uppercase tracking-[0.14em] text-slate-300/76">
+                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                                {stepPayload.step.status}
+                              </span>
+                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                                requests {stepPayload.execution_requests.length}
+                              </span>
+                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                                attempts {stepPayload.attempts.length}
+                              </span>
+                              <button
+                                type="button"
+                                className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                                onClick={() => handleReplayStep(stepPayload.step.id)}
+                                disabled={!replayResult?.replayable}
+                              >
+                                Replay Step
+                              </button>
                             </div>
                           </div>
-                          <div className="flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-slate-300/76">
-                            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
-                              {stepPayload.step.status}
-                            </span>
-                            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
-                              requests {stepPayload.execution_requests.length}
-                            </span>
-                            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
-                              attempts {stepPayload.attempts.length}
-                            </span>
-                          </div>
+                          {!replayResult?.replayable ? (
+                            <div className="mt-2 text-xs text-amber-100/90">
+                              Replay unavailable: {replayResult?.reason || "The replay payload could not be reconstructed."}
+                            </div>
+                          ) : null}
+                          {stepPayload.error?.message ? (
+                            <div className="mt-2 text-xs text-rose-100">
+                              {String(stepPayload.error.message)}
+                            </div>
+                          ) : null}
                         </div>
-                        {stepPayload.error?.message ? (
-                          <div className="mt-2 text-xs text-rose-100">
-                            {String(stepPayload.error.message)}
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
+                      );
+                    })}
                     {!debuggerData?.steps.length ? (
                       <div className="text-xs text-slate-300/74">
                         Launch a workbench run to inspect step state here.
