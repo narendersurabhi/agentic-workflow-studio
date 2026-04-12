@@ -88,7 +88,7 @@ class TaskExecutionRequest(BaseModel):
     intent_confidence: float | None = None
     intent_segment: workflow_contracts.IntentGraphSegment | None = None
     dependency_artifacts: dict[str, Any] = Field(default_factory=dict)
-    retry_policy: str | None = None
+    retry_policy: dict[str, Any] = Field(default_factory=dict)
     source_payload: dict[str, Any] = Field(default_factory=dict, exclude=True)
     requests: list[TaskExecutionStep] = Field(default_factory=list)
 
@@ -147,6 +147,7 @@ class TaskDispatchPayload(BaseModel):
     intent_source: str | None = None
     intent_confidence: float | None = None
     intent_segment: workflow_contracts.IntentGraphSegment | None = None
+    retry_policy: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
     correlation_id: str = ""
     trace_id: str = ""
@@ -209,7 +210,7 @@ def build_task_execution_request(
             if isinstance(dependency_artifacts_value, Mapping)
             else {}
         ),
-        retry_policy=_string_value(payload.get("retry_policy")) or None,
+        retry_policy=dict(payload.get("retry_policy")) if isinstance(payload.get("retry_policy"), Mapping) else {},
         source_payload=payload,
         requests=[
             TaskExecutionStep(
@@ -276,6 +277,7 @@ def build_task_dispatch_payload(
             "intent_source": execution_request.intent_source,
             "intent_confidence": execution_request.intent_confidence,
             "intent_segment": execution_request.intent_segment,
+            "retry_policy": execution_request.retry_policy,
             "context": execution_request.context,
             "correlation_id": correlation_id,
             "trace_id": trace_id,

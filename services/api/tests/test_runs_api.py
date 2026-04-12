@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from datetime import UTC, datetime
@@ -20,11 +21,13 @@ from services.api.app.models import (  # noqa: E402
     JobRecord,
     RunRecord,
     RunStepRecord,
+    StepAttemptRecord,
     StepCheckpointRecord,
     TaskRecord,
 )
 
 
+Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
 
 client = TestClient(main.app)
@@ -187,6 +190,112 @@ def test_run_debugger_includes_execution_requests() -> None:
     assert debugger["execution_requests"]
     assert debugger["steps"][0]["execution_requests"]
     assert debugger["execution_requests"][0]["run_id"] == job["run_id"]
+
+
+def test_execution_request_snapshot_captures_retry_policy_and_context_provenance() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        payload = main._task_payload_from_record(
+            task,
+            correlation_id=f"corr-{uuid.uuid4()}",
+            context={
+                "job_context": {"workspace_id": "demo"},
+                "dependencies": {"dep-1": {"status": "completed"}},
+                "dependencies_by_name": {"ListWorkspace": {"files": []}},
+            },
+        )
+        assert payload["task_id"] == task.id
+        record = (
+            db.query(ExecutionRequestRecord)
+            .filter(ExecutionRequestRecord.run_id == job["run_id"])
+            .first()
+        )
+        assert record is not None
+        assert record.request_id == "workspace_list_files"
+        assert record.capability_id == "filesystem.workspace.list"
+        assert record.retry_policy_json["max_attempts"] == 3
+        assert record.retry_policy_json["max_reworks"] == 2
+        assert record.policy_snapshot_json["critic_required"] is False
+        assert "job_context_keys" in record.context_provenance_json
+        assert record.context_provenance_json["job_context_keys"] == ["workspace_id"]
+
+
+def test_task_started_and_heartbeat_update_attempt_leases_and_execution_request() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    correlation_id = f"corr-{uuid.uuid4()}"
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        main._task_payload_from_record(task, correlation_id=correlation_id, context={})
+        task_id = task.id
+
+    started_at = _utcnow()
+    main._handle_event(
+        "tasks.events",
+        {
+            "data": json.dumps(
+                {
+                    "type": "task.started",
+                    "job_id": job["id"],
+                    "task_id": task_id,
+                    "occurred_at": started_at.isoformat(),
+                    "payload": {
+                        "task_id": task_id,
+                        "attempts": 1,
+                        "max_attempts": 3,
+                        "worker_consumer": "worker-phase2",
+                    },
+                    "correlation_id": correlation_id,
+                }
+            )
+        },
+    )
+
+    heartbeat_at = _utcnow()
+    main._handle_event(
+        "tasks.events",
+        {
+            "data": json.dumps(
+                {
+                    "type": "task.heartbeat",
+                    "job_id": job["id"],
+                    "task_id": task_id,
+                    "occurred_at": heartbeat_at.isoformat(),
+                    "payload": {
+                        "task_id": task_id,
+                        "attempts": 1,
+                        "status": "heartbeat",
+                        "worker_consumer": "worker-phase2",
+                    },
+                    "correlation_id": correlation_id,
+                }
+            )
+        },
+    )
+
+    with SessionLocal() as db:
+        attempt = db.query(StepAttemptRecord).filter(StepAttemptRecord.step_id == task_id).first()
+        request = (
+            db.query(ExecutionRequestRecord)
+            .filter(ExecutionRequestRecord.run_id == job["run_id"])
+            .first()
+        )
+        assert attempt is not None
+        assert request is not None
+        assert attempt.lease_owner == "worker-phase2"
+        assert attempt.last_heartbeat_at is not None
+        assert attempt.lease_expires_at is not None
+        assert attempt.heartbeat_count == 1
+        assert request.status == "heartbeat"
+        assert request.lease_owner == "worker-phase2"
+        assert request.last_heartbeat_at is not None
+        assert request.lease_expires_at is not None
 
 
 def test_run_control_endpoints_delegate_to_job_lifecycle(monkeypatch) -> None:

@@ -10,7 +10,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Mapping, Sequence
 from urllib.error import HTTPError, URLError
@@ -257,6 +257,7 @@ CHAT_INTENT_VECTOR_NAMESPACE_PREFIX = (
     os.getenv("CHAT_INTENT_VECTOR_NAMESPACE_PREFIX", "chat_intent_catalog").strip()
     or "chat_intent_catalog"
 )
+STEP_ATTEMPT_LEASE_TTL_S = max(30, int(os.getenv("STEP_ATTEMPT_LEASE_TTL_S", "120")))
 CHAT_INTENT_VECTOR_WORKSPACE_ID = (
     os.getenv("CHAT_INTENT_VECTOR_WORKSPACE_ID", "chat-intent-catalog").strip()
     or "chat-intent-catalog"
@@ -1396,10 +1397,20 @@ def _execution_request_from_record(record: ExecutionRequestRecord) -> models.Exe
         run_id=record.run_id,
         job_id=record.job_id,
         step_id=record.step_id,
+        request_id=record.request_id,
+        capability_id=record.capability_id,
         step_attempt_id=record.step_attempt_id,
         attempt_number=record.attempt_number,
         status=record.status,
         request=record.request_json or {},
+        retry_policy=record.retry_policy_json or {},
+        policy_snapshot=record.policy_snapshot_json or {},
+        context_provenance=record.context_provenance_json or {},
+        deadline_at=record.deadline_at,
+        retry_classification=record.retry_classification,
+        lease_owner=record.lease_owner,
+        lease_expires_at=record.lease_expires_at,
+        last_heartbeat_at=record.last_heartbeat_at,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -9426,6 +9437,8 @@ def _handle_event(stream_name: str, data: dict[str, str]) -> None:
         _handle_task_failed(envelope)
     elif event_type == "task.started":
         _handle_task_started(envelope)
+    elif event_type == "task.heartbeat":
+        _handle_task_heartbeat(envelope)
     elif event_type == "task.accepted":
         _handle_task_accepted(envelope)
     elif event_type == "task.rework_requested":
@@ -9664,6 +9677,10 @@ def _handle_task_completed(envelope: dict) -> None:
             payload=payload,
             status=models.TaskStatus.completed.value,
             step_attempt_id=attempt.id,
+            worker_id=attempt.worker_id,
+            heartbeat_at=attempt.finished_at,
+            lease_expires_at=attempt.lease_expires_at,
+            retry_classification=attempt.retry_classification,
         )
         _replace_attempt_invocations(db, attempt=attempt, task=task, payload=payload)
         for capability_id in task.tool_requests or []:
@@ -9711,6 +9728,10 @@ def _handle_task_failed(envelope: dict) -> None:
             payload=payload,
             status=models.TaskStatus.failed.value,
             step_attempt_id=attempt.id,
+            worker_id=attempt.worker_id,
+            heartbeat_at=attempt.finished_at,
+            lease_expires_at=attempt.lease_expires_at,
+            retry_classification=attempt.retry_classification,
         )
         _replace_attempt_invocations(db, attempt=attempt, task=task, payload=payload)
         for capability_id in task.tool_requests or []:
@@ -9820,10 +9841,51 @@ def _handle_task_started(envelope: dict) -> None:
             payload=payload,
             status=models.TaskStatus.running.value,
             step_attempt_id=attempt.id,
+            worker_id=attempt.worker_id,
+            heartbeat_at=occurred_at,
+            lease_expires_at=attempt.lease_expires_at,
         )
         if job:
             _set_job_status(job, models.JobStatus.running)
             job.updated_at = now
+            _sync_shadow_run_status(db, job)
+        db.commit()
+
+
+def _handle_task_heartbeat(envelope: dict) -> None:
+    payload = envelope.get("payload") or {}
+    task_id = payload.get("task_id") or envelope.get("task_id")
+    if not task_id:
+        return
+    now = _utcnow()
+    occurred_at = _parse_event_datetime(envelope.get("occurred_at")) or now
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
+        if not task:
+            return
+        job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
+        attempt = _touch_step_attempt_heartbeat(
+            db,
+            task=task,
+            job=job,
+            payload=payload,
+            occurred_at=occurred_at,
+        )
+        heartbeat_status = str(payload.get("status") or "").strip() or "heartbeat"
+        if attempt is not None:
+            _update_execution_request_status(
+                db,
+                job=job,
+                task=task,
+                payload=payload,
+                status=heartbeat_status,
+                step_attempt_id=attempt.id,
+                worker_id=attempt.worker_id,
+                heartbeat_at=occurred_at,
+                lease_expires_at=attempt.lease_expires_at,
+            )
+        if job is not None:
+            job.updated_at = occurred_at
             _sync_shadow_run_status(db, job)
         db.commit()
 
@@ -12505,6 +12567,91 @@ def _execution_request_record_id(run_id: str, step_id: str, attempt_number: int)
     return f"{run_id}:{step_id}:{max(1, int(attempt_number))}"
 
 
+def _retry_policy_snapshot_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = payload.get("retry_policy") if isinstance(payload, Mapping) else None
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {}
+
+
+def _policy_snapshot_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    snapshot: dict[str, Any] = {}
+    acceptance = payload.get("acceptance_criteria")
+    if isinstance(acceptance, list):
+        snapshot["acceptance_criteria"] = list(acceptance)
+    snapshot["critic_required"] = bool(payload.get("critic_required"))
+    execution_gates = payload.get("execution_gates")
+    if isinstance(execution_gates, Mapping):
+        snapshot["execution_gates"] = dict(execution_gates)
+    return snapshot
+
+
+def _context_provenance_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    context = payload.get("context")
+    if not isinstance(context, Mapping):
+        return {}
+    provenance: dict[str, Any] = {"context_keys": sorted(str(key) for key in context.keys())}
+    dependencies = context.get("dependencies")
+    if isinstance(dependencies, Mapping):
+        provenance["dependency_ids"] = sorted(str(key) for key in dependencies.keys())
+    dependencies_by_name = context.get("dependencies_by_name")
+    if isinstance(dependencies_by_name, Mapping):
+        provenance["dependency_names"] = sorted(str(key) for key in dependencies_by_name.keys())
+    job_context = context.get("job_context")
+    if isinstance(job_context, Mapping):
+        provenance["job_context_keys"] = sorted(str(key) for key in job_context.keys())
+    return provenance
+
+
+def _deadline_at_from_retry_policy(
+    retry_policy: Mapping[str, Any] | None,
+    *,
+    base_time: datetime,
+) -> datetime | None:
+    if not isinstance(retry_policy, Mapping):
+        return None
+    raw_timeout = retry_policy.get("timeout_budget_s")
+    if isinstance(raw_timeout, bool):
+        return None
+    try:
+        timeout_budget = int(raw_timeout)
+    except (TypeError, ValueError):
+        return None
+    if timeout_budget <= 0:
+        return None
+    return base_time + timedelta(seconds=timeout_budget)
+
+
+def _first_request_metadata(
+    execution_request: execution_contracts.TaskExecutionRequest,
+) -> tuple[str | None, str | None]:
+    if not execution_request.requests:
+        return None, None
+    request = execution_request.requests[0]
+    request_id = str(request.request_id or "").strip() or None
+    capability_id = None
+    if request.capability_binding is not None:
+        capability_id = str(request.capability_binding.capability_id or "").strip() or None
+    return request_id, capability_id or request_id
+
+
+def _lease_expiry_from_payload(
+    payload: Mapping[str, Any] | None,
+    *,
+    occurred_at: datetime,
+) -> datetime:
+    raw_ttl = payload.get("lease_ttl_s") if isinstance(payload, Mapping) else None
+    try:
+        ttl_seconds = int(raw_ttl)
+    except (TypeError, ValueError):
+        ttl_seconds = STEP_ATTEMPT_LEASE_TTL_S
+    return occurred_at + timedelta(seconds=max(30, ttl_seconds))
+
+
 def _sync_execution_request_snapshot(
     task_payload: Mapping[str, Any] | None,
 ) -> None:
@@ -12524,6 +12671,8 @@ def _sync_execution_request_snapshot(
         run_id = _durable_run_id(job, job_id)
         attempts = int(task_payload.get("attempts") or 1)
         execution_request = execution_contracts.build_task_execution_request(task_payload)
+        retry_policy = _retry_policy_snapshot_from_payload(task_payload)
+        request_id, capability_id = _first_request_metadata(execution_request)
         record_id = _execution_request_record_id(run_id, task_id, attempts)
         record = (
             db.query(ExecutionRequestRecord)
@@ -12538,10 +12687,20 @@ def _sync_execution_request_snapshot(
                 run_id=run_id,
                 job_id=job_id,
                 step_id=task_id,
+                request_id=request_id,
+                capability_id=capability_id,
                 step_attempt_id=None,
                 attempt_number=attempts,
                 status=status,
                 request_json={},
+                retry_policy_json={},
+                policy_snapshot_json={},
+                context_provenance_json={},
+                deadline_at=None,
+                retry_classification=None,
+                lease_owner=None,
+                lease_expires_at=None,
+                last_heartbeat_at=None,
                 created_at=now,
                 updated_at=now,
             )
@@ -12549,9 +12708,15 @@ def _sync_execution_request_snapshot(
         record.run_id = run_id
         record.job_id = job_id
         record.step_id = task_id
+        record.request_id = request_id
+        record.capability_id = capability_id
         record.attempt_number = attempts
         record.status = status
         record.request_json = execution_request.model_dump(mode="json", exclude_none=True)
+        record.retry_policy_json = retry_policy
+        record.policy_snapshot_json = _policy_snapshot_from_payload(task_payload)
+        record.context_provenance_json = _context_provenance_from_payload(task_payload)
+        record.deadline_at = _deadline_at_from_retry_policy(retry_policy, base_time=now)
         record.updated_at = now
         db.commit()
 
@@ -12564,6 +12729,10 @@ def _update_execution_request_status(
     payload: Mapping[str, Any] | None,
     status: str,
     step_attempt_id: str | None = None,
+    worker_id: str | None = None,
+    heartbeat_at: datetime | None = None,
+    lease_expires_at: datetime | None = None,
+    retry_classification: str | None = None,
 ) -> None:
     attempts = _payload_attempt_number(payload)
     if attempts is None:
@@ -12579,6 +12748,14 @@ def _update_execution_request_status(
         return
     record.status = status
     record.step_attempt_id = step_attempt_id
+    if worker_id is not None:
+        record.lease_owner = worker_id
+    if heartbeat_at is not None:
+        record.last_heartbeat_at = heartbeat_at
+    if lease_expires_at is not None:
+        record.lease_expires_at = lease_expires_at
+    if retry_classification is not None:
+        record.retry_classification = retry_classification
     record.updated_at = _utcnow()
 
 
@@ -12767,6 +12944,12 @@ def _upsert_step_attempt_started(
 ) -> StepAttemptRecord:
     attempt_number = _payload_attempt_number(payload) or max(int(task.attempts or 0), 1)
     attempt_id = _step_attempt_record_id(task.id, attempt_number)
+    worker_id = (
+        payload.get("worker_consumer")
+        if isinstance(payload.get("worker_consumer"), str)
+        else None
+    )
+    lease_expires_at = _lease_expiry_from_payload(payload, occurred_at=occurred_at)
     record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
     if record is None:
         record = StepAttemptRecord(
@@ -12776,24 +12959,25 @@ def _upsert_step_attempt_started(
             step_id=task.id,
             attempt_number=attempt_number,
             status=models.TaskStatus.running.value,
-            worker_id=payload.get("worker_consumer")
-            if isinstance(payload.get("worker_consumer"), str)
-            else None,
+            worker_id=worker_id,
             started_at=occurred_at,
             finished_at=None,
             error_code=None,
             error_message=None,
             retry_classification=None,
+            lease_owner=worker_id,
+            lease_expires_at=lease_expires_at,
+            last_heartbeat_at=occurred_at,
+            heartbeat_count=0,
             result_summary_json={},
         )
         db.add(record)
         return record
     record.status = models.TaskStatus.running.value
-    record.worker_id = (
-        payload.get("worker_consumer")
-        if isinstance(payload.get("worker_consumer"), str)
-        else record.worker_id
-    )
+    record.worker_id = worker_id or record.worker_id
+    record.lease_owner = worker_id or record.lease_owner
+    record.lease_expires_at = lease_expires_at
+    record.last_heartbeat_at = occurred_at
     if record.started_at is None or occurred_at < record.started_at:
         record.started_at = occurred_at
     return record
@@ -12817,6 +13001,11 @@ def _upsert_step_attempt_finished(
     attempt_id = _step_attempt_record_id(task.id, attempt_number)
     record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
     started_at = _parse_event_datetime(payload.get("started_at")) or occurred_at
+    worker_id = (
+        payload.get("worker_consumer")
+        if isinstance(payload.get("worker_consumer"), str)
+        else None
+    )
     if record is None:
         record = StepAttemptRecord(
             id=attempt_id,
@@ -12825,30 +13014,67 @@ def _upsert_step_attempt_finished(
             step_id=task.id,
             attempt_number=attempt_number,
             status=status,
-            worker_id=payload.get("worker_consumer")
-            if isinstance(payload.get("worker_consumer"), str)
-            else None,
+            worker_id=worker_id,
             started_at=started_at,
             finished_at=None,
             error_code=None,
             error_message=None,
             retry_classification=None,
+            lease_owner=worker_id,
+            lease_expires_at=None,
+            last_heartbeat_at=None,
+            heartbeat_count=0,
             result_summary_json={},
         )
         db.add(record)
     error_message = _task_error_from_payload(payload)
     record.status = status
-    record.worker_id = (
-        payload.get("worker_consumer")
-        if isinstance(payload.get("worker_consumer"), str)
-        else record.worker_id
-    )
+    record.worker_id = worker_id or record.worker_id
     record.started_at = record.started_at or started_at
     record.finished_at = _parse_event_datetime(payload.get("finished_at")) or occurred_at
     record.error_message = error_message
     record.error_code = _task_error_code_from_payload(payload, error_message)
     record.retry_classification = _retry_classification_for_error(error_message)
+    record.lease_owner = worker_id or record.lease_owner
+    record.lease_expires_at = record.finished_at
+    record.last_heartbeat_at = record.finished_at
     record.result_summary_json = _build_step_attempt_result_summary(payload, error_message)
+    return record
+
+
+def _touch_step_attempt_heartbeat(
+    db: Session,
+    *,
+    task: TaskRecord,
+    job: JobRecord | None,
+    payload: Mapping[str, Any],
+    occurred_at: datetime,
+) -> StepAttemptRecord | None:
+    attempt_number = _payload_attempt_number(payload)
+    record: StepAttemptRecord | None = None
+    if attempt_number is not None:
+        attempt_id = _step_attempt_record_id(task.id, attempt_number)
+        record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
+    if record is None:
+        record = _latest_step_attempt_record(db, task.id)
+    if record is None:
+        record = _upsert_step_attempt_started(
+            db,
+            task=task,
+            job=job,
+            payload=payload,
+            occurred_at=occurred_at,
+        )
+    worker_id = (
+        payload.get("worker_consumer")
+        if isinstance(payload.get("worker_consumer"), str)
+        else None
+    )
+    record.worker_id = worker_id or record.worker_id
+    record.lease_owner = worker_id or record.lease_owner
+    record.last_heartbeat_at = occurred_at
+    record.lease_expires_at = _lease_expiry_from_payload(payload, occurred_at=occurred_at)
+    record.heartbeat_count = int(record.heartbeat_count or 0) + 1
     return record
 
 
@@ -13038,6 +13264,10 @@ def _step_attempt_from_record(record: StepAttemptRecord) -> models.StepAttempt:
         error_code=record.error_code,
         error_message=record.error_message,
         retry_classification=record.retry_classification,
+        lease_owner=record.lease_owner,
+        lease_expires_at=record.lease_expires_at,
+        last_heartbeat_at=record.last_heartbeat_at,
+        heartbeat_count=record.heartbeat_count or 0,
         result_summary=record.result_summary_json or {},
     )
 

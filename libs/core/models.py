@@ -377,6 +377,14 @@ class CapabilityRequestSpec(BaseModel):
 
 class StepRetryPolicy(BaseModel):
     max_attempts: int = 1
+    retry_class: str = "standard"
+    retryable_errors: List[str] = Field(default_factory=list)
+    backoff_seconds: float = 0.0
+    backoff_multiplier: float = 1.0
+    max_backoff_seconds: Optional[float] = None
+    jitter_seconds: float = 0.0
+    timeout_budget_s: Optional[int] = None
+    max_reworks: Optional[int] = None
 
 
 class StepAcceptancePolicy(BaseModel):
@@ -466,10 +474,20 @@ class ExecutionRequest(BaseModel):
     run_id: str
     job_id: str
     step_id: str
+    request_id: Optional[str] = None
+    capability_id: Optional[str] = None
     step_attempt_id: Optional[str] = None
     attempt_number: int = 1
     status: str = ""
     request: Dict[str, Any] = Field(default_factory=dict)
+    retry_policy: Dict[str, Any] = Field(default_factory=dict)
+    policy_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    context_provenance: Dict[str, Any] = Field(default_factory=dict)
+    deadline_at: Optional[datetime] = None
+    retry_classification: Optional[str] = None
+    lease_owner: Optional[str] = None
+    lease_expires_at: Optional[datetime] = None
+    last_heartbeat_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -503,6 +521,10 @@ class StepAttempt(BaseModel):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     retry_classification: Optional[str] = None
+    lease_owner: Optional[str] = None
+    lease_expires_at: Optional[datetime] = None
+    last_heartbeat_at: Optional[datetime] = None
+    heartbeat_count: int = 0
     result_summary: Dict[str, Any] = Field(default_factory=dict)
 
 

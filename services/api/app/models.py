@@ -287,6 +287,10 @@ class StepAttemptRecord(Base):
     error_code: Mapped[str | None] = mapped_column(String, nullable=True)
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     retry_classification: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    heartbeat_count: Mapped[int] = mapped_column(Integer, default=0)
     result_summary_json: Mapped[Dict[str, Any]] = mapped_column("result_summary", JSON, default=dict)
 
 
@@ -297,6 +301,8 @@ class ExecutionRequestRecord(Base):
     run_id: Mapped[str] = mapped_column(String, index=True)
     job_id: Mapped[str] = mapped_column(String, index=True)
     step_id: Mapped[str] = mapped_column(String, index=True)
+    request_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    capability_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     step_attempt_id: Mapped[str | None] = mapped_column(
         ForeignKey("step_attempts.id"),
         nullable=True,
@@ -305,6 +311,16 @@ class ExecutionRequestRecord(Base):
     attempt_number: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String, default="", index=True)
     request_json: Mapped[Dict[str, Any]] = mapped_column("request", JSON, default=dict)
+    retry_policy_json: Mapped[Dict[str, Any]] = mapped_column("retry_policy", JSON, default=dict)
+    policy_snapshot_json: Mapped[Dict[str, Any]] = mapped_column("policy_snapshot", JSON, default=dict)
+    context_provenance_json: Mapped[Dict[str, Any]] = mapped_column(
+        "context_provenance", JSON, default=dict
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    retry_classification: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
