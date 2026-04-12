@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import type React from "react";
 
 import {
@@ -57,6 +58,14 @@ type DagConnectorDragState = {
   y: number;
   branchLabel?: string;
   sourcePortY?: number;
+};
+
+type DagCanvasPanState = {
+  startClientX: number;
+  startClientY: number;
+  startScrollLeft: number;
+  startScrollTop: number;
+  clearSelectionOnClick: boolean;
 };
 
 type ComposerDagCanvasProps = {
@@ -117,6 +126,7 @@ type ComposerDagCanvasProps = {
 
 const toolbarButtonClassName =
   "inline-flex h-8 items-center rounded-lg border border-black/15 bg-[rgba(54,68,84,0.94)] px-2.5 text-[10px] font-semibold tracking-[0.04em] text-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-white/18 hover:bg-[rgba(61,77,95,0.98)] disabled:cursor-not-allowed disabled:opacity-40";
+const DAG_CANVAS_PAN_THRESHOLD = 6;
 
 type BlueprintPreviewNode = {
   id: string;
@@ -463,18 +473,142 @@ export default function ComposerDagCanvas({
   runWorkflowDisabled = false,
 }: ComposerDagCanvasProps) {
   const showEmptyBlueprint = showBlueprintPreview && visualChainNodes.length === 0;
-  const clearSelectedNodeFromCanvas = (
-    event: React.MouseEvent<HTMLDivElement>
-  ) => {
-    if (isInteractiveCanvasTarget(event.target)) {
-      return;
+  const [dagCanvasPanState, setDagCanvasPanState] = useState<DagCanvasPanState | null>(null);
+  const [dagCanvasPanModifierPressed, setDagCanvasPanModifierPressed] = useState(false);
+  const dagCanvasPanMovedRef = useRef(false);
+
+  const canStartDagCanvasPan = (target: EventTarget | null) => {
+    if (isInteractiveCanvasTarget(target)) {
+      return false;
     }
-    const target = event.target;
-    if (target instanceof Element && target.closest("[data-composer-node='true']")) {
-      return;
+    if (!(target instanceof Element)) {
+      return true;
     }
-    setSelectedDagNodeId(null);
+    if (target.closest("[data-composer-node='true']")) {
+      return false;
+    }
+    if (target.closest("[data-composer-edge='true']")) {
+      return false;
+    }
+    return true;
   };
+
+  useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) {
+        return false;
+      }
+      return Boolean(
+        target.closest(
+          "input,textarea,select,button,a,label,[contenteditable='true']"
+        )
+      );
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || isEditableTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      setDagCanvasPanModifierPressed(true);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== "Space") {
+        return;
+      }
+      setDagCanvasPanModifierPressed(false);
+    };
+
+    const resetPanModifier = () => {
+      setDagCanvasPanModifierPressed(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", resetPanModifier);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", resetPanModifier);
+    };
+  }, []);
+
+  const beginDagCanvasPan = (event: React.MouseEvent<HTMLDivElement>) => {
+    const viewport = dagCanvasViewportRef.current;
+    if (!viewport || dagCanvasDraggingNodeId || dagConnectorDrag) {
+      return;
+    }
+    if (event.button !== 0 && event.button !== 1) {
+      return;
+    }
+    if (!canStartDagCanvasPan(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    dagCanvasPanMovedRef.current = false;
+    setDagCanvasPanState({
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startScrollLeft: viewport.scrollLeft,
+      startScrollTop: viewport.scrollTop,
+      clearSelectionOnClick: event.button === 0 && !dagCanvasPanModifierPressed,
+    });
+  };
+
+  useEffect(() => {
+    if (!dagCanvasPanState) {
+      return;
+    }
+    const viewport = dagCanvasViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const handleMove = (event: MouseEvent) => {
+      const deltaX = event.clientX - dagCanvasPanState.startClientX;
+      const deltaY = event.clientY - dagCanvasPanState.startClientY;
+      if (
+        !dagCanvasPanMovedRef.current &&
+        Math.abs(deltaX) < DAG_CANVAS_PAN_THRESHOLD &&
+        Math.abs(deltaY) < DAG_CANVAS_PAN_THRESHOLD
+      ) {
+        return;
+      }
+      dagCanvasPanMovedRef.current = true;
+      viewport.scrollLeft = dagCanvasPanState.startScrollLeft - deltaX;
+      viewport.scrollTop = dagCanvasPanState.startScrollTop - deltaY;
+    };
+
+    const finishPan = () => {
+      if (!dagCanvasPanMovedRef.current && dagCanvasPanState.clearSelectionOnClick) {
+        setSelectedDagNodeId(null);
+      }
+      dagCanvasPanMovedRef.current = false;
+      setDagCanvasPanState(null);
+    };
+
+    const previousBodyCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", finishPan);
+    window.addEventListener("blur", finishPan);
+    return () => {
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", finishPan);
+      window.removeEventListener("blur", finishPan);
+    };
+  }, [
+    dagCanvasPanState,
+    dagCanvasDraggingNodeId,
+    dagCanvasViewportRef,
+    dagConnectorDrag,
+    setSelectedDagNodeId,
+  ]);
 
   return (
     <div className="relative h-full">
@@ -524,8 +658,16 @@ export default function ComposerDagCanvas({
 
       <div
         ref={dagCanvasViewportRef}
-        className="relative h-full overflow-auto bg-[#506478] [background-image:linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_82%_24%,rgba(125,211,252,0.08),transparent_14%),linear-gradient(180deg,rgba(24,36,49,0.2),rgba(9,16,27,0.34))] [background-size:24px_24px,24px_24px,100%_100%,100%_100%,100%_100%]"
-        onMouseDown={clearSelectedNodeFromCanvas}
+        data-composer-canvas-viewport="true"
+        className={`relative h-full overflow-auto bg-[#506478] [background-image:linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_82%_24%,rgba(125,211,252,0.08),transparent_14%),linear-gradient(180deg,rgba(24,36,49,0.2),rgba(9,16,27,0.34))] [background-size:24px_24px,24px_24px,100%_100%,100%_100%,100%_100%] ${
+          dagCanvasPanState ? "cursor-grabbing" : "cursor-grab"
+        }`}
+        onAuxClick={(event) => {
+          if (event.button === 1) {
+            event.preventDefault();
+          }
+        }}
+        onMouseDown={beginDagCanvasPan}
       >
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(191,219,254,0.08),transparent_12%),radial-gradient(circle_at_84%_22%,rgba(103,232,249,0.06),transparent_11%),radial-gradient(circle_at_50%_100%,rgba(15,23,42,0.14),transparent_40%)]" />
         <div
@@ -607,6 +749,7 @@ export default function ComposerDagCanvas({
               return (
                 <g
                   key={`composer-edge-${edge.edgeKey}`}
+                  data-composer-edge="true"
                   onMouseEnter={() => setHoveredDagEdgeKey(edge.edgeKey)}
                   onMouseLeave={() =>
                     setHoveredDagEdgeKey((prev) => (prev === edge.edgeKey ? null : prev))
@@ -685,7 +828,7 @@ export default function ComposerDagCanvas({
               );
             })}
             {dagConnectorPreview ? (
-              <>
+              <g data-composer-edge="true">
                 <path
                   d={dagConnectorPreview.path}
                   stroke="rgba(15,23,42,0.35)"
@@ -702,7 +845,7 @@ export default function ComposerDagCanvas({
                   strokeDasharray="8 5"
                   markerEnd="url(#composer-arrow)"
                 />
-              </>
+              </g>
             ) : null}
           </svg>
 
