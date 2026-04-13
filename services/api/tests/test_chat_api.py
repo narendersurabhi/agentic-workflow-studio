@@ -508,7 +508,8 @@ def test_chat_turn_can_request_clarification_for_ambiguous_workflow() -> None:
     assert body["session"]["metadata"]["pending_clarification"]["questions"]
 
 
-def test_chat_turn_can_submit_job() -> None:
+def test_chat_turn_can_submit_job(monkeypatch) -> None:
+    monkeypatch.setattr(main, "ADAPTIVE_PLANNING_ENABLED", True)
     session = client.post("/chat/sessions", json={}).json()
 
     response = client.post(
@@ -526,8 +527,10 @@ def test_chat_turn_can_submit_job() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["job"]["goal"] == "Render a PDF deployment report"
+    assert body["job"]["planning_mode"] == "adaptive"
     assert body["job"]["metadata"]["workflow_source"] == "chat"
     assert body["job"]["metadata"]["render_path_mode"] == "auto"
+    assert body["job"]["metadata"]["planning_mode"] == "adaptive"
     assert body["assistant_message"]["action"]["type"] == "submit_job"
     assert body["assistant_message"]["action"]["job_id"] == body["job"]["id"]
     assert body["session"]["active_job_id"] == body["job"]["id"]

@@ -668,6 +668,8 @@ type Job = {
   created_at: string;
   updated_at: string;
   priority: number;
+  planning_mode?: string;
+  current_revision_number?: number;
   metadata?: Record<string, unknown>;
   context_json?: Record<string, unknown>;
 };
@@ -754,6 +756,16 @@ type Plan = {
   dag_edges: string[][];
 };
 
+type PlanRevisionSummary = {
+  revision_number: number;
+  plan_id?: string | null;
+  trigger_reason?: string | null;
+  created_at?: string | null;
+  superseded_at?: string | null;
+  active?: boolean;
+  task_count?: number;
+};
+
 type JobDetailsPayload = {
   job_id: string;
   job_status?: string | null;
@@ -761,6 +773,11 @@ type JobDetailsPayload = {
   plan?: Plan | null;
   tasks?: Task[];
   task_results?: Record<string, TaskResult>;
+  planning_mode?: string;
+  current_revision_number?: number;
+  revision_history?: PlanRevisionSummary[];
+  last_replan_reason?: string | null;
+  recovery_metadata?: Record<string, unknown>;
 };
 
 const mapViewerFeedback = (items: FeedbackEntry[], actorId: string) =>
@@ -902,6 +919,11 @@ type JobDebuggerPayload = {
   job_id: string;
   job_status: string;
   plan_id?: string | null;
+  planning_mode?: string;
+  current_revision_number?: number;
+  revision_history?: PlanRevisionSummary[];
+  last_replan_reason?: string | null;
+  recovery_metadata?: Record<string, unknown>;
   generated_at: string;
   timeline_events_scanned: number;
   tasks: DebuggerTaskEntry[];
@@ -5626,7 +5648,8 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         body: JSON.stringify({
           goal: submissionGoal,
           context_json: submissionContext,
-          priority
+          priority,
+          planning_mode: visualChainNodes.length > 0 ? "static" : "adaptive"
         })
       });
       if (!response.ok) {
@@ -9652,6 +9675,10 @@ const openTemplateModal = (template: Template) => {
                     <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
                       Run: {formatTimestamp(job.updated_at || job.created_at)}
                     </div>
+                    <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                      Planning: {(job.planning_mode || "static").toUpperCase()} • Revision{" "}
+                      {job.current_revision_number || 0}
+                    </div>
                     {(() => {
                       const provider =
                         typeof job.metadata?.llm_provider === "string"
@@ -9787,6 +9814,23 @@ const openTemplateModal = (template: Template) => {
               <div className="mt-2 text-xs text-slate-600">
                 Status: {selectedJobStatus || selectedJob?.status || "unknown"}
               </div>
+              <div className="mt-2 text-xs text-slate-600">
+                Planning: {(jobDebugger?.planning_mode || selectedJob?.planning_mode || "static").toUpperCase()}
+                {" • "}
+                Revision {jobDebugger?.current_revision_number || selectedJob?.current_revision_number || 0}
+              </div>
+              {(jobDebugger?.last_replan_reason ||
+                (selectedJob?.metadata &&
+                  typeof selectedJob.metadata.replan_reason === "string" &&
+                  selectedJob.metadata.replan_reason)) ? (
+                <div className="mt-2 text-xs text-slate-600">
+                  Last replan reason:{" "}
+                  {jobDebugger?.last_replan_reason ||
+                    (typeof selectedJob?.metadata?.replan_reason === "string"
+                      ? selectedJob.metadata.replan_reason
+                      : "unknown")}
+                </div>
+              ) : null}
               <div className="mt-3 font-medium">Plan</div>
               {selectedPlan ? (
                 <div className="text-xs text-slate-600">
@@ -9802,6 +9846,19 @@ const openTemplateModal = (template: Template) => {
               ) : (
                 <div className="text-xs text-slate-600">Plan not created yet.</div>
               )}
+              {Array.isArray(jobDebugger?.revision_history) && jobDebugger.revision_history.length > 0 ? (
+                <div className="mt-3 space-y-1">
+                  <div className="font-medium">Revision History</div>
+                  <div className="space-y-1 text-xs text-slate-600">
+                    {jobDebugger.revision_history.map((revision) => (
+                      <div key={`revision-${revision.revision_number}`}>
+                        r{revision.revision_number} • {revision.trigger_reason || "initial_plan"} •{" "}
+                        {revision.active ? "active" : "superseded"}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {selectedPlan ? (
                 <FeedbackControl
                   title="Does this plan make sense?"
@@ -10009,6 +10066,19 @@ const openTemplateModal = (template: Template) => {
                         {formatTimestamp(jobDebugger.generated_at)} •{" "}
                         <span className="font-semibold text-slate-700">Events scanned:</span>{" "}
                         {jobDebugger.timeline_events_scanned}
+                      </div>
+                      <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                        <span className="font-semibold text-slate-700">Planning:</span>{" "}
+                        {(jobDebugger.planning_mode || "static").toUpperCase()} •{" "}
+                        <span className="font-semibold text-slate-700">Revision:</span>{" "}
+                        {jobDebugger.current_revision_number || 0}
+                        {jobDebugger.last_replan_reason ? (
+                          <>
+                            {" • "}
+                            <span className="font-semibold text-slate-700">Last replan:</span>{" "}
+                            {jobDebugger.last_replan_reason}
+                          </>
+                        ) : null}
                       </div>
                       {debuggerActionNotice ? (
                         <div className="text-xs text-slate-600">{debuggerActionNotice}</div>

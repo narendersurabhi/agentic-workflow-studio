@@ -197,6 +197,13 @@ export type WorkflowInterface = {
   outputs: WorkflowOutputDefinition[];
 };
 
+export type WorkflowRuntimeSettings = {
+  executionMode?: "static" | "adaptive";
+  adaptivePolicy?: {
+    maxReplans?: number;
+  };
+};
+
 export type StudioPersistedWorkflowDraft = {
   summary?: string;
   goal?: string;
@@ -205,6 +212,7 @@ export type StudioPersistedWorkflowDraft = {
   nodes?: ComposerDraftNode[];
   edges?: ComposerDraftEdge[];
   workflowInterface?: WorkflowInterface;
+  runtimeSettings?: WorkflowRuntimeSettings;
 };
 
 export type WorkbenchConversionDiagnostic = {

@@ -1277,6 +1277,7 @@ def handle_turn(
                         goal=resolved_goal,
                         context_json=merged_context,
                         priority=request.priority,
+                        planning_mode=models.PlanningMode.adaptive,
                     ),
                     db,
                 )
@@ -1302,6 +1303,7 @@ def handle_turn(
                     goal=resolved_goal,
                     context_json=merged_context,
                     priority=request.priority,
+                    planning_mode=models.PlanningMode.adaptive,
                 ),
                 db,
             )

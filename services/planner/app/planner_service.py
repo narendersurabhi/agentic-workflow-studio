@@ -91,6 +91,31 @@ def _intent_segment_contract_reason(detail: str) -> str:
     return reason or "unknown"
 
 
+def _filtered_capabilities_for_job(
+    job: models.Job,
+    capabilities: Mapping[str, Any],
+) -> dict[str, Any]:
+    metadata = job.metadata if isinstance(job.metadata, Mapping) else {}
+    raw_allowed = metadata.get("allowed_capability_ids")
+    if not isinstance(raw_allowed, Sequence) or isinstance(raw_allowed, (str, bytes)):
+        return dict(capabilities)
+    allowed_ids = {
+        capability_registry.canonicalize_capability_id(raw_id)
+        for raw_id in raw_allowed
+        if capability_registry.canonicalize_capability_id(raw_id)
+    }
+    if not allowed_ids:
+        return dict(capabilities)
+    filtered: dict[str, Any] = {}
+    for key, spec in capabilities.items():
+        capability_id = capability_registry.canonicalize_capability_id(
+            getattr(spec, "capability_id", None) or key
+        )
+        if capability_id and capability_id in allowed_ids:
+            filtered[key] = spec
+    return filtered
+
+
 def build_plan_request(
     job: models.Job,
     tools: list[models.ToolSpec],
@@ -100,7 +125,7 @@ def build_plan_request(
     runtime: PlannerServiceRuntime,
     include_semantic_hints: bool | None = None,
 ) -> planner_contracts.PlanRequest:
-    capabilities = runtime.load_capabilities()
+    capabilities = _filtered_capabilities_for_job(job, runtime.load_capabilities())
     use_semantic_hints = config.mode == "llm" if include_semantic_hints is None else include_semantic_hints
     semantic_hints: list[dict[str, Any]] = []
     if use_semantic_hints and config.semantic_hint_limit > 0:

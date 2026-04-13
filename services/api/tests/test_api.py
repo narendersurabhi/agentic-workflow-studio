@@ -153,6 +153,30 @@ def test_create_job():
     assert data["goal"] == "demo"
     assert data["metadata"]["normalized_intent_envelope"]["goal"] == "demo"
     assert data["metadata"]["render_path_mode"] == "explicit"
+    assert data["planning_mode"] == "static"
+    assert data["current_revision_number"] == 0
+
+
+def test_create_job_accepts_adaptive_planning_contract(monkeypatch) -> None:
+    monkeypatch.setattr(main, "ADAPTIVE_PLANNING_ENABLED", True)
+
+    response = client.post(
+        "/jobs",
+        json={
+            "goal": "adaptive demo",
+            "context_json": {},
+            "priority": 1,
+            "planning_mode": "adaptive",
+            "adaptive_policy": {"max_replans": 4},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["planning_mode"] == "adaptive"
+    assert body["current_revision_number"] == 0
+    assert body["metadata"]["planning_mode"] == "adaptive"
+    assert body["metadata"]["adaptive_policy"]["max_replans"] == 4
 
 
 def test_intent_assessment_fallback_used_respects_mode(monkeypatch) -> None:
@@ -2095,7 +2119,10 @@ def test_contract_intent_mismatch_triggers_auto_replan_with_recovery_metadata():
                 created_at=now,
                 updated_at=now,
                 priority=0,
-                metadata_json={},
+                metadata_json={
+                    "planning_mode": "adaptive",
+                    "adaptive_policy": {"max_replans": 2},
+                },
             )
         )
         db.add(
@@ -2151,11 +2178,144 @@ def test_contract_intent_mismatch_triggers_auto_replan_with_recovery_metadata():
     body = job_after.json()
     assert body["status"] == "planning"
     metadata = body["metadata"]
+    assert body["planning_mode"] == "adaptive"
     assert metadata.get("replan_reason") == "intent_mismatch_auto_repair"
     recovery = metadata.get("intent_mismatch_recovery")
     assert isinstance(recovery, dict)
     assert recovery.get("failing_capability") == "github.repo.list"
     assert recovery.get("allowed_task_intents") == ["io"]
+    pending_replan = metadata.get("pending_replan")
+    assert isinstance(pending_replan, dict)
+    assert pending_replan.get("reason") == "intent_mismatch_auto_repair"
+
+    with SessionLocal() as db:
+        assert db.query(PlanRecord).filter(PlanRecord.job_id == job_id).count() == 1
+        task_after = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
+        assert task_after is not None
+        assert task_after.status == models.TaskStatus.canceled.value
+
+
+def test_manual_replan_creates_plan_revision_history_without_deleting_prior_records(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(main, "ADAPTIVE_PLANNING_ENABLED", True)
+
+    create_job_response = client.post(
+        "/jobs",
+        json={
+            "goal": "replan this job",
+            "context_json": {},
+            "priority": 0,
+            "planning_mode": "adaptive",
+            "adaptive_policy": {"max_replans": 3},
+        },
+    )
+    assert create_job_response.status_code == 200
+    job_id = create_job_response.json()["id"]
+
+    create_plan_response = client.post(
+        f"/plans?job_id={job_id}",
+        json={
+            "planner_version": "initial",
+            "tasks_summary": "initial plan",
+            "dag_edges": [["CollectInput", "SummarizeInput"]],
+            "tasks": [
+                {
+                    "name": "CollectInput",
+                    "description": "Collect input",
+                    "instruction": "Collect input",
+                    "acceptance_criteria": ["input collected"],
+                    "expected_output_schema_ref": "schemas/unknown",
+                    "deps": [],
+                    "tool_requests": ["filesystem.workspace.list"],
+                    "tool_inputs": {"filesystem.workspace.list": {}},
+                    "critic_required": False,
+                },
+                {
+                    "name": "SummarizeInput",
+                    "description": "Summarize input",
+                    "instruction": "Summarize input",
+                    "acceptance_criteria": ["summary created"],
+                    "expected_output_schema_ref": "schemas/unknown",
+                    "deps": ["CollectInput"],
+                    "tool_requests": ["filesystem.workspace.list"],
+                    "tool_inputs": {"filesystem.workspace.list": {}},
+                    "critic_required": False,
+                },
+            ],
+        },
+    )
+    assert create_plan_response.status_code == 200
+    first_plan_id = create_plan_response.json()["id"]
+
+    with SessionLocal() as db:
+        tasks = (
+            db.query(TaskRecord)
+            .filter(TaskRecord.plan_id == first_plan_id)
+            .order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc())
+            .all()
+        )
+        assert len(tasks) == 2
+        tasks[0].status = models.TaskStatus.completed.value
+        tasks[1].status = models.TaskStatus.running.value
+        db.commit()
+
+    replan_response = client.post(f"/jobs/{job_id}/replan")
+    assert replan_response.status_code == 200
+    replan_body = replan_response.json()
+    assert replan_body["status"] == "planning"
+    assert replan_body["metadata"]["pending_replan"]["reason"] == "manual"
+
+    main._handle_plan_created(
+        {
+            "job_id": job_id,
+            "payload": {
+                "job_id": job_id,
+                "planner_version": "replan",
+                "tasks_summary": "replanned",
+                "dag_edges": [],
+                "tasks": [
+                    {
+                        "name": "WriteFinalOutput",
+                        "description": "Write final output",
+                        "instruction": "Write final output",
+                        "acceptance_criteria": ["output written"],
+                        "expected_output_schema_ref": "schemas/unknown",
+                        "deps": [],
+                        "tool_requests": ["filesystem.workspace.list"],
+                        "tool_inputs": {"filesystem.workspace.list": {}},
+                        "critic_required": False,
+                    }
+                ],
+            },
+        }
+    )
+
+    details_response = client.get(f"/jobs/{job_id}/details")
+    assert details_response.status_code == 200
+    details = details_response.json()
+    assert details["planning_mode"] == "adaptive"
+    assert details["current_revision_number"] == 2
+    assert details["last_replan_reason"] == "manual"
+    assert len(details["revision_history"]) == 2
+    assert details["revision_history"][0]["active"] is False
+    assert details["revision_history"][1]["active"] is True
+    assert len(details["tasks"]) == 1
+
+    debugger_response = client.get(f"/jobs/{job_id}/debugger")
+    assert debugger_response.status_code == 200
+    debugger = debugger_response.json()
+    assert debugger["planning_mode"] == "adaptive"
+    assert debugger["current_revision_number"] == 2
+    assert len(debugger["revision_history"]) == 2
+    assert debugger["last_replan_reason"] == "manual"
+
+    with SessionLocal() as db:
+        assert db.query(PlanRecord).filter(PlanRecord.job_id == job_id).count() == 2
+        prior_tasks = db.query(TaskRecord).filter(TaskRecord.plan_id == first_plan_id).all()
+        assert len(prior_tasks) == 2
+        assert any(task.status == models.TaskStatus.canceled.value for task in prior_tasks)
+
 
 def test_semantic_memory_write_and_read_round_trip():
     user_id = f"semantic-user-{uuid.uuid4()}"
@@ -4897,6 +5057,76 @@ def test_workflow_version_run_accepts_explicit_inputs(monkeypatch) -> None:
     assert task_record.tool_inputs["json_transform"]["input"] == {
         "$from": ["job_context", "workflow", "variables", "topic_alias"]
     }
+
+
+def test_workflow_version_run_uses_adaptive_runtime_settings(monkeypatch) -> None:
+    monkeypatch.setattr(main, "ADAPTIVE_PLANNING_ENABLED", True)
+
+    capability = cap_registry.CapabilitySpec(
+        capability_id="json_transform",
+        description="Transform JSON",
+        enabled=True,
+        risk_tier="read_only",
+        idempotency="read",
+        output_schema_ref="schemas/json_object",
+        planner_hints={"task_intents": ["transform"]},
+        adapters=(
+            cap_registry.CapabilityAdapterSpec(
+                type="local_tool",
+                server_id="local_worker",
+                tool_name="json_transform",
+            ),
+        ),
+    )
+    registry = cap_registry.CapabilityRegistry(capabilities={"json_transform": capability})
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+
+    create_response = client.post(
+        "/workflows/definitions",
+        json={
+            "title": "Adaptive workflow",
+            "goal": "Use adaptive workflow runtime",
+            "context_json": {"user_id": "narendersurabhi"},
+            "draft": {
+                "summary": "Adaptive workflow",
+                "runtimeSettings": {
+                    "executionMode": "adaptive",
+                    "adaptivePolicy": {"maxReplans": 3},
+                },
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "taskName": "Transform",
+                        "capabilityId": "json_transform",
+                        "bindings": {
+                            "input": {
+                                "kind": "literal",
+                                "value": {"message": "adaptive runtime"},
+                            }
+                        },
+                    }
+                ],
+                "edges": [],
+            },
+        },
+    )
+    assert create_response.status_code == 200
+    definition = create_response.json()
+
+    publish_response = client.post(f"/workflows/definitions/{definition['id']}/publish", json={})
+    assert publish_response.status_code == 200
+    version = publish_response.json()
+    assert version["metadata"]["workflow_runtime_settings"]["execution_mode"] == "adaptive"
+    assert version["metadata"]["workflow_runtime_settings"]["adaptive_policy"]["max_replans"] == 3
+
+    run_response = client.post(f"/workflows/versions/{version['id']}/run", json={})
+    assert run_response.status_code == 200
+    body = run_response.json()
+    assert body["job"]["planning_mode"] == "adaptive"
+    assert body["job"]["metadata"]["planning_mode"] == "adaptive"
+    assert body["job"]["metadata"]["adaptive_policy"]["max_replans"] == 3
+    assert body["job"]["metadata"]["allowed_capability_ids"] == ["json_transform"]
+    assert body["workflow_run"]["planning_mode"] == "adaptive"
 
 
 def test_publish_workflow_definition_rejects_unknown_memory_read_name() -> None:

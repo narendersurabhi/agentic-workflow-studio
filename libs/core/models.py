@@ -83,6 +83,11 @@ class RunKind(str, Enum):
     api = "api"
 
 
+class PlanningMode(str, Enum):
+    static = "static"
+    adaptive = "adaptive"
+
+
 class FeedbackTargetType(str, Enum):
     chat_message = "chat_message"
     intent_assessment = "intent_assessment"
@@ -260,7 +265,19 @@ class Job(BaseModel):
     created_at: datetime
     updated_at: datetime
     priority: int = 0
+    planning_mode: PlanningMode = PlanningMode.static
+    current_revision_number: int = 0
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanRevisionSummary(BaseModel):
+    revision_number: int
+    plan_id: Optional[str] = None
+    trigger_reason: Optional[str] = None
+    created_at: Optional[datetime] = None
+    superseded_at: Optional[datetime] = None
+    active: bool = False
+    task_count: int = 0
 
 
 class Plan(BaseModel):
@@ -309,12 +326,21 @@ class JobDetails(BaseModel):
     plan: Optional[Plan] = None
     tasks: List[Task] = Field(default_factory=list)
     task_results: Dict[str, Any] = Field(default_factory=dict)
+    planning_mode: PlanningMode = PlanningMode.static
+    current_revision_number: int = 0
+    revision_history: List[PlanRevisionSummary] = Field(default_factory=list)
+    last_replan_reason: Optional[str] = None
+    recovery_metadata: Dict[str, Any] = Field(default_factory=dict)
     goal_intent_profile: Dict[str, Any] = Field(default_factory=dict)
     goal_intent_graph: Optional[Dict[str, Any]] = None
     normalized_intent_envelope: Dict[str, Any] = Field(default_factory=dict)
     normalization_trace: Dict[str, Any] = Field(default_factory=dict)
     normalization_clarification: Dict[str, Any] = Field(default_factory=dict)
     normalization_candidate_capabilities: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class AdaptivePlanningPolicy(BaseModel):
+    max_replans: int = 2
 
 
 class TaskCreate(BaseModel):
@@ -476,6 +502,8 @@ class Run(BaseModel):
     latest_step_name: Optional[str] = None
     latest_step_error: Optional[str] = None
     user_id: Optional[str] = None
+    planning_mode: PlanningMode = PlanningMode.static
+    current_revision_number: int = 0
     run_spec: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
@@ -791,6 +819,8 @@ class JobCreate(BaseModel):
     context_json: Dict[str, Any] = Field(default_factory=dict)
     priority: int = 0
     idempotency_key: Optional[str] = None
+    planning_mode: PlanningMode = PlanningMode.static
+    adaptive_policy: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowDefinitionCreate(BaseModel):
@@ -885,6 +915,8 @@ class WorkflowRun(BaseModel):
     latest_task_name: Optional[str] = None
     latest_task_error: Optional[str] = None
     user_id: Optional[str] = None
+    planning_mode: PlanningMode = PlanningMode.static
+    current_revision_number: int = 0
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime

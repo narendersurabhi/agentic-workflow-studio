@@ -41,6 +41,7 @@ import type {
   WorkflowOutputDefinition,
   WorkflowRun,
   WorkflowRunResult,
+  WorkflowRuntimeSettings,
   WorkflowTrigger,
   WorkflowVariableDefinition,
   WorkflowVersion,
@@ -94,6 +95,13 @@ const initialWorkflowInterface = (): WorkflowInterface => ({
   inputs: [],
   variables: [],
   outputs: [],
+});
+
+const initialWorkflowRuntimeSettings = (): WorkflowRuntimeSettings => ({
+  executionMode: "static",
+  adaptivePolicy: {
+    maxReplans: 2,
+  },
 });
 
 const createStudioOutput = () => ({
@@ -748,6 +756,50 @@ const restorePersistedWorkflowDraft = (
       draft?.workflowInterface ||
         (isRecord(draft) && "workflow_interface" in draft ? draft.workflow_interface : null)
     ),
+    runtimeSettings: (() => {
+      const runtimeSettings =
+        draft?.runtimeSettings ||
+        (isRecord(draft) && "runtime_settings" in draft ? draft.runtime_settings : null);
+      const adaptivePolicy =
+        runtimeSettings &&
+        typeof runtimeSettings === "object" &&
+        !Array.isArray(runtimeSettings) &&
+        "adaptivePolicy" in runtimeSettings
+          ? (runtimeSettings as { adaptivePolicy?: { maxReplans?: unknown } }).adaptivePolicy
+          : runtimeSettings &&
+              typeof runtimeSettings === "object" &&
+              !Array.isArray(runtimeSettings) &&
+              "adaptive_policy" in runtimeSettings
+            ? (runtimeSettings as { adaptive_policy?: { maxReplans?: unknown; max_replans?: unknown } })
+                .adaptive_policy
+            : null;
+      const maxReplansValue =
+        adaptivePolicy && typeof adaptivePolicy === "object" && !Array.isArray(adaptivePolicy)
+          ? Number(
+              (adaptivePolicy as { maxReplans?: unknown; max_replans?: unknown }).maxReplans ??
+                (adaptivePolicy as { maxReplans?: unknown; max_replans?: unknown }).max_replans ??
+                initialWorkflowRuntimeSettings().adaptivePolicy?.maxReplans ??
+                2
+            )
+          : Number(initialWorkflowRuntimeSettings().adaptivePolicy?.maxReplans ?? 2);
+      const normalizedMaxReplans = Number.isFinite(maxReplansValue)
+        ? maxReplansValue
+        : Number(initialWorkflowRuntimeSettings().adaptivePolicy?.maxReplans ?? 2);
+      const executionModeValue =
+        runtimeSettings &&
+        typeof runtimeSettings === "object" &&
+        !Array.isArray(runtimeSettings) &&
+        ("executionMode" in runtimeSettings || "execution_mode" in runtimeSettings)
+          ? ((runtimeSettings as { executionMode?: unknown; execution_mode?: unknown }).executionMode ??
+              (runtimeSettings as { executionMode?: unknown; execution_mode?: unknown }).execution_mode)
+          : "static";
+      return {
+        executionMode: executionModeValue === "adaptive" ? "adaptive" : "static",
+        adaptivePolicy: {
+          maxReplans: Math.max(0, Math.min(10, normalizedMaxReplans)),
+        },
+      } satisfies WorkflowRuntimeSettings;
+    })(),
     composerDraft: {
       summary:
         typeof draft?.summary === "string" && draft.summary.trim()
@@ -1577,6 +1629,9 @@ export default function WorkflowStudio() {
   const [composerDraft, setComposerDraft] = useState<ComposerDraft>(initialStudioDraft);
   const [workflowInterface, setWorkflowInterface] = useState<WorkflowInterface>(
     initialWorkflowInterface
+  );
+  const [workflowRuntimeSettings, setWorkflowRuntimeSettings] = useState<WorkflowRuntimeSettings>(
+    initialWorkflowRuntimeSettings
   );
   const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalog | null>(null);
   const [capabilityLoading, setCapabilityLoading] = useState(true);
@@ -4040,6 +4095,7 @@ export default function WorkflowStudio() {
       })),
       edges: composerDraftEdges,
       workflowInterface,
+      runtimeSettings: workflowRuntimeSettings,
     }),
     [
       composerDraft.summary,
@@ -4049,6 +4105,7 @@ export default function WorkflowStudio() {
       goal,
       visualChainNodes,
       workflowInterface,
+      workflowRuntimeSettings,
     ]
   );
 
@@ -4069,6 +4126,7 @@ export default function WorkflowStudio() {
     setContextJson(initialContextJson());
     setComposerDraft(initialStudioDraft());
     setWorkflowInterface(initialWorkflowInterface());
+    setWorkflowRuntimeSettings(initialWorkflowRuntimeSettings());
     setComposerNodePositions({});
     setSavedWorkflowDefinition(null);
     setPublishedWorkflowVersion(null);
@@ -4101,6 +4159,7 @@ export default function WorkflowStudio() {
     setContextJson(restored.contextJsonText);
     setComposerDraft(restored.composerDraft);
     setWorkflowInterface(restored.workflowInterface);
+    setWorkflowRuntimeSettings(restored.runtimeSettings);
     setComposerNodePositions(restored.nodePositions);
     setSavedWorkflowDefinition(definition);
     setPublishedWorkflowVersion(null);
@@ -4146,6 +4205,7 @@ export default function WorkflowStudio() {
     setContextJson(restored.contextJsonText);
     setComposerDraft(restored.composerDraft);
     setWorkflowInterface(restored.workflowInterface);
+    setWorkflowRuntimeSettings(restored.runtimeSettings);
     setComposerNodePositions(restored.nodePositions);
     setSavedWorkflowDefinition(definition);
     setPublishedWorkflowVersion(version);
@@ -4344,6 +4404,9 @@ export default function WorkflowStudio() {
       ),
     });
     setWorkflowInterface(pendingWorkbenchWorkflowDraft.workflowInterface);
+    setWorkflowRuntimeSettings(
+      pendingWorkbenchWorkflowDraft.runtimeSettings || initialWorkflowRuntimeSettings()
+    );
     setComposerNodePositions(pendingWorkbenchWorkflowDraft.nodePositions);
     setSavedWorkflowDefinition(null);
     setPublishedWorkflowVersion(null);
@@ -4923,7 +4986,7 @@ export default function WorkflowStudio() {
         </div>
       </div>
 
-      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
         <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
             Goal
@@ -4956,11 +5019,22 @@ export default function WorkflowStudio() {
             {contextState.invalid ? "Unavailable" : `${contextPathSuggestions.length} detected`}
           </div>
         </div>
+        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+            Execution Mode
+          </div>
+          <div className="mt-1 text-sm text-slate-100">
+            {workflowRuntimeSettings.executionMode === "adaptive" ? "Adaptive" : "Static"}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-300/60">
+            Max replans {workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
+          </div>
+        </div>
       </div>
 
       {workflowSetupExpanded ? (
         <div className="mt-3 space-y-3 border-t border-white/8 pt-3">
-          <div className="grid gap-3 lg:grid-cols-3">
+          <div className="grid gap-3 lg:grid-cols-4">
             <label className="block">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
                 Goal
@@ -5000,7 +5074,54 @@ export default function WorkflowStudio() {
                 explicitly.
               </div>
             </label>
+            <label className="block">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                Execution Mode
+              </div>
+              <select
+                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/40 focus:bg-slate-950/28"
+                value={workflowRuntimeSettings.executionMode || "static"}
+                onChange={(event) =>
+                  setWorkflowRuntimeSettings((prev) => ({
+                    executionMode: event.target.value === "adaptive" ? "adaptive" : "static",
+                    adaptivePolicy: {
+                      maxReplans: prev.adaptivePolicy?.maxReplans ?? 2,
+                    },
+                  }))
+                }
+              >
+                <option value="static">Static</option>
+                <option value="adaptive">Adaptive</option>
+              </select>
+              <div className="mt-2 text-xs leading-5 text-slate-200/62">
+                Adaptive mode only affects published workflow runs. Draft compile and preflight stay deterministic.
+              </div>
+            </label>
           </div>
+
+          <label className="block max-w-xs">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+              Max Adaptive Replans
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={10}
+              className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/40 focus:bg-slate-950/28"
+              value={workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
+              onChange={(event) =>
+                setWorkflowRuntimeSettings((prev) => ({
+                  executionMode: prev.executionMode || "static",
+                  adaptivePolicy: {
+                    maxReplans: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
+                  },
+                }))
+              }
+            />
+            <div className="mt-2 text-xs leading-5 text-slate-200/62">
+              Used only when execution mode is adaptive.
+            </div>
+          </label>
 
           <label className="block">
             <div className="flex items-center justify-between gap-3">

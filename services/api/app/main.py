@@ -200,6 +200,8 @@ COMPOSER_RECOMMENDER_ENABLED = os.getenv("COMPOSER_RECOMMENDER_ENABLED", "true")
 ORCHESTRATOR_RECOVER_PENDING = os.getenv("ORCHESTRATOR_RECOVER_PENDING", "true").lower() == "true"
 ORCHESTRATOR_RECOVER_IDLE_MS = int(os.getenv("ORCHESTRATOR_RECOVER_IDLE_MS", "60000"))
 REPLAN_MAX = int(os.getenv("REPLAN_MAX", "1"))
+ADAPTIVE_PLANNING_ENABLED = os.getenv("ADAPTIVE_PLANNING_ENABLED", "false").lower() == "true"
+ADAPTIVE_REPLAN_MAX_DEFAULT = max(0, int(os.getenv("ADAPTIVE_REPLAN_MAX_DEFAULT", "2")))
 TOOL_INPUT_VALIDATION_ENABLED = os.getenv("TOOL_INPUT_VALIDATION_ENABLED", "true").lower() == "true"
 INTENT_CLARIFICATION_ON_CREATE = (
     os.getenv("INTENT_CLARIFICATION_ON_CREATE", "false").lower() == "true"
@@ -1058,6 +1060,8 @@ def _job_from_record(record: JobRecord) -> models.Job:
         created_at=record.created_at,
         updated_at=record.updated_at,
         priority=record.priority or 0,
+        planning_mode=_planning_mode_from_metadata(metadata),
+        current_revision_number=_current_revision_number_from_metadata(metadata),
         metadata=metadata,
     )
 
@@ -1081,6 +1085,217 @@ def _run_id_from_metadata(metadata: Mapping[str, Any] | None, job_id: str) -> st
         if candidate:
             return candidate
     return job_id
+
+
+def _coerce_planning_mode(
+    value: Any,
+    *,
+    allow_adaptive: bool = True,
+) -> models.PlanningMode:
+    if isinstance(value, models.PlanningMode):
+        normalized = value.value
+    else:
+        normalized = str(value or "").strip().lower()
+    if normalized == models.PlanningMode.adaptive.value and allow_adaptive:
+        return models.PlanningMode.adaptive
+    return models.PlanningMode.static
+
+
+def _planning_mode_from_metadata(metadata: Mapping[str, Any] | None) -> models.PlanningMode:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    return _coerce_planning_mode(normalized.get("planning_mode"))
+
+
+def _adaptive_policy_from_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    raw_policy = normalized.get("adaptive_policy")
+    policy = dict(raw_policy) if isinstance(raw_policy, Mapping) else {}
+    try:
+        raw_max_replans = policy.get("max_replans", policy.get("maxReplans", ADAPTIVE_REPLAN_MAX_DEFAULT))
+        max_replans = int(raw_max_replans)
+    except (TypeError, ValueError):
+        max_replans = ADAPTIVE_REPLAN_MAX_DEFAULT
+    policy["max_replans"] = max(0, min(10, max_replans))
+    return policy
+
+
+def _parse_metadata_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _plan_revision_summaries_from_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> list[models.PlanRevisionSummary]:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    raw_history = normalized.get("plan_revision_history")
+    if not isinstance(raw_history, list):
+        return []
+    summaries: list[models.PlanRevisionSummary] = []
+    for entry in raw_history:
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            revision_number = int(entry.get("revision_number", 0))
+        except (TypeError, ValueError):
+            revision_number = 0
+        if revision_number <= 0:
+            continue
+        try:
+            task_count = max(0, int(entry.get("task_count", 0) or 0))
+        except (TypeError, ValueError):
+            task_count = 0
+        summaries.append(
+            models.PlanRevisionSummary(
+                revision_number=revision_number,
+                plan_id=str(entry.get("plan_id") or "").strip() or None,
+                trigger_reason=str(entry.get("trigger_reason") or "").strip() or None,
+                created_at=_parse_metadata_datetime(entry.get("created_at")),
+                superseded_at=_parse_metadata_datetime(entry.get("superseded_at")),
+                active=bool(entry.get("active")),
+                task_count=task_count,
+            )
+        )
+    return sorted(summaries, key=lambda item: item.revision_number)
+
+
+def _current_revision_number_from_metadata(metadata: Mapping[str, Any] | None) -> int:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    try:
+        explicit = int(normalized.get("current_revision_number", 0))
+    except (TypeError, ValueError):
+        explicit = 0
+    if explicit > 0:
+        return explicit
+    history = _plan_revision_summaries_from_metadata(normalized)
+    return history[-1].revision_number if history else 0
+
+
+def _active_plan_id_from_metadata(metadata: Mapping[str, Any] | None) -> str | None:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    value = str(normalized.get("active_plan_id") or "").strip()
+    if value:
+        return value
+    for revision in reversed(_plan_revision_summaries_from_metadata(normalized)):
+        if revision.active and revision.plan_id:
+            return revision.plan_id
+    return None
+
+
+def _recovery_metadata_from_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    for key in ("pending_replan", "last_replan_context", "intent_mismatch_recovery"):
+        value = normalized.get(key)
+        if isinstance(value, Mapping):
+            return dict(value)
+    return {}
+
+
+def _active_plan_record_for_job(
+    db: Session,
+    job: JobRecord | None = None,
+    *,
+    job_id: str | None = None,
+) -> PlanRecord | None:
+    resolved_job_id = (
+        job.id if isinstance(job, JobRecord) and isinstance(job.id, str) and job.id else None
+    ) or (str(job_id or "").strip() or None)
+    if not resolved_job_id:
+        return None
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    active_plan_id = _active_plan_id_from_metadata(metadata)
+    if active_plan_id:
+        plan = (
+            db.query(PlanRecord)
+            .filter(PlanRecord.id == active_plan_id, PlanRecord.job_id == resolved_job_id)
+            .first()
+        )
+        if plan is not None:
+            return plan
+    return (
+        db.query(PlanRecord)
+        .filter(PlanRecord.job_id == resolved_job_id)
+        .order_by(PlanRecord.created_at.desc())
+        .first()
+    )
+
+
+def _workflow_allowed_capability_ids_from_run_spec(
+    run_spec: models.RunSpec | None,
+) -> list[str]:
+    if run_spec is None:
+        return []
+    allowed: list[str] = []
+    seen: set[str] = set()
+    for request in run_spec.capability_requests:
+        capability_id = str(request.capability_id or "").strip()
+        if capability_id and capability_id not in seen:
+            seen.add(capability_id)
+            allowed.append(capability_id)
+    for step in run_spec.steps:
+        capability_id = str(step.capability_request.capability_id or "").strip()
+        if capability_id and capability_id not in seen:
+            seen.add(capability_id)
+            allowed.append(capability_id)
+    return allowed
+
+
+def _mark_plan_revision_active(
+    job: JobRecord,
+    *,
+    plan_record: PlanRecord,
+    task_count: int,
+    trigger_reason: str,
+) -> None:
+    metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
+    history = [
+        entry.model_dump(mode="json")
+        for entry in _plan_revision_summaries_from_metadata(metadata)
+    ]
+    active_timestamp = (
+        plan_record.created_at.isoformat()
+        if isinstance(plan_record.created_at, datetime)
+        else _utcnow().isoformat()
+    )
+    for entry in history:
+        if bool(entry.get("active")):
+            entry["active"] = False
+            entry.setdefault("superseded_at", active_timestamp)
+    revision_number = 1 + max(
+        [int(entry.get("revision_number", 0) or 0) for entry in history] or [0]
+    )
+    history.append(
+        {
+            "revision_number": revision_number,
+            "plan_id": plan_record.id,
+            "trigger_reason": trigger_reason,
+            "created_at": active_timestamp,
+            "superseded_at": None,
+            "active": True,
+            "task_count": max(0, int(task_count)),
+        }
+    )
+    pending_replan = metadata.pop("pending_replan", None)
+    if isinstance(pending_replan, Mapping):
+        metadata["last_replan_context"] = dict(pending_replan)
+    metadata["active_plan_id"] = plan_record.id
+    metadata["current_revision_number"] = revision_number
+    metadata["plan_revision_history"] = history[-20:]
+    if revision_number <= 1:
+        metadata.pop("replan_reason", None)
+    job.metadata_json = metadata
 
 
 def _workflow_definition_from_record(
@@ -1145,6 +1360,49 @@ def _workflow_version_plan(record: WorkflowVersionRecord) -> models.PlanCreate |
         except ValueError:
             pass
     return _parse_plan_payload(record.compiled_plan_json or {})
+
+
+def _workflow_runtime_settings_from_draft(
+    draft: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    normalized_draft = draft if isinstance(draft, Mapping) else {}
+    raw_settings = normalized_draft.get("runtimeSettings")
+    if not isinstance(raw_settings, Mapping):
+        raw_settings = normalized_draft.get("runtime_settings")
+    settings = dict(raw_settings) if isinstance(raw_settings, Mapping) else {}
+    execution_mode = _coerce_planning_mode(
+        settings.get("executionMode", settings.get("execution_mode"))
+    )
+    raw_policy = settings.get("adaptivePolicy")
+    if not isinstance(raw_policy, Mapping):
+        raw_policy = settings.get("adaptive_policy")
+    adaptive_policy = _adaptive_policy_from_metadata({"adaptive_policy": raw_policy or {}})
+    return {
+        "execution_mode": execution_mode.value,
+        "adaptive_policy": adaptive_policy,
+    }
+
+
+def _workflow_runtime_settings_from_version(
+    version: WorkflowVersionRecord,
+) -> dict[str, Any]:
+    metadata = version.metadata_json if isinstance(version.metadata_json, dict) else {}
+    raw_settings = metadata.get("workflow_runtime_settings")
+    if isinstance(raw_settings, Mapping):
+        settings = dict(raw_settings)
+        execution_mode = _coerce_planning_mode(
+            settings.get("execution_mode", settings.get("executionMode"))
+        )
+        raw_policy = settings.get("adaptive_policy")
+        if not isinstance(raw_policy, Mapping):
+            raw_policy = settings.get("adaptivePolicy")
+        return {
+            "execution_mode": execution_mode.value,
+            "adaptive_policy": _adaptive_policy_from_metadata(
+                {"adaptive_policy": raw_policy or {}}
+            ),
+        }
+    return _workflow_runtime_settings_from_draft(version.draft_json or {})
 
 
 def _scheduler_mode_from_metadata(metadata: Mapping[str, Any] | None) -> str:
@@ -1235,7 +1493,12 @@ def _workflow_run_from_record(
         goal=record.goal or "",
         requested_context_json=record.requested_context_json or {},
         job_id=record.job_id,
-        plan_id=record.plan_id,
+        plan_id=(
+            _active_plan_id_from_metadata(
+                job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            )
+            or record.plan_id
+        ),
         job_status=job_status,
         job_error=job_error,
         latest_task_id=(
@@ -1255,6 +1518,12 @@ def _workflow_run_from_record(
         ),
         run_id=record.id,
         user_id=record.user_id,
+        planning_mode=_planning_mode_from_metadata(
+            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+        ),
+        current_revision_number=_current_revision_number_from_metadata(
+            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+        ),
         metadata=record.metadata_json or {},
         created_at=record.created_at,
         updated_at=updated_at,
@@ -1320,7 +1589,12 @@ def _run_from_record(
         requested_context_json=record.requested_context_json or {},
         status=status,
         job_id=record.job_id,
-        plan_id=record.plan_id,
+        plan_id=(
+            _active_plan_id_from_metadata(
+                job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            )
+            or record.plan_id
+        ),
         workflow_run_id=record.workflow_run_id,
         source_definition_id=record.source_definition_id,
         source_version_id=record.source_version_id,
@@ -1343,6 +1617,12 @@ def _run_from_record(
             else None
         ),
         user_id=record.user_id,
+        planning_mode=_planning_mode_from_metadata(
+            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+        ),
+        current_revision_number=_current_revision_number_from_metadata(
+            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+        ),
         run_spec=record.run_spec_json or {},
         metadata=metadata,
         created_at=record.created_at,
@@ -9470,6 +9750,9 @@ def _handle_plan_created(envelope: dict) -> None:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         job_goal = job.goal if job and isinstance(job.goal, str) else ""
         job_metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+        pending_replan = (
+            job_metadata.get("pending_replan") if isinstance(job_metadata.get("pending_replan"), Mapping) else None
+        )
         job_context = _preflight_job_context(
             db=db,
             goal_text=job_goal,
@@ -9512,27 +9795,28 @@ def _handle_plan_created(envelope: dict) -> None:
                 },
             )
             return
-        existing = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+        existing = _active_plan_record_for_job(db, job)
         if existing:
-            plan_id = existing.id
-            if use_postgres_scheduler and job:
-                metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
-                metadata["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
-                metadata["run_spec"] = planner_run_spec.model_dump(mode="json")
-                job.metadata_json = metadata
-                job.updated_at = now
-            if job:
-                _sync_shadow_run(
-                    db,
-                    job_record=job,
-                    plan_record=existing,
-                    plan=plan,
-                    run_spec=planner_run_spec,
-                )
-            db.commit()
-            _dispatch_ready_work_for_job(job_id, plan_id, envelope.get("correlation_id"))
-            _refresh_job_status(job_id)
-            return
+            if pending_replan is None:
+                plan_id = existing.id
+                if use_postgres_scheduler and job:
+                    metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
+                    metadata["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
+                    metadata["run_spec"] = planner_run_spec.model_dump(mode="json")
+                    job.metadata_json = metadata
+                    job.updated_at = now
+                if job:
+                    _sync_shadow_run(
+                        db,
+                        job_record=job,
+                        plan_record=existing,
+                        plan=plan,
+                        run_spec=planner_run_spec,
+                    )
+                db.commit()
+                _dispatch_ready_work_for_job(job_id, plan_id, envelope.get("correlation_id"))
+                _refresh_job_status(job_id)
+                return
         record = PlanRecord(
             id=str(uuid.uuid4()),
             job_id=job_id,
@@ -9611,6 +9895,17 @@ def _handle_plan_created(envelope: dict) -> None:
                 metadata["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
                 metadata["run_spec"] = planner_run_spec.model_dump(mode="json")
                 job.metadata_json = metadata
+            trigger_reason = (
+                str(pending_replan.get("reason") or "").strip()
+                if isinstance(pending_replan, Mapping)
+                else ""
+            ) or "initial_plan"
+            _mark_plan_revision_active(
+                job,
+                plan_record=record,
+                task_count=len(plan.tasks),
+                trigger_reason=trigger_reason,
+            )
             _set_job_status(job, models.JobStatus.planning)
             job.updated_at = now
             _sync_shadow_run(
@@ -9745,10 +10040,24 @@ def _handle_task_failed(envelope: dict) -> None:
             "tool_intent_mismatch" in error or "contract.intent_mismatch" in error
         ):
             mismatch = _intent_mismatch_repair_constraints(error, task)
-            replan_done = _replan_job_for_intent_mismatch(
+            replan_done = _replan_job_for_intent_mismatch(db, task.job_id, mismatch=mismatch)
+            if replan_done:
+                return
+        if _should_trigger_retry_exhausted_replan(job, task, payload, error if isinstance(error, str) else None):
+            replan_done = _request_job_replan(
                 db,
                 task.job_id,
-                mismatch=mismatch,
+                reason="retry_exhausted_auto_repair",
+                context={
+                    "failed_task_id": task.id,
+                    "failed_task_name": task.name,
+                    "failed_task_error": error,
+                    "failed_task_intent": str(task.intent or "").strip() or None,
+                    "retry_classification": attempt.retry_classification,
+                    "attempt_number": attempt.attempt_number,
+                    "max_attempts": int(task.max_attempts or 0),
+                },
+                require_adaptive=True,
             )
             if replan_done:
                 return
@@ -9805,6 +10114,191 @@ def _intent_mismatch_repair_constraints(error: str, task: TaskRecord | None) -> 
             constraints["segment_intent"] = parts[2].replace("segment=", "").strip()
             constraints["actual_task_intent"] = parts[3].replace("task=", "").strip()
     return constraints
+
+
+def _completed_step_snapshots_for_plan(
+    db: Session,
+    plan_record: PlanRecord | None,
+) -> list[dict[str, Any]]:
+    if plan_record is None:
+        return []
+    tasks = (
+        db.query(TaskRecord)
+        .filter(TaskRecord.plan_id == plan_record.id)
+        .order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc())
+        .all()
+    )
+    snapshots: list[dict[str, Any]] = []
+    for task in tasks:
+        if task.status not in {
+            models.TaskStatus.completed.value,
+            models.TaskStatus.accepted.value,
+        }:
+            continue
+        result = _load_task_result(task.id)
+        snapshots.append(
+            {
+                "task_id": task.id,
+                "name": task.name,
+                "status": task.status,
+                "outputs": dict(result.get("outputs"))
+                if isinstance(result.get("outputs"), Mapping)
+                else {},
+                "result": result,
+            }
+        )
+    return snapshots
+
+
+def _supersede_unfinished_plan_tail(
+    db: Session,
+    plan_record: PlanRecord | None,
+    *,
+    reason: str,
+    superseded_at: datetime,
+) -> None:
+    if plan_record is None:
+        return
+    cancelable_statuses = {
+        models.TaskStatus.pending.value,
+        models.TaskStatus.ready.value,
+        models.TaskStatus.running.value,
+        models.TaskStatus.blocked.value,
+        models.TaskStatus.rework_requested.value,
+        models.TaskStatus.failed.value,
+    }
+    tasks = db.query(TaskRecord).filter(TaskRecord.plan_id == plan_record.id).all()
+    for task in tasks:
+        if task.status in cancelable_statuses:
+            task.status = models.TaskStatus.canceled.value
+            task.updated_at = superseded_at
+    run_steps = db.query(RunStepRecord).filter(RunStepRecord.plan_id == plan_record.id).all()
+    for step in run_steps:
+        metadata = dict(step.metadata_json or {})
+        metadata["superseded_at"] = superseded_at.isoformat()
+        metadata["superseded_reason"] = reason
+        step.metadata_json = metadata
+        if step.status not in {
+            models.TaskStatus.completed.value,
+            models.TaskStatus.accepted.value,
+            models.TaskStatus.canceled.value,
+        }:
+            step.status = models.TaskStatus.canceled.value
+        step.updated_at = superseded_at
+
+
+def _auto_replan_blocked_by_failure(error_message: str | None) -> bool:
+    if not error_message:
+        return True
+    normalized = error_message.strip().lower()
+    if not normalized:
+        return True
+    if "clarification" in normalized:
+        return True
+    if "missing input" in normalized or "missing_input" in normalized:
+        return True
+    if "intent_clarification_required" in normalized:
+        return True
+    if "workflow_inputs_invalid" in normalized:
+        return True
+    classification = _classify_task_error(error_message)
+    return classification.get("category") == "policy"
+
+
+def _should_trigger_retry_exhausted_replan(
+    job: JobRecord | None,
+    task: TaskRecord | None,
+    payload: Mapping[str, Any] | None,
+    error_message: str | None,
+) -> bool:
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    if _planning_mode_from_metadata(metadata) != models.PlanningMode.adaptive:
+        return False
+    if _auto_replan_blocked_by_failure(error_message):
+        return False
+    if isinstance(metadata.get("pending_replan"), Mapping):
+        return False
+    policy = _adaptive_policy_from_metadata(metadata)
+    try:
+        replan_count = int(metadata.get("replan_count", 0))
+    except (TypeError, ValueError):
+        replan_count = 0
+    if replan_count >= int(policy.get("max_replans", ADAPTIVE_REPLAN_MAX_DEFAULT)):
+        return False
+    classification = _classify_task_error(error_message)
+    if isinstance(error_message, str) and error_message.strip().lower() == "max_attempts_exceeded":
+        return True
+    if not classification.get("retryable"):
+        return False
+    if task is None:
+        return False
+    attempt_number = _payload_attempt_number(payload or {})
+    if attempt_number is None:
+        attempt_number = max(int(task.attempts or 0), 0)
+    max_attempts = max(int(task.max_attempts or 0), 0)
+    return max_attempts > 0 and attempt_number >= max_attempts
+
+
+def _request_job_replan(
+    db: Session,
+    job_id: str,
+    *,
+    reason: str,
+    context: Mapping[str, Any] | None = None,
+    require_adaptive: bool = False,
+) -> bool:
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    if not job:
+        return False
+    metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
+    planning_mode = _planning_mode_from_metadata(metadata)
+    if require_adaptive and planning_mode != models.PlanningMode.adaptive:
+        return False
+    if isinstance(metadata.get("pending_replan"), Mapping):
+        return False
+    try:
+        current_count = int(metadata.get("replan_count", 0) or 0)
+    except (TypeError, ValueError):
+        current_count = 0
+    max_replans = int(_adaptive_policy_from_metadata(metadata).get("max_replans", 0))
+    if require_adaptive and current_count >= max_replans:
+        return False
+    now = _utcnow()
+    active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+    replan_context: dict[str, Any] = {
+        "reason": reason,
+        "requested_at": now.isoformat(),
+        "planning_mode": planning_mode.value,
+        "prior_revision_number": _current_revision_number_from_metadata(metadata),
+        "prior_plan_id": active_plan.id if active_plan is not None else None,
+        "completed_steps": _completed_step_snapshots_for_plan(db, active_plan),
+    }
+    if isinstance(context, Mapping):
+        replan_context.update(dict(context))
+    if reason == "intent_mismatch_auto_repair" and isinstance(context, Mapping):
+        metadata["intent_mismatch_recovery"] = dict(context)
+        history = metadata.get("intent_mismatch_recovery_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(dict(context))
+        metadata["intent_mismatch_recovery_history"] = history[-10:]
+    _supersede_unfinished_plan_tail(
+        db,
+        active_plan,
+        reason=reason,
+        superseded_at=now,
+    )
+    metadata["replan_count"] = current_count + 1
+    metadata["replan_reason"] = reason
+    metadata["pending_replan"] = replan_context
+    metadata["last_replan_context"] = replan_context
+    job.metadata_json = metadata
+    job.status = models.JobStatus.planning.value
+    job.updated_at = now
+    _sync_shadow_run_status(db, job)
+    db.commit()
+    _emit_event("job.created", _job_from_record(job).model_dump())
+    return True
 
 
 def _handle_task_started(envelope: dict) -> None:
@@ -9896,33 +10390,14 @@ def _replan_job_for_intent_mismatch(
     *,
     mismatch: Mapping[str, Any] | None = None,
 ) -> bool:
-    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
-    if not job:
-        return False
-    metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
-    count = int(metadata.get("replan_count", 0))
-    if count >= REPLAN_MAX:
-        return False
-    metadata["replan_count"] = count + 1
-    metadata["replan_reason"] = "intent_mismatch_auto_repair"
     mismatch_payload = dict(mismatch) if isinstance(mismatch, Mapping) else {}
-    if mismatch_payload:
-        mismatch_payload.setdefault("attempt", count + 1)
-        mismatch_payload.setdefault("created_at", _utcnow().isoformat())
-        metadata["intent_mismatch_recovery"] = mismatch_payload
-        history = metadata.get("intent_mismatch_recovery_history")
-        if not isinstance(history, list):
-            history = []
-        history.append(mismatch_payload)
-        metadata["intent_mismatch_recovery_history"] = history[-10:]
-    job.metadata_json = metadata
-    job.status = models.JobStatus.planning.value
-    job.updated_at = _utcnow()
-    db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete(synchronize_session=False)
-    db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete(synchronize_session=False)
-    db.commit()
-    _emit_event("job.created", _job_from_record(job).model_dump())
-    return True
+    return _request_job_replan(
+        db,
+        job_id,
+        reason="intent_mismatch_auto_repair",
+        context=mismatch_payload,
+        require_adaptive=True,
+    )
 
 
 def _handle_task_accepted(envelope: dict) -> None:
@@ -10097,7 +10572,7 @@ def _schedule_postgres_run(job_id: str, *, correlation_id: str | None = None) ->
                 extra={"job_id": job.id, "workflow_run_id": workflow_run_id},
             )
             return
-        plan = db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+        plan = _active_plan_record_for_job(db, job, job_id=job.id)
         if plan is None:
             return
         scheduled_job_id = job.id
@@ -10241,7 +10716,7 @@ def _dispatch_ready_work_for_job(
             return
         use_postgres_scheduler = _job_uses_postgres_scheduler(job)
         if resolved_plan_id is None:
-            plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+            plan = _active_plan_record_for_job(db, job, job_id=job_id)
             resolved_plan_id = plan.id if plan is not None else None
     if use_postgres_scheduler:
         _schedule_postgres_run(job_id, correlation_id=correlation_id)
@@ -10405,7 +10880,11 @@ def _recover_jobs() -> None:
             .all()
         )
         for job in jobs:
-            plan = db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+            metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+            if isinstance(metadata.get("pending_replan"), Mapping):
+                _emit_event("job.created", _job_from_record(job).model_dump())
+                continue
+            plan = _active_plan_record_for_job(db, job, job_id=job.id)
             if plan:
                 _dispatch_ready_work_for_job(job.id, plan.id, None)
                 continue
@@ -11669,8 +12148,17 @@ def _refresh_job_status(job_id: str) -> None:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
         if not job:
             return
-        tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+        active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+        if active_plan is None:
+            return
+        tasks = db.query(TaskRecord).filter(TaskRecord.plan_id == active_plan.id).all()
         if not tasks:
+            metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+            if isinstance(metadata.get("pending_replan"), Mapping):
+                _set_job_status(job, models.JobStatus.planning)
+                job.updated_at = _utcnow()
+                _sync_shadow_run_status(db, job)
+                db.commit()
             return
         statuses = {task.status for task in tasks}
         now = _utcnow()
@@ -12523,11 +13011,7 @@ def _sync_shadow_run_steps(
         record.metadata_json = dict(step.routing_hints or {})
         record.created_at = task.created_at
         record.updated_at = task.updated_at
-    stale_ids = [record_id for record_id in existing if record_id not in seen]
-    if stale_ids:
-        db.query(RunStepRecord).filter(RunStepRecord.id.in_(stale_ids)).delete(
-            synchronize_session=False
-        )
+    # Preserve prior revision run-step rows so adaptive replans can retain debugger history.
 
 
 def _sync_shadow_run(
@@ -13333,6 +13817,15 @@ def _latest_task_failures_for_jobs(
     normalized_job_ids = [job_id for job_id in job_ids if isinstance(job_id, str) and job_id]
     if not normalized_job_ids:
         return {}
+    job_records = (
+        db.query(JobRecord).filter(JobRecord.id.in_(normalized_job_ids)).all()
+        if normalized_job_ids
+        else []
+    )
+    active_plan_ids = {
+        job.id: _active_plan_id_from_metadata(job.metadata_json if isinstance(job.metadata_json, dict) else {})
+        for job in job_records
+    }
     task_records = (
         db.query(TaskRecord)
         .filter(TaskRecord.job_id.in_(normalized_job_ids))
@@ -13352,6 +13845,9 @@ def _latest_task_failures_for_jobs(
     latest_by_job: dict[str, dict[str, Any]] = {}
     for record in result_records:
         if not isinstance(record.job_id, str) or not record.job_id:
+            continue
+        active_plan_id = active_plan_ids.get(record.job_id)
+        if active_plan_id and record.plan_id != active_plan_id:
             continue
         error = str(record.latest_error or "").strip()
         if not error:
@@ -13859,6 +14355,15 @@ def _create_job_internal(
     if job.idempotency_key:
         metadata["idempotency_key"] = job.idempotency_key
     metadata["render_path_mode"] = planner_contracts.RENDER_PATH_MODE_EXPLICIT
+    metadata["planning_mode"] = _coerce_planning_mode(
+        job.planning_mode,
+        allow_adaptive=ADAPTIVE_PLANNING_ENABLED,
+    ).value
+    metadata["adaptive_policy"] = _adaptive_policy_from_metadata(
+        {"adaptive_policy": job.adaptive_policy}
+    )
+    metadata.setdefault("current_revision_number", 0)
+    metadata.setdefault("plan_revision_history", [])
     if LLM_PROVIDER_NAME:
         metadata["llm_provider"] = LLM_PROVIDER_NAME
     if LLM_MODEL_NAME:
@@ -13916,6 +14421,18 @@ def _create_job_internal(
         metadata["goal_intent_graph"] = goal_intent_graph.model_dump(mode="json", exclude_none=True)
     if isinstance(metadata_overrides, Mapping):
         metadata.update(dict(metadata_overrides))
+    resolved_planning_mode = _coerce_planning_mode(
+        metadata.get("planning_mode"),
+        allow_adaptive=ADAPTIVE_PLANNING_ENABLED,
+    )
+    metadata["planning_mode"] = resolved_planning_mode.value
+    metadata["adaptive_policy"] = _adaptive_policy_from_metadata(metadata)
+    if not isinstance(metadata.get("plan_revision_history"), list):
+        metadata["plan_revision_history"] = []
+    try:
+        metadata["current_revision_number"] = max(0, int(metadata.get("current_revision_number", 0)))
+    except (TypeError, ValueError):
+        metadata["current_revision_number"] = 0
     if not _delay_shadow_run_creation(metadata):
         metadata["canonical_run_id"] = job_id
     record = JobRecord(
@@ -14139,7 +14656,8 @@ def get_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
 
 @app.get("/jobs/{job_id}/plan", response_model=models.Plan)
 def get_plan(job_id: str, db: Session = Depends(get_db)) -> models.Plan:
-    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    plan = _active_plan_record_for_job(db, job, job_id=job_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     return _plan_from_record(plan)
@@ -14148,7 +14666,11 @@ def get_plan(job_id: str, db: Session = Depends(get_db)) -> models.Plan:
 @app.get("/jobs/{job_id}/tasks", response_model=List[models.Task])
 def get_tasks(job_id: str, db: Session = Depends(get_db)) -> List[models.Task]:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
-    tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+    active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+    task_query = db.query(TaskRecord).filter(TaskRecord.job_id == job_id)
+    if active_plan is not None:
+        task_query = task_query.filter(TaskRecord.plan_id == active_plan.id)
+    tasks = task_query.all()
     profiles = _coerce_task_intent_profiles(
         job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
     )
@@ -14157,7 +14679,12 @@ def get_tasks(job_id: str, db: Session = Depends(get_db)) -> List[models.Task]:
 
 @app.get("/jobs/{job_id}/task_results")
 def get_task_results(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+    job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+    task_query = db.query(TaskRecord).filter(TaskRecord.job_id == job_id)
+    if active_plan is not None:
+        task_query = task_query.filter(TaskRecord.plan_id == active_plan.id)
+    tasks = task_query.all()
     return {task.id: _load_task_result(task.id) for task in tasks}
 
 
@@ -14166,8 +14693,11 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    plan_record = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
-    tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+    plan_record = _active_plan_record_for_job(db, job, job_id=job_id)
+    task_query = db.query(TaskRecord).filter(TaskRecord.job_id == job_id)
+    if plan_record is not None:
+        task_query = task_query.filter(TaskRecord.plan_id == plan_record.id)
+    tasks = task_query.all()
     metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
     profiles = _coerce_task_intent_profiles(metadata)
     normalization_fields = _normalization_response_fields(metadata, goal=job.goal or "")
@@ -14179,6 +14709,11 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
         plan=_plan_from_record(plan_record) if plan_record else None,
         tasks=[_task_from_record(task, profiles.get(task.id)) for task in tasks],
         task_results={task.id: _load_task_result(task.id) for task in tasks},
+        planning_mode=_planning_mode_from_metadata(metadata),
+        current_revision_number=_current_revision_number_from_metadata(metadata),
+        revision_history=_plan_revision_summaries_from_metadata(metadata),
+        last_replan_reason=str(metadata.get("replan_reason") or "").strip() or None,
+        recovery_metadata=_recovery_metadata_from_metadata(metadata),
         goal_intent_profile=normalization_fields["goal_intent_profile"],
         goal_intent_graph=normalization_fields["goal_intent_graph"],
         normalized_intent_envelope=normalization_fields["normalized_intent_envelope"],
@@ -14197,13 +14732,11 @@ def get_job_debugger(
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    plan_record = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
-    task_records = (
-        db.query(TaskRecord)
-        .filter(TaskRecord.job_id == job_id)
-        .order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc())
-        .all()
-    )
+    plan_record = _active_plan_record_for_job(db, job, job_id=job_id)
+    task_query = db.query(TaskRecord).filter(TaskRecord.job_id == job_id)
+    if plan_record is not None:
+        task_query = task_query.filter(TaskRecord.plan_id == plan_record.id)
+    task_records = task_query.order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc()).all()
     task_models = _resolve_task_deps(task_records)
     task_map = {task.id: task for task in task_models}
     id_to_name = {record.id: record.name for record in task_records}
@@ -14276,6 +14809,14 @@ def get_job_debugger(
         "job_id": job_id,
         "job_status": job.status,
         "plan_id": plan_record.id if plan_record else None,
+        "planning_mode": _planning_mode_from_metadata(metadata).value,
+        "current_revision_number": _current_revision_number_from_metadata(metadata),
+        "revision_history": [
+            item.model_dump(mode="json")
+            for item in _plan_revision_summaries_from_metadata(metadata)
+        ],
+        "last_replan_reason": str(metadata.get("replan_reason") or "").strip() or None,
+        "recovery_metadata": _recovery_metadata_from_metadata(metadata),
         "generated_at": _utcnow().isoformat(),
         "timeline_events_scanned": len(timeline),
         "goal_intent_profile": normalization_fields["goal_intent_profile"],
@@ -14366,21 +14907,26 @@ def _run_debugger_payload(
     plan_record = (
         db.query(PlanRecord).filter(PlanRecord.id == run_record.plan_id).first()
         if isinstance(run_record.plan_id, str) and run_record.plan_id
-        else db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+        else _active_plan_record_for_job(db, job)
     )
-    step_records = (
-        db.query(RunStepRecord)
-        .filter(RunStepRecord.run_id == run_record.id)
-        .order_by(RunStepRecord.created_at.asc(), RunStepRecord.name.asc())
-        .all()
-    )
-    task_records = (
-        db.query(TaskRecord)
-        .filter(TaskRecord.id.in_([record.id for record in step_records]))
-        .all()
-        if step_records
-        else db.query(TaskRecord).filter(TaskRecord.job_id == job.id).all()
-    )
+    step_query = db.query(RunStepRecord).filter(RunStepRecord.run_id == run_record.id)
+    if plan_record is not None:
+        step_query = step_query.filter(RunStepRecord.plan_id == plan_record.id)
+    step_records = step_query.order_by(
+        RunStepRecord.created_at.asc(),
+        RunStepRecord.name.asc(),
+    ).all()
+    if step_records:
+        task_records = (
+            db.query(TaskRecord)
+            .filter(TaskRecord.id.in_([record.id for record in step_records]))
+            .all()
+        )
+    else:
+        task_query = db.query(TaskRecord).filter(TaskRecord.job_id == job.id)
+        if plan_record is not None:
+            task_query = task_query.filter(TaskRecord.plan_id == plan_record.id)
+        task_records = task_query.all()
     task_by_id = {record.id: record for record in task_records}
     timeline = [
         _debugger_timeline_entry_from_run_event(row)
@@ -14476,6 +15022,27 @@ def _run_debugger_payload(
         ).model_dump(mode="json"),
         "job": _job_from_record(job).model_dump(mode="json"),
         "plan": _plan_from_record(plan_record).model_dump(mode="json") if plan_record else None,
+        "planning_mode": _planning_mode_from_metadata(
+            job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        ).value,
+        "current_revision_number": _current_revision_number_from_metadata(
+            job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        ),
+        "revision_history": [
+            item.model_dump(mode="json")
+            for item in _plan_revision_summaries_from_metadata(
+                job.metadata_json if isinstance(job.metadata_json, dict) else {}
+            )
+        ],
+        "last_replan_reason": str(
+            (job.metadata_json or {}).get("replan_reason")
+            if isinstance(job.metadata_json, dict)
+            else ""
+        ).strip()
+        or None,
+        "recovery_metadata": _recovery_metadata_from_metadata(
+            job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        ),
         "generated_at": _utcnow().isoformat(),
         "steps": steps_payload,
         "attempts": [attempt.model_dump(mode="json") for attempt in step_attempts],
@@ -14534,12 +15101,12 @@ def list_run_steps(run_id: str, db: Session = Depends(get_db)) -> List[models.Ru
     run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
     if run_record is None:
         raise HTTPException(status_code=404, detail="run_not_found")
-    records = (
-        db.query(RunStepRecord)
-        .filter(RunStepRecord.run_id == run_id)
-        .order_by(RunStepRecord.created_at.asc(), RunStepRecord.name.asc())
-        .all()
-    )
+    job = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    active_plan = _active_plan_record_for_job(db, job, job_id=run_record.job_id)
+    query = db.query(RunStepRecord).filter(RunStepRecord.run_id == run_id)
+    if active_plan is not None:
+        query = query.filter(RunStepRecord.plan_id == active_plan.id)
+    records = query.order_by(RunStepRecord.created_at.asc(), RunStepRecord.name.asc()).all()
     task_map = {
         task.id: task
         for task in (
@@ -14602,7 +15169,7 @@ def resume_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     job.updated_at = _utcnow()
     _sync_shadow_run_status(db, job)
     db.commit()
-    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+    plan = _active_plan_record_for_job(db, job, job_id=job.id)
     if plan is not None:
         _dispatch_ready_work_for_job(job.id, plan.id, None)
     return _run_from_record(run_record, job_record=job)
@@ -14619,7 +15186,11 @@ def retry_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     if models.JobStatus(job.status) not in {models.JobStatus.failed, models.JobStatus.canceled}:
         raise HTTPException(status_code=400, detail="Job is not retryable")
     now = _utcnow()
-    tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job.id).all()
+    active_plan = _active_plan_record_for_job(db, job, job_id=job.id)
+    task_query = db.query(TaskRecord).filter(TaskRecord.job_id == job.id)
+    if active_plan is not None:
+        task_query = task_query.filter(TaskRecord.plan_id == active_plan.id)
+    tasks = task_query.all()
     for task in tasks:
         task.status = models.TaskStatus.pending.value
         task.attempts = 0
@@ -14629,7 +15200,7 @@ def retry_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     job.updated_at = now
     _sync_shadow_run_status(db, job)
     db.commit()
-    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job.id).first()
+    plan = _active_plan_record_for_job(db, job, job_id=job.id)
     if plan is not None:
         _dispatch_ready_work_for_job(job.id, plan.id, None)
     return _run_from_record(run_record, job_record=job)
@@ -14675,7 +15246,7 @@ def resume_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     job.updated_at = _utcnow()
     _sync_shadow_run_status(db, job)
     db.commit()
-    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+    plan = _active_plan_record_for_job(db, job, job_id=job_id)
     if plan:
         _dispatch_ready_work_for_job(job_id, plan.id, None)
     return _job_from_record(job)
@@ -14689,7 +15260,11 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     if models.JobStatus(job.status) not in {models.JobStatus.failed, models.JobStatus.canceled}:
         raise HTTPException(status_code=400, detail="Job is not retryable")
     now = _utcnow()
-    tasks = db.query(TaskRecord).filter(TaskRecord.job_id == job_id).all()
+    active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+    task_query = db.query(TaskRecord).filter(TaskRecord.job_id == job_id)
+    if active_plan is not None:
+        task_query = task_query.filter(TaskRecord.plan_id == active_plan.id)
+    tasks = task_query.all()
     for task in tasks:
         task.status = models.TaskStatus.pending.value
         task.attempts = 0
@@ -14699,7 +15274,7 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     job.updated_at = now
     _sync_shadow_run_status(db, job)
     db.commit()
-    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+    plan = _active_plan_record_for_job(db, job, job_id=job_id)
     if plan:
         _dispatch_ready_work_for_job(job_id, plan.id, None)
     return _job_from_record(job)
@@ -14711,14 +15286,14 @@ def retry_failed_tasks(job_id: str, db: Session = Depends(get_db)) -> models.Job
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     now = _utcnow()
-    failed_tasks = (
-        db.query(TaskRecord)
-        .filter(
-            TaskRecord.job_id == job_id,
-            TaskRecord.status == models.TaskStatus.failed.value,
-        )
-        .all()
+    active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+    failed_query = db.query(TaskRecord).filter(
+        TaskRecord.job_id == job_id,
+        TaskRecord.status == models.TaskStatus.failed.value,
     )
+    if active_plan is not None:
+        failed_query = failed_query.filter(TaskRecord.plan_id == active_plan.id)
+    failed_tasks = failed_query.all()
     if not failed_tasks:
         raise HTTPException(status_code=400, detail="No failed tasks to retry")
     for task in failed_tasks:
@@ -14730,7 +15305,7 @@ def retry_failed_tasks(job_id: str, db: Session = Depends(get_db)) -> models.Job
     job.updated_at = now
     _sync_shadow_run_status(db, job)
     db.commit()
-    plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+    plan = _active_plan_record_for_job(db, job, job_id=job_id)
     if plan:
         _dispatch_ready_work_for_job(job_id, plan.id, None)
     return _job_from_record(job)
@@ -14773,7 +15348,7 @@ def retry_task(
             )
     plan = db.query(PlanRecord).filter(PlanRecord.id == task.plan_id).first()
     if not plan:
-        plan = db.query(PlanRecord).filter(PlanRecord.job_id == job_id).first()
+        plan = _active_plan_record_for_job(db, job, job_id=job_id)
     if plan:
         _dispatch_ready_work_for_job(job_id, plan.id, None)
     return _job_from_record(job)
@@ -14784,31 +15359,13 @@ def replan_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
-    metadata["replan_count"] = int(metadata.get("replan_count", 0)) + 1
-    metadata["replan_reason"] = "manual"
-    job.metadata_json = metadata
-    job.status = models.JobStatus.planning.value
-    job.updated_at = _utcnow()
-    run_id = _durable_run_id(job, job.id)
-    db.query(TaskRecord).filter(TaskRecord.job_id == job_id).delete(synchronize_session=False)
-    db.query(PlanRecord).filter(PlanRecord.job_id == job_id).delete(synchronize_session=False)
-    db.query(RunStepRecord).filter(RunStepRecord.run_id == run_id).delete(synchronize_session=False)
-    db.query(ExecutionRequestRecord).filter(
-        ExecutionRequestRecord.run_id == run_id
-    ).delete(synchronize_session=False)
-    db.query(StepCheckpointRecord).filter(
-        StepCheckpointRecord.run_id == run_id
-    ).delete(synchronize_session=False)
-    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
-    if run_record is not None:
-        run_record.plan_id = None
-        run_record.run_spec_json = {}
-        run_record.status = job.status
-        run_record.updated_at = job.updated_at
-    db.commit()
-    _emit_event("job.created", _job_from_record(job).model_dump())
-    return _job_from_record(job)
+    if not _request_job_replan(db, job_id, reason="manual", require_adaptive=False):
+        metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        if isinstance(metadata.get("pending_replan"), Mapping):
+            return _job_from_record(job)
+        raise HTTPException(status_code=400, detail="replan_not_allowed")
+    refreshed = db.query(JobRecord).filter(JobRecord.id == job_id).first()
+    return _job_from_record(refreshed or job)
 
 
 @app.post("/jobs/{job_id}/clear")
@@ -15819,10 +16376,12 @@ def publish_workflow_definition(
     )
     next_version_number = 1 if latest is None else int(latest.version_number) + 1
     merged_metadata = dict(definition.metadata_json or {})
+    runtime_settings = _workflow_runtime_settings_from_draft(definition.draft_json or {})
     if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
         merged_metadata.update(dict(payload["metadata"]))
     merged_metadata["publish"] = publish_meta
     merged_metadata["run_spec"] = run_spec.model_dump(mode="json")
+    merged_metadata["workflow_runtime_settings"] = runtime_settings
     record = WorkflowVersionRecord(
         id=str(uuid.uuid4()),
         definition_id=definition.id,
@@ -15992,6 +16551,15 @@ def _run_workflow_version_internal(
     if compiled_plan is None:
         raise HTTPException(status_code=400, detail="workflow_version_plan_invalid")
     run_spec = _workflow_version_run_spec(version)
+    runtime_settings = _workflow_runtime_settings_from_version(version)
+    execution_mode = _coerce_planning_mode(
+        runtime_settings.get("execution_mode"),
+        allow_adaptive=ADAPTIVE_PLANNING_ENABLED,
+    )
+    adaptive_policy = _adaptive_policy_from_metadata(
+        {"adaptive_policy": runtime_settings.get("adaptive_policy", {})}
+    )
+    allowed_capability_ids = _workflow_allowed_capability_ids_from_run_spec(run_spec)
     use_postgres_scheduler = STUDIO_RUN_SCHEDULER_ENABLED and run_spec is not None
     trigger_context = (
         trigger.config_json.get("context_json")
@@ -16089,6 +16657,12 @@ def _run_workflow_version_internal(
         "render_path_mode": planner_contracts.RENDER_PATH_MODE_AUTO,
         "workflow_definition_id": definition.id,
         "workflow_version_id": version.id,
+        "planning_mode": execution_mode.value,
+        "adaptive_policy": adaptive_policy,
+        "workflow_runtime_settings": {
+            "execution_mode": execution_mode.value,
+            "adaptive_policy": adaptive_policy,
+        },
         "goal_intent_profile": (
             workflow_contracts.dump_goal_intent_profile(workflow_envelope.profile) or {}
         ),
@@ -16097,6 +16671,8 @@ def _run_workflow_version_internal(
         ),
         "goal_intent_graph": workflow_contracts.dump_intent_graph(workflow_envelope.graph),
     }
+    if execution_mode == models.PlanningMode.adaptive and allowed_capability_ids:
+        metadata_overrides["allowed_capability_ids"] = allowed_capability_ids
     if use_postgres_scheduler:
         metadata_overrides["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
     if trigger is not None:
@@ -16107,6 +16683,8 @@ def _run_workflow_version_internal(
             context_json=context_json,
             priority=priority,
             idempotency_key=idempotency_key or None,
+            planning_mode=execution_mode,
+            adaptive_policy=adaptive_policy,
         ),
         db,
         emit_job_created_event=False,
@@ -16119,7 +16697,11 @@ def _run_workflow_version_internal(
         emit_plan_created_event=not use_postgres_scheduler,
     )
     now = _utcnow()
-    run_metadata = {"source": source}
+    run_metadata = {
+        "source": source,
+        "execution_mode": execution_mode.value,
+        "adaptive_policy": adaptive_policy,
+    }
     if use_postgres_scheduler:
         run_metadata["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
     if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
@@ -16553,6 +17135,19 @@ def _create_plan_internal(
         )
     if job:
         _merge_task_intent_profiles_into_job_metadata(job, task_intent_profiles)
+        job_metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        pending_replan = job_metadata.get("pending_replan")
+        trigger_reason = (
+            str(pending_replan.get("reason") or "").strip()
+            if isinstance(pending_replan, Mapping)
+            else ""
+        ) or "initial_plan"
+        _mark_plan_revision_active(
+            job,
+            plan_record=record,
+            task_count=len(plan.tasks),
+            trigger_reason=trigger_reason,
+        )
         job.updated_at = now
         if not _delay_shadow_run_creation(
             job.metadata_json if isinstance(job.metadata_json, dict) else {}
