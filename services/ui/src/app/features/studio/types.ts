@@ -204,6 +204,17 @@ export type WorkflowRuntimeSettings = {
   };
 };
 
+export type AdaptiveReplanStatus = {
+  active_plan_id?: string | null;
+  pending_replan?: boolean;
+  pending_replan_reason?: string | null;
+  max_replans?: number;
+  replans_used?: number;
+  replans_remaining?: number;
+  can_manual_replan?: boolean;
+  replan_block_reason?: string | null;
+};
+
 export type StudioPersistedWorkflowDraft = {
   summary?: string;
   goal?: string;
@@ -414,6 +425,9 @@ export type WorkflowRun = {
   latest_task_name?: string | null;
   latest_task_error?: string | null;
   user_id?: string | null;
+  planning_mode?: "static" | "adaptive" | string;
+  current_revision_number?: number;
+  adaptive_status?: AdaptiveReplanStatus;
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -427,6 +441,9 @@ export type WorkflowRunResult = {
     id: string;
     goal: string;
     status: string;
+    planning_mode?: "static" | "adaptive" | string;
+    current_revision_number?: number;
+    adaptive_status?: AdaptiveReplanStatus;
     metadata?: Record<string, unknown>;
   };
   plan: {

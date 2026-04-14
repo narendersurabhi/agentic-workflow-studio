@@ -36,16 +36,16 @@ export default function StudioCompilePanel({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-100/68">
-            Compile Preview
+            Workflow Readiness Check
           </div>
-          <h3 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">Plan Output</h3>
+          <h3 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">Plan Preview</h3>
         </div>
         <button
           className="rounded-full border border-sky-300/30 bg-sky-400/14 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-50 transition hover:border-sky-200/50 hover:bg-sky-400/18 disabled:cursor-not-allowed disabled:opacity-60"
           onClick={onCompile}
           disabled={compileLoading}
         >
-          {compileLoading ? "Compiling..." : "Compile Draft"}
+          {compileLoading ? "Checking..." : "Check Workflow"}
         </button>
       </div>
 

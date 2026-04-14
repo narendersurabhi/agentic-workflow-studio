@@ -15,9 +15,9 @@ const bodyFont = Manrope({
 });
 
 export const metadata = {
-  title: "Agentic Workflow Studio",
+  title: "AI Workflow Workspace",
   description:
-    "A planner-executor workflow platform for authoring and executing AI-powered workflows through chat, compose, and a visual DAG editor."
+    "A workflow platform for designing, running, and monitoring AI-powered business automations."
 };
 
 export default function RootLayout({

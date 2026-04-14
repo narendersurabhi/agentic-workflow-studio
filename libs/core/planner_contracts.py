@@ -83,6 +83,7 @@ class PlanRequest(BaseModel):
     capabilities: list[PlanRequestCapability] = Field(default_factory=list)
     normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | None = None
     goal_intent_graph: workflow_contracts.IntentGraph | None = None
+    revision_context: models.PlanRevisionContext | None = None
     semantic_capability_hints: list[dict[str, Any]] = Field(default_factory=list)
     max_dependency_depth: int | None = None
     render_path_mode: str = RENDER_PATH_MODE_EXPLICIT
@@ -205,6 +206,137 @@ def _reference_has_default_path(value: Mapping[str, Any] | None) -> bool:
     if not isinstance(value, Mapping):
         return False
     return _non_empty_string(value.get("$default")) is not None
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _completed_step_contexts(raw: Any) -> list[models.CompletedStepContext]:
+    if not isinstance(raw, list):
+        return []
+    items: list[models.CompletedStepContext] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        task_id = _non_empty_string(entry.get("task_id"))
+        name = _non_empty_string(entry.get("name"))
+        if not task_id or not name:
+            continue
+        status = _non_empty_string(entry.get("status")) or models.TaskStatus.completed.value
+        outputs = dict(entry.get("outputs")) if isinstance(entry.get("outputs"), Mapping) else {}
+        result = dict(entry.get("result")) if isinstance(entry.get("result"), Mapping) else {}
+        items.append(
+            models.CompletedStepContext(
+                task_id=task_id,
+                name=name,
+                status=status,
+                outputs=outputs,
+                result=result,
+            )
+        )
+    return items
+
+
+def _failed_step_context(raw: Mapping[str, Any] | None) -> models.FailedStepContext | None:
+    if not isinstance(raw, Mapping):
+        return None
+    capability_id = _non_empty_string(raw.get("failing_capability"))
+    if capability_id is None:
+        failed_requests = raw.get("failed_tool_requests")
+        if isinstance(failed_requests, Sequence) and not isinstance(failed_requests, (str, bytes)):
+            for item in failed_requests:
+                capability_id = _non_empty_string(item)
+                if capability_id:
+                    break
+    if capability_id is None:
+        capability_id = _non_empty_string(raw.get("failing_tool"))
+    error_message = _non_empty_string(raw.get("failed_task_error")) or _non_empty_string(raw.get("error"))
+    retry_classification = _non_empty_string(raw.get("retry_classification"))
+    retryable = bool(raw.get("retryable"))
+    if not retryable and retry_classification == "retryable":
+        retryable = True
+    failed_step = models.FailedStepContext(
+        task_id=_non_empty_string(raw.get("failed_task_id")),
+        task_name=_non_empty_string(raw.get("failed_task_name")),
+        capability_id=capability_id,
+        task_intent=_non_empty_string(raw.get("failed_task_intent")),
+        error_message=error_message,
+        failure_category=_non_empty_string(raw.get("failure_category")),
+        retry_classification=retry_classification,
+        retryable=retryable,
+        attempt_number=_int_or_zero(raw.get("attempt_number")),
+        max_attempts=_int_or_zero(raw.get("max_attempts")),
+    )
+    if not any(
+        (
+            failed_step.task_id,
+            failed_step.task_name,
+            failed_step.capability_id,
+            failed_step.task_intent,
+            failed_step.error_message,
+            failed_step.failure_category,
+            failed_step.retry_classification,
+            failed_step.attempt_number,
+            failed_step.max_attempts,
+        )
+    ):
+        return None
+    return failed_step
+
+
+_REVISION_CONTEXT_EXCLUDED_KEYS = frozenset(
+    {
+        "reason",
+        "requested_at",
+        "planning_mode",
+        "prior_revision_number",
+        "prior_plan_id",
+        "completed_steps",
+        "failed_task_id",
+        "failed_task_name",
+        "failed_task_error",
+        "failed_task_intent",
+        "failure_category",
+        "retry_classification",
+        "retryable",
+        "attempt_number",
+        "max_attempts",
+    }
+)
+
+
+def parse_revision_context_from_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> models.PlanRevisionContext | None:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    raw_revision_context = normalized.get("revision_context")
+    if isinstance(raw_revision_context, Mapping):
+        try:
+            return models.PlanRevisionContext.model_validate(raw_revision_context)
+        except Exception:
+            pass
+    raw_context = normalized.get("pending_replan")
+    if not isinstance(raw_context, Mapping):
+        raw_context = normalized.get("last_replan_context")
+    if not isinstance(raw_context, Mapping):
+        return None
+    constraints = {
+        str(key): value
+        for key, value in raw_context.items()
+        if str(key) not in _REVISION_CONTEXT_EXCLUDED_KEYS
+    }
+    return models.PlanRevisionContext(
+        revision_number=_int_or_zero(raw_context.get("prior_revision_number")),
+        prior_plan_id=_non_empty_string(raw_context.get("prior_plan_id")),
+        trigger_reason=_non_empty_string(raw_context.get("reason")),
+        completed_steps=_completed_step_contexts(raw_context.get("completed_steps")),
+        failed_step=_failed_step_context(raw_context),
+        constraints=constraints,
+    )
 
 
 def validate_render_path_requirement(
@@ -350,6 +482,11 @@ def build_plan_request(
     job_metadata = job.metadata if isinstance(job.metadata, dict) else {}
     normalized_intent_envelope = normalized_intent_envelope_for_job(job)
     goal_intent_graph = None
+    revision_context = (
+        job.revision_context
+        if isinstance(getattr(job, "revision_context", None), models.PlanRevisionContext)
+        else parse_revision_context_from_metadata(job_metadata)
+    )
     if normalized_intent_envelope is not None and normalized_intent_envelope.graph.segments:
         goal_intent_graph = normalized_intent_envelope.graph
     if goal_intent_graph is None:
@@ -390,6 +527,7 @@ def build_plan_request(
         ],
         normalized_intent_envelope=normalized_intent_envelope,
         goal_intent_graph=goal_intent_graph,
+        revision_context=revision_context,
         semantic_capability_hints=[
             dict(item) for item in semantic_capability_hints or [] if isinstance(item, Mapping)
         ],
@@ -925,7 +1063,19 @@ def goal_intent_segments(request: PlanRequest) -> list[dict[str, Any]]:
     return [segment.model_dump(mode="json", exclude_none=True) for segment in graph.segments]
 
 
+def revision_context(
+    request: PlanRequest,
+) -> models.PlanRevisionContext | None:
+    return request.revision_context
+
+
 def intent_mismatch_recovery(request: PlanRequest) -> dict[str, Any] | None:
+    structured = revision_context(request)
+    if structured is not None and structured.trigger_reason == "intent_mismatch_auto_repair":
+        if isinstance(structured.constraints.get("intent_mismatch_recovery"), Mapping):
+            return dict(structured.constraints["intent_mismatch_recovery"])
+        if structured.constraints:
+            return dict(structured.constraints)
     raw = request.job_metadata.get("intent_mismatch_recovery")
     if not isinstance(raw, dict):
         return None

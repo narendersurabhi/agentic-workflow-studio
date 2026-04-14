@@ -140,6 +140,52 @@ def test_build_plan_request_supports_envelope_only_job_metadata() -> None:
     assert planner_contracts.goal_intent_sequence(request) == ["validate"]
 
 
+def test_build_plan_request_extracts_revision_context_from_metadata() -> None:
+    job = _job()
+    job.metadata = {
+        "planning_mode": "adaptive",
+        "revision_context": {
+            "revision_number": 2,
+            "prior_plan_id": "plan-2",
+            "trigger_reason": "retry_exhausted_auto_repair",
+            "completed_steps": [
+                {
+                    "task_id": "task-1",
+                    "name": "CollectInput",
+                    "status": "completed",
+                    "outputs": {"filesystem.workspace.list": {"entries": []}},
+                    "result": {"status": "completed"},
+                }
+            ],
+            "failed_step": {
+                "task_id": "task-2",
+                "task_name": "CallService",
+                "capability_id": "filesystem.workspace.list",
+                "task_intent": "io",
+                "error_message": "service unavailable: upstream temporary 503",
+                "failure_category": "transient",
+                "retry_classification": "retryable",
+                "retryable": True,
+                "attempt_number": 3,
+                "max_attempts": 3,
+            },
+            "remaining_goals": ["CallService"],
+            "constraints": {"retry_classification": "retryable"},
+            "budgets": {"max_replans": 2, "replans_used": 1, "replans_remaining": 1},
+        },
+    }
+
+    request = planner_contracts.build_plan_request(job, tools=[], capabilities={})
+
+    assert request.revision_context is not None
+    assert request.revision_context.revision_number == 2
+    assert request.revision_context.prior_plan_id == "plan-2"
+    assert request.revision_context.completed_steps[0].task_id == "task-1"
+    assert request.revision_context.failed_step is not None
+    assert request.revision_context.failed_step.task_name == "CallService"
+    assert request.revision_context.budgets["replans_remaining"] == 1
+
+
 def test_governance_context_uses_request_metadata() -> None:
     request = planner_contracts.build_plan_request(_job(), tools=[], capabilities={})
 

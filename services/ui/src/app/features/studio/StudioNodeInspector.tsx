@@ -219,7 +219,7 @@ export default function StudioNodeInspector({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/68">
-            Node Inspector
+            Step Inspector
           </div>
           <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">{selectedDagNode.taskName}</h2>
           <div className="mt-1 text-xs text-slate-400">{selectedDagNode.capabilityId}</div>

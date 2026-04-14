@@ -651,11 +651,11 @@ export function mapRunToWorkflowPromotion(
   if (workbenchModeForRun(debuggerData.run, normalizedRunSpec) !== "agent") {
     return {
       promotable: false,
-      reason: "Only agent runs can be promoted to Workflow Studio drafts.",
+      reason: "Only agent runs can be promoted to Workflow Builder drafts.",
       diagnostics: [
         {
           code: "unsupported_run_mode",
-          message: "Only agent runs can be promoted to Workflow Studio drafts.",
+          message: "Only agent runs can be promoted to Workflow Builder drafts.",
         },
       ],
     };
@@ -750,7 +750,7 @@ export function mapRunToWorkflowPromotion(
       promotable: false,
       reason: firstDiagnosticReason(
         diagnostics,
-        "This run cannot be promoted into a Workflow Studio draft."
+        "This run cannot be promoted into a Workflow Builder draft."
       ),
       diagnostics,
     };

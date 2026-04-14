@@ -108,7 +108,7 @@ export default function ComposerStepInspector({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-            Node Inspector
+            Step Inspector
           </div>
           <div className="text-xs font-semibold text-slate-800">{selectedDagNode.taskName}</div>
           <div className="text-[11px] text-slate-500">{selectedDagNode.capabilityId}</div>

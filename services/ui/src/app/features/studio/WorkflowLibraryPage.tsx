@@ -310,10 +310,10 @@ export default function WorkflowLibraryPage() {
   return (
     <AppShell
       activeScreen="workflows"
-      title="Workflows"
+      title="Saved Workflows"
       breadcrumbs={[
         { label: "Project", href: "/project" },
-        { label: "Workflows" },
+        { label: "Saved Workflows" },
       ]}
       actions={
         <>
@@ -321,13 +321,13 @@ export default function WorkflowLibraryPage() {
             href="/studio"
             className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
           >
-            Open Studio
+            Open Builder
           </Link>
           <Link
             href="/studio?mode=new"
             className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
           >
-            New Draft
+            New Workflow
           </Link>
         </>
       }
@@ -341,14 +341,13 @@ export default function WorkflowLibraryPage() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
-                    Workflow Library
+                    Saved Workflows
                   </div>
                   <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
                     Saved Workflows
                   </h2>
                   <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
-                    Review saved workflow drafts, inspect version history, create manual triggers,
-                    and jump back into Workflow Studio when you want to edit or restore a version.
+                    Manage reusable workflows, versions, triggers, and published automations.
                   </p>
                 </div>
 

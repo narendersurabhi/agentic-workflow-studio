@@ -5,19 +5,19 @@ import AppShell from "../components/AppShell";
 const projectCards = [
   {
     href: "/workflows",
-    eyebrow: "Workflow Library",
-    title: "Review Saved Drafts",
+    eyebrow: "Saved Workflows",
+    title: "Saved Workflows",
     description:
-      "Browse saved workflow definitions, inspect version history, create manual triggers, and jump back into Studio with a selected draft.",
+      "Manage reusable workflows, versions, triggers, and published automations.",
     cta: "Open Workflows",
   },
   {
     href: "/studio",
-    eyebrow: "Workflow Studio",
-    title: "Design the Workspace",
+    eyebrow: "Workflow Builder",
+    title: "Workflow Builder",
     description:
-      "Build and edit workflows on the full graph workspace, then move the floating utility panels around the stage while you iterate.",
-    cta: "Open Studio",
+      "Design the steps, decisions, tools, and AI actions your process needs.",
+    cta: "Open Builder",
   },
 ];
 
@@ -33,13 +33,13 @@ export default function ProjectPage() {
             href="/workflows"
             className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
           >
-            Workflows
+            Saved Workflows
           </Link>
           <Link
             href="/studio"
             className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
           >
-            Open Studio
+            Open Builder
           </Link>
         </>
       }
@@ -51,11 +51,10 @@ export default function ProjectPage() {
               Project
             </div>
             <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
-              Workflow Surfaces
+              Workflow Management
             </h2>
             <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
-              Move between the dedicated workflow views without losing the shared studio shell.
-              The library and the editor now live as separate first-class destinations.
+              Move between saved automations and the builder for designing business workflows.
             </p>
           </div>
 

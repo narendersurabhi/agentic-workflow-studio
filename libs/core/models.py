@@ -256,6 +256,39 @@ class EventEnvelope(BaseModel):
     payload: Dict[str, Any]
 
 
+class FailedStepContext(BaseModel):
+    task_id: Optional[str] = None
+    task_name: Optional[str] = None
+    capability_id: Optional[str] = None
+    task_intent: Optional[str] = None
+    error_message: Optional[str] = None
+    failure_category: Optional[str] = None
+    retry_classification: Optional[str] = None
+    retryable: bool = False
+    attempt_number: int = 0
+    max_attempts: int = 0
+
+
+class CompletedStepContext(BaseModel):
+    task_id: str
+    name: str
+    status: str
+    outputs: Dict[str, Any] = Field(default_factory=dict)
+    result: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanRevisionContext(BaseModel):
+    revision_number: int = 0
+    prior_plan_id: Optional[str] = None
+    trigger_reason: Optional[str] = None
+    completed_steps: List[CompletedStepContext] = Field(default_factory=list)
+    failed_step: Optional[FailedStepContext] = None
+    remaining_goals: List[str] = Field(default_factory=list)
+    constraints: Dict[str, Any] = Field(default_factory=dict)
+    budgets: Dict[str, Any] = Field(default_factory=dict)
+    human_feedback: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class Job(BaseModel):
     id: str
     run_id: Optional[str] = None
@@ -267,6 +300,8 @@ class Job(BaseModel):
     priority: int = 0
     planning_mode: PlanningMode = PlanningMode.static
     current_revision_number: int = 0
+    adaptive_status: "AdaptiveReplanStatus" = Field(default_factory=lambda: AdaptiveReplanStatus())
+    revision_context: Optional[PlanRevisionContext] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -278,6 +313,17 @@ class PlanRevisionSummary(BaseModel):
     superseded_at: Optional[datetime] = None
     active: bool = False
     task_count: int = 0
+
+
+class AdaptiveReplanStatus(BaseModel):
+    active_plan_id: Optional[str] = None
+    pending_replan: bool = False
+    pending_replan_reason: Optional[str] = None
+    max_replans: int = 0
+    replans_used: int = 0
+    replans_remaining: int = 0
+    can_manual_replan: bool = True
+    replan_block_reason: Optional[str] = None
 
 
 class Plan(BaseModel):
@@ -328,8 +374,10 @@ class JobDetails(BaseModel):
     task_results: Dict[str, Any] = Field(default_factory=dict)
     planning_mode: PlanningMode = PlanningMode.static
     current_revision_number: int = 0
+    adaptive_status: AdaptiveReplanStatus = Field(default_factory=AdaptiveReplanStatus)
     revision_history: List[PlanRevisionSummary] = Field(default_factory=list)
     last_replan_reason: Optional[str] = None
+    revision_context: Optional[PlanRevisionContext] = None
     recovery_metadata: Dict[str, Any] = Field(default_factory=dict)
     goal_intent_profile: Dict[str, Any] = Field(default_factory=dict)
     goal_intent_graph: Optional[Dict[str, Any]] = None
@@ -504,6 +552,7 @@ class Run(BaseModel):
     user_id: Optional[str] = None
     planning_mode: PlanningMode = PlanningMode.static
     current_revision_number: int = 0
+    adaptive_status: AdaptiveReplanStatus = Field(default_factory=AdaptiveReplanStatus)
     run_spec: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
@@ -917,6 +966,7 @@ class WorkflowRun(BaseModel):
     user_id: Optional[str] = None
     planning_mode: PlanningMode = PlanningMode.static
     current_revision_number: int = 0
+    adaptive_status: AdaptiveReplanStatus = Field(default_factory=AdaptiveReplanStatus)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime

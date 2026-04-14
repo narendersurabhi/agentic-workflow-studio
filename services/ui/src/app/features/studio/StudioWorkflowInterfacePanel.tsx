@@ -112,12 +112,12 @@ export default function StudioWorkflowInterfacePanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100/68">
-            Workflow Interface
+            Workflow Inputs
           </div>
-          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">Inputs, Variables, Outputs</h2>
+          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">Workflow Request Contract</h2>
           <p className="mt-1.5 max-w-3xl text-sm leading-5 text-slate-300/78">
-            Define the workflow contract once, then bind nodes to workflow-level inputs and variables
-            instead of depending on raw <code>context_json</code>.
+            Define the information this workflow needs once, then reuse it across the steps instead
+            of re-entering raw context.
           </p>
         </div>
       </div>

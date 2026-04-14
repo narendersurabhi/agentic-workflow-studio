@@ -271,10 +271,10 @@ export default function GlobalMemoryScreen() {
   return (
     <AppShell
       activeScreen="memory"
-      title="Global Memory"
+      title="User Context Memory"
       breadcrumbs={[
         { label: "Project", href: "/project" },
-        { label: "Memory" },
+        { label: "User Context Memory" },
       ]}
       actions={
         <>
@@ -297,16 +297,16 @@ export default function GlobalMemoryScreen() {
             onClick={saveEntry}
             disabled={saving}
           >
-            {saving ? "Saving..." : "Save Memory"}
+            {saving ? "Saving..." : "Save Context"}
           </button>
         </>
       }
     >
       <div className="space-y-5">
       <ScreenHeader
-        eyebrow="Global Memory"
-        title="Manage user-scoped memory."
-        description="View, create, update, and delete stable user memory entries without going through a workflow run."
+        eyebrow="User Context Memory"
+        title="User Context Memory"
+        description="Manage reusable user and project context so repeated details do not need to be re-entered."
         activeScreen="memory"
         theme="studio"
         compact
@@ -339,7 +339,7 @@ export default function GlobalMemoryScreen() {
               />
             </label>
             <label className="block">
-              <div className="text-sm font-medium text-white">Memory Type</div>
+              <div className="text-sm font-medium text-white">Context Type</div>
               <select
                 className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white shadow-sm outline-none transition focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/20"
                 value={selectedName}
@@ -418,7 +418,7 @@ export default function GlobalMemoryScreen() {
                 Editor
               </div>
               <h2 className="mt-1 text-[26px] font-semibold tracking-[-0.03em] text-white">
-                {selectedEntry ? "Update Memory Entry" : "Create Memory Entry"}
+                {selectedEntry ? "Update Context Entry" : "Create Context Entry"}
               </h2>
             </div>
             <button

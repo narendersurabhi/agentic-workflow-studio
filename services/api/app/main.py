@@ -171,7 +171,11 @@ ORCHESTRATOR_ENABLED = os.getenv("ORCHESTRATOR_ENABLED", "true").lower() == "tru
 POLICY_GATE_ENABLED = os.getenv("POLICY_GATE_ENABLED", "false").lower() == "true"
 JOB_RECOVERY_ENABLED = os.getenv("JOB_RECOVERY_ENABLED", "true").lower() == "true"
 LLM_PROVIDER_NAME = os.getenv("LLM_PROVIDER", "").strip()
-LLM_MODEL_NAME = os.getenv("OPENAI_MODEL", "").strip()
+LLM_MODEL_NAME = (
+    os.getenv("GEMINI_MODEL", "")
+    if LLM_PROVIDER_NAME.lower() == "gemini"
+    else os.getenv("OPENAI_MODEL", "")
+).strip()
 CHAT_ROUTER_MODEL = os.getenv("CHAT_ROUTER_MODEL", "").strip()
 CHAT_RESPONSE_MODEL = os.getenv("CHAT_RESPONSE_MODEL", "").strip()
 CHAT_PENDING_CORRECTION_MODEL = os.getenv("CHAT_PENDING_CORRECTION_MODEL", "").strip()
@@ -1062,6 +1066,8 @@ def _job_from_record(record: JobRecord) -> models.Job:
         priority=record.priority or 0,
         planning_mode=_planning_mode_from_metadata(metadata),
         current_revision_number=_current_revision_number_from_metadata(metadata),
+        adaptive_status=_adaptive_replan_status_from_metadata(metadata),
+        revision_context=planner_contracts.parse_revision_context_from_metadata(metadata),
         metadata=metadata,
     )
 
@@ -1117,6 +1123,59 @@ def _adaptive_policy_from_metadata(metadata: Mapping[str, Any] | None) -> dict[s
         max_replans = ADAPTIVE_REPLAN_MAX_DEFAULT
     policy["max_replans"] = max(0, min(10, max_replans))
     return policy
+
+
+def _replan_count_from_metadata(metadata: Mapping[str, Any] | None) -> int:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    try:
+        return max(0, int(normalized.get("replan_count", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _effective_max_replans_from_metadata(metadata: Mapping[str, Any] | None) -> int:
+    if _planning_mode_from_metadata(metadata) != models.PlanningMode.adaptive:
+        return 0
+    return max(0, int(_adaptive_policy_from_metadata(metadata).get("max_replans", 0) or 0))
+
+
+def _manual_replan_block_reason_from_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> str | None:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    if isinstance(normalized.get("pending_replan"), Mapping):
+        return "pending_replan"
+    if (
+        _planning_mode_from_metadata(normalized) == models.PlanningMode.adaptive
+        and _replan_count_from_metadata(normalized) >= _effective_max_replans_from_metadata(normalized)
+    ):
+        return "max_replans_exhausted"
+    return None
+
+
+def _adaptive_replan_status_from_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> models.AdaptiveReplanStatus:
+    normalized = metadata if isinstance(metadata, Mapping) else {}
+    pending_replan = normalized.get("pending_replan")
+    pending_reason = (
+        str(pending_replan.get("reason") or "").strip()
+        if isinstance(pending_replan, Mapping)
+        else ""
+    )
+    max_replans = _effective_max_replans_from_metadata(normalized)
+    replans_used = _replan_count_from_metadata(normalized)
+    replan_block_reason = _manual_replan_block_reason_from_metadata(normalized)
+    return models.AdaptiveReplanStatus(
+        active_plan_id=_active_plan_id_from_metadata(normalized),
+        pending_replan=isinstance(pending_replan, Mapping),
+        pending_replan_reason=pending_reason or None,
+        max_replans=max_replans,
+        replans_used=replans_used,
+        replans_remaining=max(0, max_replans - replans_used),
+        can_manual_replan=replan_block_reason is None,
+        replan_block_reason=replan_block_reason,
+    )
 
 
 def _parse_metadata_datetime(value: Any) -> datetime | None:
@@ -1201,6 +1260,148 @@ def _recovery_metadata_from_metadata(metadata: Mapping[str, Any] | None) -> dict
         if isinstance(value, Mapping):
             return dict(value)
     return {}
+
+
+def _remaining_goals_from_plan(
+    db: Session,
+    plan_record: PlanRecord | None,
+) -> list[str]:
+    if plan_record is None:
+        return []
+    tasks = (
+        db.query(TaskRecord)
+        .filter(TaskRecord.plan_id == plan_record.id)
+        .order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc())
+        .all()
+    )
+    remaining: list[str] = []
+    for task in tasks:
+        if task.status in {
+            models.TaskStatus.completed.value,
+            models.TaskStatus.accepted.value,
+            models.TaskStatus.canceled.value,
+        }:
+            continue
+        name = str(task.name or "").strip()
+        if name:
+            remaining.append(name)
+    return remaining
+
+
+def _build_failed_step_context(
+    context: Mapping[str, Any] | None,
+) -> models.FailedStepContext | None:
+    if not isinstance(context, Mapping):
+        return None
+    def _coerce_non_negative_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    capability_id = str(context.get("failing_capability") or "").strip() or None
+    if capability_id is None:
+        failed_tool_requests = context.get("failed_tool_requests")
+        if isinstance(failed_tool_requests, Sequence) and not isinstance(
+            failed_tool_requests, (str, bytes)
+        ):
+            for item in failed_tool_requests:
+                capability_id = str(item or "").strip() or None
+                if capability_id:
+                    break
+    if capability_id is None:
+        capability_id = str(context.get("failing_tool") or "").strip() or None
+    error_message = (
+        str(context.get("failed_task_error") or "").strip()
+        or str(context.get("error") or "").strip()
+        or None
+    )
+    classification = _classify_task_error(error_message)
+    retry_classification = str(context.get("retry_classification") or "").strip() or None
+    retryable = bool(context.get("retryable"))
+    if not retryable:
+        retryable = bool(classification.get("retryable"))
+    failed_step = models.FailedStepContext(
+        task_id=str(context.get("failed_task_id") or "").strip() or None,
+        task_name=str(context.get("failed_task_name") or "").strip() or None,
+        capability_id=capability_id,
+        task_intent=str(context.get("failed_task_intent") or "").strip() or None,
+        error_message=error_message,
+        failure_category=str(context.get("failure_category") or "").strip()
+        or str(classification.get("category") or "").strip()
+        or None,
+        retry_classification=retry_classification,
+        retryable=retryable,
+        attempt_number=_coerce_non_negative_int(context.get("attempt_number")),
+        max_attempts=_coerce_non_negative_int(context.get("max_attempts")),
+    )
+    if not any(
+        (
+            failed_step.task_id,
+            failed_step.task_name,
+            failed_step.capability_id,
+            failed_step.task_intent,
+            failed_step.error_message,
+            failed_step.failure_category,
+            failed_step.retry_classification,
+            failed_step.attempt_number,
+            failed_step.max_attempts,
+        )
+    ):
+        return None
+    return failed_step
+
+
+_REVISION_CONTEXT_CONSTRAINT_EXCLUDED_KEYS = frozenset(
+    {
+        "failed_task_id",
+        "failed_task_name",
+        "failed_task_error",
+        "failed_task_intent",
+        "failure_category",
+        "retry_classification",
+        "retryable",
+        "attempt_number",
+        "max_attempts",
+        "completed_steps",
+    }
+)
+
+
+def _build_plan_revision_context(
+    db: Session,
+    *,
+    metadata: Mapping[str, Any] | None,
+    active_plan: PlanRecord | None,
+    reason: str,
+    context: Mapping[str, Any] | None = None,
+) -> models.PlanRevisionContext:
+    normalized_metadata = metadata if isinstance(metadata, Mapping) else {}
+    normalized_context = dict(context) if isinstance(context, Mapping) else {}
+    adaptive_status = _adaptive_replan_status_from_metadata(normalized_metadata)
+    completed_steps = [
+        models.CompletedStepContext.model_validate(item)
+        for item in _completed_step_snapshots_for_plan(db, active_plan)
+        if isinstance(item, Mapping)
+    ]
+    return models.PlanRevisionContext(
+        revision_number=_current_revision_number_from_metadata(normalized_metadata),
+        prior_plan_id=active_plan.id if active_plan is not None else None,
+        trigger_reason=str(reason or "").strip() or None,
+        completed_steps=completed_steps,
+        failed_step=_build_failed_step_context(normalized_context),
+        remaining_goals=_remaining_goals_from_plan(db, active_plan),
+        constraints={
+            str(key): value
+            for key, value in normalized_context.items()
+            if str(key) not in _REVISION_CONTEXT_CONSTRAINT_EXCLUDED_KEYS
+        },
+        budgets={
+            "max_replans": adaptive_status.max_replans,
+            "replans_used": adaptive_status.replans_used,
+            "replans_remaining": adaptive_status.replans_remaining,
+        },
+    )
 
 
 def _active_plan_record_for_job(
@@ -1524,6 +1725,9 @@ def _workflow_run_from_record(
         current_revision_number=_current_revision_number_from_metadata(
             job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
         ),
+        adaptive_status=_adaptive_replan_status_from_metadata(
+            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+        ),
         metadata=record.metadata_json or {},
         created_at=record.created_at,
         updated_at=updated_at,
@@ -1621,6 +1825,9 @@ def _run_from_record(
             job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
         ),
         current_revision_number=_current_revision_number_from_metadata(
+            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+        ),
+        adaptive_status=_adaptive_replan_status_from_metadata(
             job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
         ),
         run_spec=record.run_spec_json or {},
@@ -10081,6 +10288,7 @@ def _intent_mismatch_repair_constraints(error: str, task: TaskRecord | None) -> 
         "detail": detail,
     }
     if isinstance(task, TaskRecord):
+        constraints["failed_task_id"] = task.id
         constraints["failed_task_name"] = task.name
         constraints["failed_task_intent"] = str(task.intent or "").strip()
         constraints["failed_tool_requests"] = list(task.tool_requests or [])
@@ -10218,12 +10426,7 @@ def _should_trigger_retry_exhausted_replan(
         return False
     if isinstance(metadata.get("pending_replan"), Mapping):
         return False
-    policy = _adaptive_policy_from_metadata(metadata)
-    try:
-        replan_count = int(metadata.get("replan_count", 0))
-    except (TypeError, ValueError):
-        replan_count = 0
-    if replan_count >= int(policy.get("max_replans", ADAPTIVE_REPLAN_MAX_DEFAULT)):
+    if _replan_count_from_metadata(metadata) >= _effective_max_replans_from_metadata(metadata):
         return False
     classification = _classify_task_error(error_message)
     if isinstance(error_message, str) and error_message.strip().lower() == "max_attempts_exceeded":
@@ -10256,15 +10459,25 @@ def _request_job_replan(
         return False
     if isinstance(metadata.get("pending_replan"), Mapping):
         return False
-    try:
-        current_count = int(metadata.get("replan_count", 0) or 0)
-    except (TypeError, ValueError):
-        current_count = 0
-    max_replans = int(_adaptive_policy_from_metadata(metadata).get("max_replans", 0))
-    if require_adaptive and current_count >= max_replans:
+    block_reason = _manual_replan_block_reason_from_metadata(metadata)
+    if planning_mode == models.PlanningMode.adaptive and block_reason is not None:
         return False
+    current_count = _replan_count_from_metadata(metadata)
     now = _utcnow()
     active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+    revision_context = _build_plan_revision_context(
+        db,
+        metadata=metadata,
+        active_plan=active_plan,
+        reason=reason,
+        context=context,
+    )
+    max_replans = _effective_max_replans_from_metadata(metadata)
+    revision_context.budgets = {
+        "max_replans": max_replans,
+        "replans_used": current_count + 1,
+        "replans_remaining": max(0, max_replans - (current_count + 1)),
+    }
     replan_context: dict[str, Any] = {
         "reason": reason,
         "requested_at": now.isoformat(),
@@ -10292,6 +10505,7 @@ def _request_job_replan(
     metadata["replan_reason"] = reason
     metadata["pending_replan"] = replan_context
     metadata["last_replan_context"] = replan_context
+    metadata["revision_context"] = revision_context.model_dump(mode="json", exclude_none=True)
     job.metadata_json = metadata
     job.status = models.JobStatus.planning.value
     job.updated_at = now
@@ -14701,6 +14915,7 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
     metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
     profiles = _coerce_task_intent_profiles(metadata)
     normalization_fields = _normalization_response_fields(metadata, goal=job.goal or "")
+    revision_context = planner_contracts.parse_revision_context_from_metadata(metadata)
     return models.JobDetails(
         job_id=job_id,
         run_id=_run_id_from_metadata(metadata, job_id),
@@ -14711,8 +14926,10 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
         task_results={task.id: _load_task_result(task.id) for task in tasks},
         planning_mode=_planning_mode_from_metadata(metadata),
         current_revision_number=_current_revision_number_from_metadata(metadata),
+        adaptive_status=_adaptive_replan_status_from_metadata(metadata),
         revision_history=_plan_revision_summaries_from_metadata(metadata),
         last_replan_reason=str(metadata.get("replan_reason") or "").strip() or None,
+        revision_context=revision_context,
         recovery_metadata=_recovery_metadata_from_metadata(metadata),
         goal_intent_profile=normalization_fields["goal_intent_profile"],
         goal_intent_graph=normalization_fields["goal_intent_graph"],
@@ -14748,6 +14965,7 @@ def get_job_debugger(
     )
     task_intent_profiles = _coerce_task_intent_profiles(metadata)
     normalization_fields = _normalization_response_fields(metadata, goal=job.goal or "")
+    revision_context = planner_contracts.parse_revision_context_from_metadata(metadata)
 
     timeline = _debugger_timeline_for_job(job_id, limit=limit, db=db)
     timeline_by_task: dict[str, list[dict[str, Any]]] = {}
@@ -14811,11 +15029,15 @@ def get_job_debugger(
         "plan_id": plan_record.id if plan_record else None,
         "planning_mode": _planning_mode_from_metadata(metadata).value,
         "current_revision_number": _current_revision_number_from_metadata(metadata),
+        "adaptive_status": _adaptive_replan_status_from_metadata(metadata).model_dump(mode="json"),
         "revision_history": [
             item.model_dump(mode="json")
             for item in _plan_revision_summaries_from_metadata(metadata)
         ],
         "last_replan_reason": str(metadata.get("replan_reason") or "").strip() or None,
+        "revision_context": revision_context.model_dump(mode="json", exclude_none=True)
+        if revision_context is not None
+        else None,
         "recovery_metadata": _recovery_metadata_from_metadata(metadata),
         "generated_at": _utcnow().isoformat(),
         "timeline_events_scanned": len(timeline),
@@ -14989,6 +15211,9 @@ def _run_debugger_payload(
             _step_checkpoint_from_record(checkpoint).model_dump(mode="json")
         )
     latest_failure = _latest_task_failures_for_jobs(db, [job.id]).get(job.id)
+    revision_context = planner_contracts.parse_revision_context_from_metadata(
+        job.metadata_json if isinstance(job.metadata_json, dict) else {}
+    )
     steps_payload: list[dict[str, Any]] = []
     for step_record in step_records:
         task_record = task_by_id.get(step_record.id)
@@ -15028,6 +15253,9 @@ def _run_debugger_payload(
         "current_revision_number": _current_revision_number_from_metadata(
             job.metadata_json if isinstance(job.metadata_json, dict) else {}
         ),
+        "adaptive_status": _adaptive_replan_status_from_metadata(
+            job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        ).model_dump(mode="json"),
         "revision_history": [
             item.model_dump(mode="json")
             for item in _plan_revision_summaries_from_metadata(
@@ -15040,6 +15268,9 @@ def _run_debugger_payload(
             else ""
         ).strip()
         or None,
+        "revision_context": revision_context.model_dump(mode="json", exclude_none=True)
+        if revision_context is not None
+        else None,
         "recovery_metadata": _recovery_metadata_from_metadata(
             job.metadata_json if isinstance(job.metadata_json, dict) else {}
         ),
@@ -15361,9 +15592,10 @@ def replan_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
         raise HTTPException(status_code=404, detail="Job not found")
     if not _request_job_replan(db, job_id, reason="manual", require_adaptive=False):
         metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        block_reason = _manual_replan_block_reason_from_metadata(metadata)
         if isinstance(metadata.get("pending_replan"), Mapping):
             return _job_from_record(job)
-        raise HTTPException(status_code=400, detail="replan_not_allowed")
+        raise HTTPException(status_code=400, detail=block_reason or "replan_not_allowed")
     refreshed = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     return _job_from_record(refreshed or job)
 

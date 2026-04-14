@@ -239,7 +239,7 @@ export default function RagKnowledgeScreen() {
         throw new Error(
           typeof (body as { detail?: string }).detail === "string"
             ? (body as { detail: string }).detail
-            : `Failed to load RAG documents (${response.status})`
+            : `Failed to load knowledge documents (${response.status})`
         );
       }
       const nextDocuments = (body as RagDocumentListResponse).documents;
@@ -252,7 +252,7 @@ export default function RagKnowledgeScreen() {
         setChunkResponse(null);
       }
     } catch (error) {
-      setDocumentsError(asErrorMessage(error, "Failed to load RAG documents."));
+      setDocumentsError(asErrorMessage(error, "Failed to load knowledge documents."));
     } finally {
       setDocumentsLoading(false);
     }
@@ -348,7 +348,7 @@ export default function RagKnowledgeScreen() {
     try {
       payload = buildIndexPayload();
     } catch (error) {
-      setFormError(asErrorMessage(error, "Invalid RAG indexing payload."));
+      setFormError(asErrorMessage(error, "Invalid knowledge indexing payload."));
       return;
     }
     setIndexing(true);
@@ -367,7 +367,7 @@ export default function RagKnowledgeScreen() {
         );
       }
       const result = body as Record<string, unknown>;
-      setNotice("Indexed content into RAG successfully.");
+      setNotice("Indexed content into the knowledge base successfully.");
       const resultDocumentId =
         typeof result.document_id === "string" && result.document_id
           ? result.document_id
@@ -489,10 +489,10 @@ export default function RagKnowledgeScreen() {
   return (
     <AppShell
       activeScreen="rag"
-      title="RAG Knowledge Base"
+      title="Knowledge Base"
       breadcrumbs={[
         { label: "Project", href: "/project" },
-        { label: "RAG" },
+        { label: "Knowledge Base" },
       ]}
       actions={
         <>
@@ -516,9 +516,9 @@ export default function RagKnowledgeScreen() {
       }
     >
         <ScreenHeader
-          eyebrow="Agentic Workflow Studio"
-          title="RAG Knowledge Base"
-          description="Index markdown, text, workspace files, and directories into the vector store. Browse indexed documents, inspect stored chunks, replace stale content, and remove documents cleanly."
+          eyebrow="Knowledge Base"
+          title="Knowledge Base"
+          description="Connect documents and workspace content so AI workflows can retrieve the right context."
           activeScreen="rag"
           theme="studio"
           compact
@@ -543,7 +543,7 @@ export default function RagKnowledgeScreen() {
               />
             </label>
             <label className={fieldGroupClassName}>
-              <span className={fieldLabelClassName}>Memory User ID</span>
+              <span className={fieldLabelClassName}>Context User ID</span>
               <input
                 value={userId}
                 onChange={(event) => setUserId(event.target.value)}

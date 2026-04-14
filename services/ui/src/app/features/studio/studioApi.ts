@@ -7,7 +7,7 @@
  * stay free of raw fetch logic and retry handling.
  */
 
-import type { CapabilityCatalog } from "./types";
+import type { AdaptiveReplanStatus, CapabilityCatalog } from "./types";
 
 const apiUrl =
   typeof process !== "undefined"
@@ -35,6 +35,9 @@ export type CanonicalRun = {
   latest_step_name?: string | null;
   latest_step_error?: string | null;
   user_id?: string | null;
+  planning_mode?: string;
+  current_revision_number?: number;
+  adaptive_status?: AdaptiveReplanStatus;
   run_spec: Record<string, unknown>;
   metadata: Record<string, unknown>;
   created_at: string;
@@ -95,6 +98,11 @@ export type WorkbenchDebuggerData = {
   run: CanonicalRun;
   job?: Record<string, unknown>;
   plan?: Record<string, unknown> | null;
+  planning_mode?: string;
+  current_revision_number?: number;
+  adaptive_status?: AdaptiveReplanStatus;
+  revision_history?: Record<string, unknown>[];
+  last_replan_reason?: string | null;
   generated_at?: string;
   steps: WorkbenchDebuggerStep[];
   execution_requests: Record<string, unknown>[];

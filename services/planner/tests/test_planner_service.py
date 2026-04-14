@@ -122,6 +122,32 @@ def test_build_llm_prompt_uses_request_contract() -> None:
                 ],
             )
         ],
+        revision_context=models.PlanRevisionContext(
+            revision_number=1,
+            prior_plan_id="plan-1",
+            trigger_reason="intent_mismatch_auto_repair",
+            completed_steps=[
+                models.CompletedStepContext(
+                    task_id="task-1",
+                    name="CollectInput",
+                    status="completed",
+                    outputs={"filesystem.workspace.list": {"entries": []}},
+                    result={"status": "completed"},
+                )
+            ],
+            failed_step=models.FailedStepContext(
+                task_id="task-2",
+                task_name="RenderDocx",
+                capability_id="document.docx.render",
+                task_intent="generate",
+                error_message=(
+                    "contract.intent_mismatch:task_intent_mismatch:"
+                    "document.docx.render:generate:allowed=render"
+                ),
+                failure_category="contract",
+            ),
+            constraints={"allowed_task_intents": ["render"]},
+        ),
         semantic_capability_hints=[{"capability_id": "document.docx.render"}],
     )
 
@@ -130,6 +156,9 @@ def test_build_llm_prompt_uses_request_contract() -> None:
     assert "Goal: Render a DOCX" in prompt
     assert "Preferred capability IDs: document.docx.render" in prompt
     assert "capability_requests" in prompt
+    assert "Plan revision context (source of truth for adaptive replanning)" in prompt
+    assert "Preserve useful completed_steps" in prompt
+    assert "allowed_task_intents" in prompt
     assert "Allowed tool names" not in prompt
     assert "Planner support tools (metadata-only): search_capabilities" in prompt
     assert "Standalone runtime tools" not in prompt

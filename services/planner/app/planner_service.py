@@ -67,19 +67,36 @@ def _json_fallback(value: object) -> object:
     return str(value)
 
 
-def _format_intent_mismatch_recovery_block(recovery: Mapping[str, Any] | None) -> str:
-    if not isinstance(recovery, Mapping) or not recovery:
+def _format_revision_context_block(
+    revision_context: models.PlanRevisionContext | None,
+) -> str:
+    if revision_context is None:
         return ""
-    payload = json.dumps(recovery, ensure_ascii=False, indent=2, default=_json_fallback)
-    return (
-        "Intent mismatch auto-repair context:\n"
-        f"{payload}\n"
-        "Recovery rules:\n"
-        "- Do not repeat the failing task/tool intent mismatch.\n"
-        "- Ensure each task.intent matches the selected tool/capability intent policy.\n"
-        "- If allowed_task_intents are provided, set task intent to one of them.\n"
-        "- Keep dependencies valid while minimally modifying the prior plan shape.\n"
+    payload = json.dumps(
+        revision_context.model_dump(mode="json", exclude_none=True),
+        ensure_ascii=False,
+        indent=2,
+        default=_json_fallback,
     )
+    guidance = [
+        "Plan revision context (source of truth for adaptive replanning):",
+        f"{payload}\n"
+        "Revision rules:",
+        "- Preserve useful completed_steps. Do not recreate finished work unless the revision context makes it necessary.",
+        "- Treat failed_step as the broken boundary for repair and avoid repeating the same failure mode.",
+        "- Prefer minimal change to the prior plan shape while keeping dependencies valid.",
+    ]
+    intent_mismatch_recovery = revision_context.constraints
+    if revision_context.trigger_reason == "intent_mismatch_auto_repair":
+        if isinstance(intent_mismatch_recovery.get("intent_mismatch_recovery"), Mapping):
+            intent_mismatch_recovery = dict(intent_mismatch_recovery["intent_mismatch_recovery"])
+        guidance.extend(
+            [
+                "- Ensure each task.intent matches the selected tool/capability intent policy.",
+                "- If allowed_task_intents are provided, set task intent to one of them.",
+            ]
+        )
+    return "\n".join(guidance) + "\n"
 
 
 def _intent_segment_contract_reason(detail: str) -> str:
@@ -279,8 +296,8 @@ def build_llm_prompt(request: planner_contracts.PlanRequest) -> str:
             f"{intent_graph_json}\n"
             "Prefer preserving this segment order in tasks/dependencies.\n"
         )
-    intent_repair_block = _format_intent_mismatch_recovery_block(
-        planner_contracts.intent_mismatch_recovery(request)
+    revision_context_block = _format_revision_context_block(
+        planner_contracts.revision_context(request)
     )
     semantic_capability_block = ""
     if request.semantic_capability_hints:
@@ -356,7 +373,7 @@ def build_llm_prompt(request: planner_contracts.PlanRequest) -> str:
         f"{depth_hint}"
         f"{normalized_intent_block}"
         f"{intent_graph_block}"
-        f"{intent_repair_block}"
+        f"{revision_context_block}"
         f"{semantic_capability_block}"
         f"Preferred capability IDs: {', '.join(canonical_capability_ids) or 'none'}\n"
         f"Capability catalog (JSON): {capability_catalog_json}\n"

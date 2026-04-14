@@ -155,6 +155,8 @@ def test_create_job():
     assert data["metadata"]["render_path_mode"] == "explicit"
     assert data["planning_mode"] == "static"
     assert data["current_revision_number"] == 0
+    assert data["adaptive_status"]["can_manual_replan"] is True
+    assert data["adaptive_status"]["max_replans"] == 0
 
 
 def test_create_job_accepts_adaptive_planning_contract(monkeypatch) -> None:
@@ -177,6 +179,9 @@ def test_create_job_accepts_adaptive_planning_contract(monkeypatch) -> None:
     assert body["current_revision_number"] == 0
     assert body["metadata"]["planning_mode"] == "adaptive"
     assert body["metadata"]["adaptive_policy"]["max_replans"] == 4
+    assert body["adaptive_status"]["max_replans"] == 4
+    assert body["adaptive_status"]["replans_remaining"] == 4
+    assert body["adaptive_status"]["can_manual_replan"] is True
 
 
 def test_intent_assessment_fallback_used_respects_mode(monkeypatch) -> None:
@@ -2187,12 +2192,229 @@ def test_contract_intent_mismatch_triggers_auto_replan_with_recovery_metadata():
     pending_replan = metadata.get("pending_replan")
     assert isinstance(pending_replan, dict)
     assert pending_replan.get("reason") == "intent_mismatch_auto_repair"
+    revision_context = body.get("revision_context")
+    assert isinstance(revision_context, dict)
+    assert revision_context["trigger_reason"] == "intent_mismatch_auto_repair"
+    assert revision_context["failed_step"]["task_id"] == task_id
+    assert revision_context["constraints"]["allowed_task_intents"] == ["io"]
 
     with SessionLocal() as db:
         assert db.query(PlanRecord).filter(PlanRecord.job_id == job_id).count() == 1
         task_after = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         assert task_after is not None
         assert task_after.status == models.TaskStatus.canceled.value
+
+
+def _create_adaptive_replan_failure_fixture(
+    *,
+    planning_mode: str = "adaptive",
+    max_replans: int = 2,
+) -> dict[str, str]:
+    now = _utcnow()
+    job_id = str(uuid.uuid4())
+    plan_id = str(uuid.uuid4())
+    completed_task_id = str(uuid.uuid4())
+    failed_task_id = str(uuid.uuid4())
+    metadata = {
+        "planning_mode": planning_mode,
+        "adaptive_policy": {"max_replans": max_replans},
+        "current_revision_number": 1,
+        "active_plan_id": plan_id,
+        "plan_revision_history": [
+            {
+                "revision_number": 1,
+                "plan_id": plan_id,
+                "trigger_reason": "initial_plan",
+                "created_at": now.isoformat(),
+                "superseded_at": None,
+                "active": True,
+                "task_count": 2,
+            }
+        ],
+    }
+    with SessionLocal() as db:
+        db.add(
+            JobRecord(
+                id=job_id,
+                goal="Recover a transient workflow failure",
+                context_json={},
+                status=models.JobStatus.running.value,
+                created_at=now,
+                updated_at=now,
+                priority=0,
+                metadata_json=metadata,
+            )
+        )
+        db.add(
+            PlanRecord(
+                id=plan_id,
+                job_id=job_id,
+                planner_version="test",
+                created_at=now,
+                tasks_summary="completed setup then call service",
+                dag_edges=[["CollectInput", "CallService"]],
+                policy_decision={},
+            )
+        )
+        db.add(
+            TaskRecord(
+                id=completed_task_id,
+                job_id=job_id,
+                plan_id=plan_id,
+                name="CollectInput",
+                description="Collect input",
+                instruction="Collect input",
+                acceptance_criteria=["input collected"],
+                expected_output_schema_ref="schemas/unknown",
+                status=models.TaskStatus.completed.value,
+                deps=[],
+                attempts=1,
+                max_attempts=3,
+                rework_count=0,
+                max_reworks=2,
+                assigned_to=None,
+                intent="io",
+                tool_requests=["filesystem.workspace.list"],
+                tool_inputs={"filesystem.workspace.list": {}},
+                created_at=now,
+                updated_at=now,
+                critic_required=False,
+            )
+        )
+        db.add(
+            TaskRecord(
+                id=failed_task_id,
+                job_id=job_id,
+                plan_id=plan_id,
+                name="CallService",
+                description="Call service",
+                instruction="Call the transient service",
+                acceptance_criteria=["service called"],
+                expected_output_schema_ref="schemas/unknown",
+                status=models.TaskStatus.running.value,
+                deps=["CollectInput"],
+                attempts=3,
+                max_attempts=3,
+                rework_count=0,
+                max_reworks=2,
+                assigned_to=None,
+                intent="io",
+                tool_requests=["filesystem.workspace.list"],
+                tool_inputs={"filesystem.workspace.list": {}},
+                created_at=now,
+                updated_at=now,
+                critic_required=False,
+            )
+        )
+        db.commit()
+
+    main._store_task_result(
+        completed_task_id,
+        {
+            "task_id": completed_task_id,
+            "status": models.TaskStatus.completed.value,
+            "outputs": {
+                "filesystem.workspace.list": {
+                    "entries": [{"path": "/shared/workspace/input.txt", "type": "file"}]
+                }
+            },
+        },
+    )
+    return {
+        "job_id": job_id,
+        "plan_id": plan_id,
+        "completed_task_id": completed_task_id,
+        "failed_task_id": failed_task_id,
+    }
+
+
+def test_retry_exhausted_recoverable_failure_triggers_auto_replan_with_completed_context():
+    fixture = _create_adaptive_replan_failure_fixture()
+
+    main._handle_task_failed(
+        {
+            "task_id": fixture["failed_task_id"],
+            "payload": {
+                "task_id": fixture["failed_task_id"],
+                "attempts": 3,
+                "error": "service unavailable: upstream temporary 503",
+            },
+        }
+    )
+
+    response = client.get(f"/jobs/{fixture['job_id']}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "planning"
+    assert body["planning_mode"] == "adaptive"
+    assert body["adaptive_status"]["pending_replan"] is True
+    assert body["adaptive_status"]["replans_used"] == 1
+    metadata = body["metadata"]
+    assert metadata["replan_reason"] == "retry_exhausted_auto_repair"
+    pending_replan = metadata["pending_replan"]
+    assert pending_replan["reason"] == "retry_exhausted_auto_repair"
+    assert pending_replan["prior_revision_number"] == 1
+    assert pending_replan["prior_plan_id"] == fixture["plan_id"]
+    assert pending_replan["failed_task_id"] == fixture["failed_task_id"]
+    assert pending_replan["attempt_number"] == 3
+    assert pending_replan["max_attempts"] == 3
+    assert pending_replan["retry_classification"] == "retryable"
+    completed_steps = pending_replan["completed_steps"]
+    assert len(completed_steps) == 1
+    assert completed_steps[0]["task_id"] == fixture["completed_task_id"]
+    assert completed_steps[0]["outputs"]["filesystem.workspace.list"]["entries"][0]["path"].endswith(
+        "input.txt"
+    )
+    revision_context = body.get("revision_context")
+    assert isinstance(revision_context, dict)
+    assert revision_context["trigger_reason"] == "retry_exhausted_auto_repair"
+    assert revision_context["failed_step"]["task_id"] == fixture["failed_task_id"]
+    assert revision_context["failed_step"]["retry_classification"] == "retryable"
+    assert revision_context["remaining_goals"] == ["CallService"]
+    assert revision_context["budgets"]["replans_used"] == 1
+
+    with SessionLocal() as db:
+        completed_task = db.query(TaskRecord).filter(TaskRecord.id == fixture["completed_task_id"]).first()
+        failed_task = db.query(TaskRecord).filter(TaskRecord.id == fixture["failed_task_id"]).first()
+        assert completed_task is not None
+        assert completed_task.status == models.TaskStatus.completed.value
+        assert failed_task is not None
+        assert failed_task.status == models.TaskStatus.canceled.value
+
+
+def test_adaptive_retry_exhausted_non_trigger_failures_do_not_replan():
+    for label, error_message in {
+        "policy": "policy denied: filesystem.workspace.list is blocked",
+        "clarification": "intent_clarification_required: output path is required",
+        "missing_input": "missing_input:path",
+        "workflow_inputs": "workflow_inputs_invalid: path is required",
+    }.items():
+        fixture = _create_adaptive_replan_failure_fixture()
+
+        main._handle_task_failed(
+            {
+                "task_id": fixture["failed_task_id"],
+                "payload": {
+                    "task_id": fixture["failed_task_id"],
+                    "attempts": 3,
+                    "error": error_message,
+                },
+            }
+        )
+
+        response = client.get(f"/jobs/{fixture['job_id']}")
+        assert response.status_code == 200, label
+        body = response.json()
+        assert body["status"] == "failed", label
+        assert body["planning_mode"] == "adaptive", label
+        assert body["adaptive_status"]["pending_replan"] is False, label
+        assert body["adaptive_status"]["replans_used"] == 0, label
+        assert "pending_replan" not in body["metadata"], label
+        assert "replan_reason" not in body["metadata"], label
+        with SessionLocal() as db:
+            failed_task = db.query(TaskRecord).filter(TaskRecord.id == fixture["failed_task_id"]).first()
+            assert failed_task is not None, label
+            assert failed_task.status == models.TaskStatus.failed.value, label
 
 
 def test_manual_replan_creates_plan_revision_history_without_deleting_prior_records(
@@ -2207,7 +2429,7 @@ def test_manual_replan_creates_plan_revision_history_without_deleting_prior_reco
             "context_json": {},
             "priority": 0,
             "planning_mode": "adaptive",
-            "adaptive_policy": {"max_replans": 3},
+            "adaptive_policy": {"max_replans": 1},
         },
     )
     assert create_job_response.status_code == 200
@@ -2265,6 +2487,15 @@ def test_manual_replan_creates_plan_revision_history_without_deleting_prior_reco
     replan_body = replan_response.json()
     assert replan_body["status"] == "planning"
     assert replan_body["metadata"]["pending_replan"]["reason"] == "manual"
+    assert replan_body["adaptive_status"]["pending_replan"] is True
+    assert replan_body["adaptive_status"]["max_replans"] == 1
+    assert replan_body["adaptive_status"]["replans_used"] == 1
+    assert replan_body["adaptive_status"]["replans_remaining"] == 0
+    assert replan_body["adaptive_status"]["can_manual_replan"] is False
+    assert replan_body["adaptive_status"]["replan_block_reason"] == "pending_replan"
+    assert replan_body["revision_context"]["trigger_reason"] == "manual"
+    assert replan_body["revision_context"]["completed_steps"][0]["name"] == "CollectInput"
+    assert replan_body["revision_context"]["budgets"]["replans_remaining"] == 0
 
     main._handle_plan_created(
         {
@@ -2296,7 +2527,15 @@ def test_manual_replan_creates_plan_revision_history_without_deleting_prior_reco
     details = details_response.json()
     assert details["planning_mode"] == "adaptive"
     assert details["current_revision_number"] == 2
+    assert details["adaptive_status"]["active_plan_id"] == details["plan"]["id"]
+    assert details["adaptive_status"]["max_replans"] == 1
+    assert details["adaptive_status"]["replans_used"] == 1
+    assert details["adaptive_status"]["replans_remaining"] == 0
+    assert details["adaptive_status"]["can_manual_replan"] is False
+    assert details["adaptive_status"]["replan_block_reason"] == "max_replans_exhausted"
     assert details["last_replan_reason"] == "manual"
+    assert details["revision_context"]["trigger_reason"] == "manual"
+    assert details["revision_context"]["completed_steps"][0]["name"] == "CollectInput"
     assert len(details["revision_history"]) == 2
     assert details["revision_history"][0]["active"] is False
     assert details["revision_history"][1]["active"] is True
@@ -2307,8 +2546,17 @@ def test_manual_replan_creates_plan_revision_history_without_deleting_prior_reco
     debugger = debugger_response.json()
     assert debugger["planning_mode"] == "adaptive"
     assert debugger["current_revision_number"] == 2
+    assert debugger["adaptive_status"]["active_plan_id"] == details["plan"]["id"]
+    assert debugger["adaptive_status"]["can_manual_replan"] is False
+    assert debugger["adaptive_status"]["replan_block_reason"] == "max_replans_exhausted"
     assert len(debugger["revision_history"]) == 2
     assert debugger["last_replan_reason"] == "manual"
+    assert debugger["revision_context"]["trigger_reason"] == "manual"
+    assert debugger["revision_context"]["completed_steps"][0]["name"] == "CollectInput"
+
+    blocked_replan_response = client.post(f"/jobs/{job_id}/replan")
+    assert blocked_replan_response.status_code == 400
+    assert blocked_replan_response.json()["detail"] == "max_replans_exhausted"
 
     with SessionLocal() as db:
         assert db.query(PlanRecord).filter(PlanRecord.job_id == job_id).count() == 2

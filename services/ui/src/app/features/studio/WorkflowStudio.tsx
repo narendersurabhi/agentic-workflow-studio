@@ -76,6 +76,7 @@ import {
 } from "./utils";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+const DEMO_DATA_ENABLED = process.env.NEXT_PUBLIC_DEMO_DATA === "true";
 const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
 const STUDIO_WORKSPACE_LAYOUT_VERSION = 3;
 const STUDIO_WORKSPACE_LAYOUT_STORAGE_KEY = `ape.studio.workspace_layout.v${STUDIO_WORKSPACE_LAYOUT_VERSION}`;
@@ -86,7 +87,7 @@ const DAG_CANVAS_ZOOM_MAX = 1.5;
 const DAG_CANVAS_ZOOM_STEP = 0.1;
 
 const initialStudioDraft = (): ComposerDraft => ({
-  summary: "Workflow Studio draft",
+  summary: "Workflow Builder draft",
   nodes: [],
   edges: [],
 });
@@ -804,7 +805,7 @@ const restorePersistedWorkflowDraft = (
       summary:
         typeof draft?.summary === "string" && draft.summary.trim()
           ? draft.summary
-          : fallbackGoal || "Workflow Studio draft",
+          : fallbackGoal || "Workflow Builder draft",
       nodes,
       edges: normalizeComposerEdges(nodes, normalizePersistedEdges(draft?.edges)),
     },
@@ -929,12 +930,12 @@ const STUDIO_PANEL_DISPLAY_ORDER: FloatingStudioPanelId[] = [
   "library",
 ];
 const STUDIO_PANEL_TITLES: Record<FloatingStudioPanelId, string> = {
-  palette: "Node Palette",
-  compile: "Compile Preview",
-  setup: "Workflow Setup",
-  interface: "Workflow Interface",
-  library: "Workflow Browser",
-  inspector: "Node Inspector",
+  palette: "Step Palette",
+  compile: "Readiness Check",
+  setup: "Workflow Settings",
+  interface: "Request Contract",
+  library: "Saved Workflows",
+  inspector: "Step Inspector",
 };
 const STUDIO_DOCK_ZONE_LABELS: Record<Exclude<StudioDockZone, "overlay" | "none">, string> = {
   left: "Dock Left",
@@ -1650,6 +1651,7 @@ export default function WorkflowStudio() {
   const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([]);
   const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] = useState(true);
   const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<string | null>(null);
+  const [demoDataDetected, setDemoDataDetected] = useState(DEMO_DATA_ENABLED);
   const [workflowVersions, setWorkflowVersions] = useState<WorkflowVersion[]>([]);
   const [workflowVersionsLoading, setWorkflowVersionsLoading] = useState(false);
   const [workflowVersionsError, setWorkflowVersionsError] = useState<string | null>(null);
@@ -1731,6 +1733,7 @@ export default function WorkflowStudio() {
   const requestedWorkflowDefinitionId = String(searchParams.get("definition") || "").trim();
   const requestedWorkflowVersionId = String(searchParams.get("version") || "").trim();
   const handledStudioRouteSelectionRef = useRef("");
+  const handledDemoWorkflowSelectionRef = useRef(false);
   const [workbenchSurfaceMounted, setWorkbenchSurfaceMounted] = useState(
     activeStudioSurface === "workbench"
   );
@@ -1871,6 +1874,9 @@ export default function WorkflowStudio() {
         `${apiUrl}/workflows/definitions${params.size > 0 ? `?${params.toString()}` : ""}`
       );
       const body = (await response.json()) as WorkflowDefinition[] | { detail?: unknown };
+      if (response.headers.get("x-demo-data") === "true") {
+        setDemoDataDetected(true);
+      }
       if (!response.ok) {
         const detail = (body as { detail?: unknown }).detail;
         throw new Error(
@@ -4012,7 +4018,7 @@ export default function WorkflowStudio() {
       : withWorkspaceUserContext(contextState.context);
     return {
       draft: {
-        summary: composerDraft.summary || "Workflow Studio draft",
+        summary: composerDraft.summary || "Workflow Builder draft",
         nodes: visualChainNodes.map((node) => ({
           id: node.id,
           taskName: node.taskName,
@@ -4045,7 +4051,7 @@ export default function WorkflowStudio() {
       : withWorkspaceUserContext(contextState.context);
     return {
       draft: {
-        summary: composerDraft.summary || "Workflow Studio draft",
+        summary: composerDraft.summary || "Workflow Builder draft",
         nodes: visualChainNodes.map((node) => ({
           id: node.id,
           taskName: node.taskName,
@@ -4077,7 +4083,7 @@ export default function WorkflowStudio() {
 
   const persistedWorkflowDraft = useMemo(
     () => ({
-      summary: composerDraft.summary || "Workflow Studio draft",
+      summary: composerDraft.summary || "Workflow Builder draft",
       goal: goal.trim() || undefined,
       contextJsonText: contextJson,
       nodePositions: composerNodePositions,
@@ -4167,6 +4173,37 @@ export default function WorkflowStudio() {
     resetStudioTransientState();
     setStudioNotice(`Opened saved draft ${definition.title}.`);
   };
+
+  useEffect(() => {
+    if (
+      !demoDataDetected ||
+      handledDemoWorkflowSelectionRef.current ||
+      workflowDefinitionsLoading ||
+      requestedWorkflowDefinitionId ||
+      requestedWorkflowVersionId ||
+      requestedStudioMode ||
+      savedWorkflowDefinition
+    ) {
+      return;
+    }
+    const demoDefinition =
+      workflowDefinitions.find((definition) => definition.metadata?.source === "demo_data") ||
+      (workflowDefinitions.length === 1 ? workflowDefinitions[0] : null);
+    if (!demoDefinition) {
+      return;
+    }
+    handledDemoWorkflowSelectionRef.current = true;
+    restoreWorkflowDefinition(demoDefinition);
+  }, [
+    demoDataDetected,
+    requestedStudioMode,
+    requestedWorkflowDefinitionId,
+    requestedWorkflowVersionId,
+    restoreWorkflowDefinition,
+    savedWorkflowDefinition,
+    workflowDefinitions,
+    workflowDefinitionsLoading,
+  ]);
 
   const restoreWorkflowVersion = async (version: WorkflowVersion) => {
     let definition = savedWorkflowDefinition;
@@ -4435,7 +4472,7 @@ export default function WorkflowStudio() {
           method: savedWorkflowDefinition ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            title: composerDraft.summary || goal.trim() || "Workflow Studio draft",
+            title: composerDraft.summary || goal.trim() || "Workflow Builder draft",
             goal: goal.trim(),
             context_json: withWorkspaceUserContext(contextState.context),
             draft: persistedWorkflowDraft,
@@ -5000,12 +5037,12 @@ export default function WorkflowStudio() {
             Draft
           </div>
           <div className="mt-1 line-clamp-2 text-sm text-slate-100">
-            {composerDraft.summary.trim() || "Workflow Studio draft"}
+            {composerDraft.summary.trim() || "Workflow Builder draft"}
           </div>
         </div>
         <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
-            Memory User
+            Context User
           </div>
           <div className="mt-1 truncate text-sm text-slate-100">
             {workspaceUserId.trim() || "Not set"}
@@ -5056,12 +5093,12 @@ export default function WorkflowStudio() {
                 onChange={(event) =>
                   setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
                 }
-                placeholder="Workflow Studio draft"
+                placeholder="Workflow Builder draft"
               />
             </label>
             <label className="block">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
-                Memory User ID
+                Context User ID
               </div>
               <input
                 className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
@@ -5204,9 +5241,9 @@ export default function WorkflowStudio() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-100/68">
-            Workflow Browser
+            Saved Workflows
           </div>
-          <h3 className="mt-1 text-2xl text-white">Studio Launcher</h3>
+          <h3 className="mt-1 text-2xl text-white">Workflow Launcher</h3>
         </div>
         <button
           className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-sky-300/40 hover:bg-white/[0.08]"
@@ -6328,12 +6365,12 @@ export default function WorkflowStudio() {
 
   const studioShellTitle =
     activeStudioSurface === "workbench"
-      ? "Studio Workbench"
-      : `Workflow Studio: ${composerDraft.summary.trim() || "Pipeline Alpha"}`;
+      ? "Process Flow Designer"
+      : `Workflow Builder: ${composerDraft.summary.trim() || "Pipeline Alpha"}`;
   const studioShellBreadcrumbLabel =
     activeStudioSurface === "workbench"
-      ? "Studio Workbench"
-      : composerDraft.summary.trim() || "Workflow Studio draft";
+      ? "Process Flow Designer"
+      : composerDraft.summary.trim() || "Workflow Builder draft";
 
   return (
     <AppShell
@@ -6358,7 +6395,7 @@ export default function WorkflowStudio() {
                 }`}
                 onClick={() => switchStudioSurface(surface)}
               >
-                {surface}
+                {surface === "workflow" ? "builder" : "canvas"}
               </button>
             ))}
           </div>
@@ -6368,7 +6405,7 @@ export default function WorkflowStudio() {
                 className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
                 onClick={startFreshStudioDraft}
               >
-                New Draft
+                New Workflow
               </button>
               <button
                 className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
@@ -6409,14 +6446,14 @@ export default function WorkflowStudio() {
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
-                      Studio Workspace
+                      Workflow Builder
                     </div>
                     <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
-                      Docked Workflow Workbench
+                      Process Flow Designer
                     </h2>
                     <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
-                      The graph stays centered while utility panels dock to stable left, right, and
-                      bottom zones. Float a panel only when you need a temporary overlay.
+                      Map business logic into clear steps, decisions, tools, and AI actions before
+                      running the automation.
                     </p>
                   </div>
 

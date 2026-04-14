@@ -71,9 +71,9 @@ export default function StudioWorkflowLibrary({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-100/68">
-            Workflow Library
+            Saved Workflows
           </div>
-          <h3 className="mt-1 font-display text-2xl text-white">Saved Drafts</h3>
+          <h3 className="mt-1 font-display text-2xl text-white">Workflow Versions</h3>
         </div>
         <button
           className="rounded-full border border-white/12 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-300/40 hover:bg-white/[0.08]"
@@ -84,8 +84,7 @@ export default function StudioWorkflowLibrary({
       </div>
 
       <p className="mt-3 text-sm leading-6 text-slate-300/82">
-        Reopen saved workflow definitions into the editor, then inspect or restore published
-        versions for the active draft.
+        Manage reusable workflow definitions, versions, triggers, and published automations.
       </p>
 
       <div className="mt-4">

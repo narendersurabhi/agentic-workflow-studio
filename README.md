@@ -623,9 +623,12 @@ Capability and planning notes:
 
 ## LLM Planner and Worker Modes
 
-Docker Compose runs planner and worker in OpenAI-backed LLM mode. Before `make up`, set the OpenAI values consumed by the Compose file:
+Docker Compose runs planner and worker in LLM mode. Before `make up`, choose one provider contract.
+
+For OpenAI:
 
 ```bash
+LLM_PROVIDER=openai
 OPENAI_MODEL=<model>
 OPENAI_API_KEY=<key>
 OPENAI_BASE_URL=https://api.openai.com
@@ -635,7 +638,31 @@ OPENAI_TIMEOUT_S=60
 OPENAI_MAX_RETRIES=2
 ```
 
-In Docker Compose, `planner` and `worker` modes are fixed by `docker-compose.yml` as `PLANNER_MODE=llm`, `WORKER_MODE=llm`, and `LLM_PROVIDER=openai`.
+For an OpenAI fine-tuned model, keep `LLM_PROVIDER=openai` and set `OPENAI_MODEL` to the fine-tuned model ID.
+
+For a fine-tuned or self-hosted model behind an OpenAI-compatible Chat Completions endpoint:
+
+```bash
+LLM_PROVIDER=openai_compatible
+OPENAI_MODEL=<model>
+OPENAI_API_KEY=<key>
+OPENAI_BASE_URL=<chat-completions-compatible-base-url>
+OPENAI_TIMEOUT_S=60
+OPENAI_MAX_RETRIES=2
+```
+
+For Gemini:
+
+```bash
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=<key>
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+OPENAI_TIMEOUT_S=60
+OPENAI_MAX_RETRIES=2
+```
+
+In Docker Compose, `planner` and `worker` modes are fixed by `docker-compose.yml` as `PLANNER_MODE=llm` and `WORKER_MODE=llm`; `LLM_PROVIDER` selects OpenAI, Gemini, or mock provider behavior.
 
 The API also supports narrower model knobs for chat and intent paths:
 

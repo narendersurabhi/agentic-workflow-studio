@@ -15,6 +15,7 @@ import { ThinkingState } from "./components/chat/ThinkingState";
 import FeedbackControl from "./components/feedback/FeedbackControl";
 import FeedbackInsightsPanel from "./components/feedback/FeedbackInsightsPanel";
 import StudioWorkbenchIcon from "./features/studio/StudioWorkbenchIcon";
+import type { AdaptiveReplanStatus } from "./features/studio/types";
 import {
   WorkflowNodeSvgIcon,
   resolveWorkflowNodeVisual,
@@ -33,6 +34,7 @@ import {
 } from "./lib/feedback";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+const DEMO_DATA_ENABLED = process.env.NEXT_PUBLIC_DEMO_DATA === "true";
 const jaegerUiUrl = (process.env.NEXT_PUBLIC_JAEGER_URL || "http://localhost:16686").replace(
   /\/+$/,
   ""
@@ -670,6 +672,7 @@ type Job = {
   priority: number;
   planning_mode?: string;
   current_revision_number?: number;
+  adaptive_status?: AdaptiveReplanStatus;
   metadata?: Record<string, unknown>;
   context_json?: Record<string, unknown>;
 };
@@ -775,6 +778,7 @@ type JobDetailsPayload = {
   task_results?: Record<string, TaskResult>;
   planning_mode?: string;
   current_revision_number?: number;
+  adaptive_status?: AdaptiveReplanStatus;
   revision_history?: PlanRevisionSummary[];
   last_replan_reason?: string | null;
   recovery_metadata?: Record<string, unknown>;
@@ -921,6 +925,7 @@ type JobDebuggerPayload = {
   plan_id?: string | null;
   planning_mode?: string;
   current_revision_number?: number;
+  adaptive_status?: AdaptiveReplanStatus;
   revision_history?: PlanRevisionSummary[];
   last_replan_reason?: string | null;
   recovery_metadata?: Record<string, unknown>;
@@ -1035,6 +1040,84 @@ type GuidedStarterTemplateId = "document_pipeline" | "runbook_pipeline";
 type CanvasPoint = {
   x: number;
   y: number;
+};
+
+const DEMO_WORKSPACE_GOAL =
+  "Create a client onboarding packet, retrieve source policies, draft implementation notes, render a PDF, and notify the delivery channel.";
+
+const DEMO_WORKSPACE_CONTEXT_JSON = JSON.stringify(
+  {
+    workspace_user_id: DEFAULT_WORKSPACE_USER_ID,
+    client: "Acme Health",
+    deliverable: "AI workflow implementation brief",
+    audience: "product owners and implementation leads",
+    output_path: "/shared/artifacts/acme-onboarding-brief.pdf",
+  },
+  null,
+  2
+);
+
+const DEMO_WORKSPACE_COMPOSER_DRAFT: ComposerDraft = {
+  summary: "Client onboarding automation",
+  nodes: [
+    {
+      id: "demo-clarify",
+      taskName: "Clarify business request",
+      capabilityId: "llm.text.generate",
+      outputPath: "requirements",
+      inputBindings: {
+        prompt: {
+          kind: "literal",
+          value: "Summarize the buyer requirement, acceptance criteria, and implementation constraints.",
+        },
+      },
+    },
+    {
+      id: "demo-retrieve",
+      taskName: "Retrieve delivery context",
+      capabilityId: "rag.search",
+      outputPath: "knowledge.matches",
+      inputBindings: {
+        query: { kind: "literal", value: "agentic AI workflow implementation checklist" },
+        top_k: { kind: "literal", value: "5" },
+      },
+    },
+    {
+      id: "demo-draft",
+      taskName: "Draft implementation brief",
+      capabilityId: "llm.text.generate",
+      outputPath: "brief.markdown",
+      inputBindings: {
+        prompt: { kind: "step_output", sourceNodeId: "demo-clarify", sourcePath: "requirements" },
+        system_prompt: {
+          kind: "literal",
+          value: "Write a product-owner implementation brief with milestones and handoff notes.",
+        },
+      },
+    },
+    {
+      id: "demo-render",
+      taskName: "Render delivery PDF",
+      capabilityId: "document.pdf.render",
+      outputPath: "pdf.path",
+      inputBindings: {
+        markdown: { kind: "step_output", sourceNodeId: "demo-draft", sourcePath: "brief.markdown" },
+        output_path: { kind: "context", path: "output_path" },
+      },
+    },
+  ],
+  edges: [
+    { fromNodeId: "demo-clarify", toNodeId: "demo-retrieve" },
+    { fromNodeId: "demo-retrieve", toNodeId: "demo-draft" },
+    { fromNodeId: "demo-draft", toNodeId: "demo-render" },
+  ],
+};
+
+const DEMO_WORKSPACE_COMPOSER_NODE_POSITIONS: Record<string, CanvasPoint> = {
+  "demo-clarify": { x: 40, y: 80 },
+  "demo-retrieve": { x: 300, y: 80 },
+  "demo-draft": { x: 560, y: 80 },
+  "demo-render": { x: 820, y: 80 },
 };
 
 type ComposerCompileDiagnostic = {
@@ -1931,6 +2014,13 @@ const truncate = (value: string, length: number) =>
   value.length > length ? `${value.slice(0, length - 3)}...` : value;
 const JOB_GOAL_PREVIEW_LENGTH = 280;
 
+const formatReplanBlockReason = (reason?: string | null) => {
+  if (reason === "pending_replan") return "a replan is already pending";
+  if (reason === "max_replans_exhausted") return "the replan limit has been reached";
+  if (!reason) return "manual replan is unavailable";
+  return reason.replaceAll("_", " ");
+};
+
 const buildDagLayout = (tasks: Task[]): DagLayout => {
   const nodeWidth = 180;
   const nodeHeight = 56;
@@ -2063,6 +2153,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [priority, setPriority] = useState(0);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [events, setEvents] = useState<EventEnvelope[]>([]);
+  const [demoDataDetected, setDemoDataDetected] = useState(DEMO_DATA_ENABLED);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedJobStatus, setSelectedJobStatus] = useState<string | null>(null);
   const [selectedJobPlanError, setSelectedJobPlanError] = useState<string | null>(null);
@@ -2316,7 +2407,41 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [hasSetInitialSidebar, setHasSetInitialSidebar] = useState(false);
   const chatTranscriptRef = useRef<HTMLDivElement | null>(null);
   const intentGraphRequestSeqRef = useRef(0);
+  const demoWorkspaceDraftAppliedRef = useRef(false);
+  const demoChatLoadedRef = useRef(false);
+  const demoJobDetailsLoadedRef = useRef(false);
   const devToolsEnabled = process.env.NEXT_PUBLIC_DEV_TOOLS === "true";
+
+  useEffect(() => {
+    if (
+      !demoDataDetected ||
+      !workspaceDraftHydrated ||
+      demoWorkspaceDraftAppliedRef.current ||
+      !(showWelcomeScreen || showComposeScreen || showChatScreen)
+    ) {
+      return;
+    }
+    const contextIsEmpty = !contextJson.trim() || contextJson.trim() === "{}";
+    if (goal.trim() || !contextIsEmpty || composerDraft.nodes.length > 0) {
+      return;
+    }
+    demoWorkspaceDraftAppliedRef.current = true;
+    setGoal(DEMO_WORKSPACE_GOAL);
+    setContextJson(DEMO_WORKSPACE_CONTEXT_JSON);
+    setPriority(1);
+    setComposerDraft(DEMO_WORKSPACE_COMPOSER_DRAFT);
+    setComposerNodePositions(DEMO_WORKSPACE_COMPOSER_NODE_POSITIONS);
+    setSelectedDagNodeId("demo-draft");
+  }, [
+    composerDraft.nodes.length,
+    contextJson,
+    demoDataDetected,
+    goal,
+    showChatScreen,
+    showComposeScreen,
+    showWelcomeScreen,
+    workspaceDraftHydrated,
+  ]);
 
   const visualChainNodes = composerDraft.nodes;
   const composerDraftEdges = composerDraft.edges;
@@ -2493,6 +2618,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const selectedJob = selectedJobId
     ? jobs.find((job) => job.id === selectedJobId) || null
     : null;
+  const selectedAdaptiveStatus = jobDebugger?.adaptive_status || selectedJob?.adaptive_status || null;
   const chatMessages = chatSession?.messages || [];
   const sidebarLayout = useMemo(() => {
     if (!isDesktop) {
@@ -2539,6 +2665,9 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const loadJobs = async () => {
     const response = await fetch(`${apiUrl}/jobs`);
     const data = await response.json();
+    if (response.headers.get("x-demo-data") === "true") {
+      setDemoDataDetected(true);
+    }
     setJobs(data);
   };
 
@@ -2555,6 +2684,9 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         return;
       }
       const data = (await response.json()) as CapabilityCatalog;
+      if (response.headers.get("x-demo-data") === "true") {
+        setDemoDataDetected(true);
+      }
       setCapabilityCatalog(data);
       setCapabilityError(null);
     } catch (error) {
@@ -6307,6 +6439,22 @@ const openTemplateModal = (template: Template) => {
     setDetailsLoading(false);
   };
 
+  useEffect(() => {
+    if (!demoDataDetected || demoChatLoadedRef.current || !showChatScreen || chatSession) {
+      return;
+    }
+    demoChatLoadedRef.current = true;
+    void loadChatSession("chat-demo-001");
+  }, [chatSession, demoDataDetected, showChatScreen]);
+
+  useEffect(() => {
+    if (!demoDataDetected || demoJobDetailsLoadedRef.current || selectedJobId || jobs.length === 0) {
+      return;
+    }
+    demoJobDetailsLoadedRef.current = true;
+    void loadJobDetails(jobs[0].id);
+  }, [demoDataDetected, jobs, selectedJobId]);
+
   const loadMemoryEntries = async (
     jobId: string,
     limits: Record<string, number> = memoryLimits
@@ -6702,8 +6850,22 @@ const openTemplateModal = (template: Template) => {
 
   const replanJob = async (jobId: string) => {
     const response = await fetch(`${apiUrl}/jobs/${jobId}/replan`, { method: "POST" });
-    if (response.ok) {
-      loadJobs();
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = await response.json();
+        if (payload && typeof payload === "object" && typeof payload.detail === "string") {
+          detail = payload.detail;
+        }
+      } catch {
+        detail = "";
+      }
+      setDebuggerActionNotice(`Replan unavailable: ${formatReplanBlockReason(detail)}.`);
+      return;
+    }
+    await loadJobs();
+    if (selectedJobIdRef.current === jobId) {
+      await loadJobDetails(jobId);
     }
   };
 
@@ -6721,55 +6883,55 @@ const openTemplateModal = (template: Template) => {
   const welcomeSurfaceCards = [
     {
       href: "/compose",
-      eyebrow: "Compose",
-      title: "Build from structured inputs.",
+      eyebrow: "Request Builder",
+      title: "Workflow Request Builder",
       description:
-        "Fill in goal, context, templates, and intent details before submitting a workflow.",
-      cta: "Open Compose",
+        "Capture the goal, context, files, and requirements before submitting work.",
+      cta: "Open Request Builder",
       badge: "inputs",
       accentClassName: "text-sky-100/72",
       marker: "C",
     },
     {
       href: "/chat",
-      eyebrow: "Chat",
-      title: "Talk to the operator.",
+      eyebrow: "Workflow Chat",
+      title: "Chat-to-Workflow Assistant",
       description:
-        "Stay conversational until a tool call or workflow is actually needed.",
-      cta: "Open Chat",
+        "Describe what you need in plain language and turn it into an executable workflow.",
+      cta: "Open Assistant",
       badge: "dialogue",
       accentClassName: "text-emerald-100/72",
       marker: "H",
     },
     {
       href: "/studio",
-      eyebrow: "Workflow Studio",
-      title: "Author DAGs visually.",
+      eyebrow: "Workflow Builder",
+      title: "Workflow Builder",
       description:
-        "Build explicit flow graphs with capabilities, control nodes, and compile preview.",
-      cta: "Open Studio",
+        "Design the steps, decisions, tools, and AI actions your process needs.",
+      cta: "Open Builder",
       badge: "graph",
       accentClassName: "text-amber-100/78",
       marker: "S",
     },
     {
       href: "/memory",
-      eyebrow: "Memory",
-      title: "Manage global user memory.",
+      eyebrow: "Context Memory",
+      title: "User Context Memory",
       description:
-        "Inspect and edit user-scoped memory entries like profile data and semantic facts.",
-      cta: "Open Memory",
+        "Manage reusable user and project context so repeated details do not need to be re-entered.",
+      cta: "Open Context Memory",
       badge: "state",
       accentClassName: "text-fuchsia-100/72",
       marker: "M",
     },
     {
       href: "/rag",
-      eyebrow: "RAG",
-      title: "Manage indexed knowledge.",
+      eyebrow: "Knowledge Base",
+      title: "Knowledge Base",
       description:
-        "Index markdown, text, and workspace content into the vector store, then inspect and update stored documents.",
-      cta: "Open RAG",
+        "Connect documents and workspace content so AI workflows use the right context.",
+      cta: "Open Knowledge Base",
       badge: "retrieval",
       accentClassName: "text-cyan-100/72",
       marker: "R",
@@ -6780,7 +6942,7 @@ const openTemplateModal = (template: Template) => {
     return (
       <AppShell
         activeScreen="home"
-        title="Agentic Workflow Studio"
+        title="AI Workflow Workspace"
         breadcrumbs={[{ label: "Welcome" }]}
         actions={
           <>
@@ -6794,13 +6956,13 @@ const openTemplateModal = (template: Template) => {
               href="/workflows"
               className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
             >
-              Workflows
+              Saved Workflows
             </Link>
             <Link
               href="/studio"
               className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
             >
-              Open Studio
+              Open Builder
             </Link>
           </>
         }
@@ -6809,33 +6971,32 @@ const openTemplateModal = (template: Template) => {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
-                Welcome
+                AI Workflow Workspace
               </div>
               <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
-                Choose Your Workspace Surface
+                Start, Manage, and Monitor AI Workflows
               </h2>
               <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
-                Compose, Chat, Workflow Studio, RAG, and Memory now share the same workspace
-                chrome. Pick the surface you want to work in without leaving the studio visual
-                language.
+                Launch workflow design, chat-assisted requests, saved workflows, knowledge, and
+                reusable context from one product workspace.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                compose
+                request builder
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                chat
+                workflow chat
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                studio
+                builder
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                memory
+                context
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                rag
+                knowledge
               </span>
             </div>
           </div>
@@ -6927,8 +7088,8 @@ const openTemplateModal = (template: Template) => {
   return (
     <AppShell
       activeScreen={showComposeScreen ? "compose" : "chat"}
-      title={showComposeScreen ? "Compose Workspace" : "Chat Workspace"}
-      breadcrumbs={[{ label: showComposeScreen ? "Compose" : "Chat" }]}
+      title={showComposeScreen ? "Workflow Request Builder" : "Chat-to-Workflow Assistant"}
+      breadcrumbs={[{ label: showComposeScreen ? "Request Builder" : "Workflow Chat" }]}
     >
     <div className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
       {!useStudioSurfaceTheme ? (
@@ -8596,12 +8757,12 @@ const openTemplateModal = (template: Template) => {
         }}
       >
         <ScreenHeader
-          eyebrow="Agentic Workflow Studio"
-          title={showComposeScreen ? "Compose Workflow Jobs" : "Chat Operator"}
+          eyebrow="AI Workflow Workspace"
+          title={showComposeScreen ? "Workflow Request Builder" : "Chat-to-Workflow Assistant"}
           description={
             showComposeScreen
-              ? "Craft a goal, attach context, validate the chain, and submit a workflow from a structured planner-executor workspace."
-              : "Stay conversational until the operator needs a tool call or workflow, then track the resulting jobs in the same workspace."
+              ? "Capture the goal, context, files, and requirements before submitting work."
+              : "Describe what you need in plain language, clarify missing details, and route the request into an executable workflow."
           }
           activeScreen={showComposeScreen ? "compose" : "chat"}
           theme={useStudioSurfaceTheme ? "studio" : "default"}
@@ -8665,7 +8826,7 @@ const openTemplateModal = (template: Template) => {
                       useStudioSurfaceTheme ? "text-sky-100/72" : "text-sky-100"
                     }`}
                   >
-                    Memory User ID
+                    Context User ID
                   </div>
                   <input
                     className={`mt-2 w-full rounded-2xl px-3 py-2 text-sm outline-none transition ${
@@ -8692,9 +8853,9 @@ const openTemplateModal = (template: Template) => {
               {showComposeScreen ? (
               <div className={composeModePrimarySectionClassName}>
                 <div className="flex items-center justify-between">
-                  <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${showComposeScreen ? "text-white" : ""}`}>Compose Job</h2>
+                  <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${showComposeScreen ? "text-white" : ""}`}>Workflow Request</h2>
                   <span className={`text-xs ${showComposeScreen ? "text-slate-300/68" : "text-slate-500"}`}>
-                    Live orchestration
+                    Ready to submit
                   </span>
                 </div>
                 <div
@@ -9417,9 +9578,9 @@ const openTemplateModal = (template: Template) => {
               {showChatScreen ? (
               <div className={studioSurfacePrimarySectionClassName}>
                 <div>
-                  <h2 className="text-[22px] font-semibold tracking-[-0.03em] text-white">Chat Operator</h2>
+                  <h2 className="text-[22px] font-semibold tracking-[-0.03em] text-white">Chat-to-Workflow Assistant</h2>
                   <p className="mt-1 text-xs text-slate-300/78">
-                    Chat submits normal jobs through the existing planner and worker pipeline.
+                    Chat turns plain-language requests into workflow-backed jobs when execution is needed.
                   </p>
                 </div>
                 <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
@@ -9679,6 +9840,15 @@ const openTemplateModal = (template: Template) => {
                       Planning: {(job.planning_mode || "static").toUpperCase()} • Revision{" "}
                       {job.current_revision_number || 0}
                     </div>
+                    {job.adaptive_status && (job.planning_mode || "static") === "adaptive" ? (
+                      <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                        Replans: {job.adaptive_status.replans_used ?? 0}/
+                        {job.adaptive_status.max_replans ?? 0}
+                        {job.adaptive_status.replan_block_reason
+                          ? ` • ${formatReplanBlockReason(job.adaptive_status.replan_block_reason)}`
+                          : ""}
+                      </div>
+                    ) : null}
                     {(() => {
                       const provider =
                         typeof job.metadata?.llm_provider === "string"
@@ -9737,7 +9907,15 @@ const openTemplateModal = (template: Template) => {
                     Retry failed
                   </button>
                   <button
-                    className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}
+                    className={`rounded-full px-3 py-1 transition disabled:cursor-not-allowed disabled:opacity-50 ${studioSurfaceButtonClassName}`}
+                    disabled={job.adaptive_status?.can_manual_replan === false}
+                    title={
+                      job.adaptive_status?.can_manual_replan === false
+                        ? `Replan unavailable: ${formatReplanBlockReason(
+                            job.adaptive_status.replan_block_reason
+                          )}.`
+                        : "Queue manual replan"
+                    }
                     onClick={() => replanJob(job.id)}
                   >
                     Replan
@@ -9819,6 +9997,18 @@ const openTemplateModal = (template: Template) => {
                 {" • "}
                 Revision {jobDebugger?.current_revision_number || selectedJob?.current_revision_number || 0}
               </div>
+              {selectedAdaptiveStatus &&
+              (jobDebugger?.planning_mode || selectedJob?.planning_mode || "static") === "adaptive" ? (
+                <div className="mt-2 text-xs text-slate-600">
+                  Replans: {selectedAdaptiveStatus.replans_used ?? 0}/
+                  {selectedAdaptiveStatus.max_replans ?? 0}
+                  {selectedAdaptiveStatus.replan_block_reason
+                    ? ` • ${formatReplanBlockReason(selectedAdaptiveStatus.replan_block_reason)}`
+                    : selectedAdaptiveStatus.can_manual_replan === false
+                      ? " • manual replan unavailable"
+                      : ""}
+                </div>
+              ) : null}
               {(jobDebugger?.last_replan_reason ||
                 (selectedJob?.metadata &&
                   typeof selectedJob.metadata.replan_reason === "string" &&
@@ -10077,6 +10267,20 @@ const openTemplateModal = (template: Template) => {
                             {" • "}
                             <span className="font-semibold text-slate-700">Last replan:</span>{" "}
                             {jobDebugger.last_replan_reason}
+                          </>
+                        ) : null}
+                        {jobDebugger.adaptive_status &&
+                        (jobDebugger.planning_mode || "static") === "adaptive" ? (
+                          <>
+                            {" • "}
+                            <span className="font-semibold text-slate-700">Replans:</span>{" "}
+                            {jobDebugger.adaptive_status.replans_used ?? 0}/
+                            {jobDebugger.adaptive_status.max_replans ?? 0}
+                            {jobDebugger.adaptive_status.replan_block_reason
+                              ? ` (${formatReplanBlockReason(
+                                  jobDebugger.adaptive_status.replan_block_reason
+                                )})`
+                              : ""}
                           </>
                         ) : null}
                       </div>
@@ -10606,7 +10810,7 @@ const openTemplateModal = (template: Template) => {
               <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-sm font-semibold text-slate-800">Memory</div>
+                    <div className="text-sm font-semibold text-slate-800">Context Memory</div>
                     <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
                       Job Entries
                     </div>
@@ -10694,7 +10898,7 @@ const openTemplateModal = (template: Template) => {
                 ) : showMemory ? (
                   <div className="mt-4 space-y-3">
                     <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                      <div className="text-sm font-semibold text-slate-900">Semantic Memory</div>
+                      <div className="text-sm font-semibold text-slate-900">Semantic Context</div>
                       <div className="mt-1 text-xs text-slate-500">
                         Distilled facts for lookup and reasoning.
                       </div>
