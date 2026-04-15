@@ -2195,8 +2195,12 @@ def test_contract_intent_mismatch_triggers_auto_replan_with_recovery_metadata():
     revision_context = body.get("revision_context")
     assert isinstance(revision_context, dict)
     assert revision_context["trigger_reason"] == "intent_mismatch_auto_repair"
+    assert revision_context["selected_strategy"] == "switch_capability"
+    assert revision_context["strategy_reason"] == "contract_or_intent_mismatch"
     assert revision_context["failed_step"]["task_id"] == task_id
     assert revision_context["constraints"]["allowed_task_intents"] == ["io"]
+    assert body["adaptive_status"]["last_strategy"] == "switch_capability"
+    assert body["adaptive_status"]["last_strategy_reason"] == "contract_or_intent_mismatch"
 
     with SessionLocal() as db:
         assert db.query(PlanRecord).filter(PlanRecord.job_id == job_id).count() == 1
@@ -2368,10 +2372,14 @@ def test_retry_exhausted_recoverable_failure_triggers_auto_replan_with_completed
     revision_context = body.get("revision_context")
     assert isinstance(revision_context, dict)
     assert revision_context["trigger_reason"] == "retry_exhausted_auto_repair"
+    assert revision_context["selected_strategy"] == "patch_suffix"
+    assert revision_context["strategy_reason"] == "retry_budget_exhausted_with_reusable_prefix"
     assert revision_context["failed_step"]["task_id"] == fixture["failed_task_id"]
     assert revision_context["failed_step"]["retry_classification"] == "retryable"
     assert revision_context["remaining_goals"] == ["CallService"]
     assert revision_context["budgets"]["replans_used"] == 1
+    assert body["adaptive_status"]["last_strategy"] == "patch_suffix"
+    assert body["adaptive_status"]["last_strategy_reason"] == "retry_budget_exhausted_with_reusable_prefix"
 
     with SessionLocal() as db:
         completed_task = db.query(TaskRecord).filter(TaskRecord.id == fixture["completed_task_id"]).first()
@@ -2383,11 +2391,31 @@ def test_retry_exhausted_recoverable_failure_triggers_auto_replan_with_completed
 
 
 def test_adaptive_retry_exhausted_non_trigger_failures_do_not_replan():
-    for label, error_message in {
-        "policy": "policy denied: filesystem.workspace.list is blocked",
-        "clarification": "intent_clarification_required: output path is required",
-        "missing_input": "missing_input:path",
-        "workflow_inputs": "workflow_inputs_invalid: path is required",
+    for label, (
+        error_message,
+        expected_strategy,
+        expected_reason,
+    ) in {
+        "policy": (
+            "policy denied: filesystem.workspace.list is blocked",
+            "no_replan",
+            "policy_blocked",
+        ),
+        "clarification": (
+            "intent_clarification_required: output path is required",
+            "pause_for_human",
+            "missing_or_ambiguous_user_input",
+        ),
+        "missing_input": (
+            "missing_input:path",
+            "pause_for_human",
+            "missing_or_ambiguous_user_input",
+        ),
+        "workflow_inputs": (
+            "workflow_inputs_invalid: path is required",
+            "pause_for_human",
+            "missing_or_ambiguous_user_input",
+        ),
     }.items():
         fixture = _create_adaptive_replan_failure_fixture()
 
@@ -2409,6 +2437,8 @@ def test_adaptive_retry_exhausted_non_trigger_failures_do_not_replan():
         assert body["planning_mode"] == "adaptive", label
         assert body["adaptive_status"]["pending_replan"] is False, label
         assert body["adaptive_status"]["replans_used"] == 0, label
+        assert body["adaptive_status"]["last_strategy"] == expected_strategy, label
+        assert body["adaptive_status"]["last_strategy_reason"] == expected_reason, label
         assert "pending_replan" not in body["metadata"], label
         assert "replan_reason" not in body["metadata"], label
         with SessionLocal() as db:
@@ -2493,7 +2523,11 @@ def test_manual_replan_creates_plan_revision_history_without_deleting_prior_reco
     assert replan_body["adaptive_status"]["replans_remaining"] == 0
     assert replan_body["adaptive_status"]["can_manual_replan"] is False
     assert replan_body["adaptive_status"]["replan_block_reason"] == "pending_replan"
+    assert replan_body["adaptive_status"]["last_strategy"] == "full_replan"
+    assert replan_body["adaptive_status"]["last_strategy_reason"] == "manual_replan_requested"
     assert replan_body["revision_context"]["trigger_reason"] == "manual"
+    assert replan_body["revision_context"]["selected_strategy"] == "full_replan"
+    assert replan_body["revision_context"]["strategy_reason"] == "manual_replan_requested"
     assert replan_body["revision_context"]["completed_steps"][0]["name"] == "CollectInput"
     assert replan_body["revision_context"]["budgets"]["replans_remaining"] == 0
 
@@ -2533,8 +2567,11 @@ def test_manual_replan_creates_plan_revision_history_without_deleting_prior_reco
     assert details["adaptive_status"]["replans_remaining"] == 0
     assert details["adaptive_status"]["can_manual_replan"] is False
     assert details["adaptive_status"]["replan_block_reason"] == "max_replans_exhausted"
+    assert details["adaptive_status"]["last_strategy"] == "full_replan"
+    assert details["adaptive_status"]["last_strategy_reason"] == "manual_replan_requested"
     assert details["last_replan_reason"] == "manual"
     assert details["revision_context"]["trigger_reason"] == "manual"
+    assert details["revision_context"]["selected_strategy"] == "full_replan"
     assert details["revision_context"]["completed_steps"][0]["name"] == "CollectInput"
     assert len(details["revision_history"]) == 2
     assert details["revision_history"][0]["active"] is False
@@ -2549,9 +2586,12 @@ def test_manual_replan_creates_plan_revision_history_without_deleting_prior_reco
     assert debugger["adaptive_status"]["active_plan_id"] == details["plan"]["id"]
     assert debugger["adaptive_status"]["can_manual_replan"] is False
     assert debugger["adaptive_status"]["replan_block_reason"] == "max_replans_exhausted"
+    assert debugger["adaptive_status"]["last_strategy"] == "full_replan"
+    assert debugger["adaptive_status"]["last_strategy_reason"] == "manual_replan_requested"
     assert len(debugger["revision_history"]) == 2
     assert debugger["last_replan_reason"] == "manual"
     assert debugger["revision_context"]["trigger_reason"] == "manual"
+    assert debugger["revision_context"]["selected_strategy"] == "full_replan"
     assert debugger["revision_context"]["completed_steps"][0]["name"] == "CollectInput"
 
     blocked_replan_response = client.post(f"/jobs/{job_id}/replan")

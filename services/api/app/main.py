@@ -82,6 +82,7 @@ from . import (
     intent_service,
     memory_promotion_service,
     memory_store,
+    replan_controller,
 )
 
 core_logging.configure_logging("api")
@@ -1166,6 +1167,7 @@ def _adaptive_replan_status_from_metadata(
     max_replans = _effective_max_replans_from_metadata(normalized)
     replans_used = _replan_count_from_metadata(normalized)
     replan_block_reason = _manual_replan_block_reason_from_metadata(normalized)
+    strategy_decision = normalized.get("adaptive_strategy_decision")
     return models.AdaptiveReplanStatus(
         active_plan_id=_active_plan_id_from_metadata(normalized),
         pending_replan=isinstance(pending_replan, Mapping),
@@ -1175,6 +1177,16 @@ def _adaptive_replan_status_from_metadata(
         replans_remaining=max(0, max_replans - replans_used),
         can_manual_replan=replan_block_reason is None,
         replan_block_reason=replan_block_reason,
+        last_strategy=(
+            str(strategy_decision.get("selected_strategy") or "").strip() or None
+            if isinstance(strategy_decision, Mapping)
+            else None
+        ),
+        last_strategy_reason=(
+            str(strategy_decision.get("strategy_reason") or "").strip() or None
+            if isinstance(strategy_decision, Mapping)
+            else None
+        ),
     )
 
 
@@ -1260,6 +1272,38 @@ def _recovery_metadata_from_metadata(metadata: Mapping[str, Any] | None) -> dict
         if isinstance(value, Mapping):
             return dict(value)
     return {}
+
+
+def _adaptive_strategy_decision_payload(
+    decision: replan_controller.RecoveryDecision,
+    *,
+    decided_at: datetime | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "selected_strategy": decision.strategy.value,
+        "strategy_reason": decision.strategy_reason,
+    }
+    if isinstance(decided_at, datetime):
+        payload["decided_at"] = decided_at.isoformat()
+    if decision.replan_reason:
+        payload["replan_reason"] = decision.replan_reason
+    return payload
+
+
+def _store_adaptive_strategy_decision(
+    job: JobRecord | None,
+    decision: replan_controller.RecoveryDecision,
+    *,
+    decided_at: datetime,
+) -> dict[str, Any]:
+    metadata = dict(job.metadata_json) if job and isinstance(job.metadata_json, dict) else {}
+    metadata["adaptive_strategy_decision"] = _adaptive_strategy_decision_payload(
+        decision,
+        decided_at=decided_at,
+    )
+    if job is not None:
+        job.metadata_json = metadata
+    return metadata
 
 
 def _remaining_goals_from_plan(
@@ -1354,6 +1398,8 @@ def _build_failed_step_context(
 
 _REVISION_CONTEXT_CONSTRAINT_EXCLUDED_KEYS = frozenset(
     {
+        "selected_strategy",
+        "strategy_reason",
         "failed_task_id",
         "failed_task_name",
         "failed_task_error",
@@ -1375,6 +1421,8 @@ def _build_plan_revision_context(
     active_plan: PlanRecord | None,
     reason: str,
     context: Mapping[str, Any] | None = None,
+    selected_strategy: models.ReplanStrategy | None = None,
+    strategy_reason: str | None = None,
 ) -> models.PlanRevisionContext:
     normalized_metadata = metadata if isinstance(metadata, Mapping) else {}
     normalized_context = dict(context) if isinstance(context, Mapping) else {}
@@ -1388,6 +1436,8 @@ def _build_plan_revision_context(
         revision_number=_current_revision_number_from_metadata(normalized_metadata),
         prior_plan_id=active_plan.id if active_plan is not None else None,
         trigger_reason=str(reason or "").strip() or None,
+        selected_strategy=selected_strategy,
+        strategy_reason=str(strategy_reason or "").strip() or None,
         completed_steps=completed_steps,
         failed_step=_build_failed_step_context(normalized_context),
         remaining_goals=_remaining_goals_from_plan(db, active_plan),
@@ -10243,28 +10293,47 @@ def _handle_task_failed(envelope: dict) -> None:
                     capability=normalized_capability,
                     status="failed",
                 ).inc()
-        if isinstance(error, str) and (
-            "tool_intent_mismatch" in error or "contract.intent_mismatch" in error
+        metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+        error_message = error if isinstance(error, str) else None
+        classification = _classify_task_error(error_message)
+        mismatch = None
+        if isinstance(error_message, str) and (
+            "tool_intent_mismatch" in error_message or "contract.intent_mismatch" in error_message
         ):
-            mismatch = _intent_mismatch_repair_constraints(error, task)
-            replan_done = _replan_job_for_intent_mismatch(db, task.job_id, mismatch=mismatch)
-            if replan_done:
-                return
-        if _should_trigger_retry_exhausted_replan(job, task, payload, error if isinstance(error, str) else None):
+            mismatch = _intent_mismatch_repair_constraints(error_message, task)
+        retry_context = {
+            "failed_task_id": task.id,
+            "failed_task_name": task.name,
+            "failed_task_error": error_message,
+            "failed_task_intent": str(task.intent or "").strip() or None,
+            "failure_category": str(classification.get("category") or "").strip() or None,
+            "retry_classification": attempt.retry_classification,
+            "retryable": bool(classification.get("retryable")),
+            "attempt_number": attempt.attempt_number,
+            "max_attempts": int(task.max_attempts or 0),
+        }
+        decision = replan_controller.decide_task_failure_recovery(
+            planning_mode=_planning_mode_from_metadata(metadata),
+            has_pending_replan=isinstance(metadata.get("pending_replan"), Mapping),
+            replans_used=_replan_count_from_metadata(metadata),
+            max_replans=_effective_max_replans_from_metadata(metadata),
+            error_message=error_message,
+            classification=classification,
+            attempt_number=attempt.attempt_number,
+            max_attempts=int(task.max_attempts or 0),
+            intent_mismatch_context=mismatch,
+            retry_context=retry_context,
+        )
+        _store_adaptive_strategy_decision(job, decision, decided_at=now)
+        if decision.should_replan:
             replan_done = _request_job_replan(
                 db,
                 task.job_id,
-                reason="retry_exhausted_auto_repair",
-                context={
-                    "failed_task_id": task.id,
-                    "failed_task_name": task.name,
-                    "failed_task_error": error,
-                    "failed_task_intent": str(task.intent or "").strip() or None,
-                    "retry_classification": attempt.retry_classification,
-                    "attempt_number": attempt.attempt_number,
-                    "max_attempts": int(task.max_attempts or 0),
-                },
-                require_adaptive=True,
+                reason=str(decision.replan_reason or ""),
+                context=decision.context,
+                selected_strategy=decision.strategy,
+                strategy_reason=decision.strategy_reason,
+                require_adaptive=decision.require_adaptive,
             )
             if replan_done:
                 return
@@ -10448,6 +10517,8 @@ def _request_job_replan(
     *,
     reason: str,
     context: Mapping[str, Any] | None = None,
+    selected_strategy: models.ReplanStrategy | None = None,
+    strategy_reason: str | None = None,
     require_adaptive: bool = False,
 ) -> bool:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
@@ -10471,6 +10542,8 @@ def _request_job_replan(
         active_plan=active_plan,
         reason=reason,
         context=context,
+        selected_strategy=selected_strategy,
+        strategy_reason=strategy_reason,
     )
     max_replans = _effective_max_replans_from_metadata(metadata)
     revision_context.budgets = {
@@ -10486,6 +10559,10 @@ def _request_job_replan(
         "prior_plan_id": active_plan.id if active_plan is not None else None,
         "completed_steps": _completed_step_snapshots_for_plan(db, active_plan),
     }
+    if selected_strategy is not None:
+        replan_context["selected_strategy"] = selected_strategy.value
+    if isinstance(strategy_reason, str) and strategy_reason.strip():
+        replan_context["strategy_reason"] = strategy_reason.strip()
     if isinstance(context, Mapping):
         replan_context.update(dict(context))
     if reason == "intent_mismatch_auto_repair" and isinstance(context, Mapping):
@@ -10503,6 +10580,18 @@ def _request_job_replan(
     )
     metadata["replan_count"] = current_count + 1
     metadata["replan_reason"] = reason
+    if selected_strategy is not None:
+        metadata["adaptive_strategy_decision"] = _adaptive_strategy_decision_payload(
+            replan_controller.RecoveryDecision(
+                strategy=selected_strategy,
+                strategy_reason=str(strategy_reason or "").strip() or "replan_requested",
+                should_replan=True,
+                replan_reason=reason,
+                require_adaptive=require_adaptive,
+                context=dict(context) if isinstance(context, Mapping) else {},
+            ),
+            decided_at=now,
+        )
     metadata["pending_replan"] = replan_context
     metadata["last_replan_context"] = replan_context
     metadata["revision_context"] = revision_context.model_dump(mode="json", exclude_none=True)
@@ -10610,6 +10699,8 @@ def _replan_job_for_intent_mismatch(
         job_id,
         reason="intent_mismatch_auto_repair",
         context=mismatch_payload,
+        selected_strategy=models.ReplanStrategy.switch_capability,
+        strategy_reason="contract_or_intent_mismatch",
         require_adaptive=True,
     )
 
@@ -15590,7 +15681,16 @@ def replan_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if not _request_job_replan(db, job_id, reason="manual", require_adaptive=False):
+    decision = replan_controller.decide_manual_replan()
+    if not _request_job_replan(
+        db,
+        job_id,
+        reason=str(decision.replan_reason or "manual"),
+        context=decision.context,
+        selected_strategy=decision.strategy,
+        strategy_reason=decision.strategy_reason,
+        require_adaptive=decision.require_adaptive,
+    ):
         metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
         block_reason = _manual_replan_block_reason_from_metadata(metadata)
         if isinstance(metadata.get("pending_replan"), Mapping):

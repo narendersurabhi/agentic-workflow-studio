@@ -88,6 +88,15 @@ class PlanningMode(str, Enum):
     adaptive = "adaptive"
 
 
+class ReplanStrategy(str, Enum):
+    no_replan = "no_replan"
+    retry_same_step = "retry_same_step"
+    switch_capability = "switch_capability"
+    patch_suffix = "patch_suffix"
+    full_replan = "full_replan"
+    pause_for_human = "pause_for_human"
+
+
 class FeedbackTargetType(str, Enum):
     chat_message = "chat_message"
     intent_assessment = "intent_assessment"
@@ -281,6 +290,8 @@ class PlanRevisionContext(BaseModel):
     revision_number: int = 0
     prior_plan_id: Optional[str] = None
     trigger_reason: Optional[str] = None
+    selected_strategy: Optional[ReplanStrategy] = None
+    strategy_reason: Optional[str] = None
     completed_steps: List[CompletedStepContext] = Field(default_factory=list)
     failed_step: Optional[FailedStepContext] = None
     remaining_goals: List[str] = Field(default_factory=list)
@@ -324,6 +335,8 @@ class AdaptiveReplanStatus(BaseModel):
     replans_remaining: int = 0
     can_manual_replan: bool = True
     replan_block_reason: Optional[str] = None
+    last_strategy: Optional[ReplanStrategy] = None
+    last_strategy_reason: Optional[str] = None
 
 
 class Plan(BaseModel):
