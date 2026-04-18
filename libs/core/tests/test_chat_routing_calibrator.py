@@ -89,3 +89,68 @@ def test_train_model_and_calibrate_candidates_prefer_historically_positive_workf
         probability_by_candidate_id["workflow:release"]
         > probability_by_candidate_id["generic:submit_job"]
     )
+
+
+def test_calibrate_route_candidates_live_override_requires_threshold_and_margin() -> None:
+    model = chat_routing_calibrator.train_model(
+        [
+            {
+                "feedback_id": "fb-1",
+                "query": "Run release readiness workflow",
+                "route": "run_workflow",
+                "positive_candidate_id": "workflow:release",
+                "negative_candidate_ids": ["generic:submit_job"],
+                "top_k_candidates": ["workflow:release", "generic:submit_job"],
+                "execution_succeeded": True,
+            }
+        ],
+        epochs=140,
+        learning_rate=0.2,
+    )
+    candidates = [
+        {
+            "candidate_id": "generic:submit_job",
+            "candidate_type": "generic_path",
+            "route": "submit_job",
+            "score": 55.0,
+            "reason_codes": ["generic_execution_fallback"],
+            "metadata": {},
+        },
+        {
+            "candidate_id": "workflow:release",
+            "candidate_type": "workflow",
+            "route": "run_workflow",
+            "score": 40.0,
+            "reason_codes": ["workflow_token_overlap"],
+            "metadata": {},
+        },
+    ]
+
+    blocked = chat_routing_calibrator.calibrate_route_candidates(
+        candidates=candidates,
+        model=model,
+        live=True,
+        min_probability=0.99,
+        min_margin=0.5,
+        limit=5,
+    )
+    assert blocked["summary"]["mode"] == "shadow"
+    assert blocked["summary"]["live_override_used"] is False
+    assert blocked["summary"]["live_override_reason"] in {
+        "top_probability_below_threshold",
+        "top_margin_below_threshold",
+    }
+    assert blocked["candidates"][0]["candidate_id"] == "generic:submit_job"
+
+    applied = chat_routing_calibrator.calibrate_route_candidates(
+        candidates=candidates,
+        model=model,
+        live=True,
+        min_probability=0.55,
+        min_margin=0.01,
+        limit=5,
+    )
+    assert applied["summary"]["mode"] == "live"
+    assert applied["summary"]["live_override_used"] is True
+    assert applied["summary"]["live_override_reason"] == "applied"
+    assert applied["candidates"][0]["candidate_id"] == "workflow:release"

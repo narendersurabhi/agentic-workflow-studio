@@ -237,14 +237,15 @@ def calibrate_route_candidates(
     candidates: list[dict[str, Any]],
     model: dict[str, Any] | None = None,
     live: bool = False,
+    min_probability: float = 0.65,
+    min_margin: float = 0.08,
     limit: int | None = None,
 ) -> dict[str, Any]:
     if not candidates or model is None:
         return {"candidates": candidates[: max(1, limit or len(candidates))], "summary": {}}
 
     annotated: list[dict[str, Any]] = []
-    total = len(candidates)
-    for index, candidate in enumerate(candidates):
+    for candidate in candidates:
         candidate_id = _normalize_str(candidate.get("candidate_id") or candidate.get("id"))
         if not candidate_id:
             continue
@@ -292,6 +293,8 @@ def calibrate_route_candidates(
             _normalize_str(item.get("candidate_id")),
         ),
     )
+    base_top_k = [_normalize_str(item.get("candidate_id")) for item in annotated[:5]]
+    base_selected_candidate_id = base_top_k[0] if base_top_k else None
     shadow_top_k = [_normalize_str(item.get("candidate_id")) for item in shadow_sorted[:5]]
     shadow_selected_candidate_id = shadow_top_k[0] if shadow_top_k else None
     probability_by_id = {
@@ -301,7 +304,34 @@ def calibrate_route_candidates(
         for item in annotated
         if _normalize_str(item.get("candidate_id"))
     }
-    if not live:
+    shadow_selected_probability = (
+        float(probability_by_id.get(shadow_selected_candidate_id) or 0.0)
+        if shadow_selected_candidate_id
+        else 0.0
+    )
+    base_selected_probability = (
+        float(probability_by_id.get(base_selected_candidate_id) or 0.0)
+        if base_selected_candidate_id
+        else 0.0
+    )
+    second_probability = 0.0
+    if len(shadow_top_k) > 1:
+        second_probability = float(probability_by_id.get(shadow_top_k[1]) or 0.0)
+    live_override_used = False
+    live_override_reason = "live_disabled"
+    if live:
+        if shadow_selected_candidate_id is None:
+            live_override_reason = "no_shadow_candidate"
+        elif shadow_selected_candidate_id == base_selected_candidate_id:
+            live_override_reason = "same_as_deterministic"
+        elif shadow_selected_probability < min_probability:
+            live_override_reason = "top_probability_below_threshold"
+        elif (shadow_selected_probability - second_probability) < min_margin:
+            live_override_reason = "top_margin_below_threshold"
+        else:
+            live_override_used = True
+            live_override_reason = "applied"
+    if not live_override_used:
         shadow_rank_by_id = {
             _normalize_str(item.get("candidate_id")): index
             for index, item in enumerate(shadow_sorted)
@@ -312,14 +342,30 @@ def calibrate_route_candidates(
             metadata = dict(item.get("metadata") or {})
             metadata["shadow_rank"] = shadow_rank_by_id.get(candidate_id, len(annotated))
             item["metadata"] = metadata
-    output_candidates = shadow_sorted if live else annotated
+    output_candidates = shadow_sorted if live_override_used else annotated
     return {
         "candidates": output_candidates[: max(1, limit or len(output_candidates))],
         "summary": {
-            "mode": "live" if live else "shadow",
+            "mode": "live" if live_override_used else "shadow",
             "model_version": _normalize_str(model.get("model_version"))
             or "chat-routing-calibrator-v1",
+            "live_requested": live,
+            "live_override_used": live_override_used,
+            "live_override_reason": live_override_reason,
+            "base_selected_candidate_id": base_selected_candidate_id,
+            "base_selected_confidence": round(base_selected_probability, 6)
+            if base_selected_candidate_id
+            else None,
             "shadow_selected_candidate_id": shadow_selected_candidate_id,
+            "shadow_selected_confidence": round(shadow_selected_probability, 6)
+            if shadow_selected_candidate_id
+            else None,
+            "shadow_probability_margin": round(shadow_selected_probability - second_probability, 6)
+            if shadow_selected_candidate_id
+            else None,
+            "min_probability": round(float(min_probability), 6),
+            "min_margin": round(float(min_margin), 6),
+            "base_top_k_candidates": base_top_k,
             "shadow_top_k_candidates": shadow_top_k,
             "probability_by_candidate_id": {
                 candidate_id: round(probability, 6)

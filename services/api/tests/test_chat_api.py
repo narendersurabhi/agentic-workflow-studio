@@ -3208,6 +3208,14 @@ def test_build_chat_route_request_attaches_shadow_calibration_summary(monkeypatc
             )
         ],
     )
+    monkeypatch.setattr(
+        main.chat_routing_reranker,
+        "rerank_route_candidates",
+        lambda **kwargs: sorted(
+            kwargs["candidates"],
+            key=lambda candidate: -float(candidate.get("score") or 0.0),
+        ),
+    )
     model = main.chat_routing_calibrator.train_model(
         [
             {
@@ -3242,6 +3250,88 @@ def test_build_chat_route_request_attaches_shadow_calibration_summary(monkeypatc
         if candidate.candidate_type == main.chat_contracts.ChatRouteCandidateType.workflow
     ]
     assert workflow_candidates[0].metadata["calibration_probability"] > 0.5
+
+
+def test_build_chat_route_request_applies_live_calibration_override(monkeypatch) -> None:
+    monkeypatch.setenv("CHAT_ROUTING_CALIBRATOR_ENABLED", "true")
+    monkeypatch.setenv("CHAT_ROUTING_CALIBRATOR_LIVE", "true")
+    monkeypatch.setenv("CHAT_ROUTING_CALIBRATOR_MIN_PROBABILITY", "0.55")
+    monkeypatch.setenv("CHAT_ROUTING_CALIBRATOR_MIN_MARGIN", "0.01")
+    monkeypatch.setattr(main, "_chat_visible_capabilities", lambda: [])
+    monkeypatch.setattr(
+        main,
+        "_normalize_goal_intent",
+        lambda goal, **_kwargs: main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                confidence=0.92,
+                threshold=0.55,
+                risk_level="bounded_write",
+            ),
+            graph=main.workflow_contracts.IntentGraph(
+                segments=[main.workflow_contracts.IntentGraphSegment(id="s1", intent="generate")]
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "_retrieve_chat_workflow_candidates",
+        lambda **_kwargs: [
+            main.chat_contracts.ChatRouteCandidateDescriptor(
+                candidate_id="workflow:preferred",
+                candidate_type=main.chat_contracts.ChatRouteCandidateType.workflow,
+                family="workflow",
+                risk_tier="bounded_write",
+                preconditions=["published_workflow_available"],
+                input_keys=[],
+                cost_class=main.chat_contracts.ChatRouteCostClass.medium,
+                enabled=True,
+                score=41.0,
+                reason_codes=["workflow_token_overlap"],
+                description="Release readiness workflow",
+                route=main.chat_contracts.ChatRouteType.run_workflow,
+                metadata={"title": "Release readiness workflow", "version_id": "preferred"},
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        main.chat_routing_reranker,
+        "rerank_route_candidates",
+        lambda **kwargs: sorted(
+            kwargs["candidates"],
+            key=lambda candidate: -float(candidate.get("score") or 0.0),
+        ),
+    )
+    model = main.chat_routing_calibrator.train_model(
+        [
+            {
+                "feedback_id": "fb-1",
+                "query": "Run release readiness workflow",
+                "route": "run_workflow",
+                "positive_candidate_id": "workflow:preferred",
+                "negative_candidate_ids": ["generic:submit_job"],
+                "top_k_candidates": ["workflow:preferred", "generic:submit_job"],
+                "execution_succeeded": True,
+            }
+        ],
+        epochs=140,
+        learning_rate=0.2,
+    )
+    monkeypatch.setattr(main.chat_routing_calibrator, "load_model", lambda path=None: model)
+
+    route_request = main._build_chat_route_request(
+        content="Run release readiness workflow",
+        candidate_goal="Run release readiness workflow",
+        session_metadata={},
+        merged_context={},
+        messages=[],
+    )
+
+    calibration = route_request.routing_evidence.historical_success_features["calibration"]
+    assert calibration["mode"] == "live"
+    assert calibration["live_override_used"] is True
+    assert route_request.routing_evidence.retrieved_candidates[0].candidate_id == "workflow:preferred"
 
 
 def test_chat_turn_can_run_retrieved_workflow_candidate_without_explicit_reference(
@@ -3469,6 +3559,8 @@ def test_chat_turn_persists_routing_decision_metadata(monkeypatch) -> None:
         "generic:submit_job"
     ]
     assert body["assistant_message"]["metadata"]["routing_decision"]["calibration_mode"] == "shadow"
+    assert body["assistant_message"]["metadata"]["routing_decision"]["calibration_live_requested"] is False
+    assert body["assistant_message"]["metadata"]["routing_decision"]["calibration_live_override_used"] is False
     assert (
         body["assistant_message"]["metadata"]["routing_decision"]["shadow_selected_candidate_id"]
         == "workflow:preferred"

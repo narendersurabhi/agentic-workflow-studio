@@ -186,6 +186,9 @@ def _routing_decision_fields(
         "routing_execution_started": execution_started,
         "routing_execution_succeeded": execution_succeeded,
         "routing_calibration_mode": _non_empty_string(payload.get("calibration_mode")),
+        "routing_calibration_live_override_used": (
+            "yes" if bool(payload.get("calibration_live_override_used")) else "no"
+        ),
         "routing_shadow_candidate_changed": (
             "yes"
             if shadow_selected_candidate_id is not None
@@ -788,6 +791,7 @@ def _feedback_dimensions(item: models.Feedback) -> dict[str, Any]:
         "routing_execution_started",
         "routing_execution_succeeded",
         "routing_calibration_mode",
+        "routing_calibration_live_override_used",
         "routing_shadow_candidate_changed",
     ):
         if key not in normalized:

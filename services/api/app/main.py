@@ -5106,10 +5106,14 @@ def _calibrate_chat_route_candidates(
         return list(candidates), {}
     serialized = [candidate.model_dump(mode="json") for candidate in candidates]
     live = os.getenv("CHAT_ROUTING_CALIBRATOR_LIVE", "false").lower() == "true"
+    min_probability = float(os.getenv("CHAT_ROUTING_CALIBRATOR_MIN_PROBABILITY", "0.65") or 0.65)
+    min_margin = float(os.getenv("CHAT_ROUTING_CALIBRATOR_MIN_MARGIN", "0.08") or 0.08)
     calibrated = chat_routing_calibrator.calibrate_route_candidates(
         candidates=serialized,
         model=dict(model),
         live=live,
+        min_probability=max(0.0, min(1.0, min_probability)),
+        min_margin=max(0.0, min(1.0, min_margin)),
         limit=len(serialized),
     )
     calibrated_candidates: list[chat_contracts.ChatRouteCandidateDescriptor] = []
@@ -5121,7 +5125,6 @@ def _calibrate_chat_route_candidates(
         except Exception:  # noqa: BLE001
             continue
     summary = dict(calibrated.get("summary") or {})
-    summary["live_applied"] = live
     return calibrated_candidates or list(candidates), summary
 
 
@@ -5281,7 +5284,7 @@ def _build_chat_route_candidates(
         candidates=candidates,
     )
     candidates, calibration_summary = _calibrate_chat_route_candidates(candidates=candidates)
-    if not bool(calibration_summary.get("live_applied")):
+    if not bool(calibration_summary.get("live_override_used")):
         candidates.sort(
             key=lambda candidate: (
                 -float(candidate.score or 0.0),
@@ -6493,6 +6496,12 @@ def _normalize_chat_route(
             clarification_questions=clarification_questions,
             calibration_mode=str(calibration_features.get("mode") or "").strip() or None,
             calibration_model_version=str(calibration_features.get("model_version") or "").strip()
+            or None,
+            calibration_live_requested=bool(calibration_features.get("live_requested")),
+            calibration_live_override_used=bool(calibration_features.get("live_override_used")),
+            calibration_live_override_reason=str(
+                calibration_features.get("live_override_reason") or ""
+            ).strip()
             or None,
             shadow_selected_candidate_id=shadow_selected_candidate_id,
             shadow_top_k_candidates=[
