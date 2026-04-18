@@ -165,6 +165,7 @@ def _routing_decision_fields(
     missing_inputs = _normalize_string_list(payload.get("missing_inputs"))
     route = _non_empty_string(payload.get("route"))
     selected_candidate_id = _non_empty_string(payload.get("selected_candidate_id"))
+    shadow_selected_candidate_id = _non_empty_string(payload.get("shadow_selected_candidate_id"))
     fallback_used = "yes" if bool(payload.get("fallback_used")) else "no"
     execution_started = _routing_execution_started_state(assistant_action_type)
     execution_succeeded = _routing_execution_succeeded_state(
@@ -184,6 +185,13 @@ def _routing_decision_fields(
         "routing_fallback_reason": _non_empty_string(payload.get("fallback_reason")),
         "routing_execution_started": execution_started,
         "routing_execution_succeeded": execution_succeeded,
+        "routing_calibration_mode": _non_empty_string(payload.get("calibration_mode")),
+        "routing_shadow_candidate_changed": (
+            "yes"
+            if shadow_selected_candidate_id is not None
+            and shadow_selected_candidate_id != selected_candidate_id
+            else "no"
+        ),
     }
 
 
@@ -779,6 +787,8 @@ def _feedback_dimensions(item: models.Feedback) -> dict[str, Any]:
         "routing_fallback_reason",
         "routing_execution_started",
         "routing_execution_succeeded",
+        "routing_calibration_mode",
+        "routing_shadow_candidate_changed",
     ):
         if key not in normalized:
             normalized[key] = None

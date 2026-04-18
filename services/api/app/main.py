@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from libs.core import (
     capability_search,
     capability_registry,
+    chat_routing_calibrator,
     chat_routing_reranker,
     chat_contracts,
     document_store,
@@ -5092,6 +5093,38 @@ def _rerank_chat_route_candidates(
     return reranked_candidates or list(candidates)
 
 
+def _calibrate_chat_route_candidates(
+    *,
+    candidates: Sequence[chat_contracts.ChatRouteCandidateDescriptor],
+) -> tuple[list[chat_contracts.ChatRouteCandidateDescriptor], dict[str, Any]]:
+    if not candidates:
+        return [], {}
+    if os.getenv("CHAT_ROUTING_CALIBRATOR_ENABLED", "true").lower() != "true":
+        return list(candidates), {}
+    model = chat_routing_calibrator.load_model()
+    if not isinstance(model, Mapping):
+        return list(candidates), {}
+    serialized = [candidate.model_dump(mode="json") for candidate in candidates]
+    live = os.getenv("CHAT_ROUTING_CALIBRATOR_LIVE", "false").lower() == "true"
+    calibrated = chat_routing_calibrator.calibrate_route_candidates(
+        candidates=serialized,
+        model=dict(model),
+        live=live,
+        limit=len(serialized),
+    )
+    calibrated_candidates: list[chat_contracts.ChatRouteCandidateDescriptor] = []
+    for payload in calibrated.get("candidates", []):
+        try:
+            calibrated_candidates.append(
+                chat_contracts.ChatRouteCandidateDescriptor.model_validate(payload)
+            )
+        except Exception:  # noqa: BLE001
+            continue
+    summary = dict(calibrated.get("summary") or {})
+    summary["live_applied"] = live
+    return calibrated_candidates or list(candidates), summary
+
+
 def _build_chat_route_candidates(
     *,
     content: str,
@@ -5101,7 +5134,7 @@ def _build_chat_route_candidates(
     workflow_invocation: chat_service.ChatWorkflowInvocation | None,
     pending_clarification: bool,
     preferred_user_id: str | None = None,
-) -> list[chat_contracts.ChatRouteCandidateDescriptor]:
+) -> tuple[list[chat_contracts.ChatRouteCandidateDescriptor], dict[str, Any]]:
     candidates: list[chat_contracts.ChatRouteCandidateDescriptor] = []
     visible_capabilities = [
         (capability_id, spec)
@@ -5247,14 +5280,16 @@ def _build_chat_route_candidates(
         candidate_goal=candidate_goal,
         candidates=candidates,
     )
-    candidates.sort(
-        key=lambda candidate: (
-            -float(candidate.score or 0.0),
-            candidate.candidate_type.value,
-            candidate.candidate_id,
+    candidates, calibration_summary = _calibrate_chat_route_candidates(candidates=candidates)
+    if not bool(calibration_summary.get("live_applied")):
+        candidates.sort(
+            key=lambda candidate: (
+                -float(candidate.score or 0.0),
+                candidate.candidate_type.value,
+                candidate.candidate_id,
+            )
         )
-    )
-    return candidates
+    return candidates, calibration_summary
 
 
 def _build_chat_route_request(
@@ -5280,7 +5315,7 @@ def _build_chat_route_request(
         )
         for message in list(messages or [])[-6:]
     ]
-    candidates = _build_chat_route_candidates(
+    candidates, calibration_summary = _build_chat_route_candidates(
         content=content,
         candidate_goal=candidate_goal,
         heuristic=heuristic,
@@ -5395,7 +5430,9 @@ def _build_chat_route_request(
             workflow_target_available=workflow_invocation is not None and workflow_invocation.has_target(),
             pending_clarification=pending_clarification,
             missing_inputs=list(heuristic.missing_slots or []),
-            historical_success_features={},
+            historical_success_features=(
+                {"calibration": calibration_summary} if calibration_summary else {}
+            ),
             policy_filters_applied=[
                 "capability_allowlist:api",
                 "chat_direct_allowlist",
@@ -6240,6 +6277,11 @@ def _normalize_chat_route(
     reason_codes = list(decision.reason_codes or [])
     fallback_used = bool(decision.fallback_used)
     fallback_reason = str(decision.fallback_reason or "").strip() or None
+    calibration_features = (
+        dict(route_request.routing_evidence.historical_success_features.get("calibration"))
+        if isinstance(route_request.routing_evidence.historical_success_features.get("calibration"), Mapping)
+        else {}
+    )
     workflow_invocation_available = bool(route_request.workflow_context.target_available)
     retrieved_candidates = list(route_request.routing_evidence.retrieved_candidates or [])
     candidate_by_id = {candidate.candidate_id: candidate for candidate in retrieved_candidates}
@@ -6386,6 +6428,24 @@ def _normalize_chat_route(
         and selected_candidate_id not in top_k_candidates
     ):
         top_k_candidates = [selected_candidate_id, *top_k_candidates]
+    probability_by_candidate_id = (
+        dict(calibration_features.get("probability_by_candidate_id"))
+        if isinstance(calibration_features.get("probability_by_candidate_id"), Mapping)
+        else {}
+    )
+    selected_candidate_calibration = None
+    if selected_candidate_id:
+        selected_probability = probability_by_candidate_id.get(selected_candidate_id)
+        if isinstance(selected_probability, (int, float)):
+            selected_candidate_calibration = round(float(selected_probability), 6)
+    shadow_selected_candidate_id = str(
+        calibration_features.get("shadow_selected_candidate_id") or ""
+    ).strip() or None
+    shadow_selected_confidence = None
+    if shadow_selected_candidate_id:
+        shadow_probability = probability_by_candidate_id.get(shadow_selected_candidate_id)
+        if isinstance(shadow_probability, (int, float)):
+            shadow_selected_confidence = round(float(shadow_probability), 6)
     if fallback_reason and fallback_reason not in reason_codes:
         reason_codes.append(fallback_reason)
     assessment = {
@@ -6431,6 +6491,17 @@ def _normalize_chat_route(
             capability_id=capability_id or None,
             arguments=arguments,
             clarification_questions=clarification_questions,
+            calibration_mode=str(calibration_features.get("mode") or "").strip() or None,
+            calibration_model_version=str(calibration_features.get("model_version") or "").strip()
+            or None,
+            shadow_selected_candidate_id=shadow_selected_candidate_id,
+            shadow_top_k_candidates=[
+                str(candidate_id).strip()
+                for candidate_id in calibration_features.get("shadow_top_k_candidates", [])
+                if str(candidate_id).strip()
+            ][:5],
+            shadow_selected_confidence=shadow_selected_confidence,
+            selected_candidate_calibrated_confidence=selected_candidate_calibration,
         ).model_dump(mode="json", exclude_none=True),
     }
 

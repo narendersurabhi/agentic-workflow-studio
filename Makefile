@@ -7,6 +7,7 @@
 	build-intent-tuning-candidates \
 	build-capability-reranker-dataset \
 	build-chat-routing-reranker-dataset \
+	train-chat-routing-calibrator \
 	eval-capability-feedback \
 	k8s-apply k8s-delete k8s-apply-local k8s-delete-local \
 	k8s-apply-observability k8s-delete-observability \
@@ -220,6 +221,9 @@ build-capability-reranker-dataset:
 
 build-chat-routing-reranker-dataset:
 	PYTHONPATH=. python3 training/build_chat_routing_reranker_dataset.py --feedback artifacts/evals/chat_routing_feedback.jsonl --output training/chat_routing_reranker_train.jsonl
+
+train-chat-routing-calibrator:
+	PYTHONPATH=. python3 training/train_chat_routing_calibrator.py --training-data training/chat_routing_reranker_train.jsonl --output artifacts/evals/chat_routing_calibrator.json
 
 eval-capability-feedback:
 	PYTHONPATH=. python3 scripts/eval_capability_search_feedback.py --feedback artifacts/evals/capability_search_feedback.jsonl --output artifacts/evals/capability_search_feedback_report.json
