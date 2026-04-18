@@ -9,8 +9,11 @@
 	build-capability-reranker-dataset \
 	build-chat-routing-reranker-dataset \
 	train-chat-routing-calibrator \
+	eval-chat-routing-calibrator \
 	eval-capability-feedback \
 	k8s-apply k8s-delete k8s-apply-local k8s-delete-local \
+	setup-k8s-env-staging k8s-apply-staging k8s-delete-staging \
+	k8s-pin-staging-images k8s-up-staging k8s-restart-staging \
 	k8s-apply-observability k8s-delete-observability \
 	k8s-apply-keda-worker k8s-delete-keda-worker \
 	k8s-up-local k8s-down-local k8s-restart-local \
@@ -23,6 +26,12 @@ IMAGE_REGISTRY ?= localhost:5001
 IMAGE_OWNER ?= localhost
 IMAGE_TAG ?= latest
 LOCAL_IMAGE_TAG ?= local-$(shell date +%Y%m%d%H%M%S)
+STAGING_NAMESPACE ?= awe-staging
+STAGING_ENV_FILE ?= .env.staging
+STAGING_OVERLAY ?= deploy/k8s/overlays/staging
+STAGING_IMAGE_REGISTRY ?= ghcr.io
+STAGING_IMAGE_OWNER ?=
+STAGING_IMAGE_TAG ?= latest
 UV_EVAL_DEPS = \
 	--with typing-extensions \
 	--with pydantic \
@@ -74,6 +83,9 @@ images-push:
 setup-k8s-env:
 	./scripts/setup_k8s_env.sh
 
+setup-k8s-env-staging:
+	K8S_NAMESPACE=$(STAGING_NAMESPACE) ENV_FILE=$(STAGING_ENV_FILE) DEFAULT_ENV_FILE=.env.example ./scripts/setup_k8s_env.sh
+
 k8s-apply:
 	kubectl apply -k deploy/k8s
 
@@ -94,6 +106,20 @@ k8s-apply-local:
 	kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/k8s/overlays/local | kubectl apply -f -
 	./scripts/setup_k8s_env.sh
 
+k8s-apply-staging:
+	kubectl kustomize --load-restrictor LoadRestrictionsNone $(STAGING_OVERLAY) | kubectl apply -f -
+	$(MAKE) setup-k8s-env-staging
+
+k8s-pin-staging-images:
+	@test -n "$(STAGING_IMAGE_OWNER)" || (echo "STAGING_IMAGE_OWNER is required" >&2; exit 1)
+	kubectl set image deployment/api -n $(STAGING_NAMESPACE) api=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-api:$(STAGING_IMAGE_TAG)
+	kubectl set image deployment/planner -n $(STAGING_NAMESPACE) planner=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-planner:$(STAGING_IMAGE_TAG)
+	kubectl set image deployment/policy -n $(STAGING_NAMESPACE) policy=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-policy:$(STAGING_IMAGE_TAG)
+	kubectl set image deployment/worker -n $(STAGING_NAMESPACE) worker=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-worker:$(STAGING_IMAGE_TAG)
+	kubectl set image deployment/coder -n $(STAGING_NAMESPACE) coder=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-coder:$(STAGING_IMAGE_TAG)
+	kubectl set image deployment/rag-retriever-mcp -n $(STAGING_NAMESPACE) rag-retriever-mcp=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-rag-retriever-mcp:$(STAGING_IMAGE_TAG)
+	kubectl set image deployment/ui -n $(STAGING_NAMESPACE) ui=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-ui:$(STAGING_IMAGE_TAG)
+
 k8s-pin-local-images:
 	kubectl set image deployment/api -n awe api=localhost:5001/localhost/awe-api:$(IMAGE_TAG)
 	kubectl set image deployment/planner -n awe planner=localhost:5001/localhost/awe-planner:$(IMAGE_TAG)
@@ -110,6 +136,14 @@ k8s-delete-local:
 	kubectl delete hpa -n awe api coder --ignore-not-found
 	kubectl delete configmap -n awe awe-config --ignore-not-found
 	kubectl delete secret -n awe awe-secrets --ignore-not-found
+
+k8s-delete-staging:
+	# Safe staging teardown: keep PVC objects and their data.
+	kubectl delete deployment -n $(STAGING_NAMESPACE) api planner policy worker coder rag-retriever-mcp ui github-mcp postgres redis qdrant jaeger --ignore-not-found
+	kubectl delete service -n $(STAGING_NAMESPACE) api planner policy worker coder rag-retriever-mcp ui github-mcp postgres redis qdrant jaeger --ignore-not-found
+	kubectl delete hpa -n $(STAGING_NAMESPACE) api coder --ignore-not-found
+	kubectl delete configmap -n $(STAGING_NAMESPACE) awe-config capability-registry mcp-servers-config --ignore-not-found
+	kubectl delete secret -n $(STAGING_NAMESPACE) awe-secrets --ignore-not-found
 
 k8s-up-local:
 	kubectl config use-context docker-desktop
@@ -129,6 +163,20 @@ k8s-up-local:
 	kubectl rollout status deployment/rag-retriever-mcp -n awe --timeout=180s
 	kubectl rollout status deployment/ui -n awe --timeout=180s
 
+k8s-up-staging:
+	$(MAKE) k8s-apply-staging
+	$(MAKE) k8s-pin-staging-images
+	kubectl rollout status deployment/postgres -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/redis -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/qdrant -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/api -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/planner -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/policy -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/worker -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/coder -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/rag-retriever-mcp -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/ui -n $(STAGING_NAMESPACE) --timeout=180s
+
 k8s-down-local:
 	$(MAKE) k8s-delete-local
 
@@ -147,6 +195,19 @@ k8s-restart-local:
 	kubectl rollout status deployment/coder -n awe --timeout=180s
 	kubectl rollout status deployment/rag-retriever-mcp -n awe --timeout=180s
 	kubectl rollout status deployment/ui -n awe --timeout=180s
+
+k8s-restart-staging:
+	kubectl rollout restart deployment -n $(STAGING_NAMESPACE) api planner policy worker coder qdrant rag-retriever-mcp ui
+	kubectl rollout status deployment/postgres -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/redis -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/qdrant -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/api -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/planner -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/policy -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/worker -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/coder -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/rag-retriever-mcp -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/ui -n $(STAGING_NAMESPACE) --timeout=180s
 
 k8s-sync-shared:
 	./scripts/k8s_sync_shared.sh all
@@ -228,6 +289,9 @@ build-chat-routing-reranker-dataset:
 
 train-chat-routing-calibrator:
 	PYTHONPATH=. python3 training/train_chat_routing_calibrator.py --training-data training/chat_routing_reranker_train.jsonl --output artifacts/evals/chat_routing_calibrator.json
+
+eval-chat-routing-calibrator:
+	PYTHONPATH=. python3 scripts/eval_chat_routing_calibrator.py --feedback artifacts/evals/chat_routing_feedback.jsonl --model artifacts/evals/chat_routing_calibrator.json --output artifacts/evals/chat_routing_calibrator_replay_report.json
 
 eval-capability-feedback:
 	PYTHONPATH=. python3 scripts/eval_capability_search_feedback.py --feedback artifacts/evals/capability_search_feedback.jsonl --output artifacts/evals/capability_search_feedback_report.json

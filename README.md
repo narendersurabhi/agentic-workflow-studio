@@ -343,6 +343,12 @@ CHAT_ROUTING_CALIBRATOR_MIN_EXAMPLES=10 \
 make build-chat-routing-calibrator-from-api
 ```
 
+Replay the trained calibrator against exported routing feedback to see whether disagreements look better or worse than deterministic routing:
+
+```bash
+make eval-chat-routing-calibrator
+```
+
 Router calibration controls:
 
 - `CHAT_ROUTING_CALIBRATOR_ENABLED=true`
