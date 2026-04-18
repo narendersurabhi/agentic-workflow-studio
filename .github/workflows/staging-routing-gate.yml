@@ -1,0 +1,104 @@
+name: staging-routing-gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Optional staging API base URL override"
+        required: false
+        type: string
+      gold_path:
+        description: "Live regression suite path"
+        required: false
+        default: "eval/chat_boundary_live_regression.yaml"
+        type: string
+      min_pass_rate:
+        description: "Minimum pass rate required"
+        required: false
+        default: "1.0"
+        type: string
+      verbose:
+        description: "Print per-case rows"
+        required: false
+        default: true
+        type: boolean
+  workflow_call:
+    inputs:
+      base_url:
+        required: false
+        default: ""
+        type: string
+      gold_path:
+        required: false
+        default: "eval/chat_boundary_live_regression.yaml"
+        type: string
+      min_pass_rate:
+        required: false
+        default: "1.0"
+        type: string
+      verbose:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      STAGING_API_BASE_URL:
+        required: false
+      STAGING_API_BEARER_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  live-chat-routing-regression:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Resolve staging target
+        env:
+          INPUT_BASE_URL: ${{ inputs.base_url }}
+          INPUT_GOLD_PATH: ${{ inputs.gold_path }}
+          INPUT_MIN_PASS_RATE: ${{ inputs.min_pass_rate }}
+          INPUT_VERBOSE: ${{ inputs.verbose }}
+          SECRET_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          SECRET_BEARER_TOKEN: ${{ secrets.STAGING_API_BEARER_TOKEN }}
+        run: |
+          BASE_URL="${INPUT_BASE_URL:-}"
+          if [ -z "$BASE_URL" ]; then
+            BASE_URL="${SECRET_BASE_URL:-}"
+          fi
+          if [ -z "$BASE_URL" ]; then
+            echo "::error::Missing staging API base URL. Provide workflow input 'base_url' or environment secret 'STAGING_API_BASE_URL'."
+            exit 1
+          fi
+          echo "CHAT_BOUNDARY_LIVE_BASE_URL=$BASE_URL" >> "$GITHUB_ENV"
+          echo "CHAT_BOUNDARY_LIVE_GOLD=${INPUT_GOLD_PATH:-eval/chat_boundary_live_regression.yaml}" >> "$GITHUB_ENV"
+          echo "CHAT_BOUNDARY_LIVE_MIN_PASS_RATE=${INPUT_MIN_PASS_RATE:-1.0}" >> "$GITHUB_ENV"
+          echo "CHAT_BOUNDARY_LIVE_OUTPUT=artifacts/evals/chat_boundary_live_report.json" >> "$GITHUB_ENV"
+          if [ "${INPUT_VERBOSE}" = "true" ]; then
+            echo "CHAT_BOUNDARY_LIVE_VERBOSE=1" >> "$GITHUB_ENV"
+          else
+            echo "CHAT_BOUNDARY_LIVE_VERBOSE=0" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${SECRET_BEARER_TOKEN:-}" ]; then
+            echo "CHAT_BOUNDARY_LIVE_BEARER_TOKEN=$SECRET_BEARER_TOKEN" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run staging chat routing regression
+        run: make eval-chat-boundary-live
+
+      - name: Upload regression report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-boundary-live-report
+          path: artifacts/evals/chat_boundary_live_report.json

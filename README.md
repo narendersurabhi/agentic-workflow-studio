@@ -309,11 +309,28 @@ Run the live staging-style regression against an API environment:
 make eval-chat-boundary-live
 ```
 
+Override the target environment without editing the script:
+
+```bash
+CHAT_BOUNDARY_LIVE_BASE_URL=https://staging.example.internal \
+CHAT_BOUNDARY_LIVE_BEARER_TOKEN=... \
+CHAT_BOUNDARY_LIVE_MIN_PASS_RATE=1.0 \
+make eval-chat-boundary-live
+```
+
 CI gate (thresholded):
 
 ```bash
 make eval-chat-boundary-gate
 ```
+
+GitHub Actions staging gate:
+
+- Workflow: `.github/workflows/staging-routing-gate.yml`
+- Environment secret: `STAGING_API_BASE_URL`
+- Optional environment secret: `STAGING_API_BEARER_TOKEN`
+- Supports manual `workflow_dispatch` and reusable `workflow_call`
+- Uploads `artifacts/evals/chat_boundary_live_report.json` as a build artifact
 
 ## Kubernetes
 

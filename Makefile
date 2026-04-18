@@ -38,6 +38,9 @@ UV_EVAL_DEPS = \
 	--with redis \
 	--with psycopg2-binary \
 	--with prometheus-client
+
+CHAT_BOUNDARY_LIVE_VERBOSE ?= 1
+CHAT_BOUNDARY_LIVE_VERBOSE_FLAG = $(if $(filter 1 true TRUE yes YES,$(CHAT_BOUNDARY_LIVE_VERBOSE)),--verbose,)
 UV_QUALITY_DEPS = \
 	$(UV_EVAL_DEPS) \
 	--with pytest \
@@ -193,7 +196,7 @@ eval-chat-boundary-gate:
 	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_boundary.py --gold eval/chat_boundary_gold.yaml --min-accuracy 0.95 --max-false-chat-reply-rate 0.05 --min-pending-continuation-rate 0.95 --max-active-family-drift-rate 0.05
 
 eval-chat-boundary-live:
-	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_boundary_live.py --gold eval/chat_boundary_live_regression.yaml --verbose
+	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_boundary_live.py $(CHAT_BOUNDARY_LIVE_VERBOSE_FLAG)
 
 eval-chat-clarification:
 	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_clarification.py --gold eval/chat_clarification_mapping_gold.yaml --verbose

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -18,31 +19,44 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--base-url",
-        default="http://127.0.0.1:18000",
+        default=os.getenv("CHAT_BOUNDARY_LIVE_BASE_URL", "http://127.0.0.1:18000"),
         help="Base URL for the API environment under test.",
     )
     parser.add_argument(
         "--gold",
         type=Path,
-        default=Path("eval/chat_boundary_live_regression.yaml"),
+        default=Path(
+            os.getenv("CHAT_BOUNDARY_LIVE_GOLD", "eval/chat_boundary_live_regression.yaml")
+        ),
         help="Path to live chat-boundary regression cases (YAML).",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts/evals/chat_boundary_live_report.json"),
+        default=Path(
+            os.getenv(
+                "CHAT_BOUNDARY_LIVE_OUTPUT",
+                "artifacts/evals/chat_boundary_live_report.json",
+            )
+        ),
         help="Path to write JSON report.",
     )
     parser.add_argument(
         "--timeout-s",
         type=float,
-        default=30.0,
+        default=float(os.getenv("CHAT_BOUNDARY_LIVE_TIMEOUT_S", "30.0")),
         help="HTTP timeout in seconds.",
     )
     parser.add_argument(
         "--bearer-token",
-        default=None,
+        default=os.getenv("CHAT_BOUNDARY_LIVE_BEARER_TOKEN") or None,
         help="Optional bearer token for environments that require auth.",
+    )
+    parser.add_argument(
+        "--min-pass-rate",
+        type=float,
+        default=float(os.getenv("CHAT_BOUNDARY_LIVE_MIN_PASS_RATE", "1.0")),
+        help="Minimum pass rate required for success.",
     )
     parser.add_argument("--verbose", action="store_true", help="Print per-case rows.")
     return parser
@@ -262,7 +276,13 @@ def main() -> int:
         args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"wrote report: {args.output}")
 
-    if float((report.get("summary") or {}).get("pass_rate", 0.0)) < 1.0:
+    if float((report.get("summary") or {}).get("pass_rate", 0.0)) < float(args.min_pass_rate):
+        print(
+            "chat_boundary_live_regression_threshold_failed:"
+            f"pass_rate={float((report.get('summary') or {}).get('pass_rate', 0.0)):.3f}:"
+            f"min_pass_rate={float(args.min_pass_rate):.3f}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 
