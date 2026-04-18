@@ -91,6 +91,7 @@ class PlanningMode(str, Enum):
 class ReplanStrategy(str, Enum):
     no_replan = "no_replan"
     retry_same_step = "retry_same_step"
+    rework_step = "rework_step"
     switch_capability = "switch_capability"
     patch_suffix = "patch_suffix"
     full_replan = "full_replan"
@@ -292,6 +293,7 @@ class PlanRevisionContext(BaseModel):
     trigger_reason: Optional[str] = None
     selected_strategy: Optional[ReplanStrategy] = None
     strategy_reason: Optional[str] = None
+    evaluator_signal: Dict[str, Any] = Field(default_factory=dict)
     preserved_task_ids: List[str] = Field(default_factory=list)
     preserved_task_names: List[str] = Field(default_factory=list)
     replacement_task_ids: List[str] = Field(default_factory=list)

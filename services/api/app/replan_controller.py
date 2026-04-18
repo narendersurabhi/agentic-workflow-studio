@@ -120,3 +120,138 @@ def decide_task_failure_recovery(
         strategy=models.ReplanStrategy.no_replan,
         strategy_reason="no_applicable_recovery_strategy",
     )
+
+
+def decide_task_evaluator_recovery(
+    *,
+    planning_mode: models.PlanningMode,
+    has_pending_replan: bool,
+    replans_used: int,
+    max_replans: int,
+    requested_rework_count: int,
+    max_reworks: int,
+    evaluator_signal: Mapping[str, Any] | None = None,
+    requested_rework: bool = False,
+    min_confidence: float = 0.6,
+    replan_confidence_floor: float = 0.35,
+    schema_invalid_strategy: models.ReplanStrategy = models.ReplanStrategy.rework_step,
+) -> RecoveryDecision:
+    signal = evaluator_signal if isinstance(evaluator_signal, Mapping) else {}
+    adaptive_enabled = planning_mode == models.PlanningMode.adaptive
+    confidence = signal.get("confidence")
+    if isinstance(confidence, bool):
+        confidence = None
+    if isinstance(confidence, (int, float)):
+        confidence = max(0.0, min(1.0, float(confidence)))
+    else:
+        confidence = None
+    schema_valid = signal.get("schema_valid")
+    output_valid = signal.get("output_valid")
+    schema_invalid = (
+        (isinstance(schema_valid, bool) and not schema_valid)
+        or (isinstance(output_valid, bool) and not output_valid)
+    )
+    low_confidence = confidence is not None and confidence < max(0.0, min(1.0, float(min_confidence)))
+    severe_low_confidence = confidence is not None and confidence < max(
+        0.0,
+        min(float(min_confidence), float(replan_confidence_floor)),
+    )
+    rework_budget_available = max_reworks <= 0 or requested_rework_count <= max_reworks
+    replan_budget_available = adaptive_enabled and replans_used < max_replans
+
+    if has_pending_replan:
+        return RecoveryDecision(
+            strategy=models.ReplanStrategy.no_replan,
+            strategy_reason="pending_replan_already_requested",
+        )
+
+    if schema_invalid:
+        if schema_invalid_strategy == models.ReplanStrategy.patch_suffix and replan_budget_available:
+            return RecoveryDecision(
+                strategy=models.ReplanStrategy.patch_suffix,
+                strategy_reason="schema_invalid_policy_requires_suffix_replan",
+                should_replan=True,
+                replan_reason="evaluator_schema_invalid_auto_repair",
+                require_adaptive=True,
+            )
+        if rework_budget_available:
+            return RecoveryDecision(
+                strategy=models.ReplanStrategy.rework_step,
+                strategy_reason="schema_invalid_needs_rework",
+            )
+        if replan_budget_available:
+            return RecoveryDecision(
+                strategy=models.ReplanStrategy.patch_suffix,
+                strategy_reason="schema_invalid_rework_budget_exhausted",
+                should_replan=True,
+                replan_reason="evaluator_schema_invalid_auto_repair",
+                require_adaptive=True,
+            )
+        return RecoveryDecision(
+            strategy=models.ReplanStrategy.no_replan,
+            strategy_reason=(
+                "max_replans_exhausted"
+                if adaptive_enabled and replans_used >= max_replans
+                else "rework_budget_exhausted"
+            ),
+        )
+
+    if severe_low_confidence and replan_budget_available:
+        return RecoveryDecision(
+            strategy=models.ReplanStrategy.patch_suffix,
+            strategy_reason="low_confidence_below_replan_floor",
+            should_replan=True,
+            replan_reason="evaluator_low_confidence_auto_repair",
+            require_adaptive=True,
+        )
+
+    if low_confidence:
+        if rework_budget_available:
+            return RecoveryDecision(
+                strategy=models.ReplanStrategy.rework_step,
+                strategy_reason="low_confidence_needs_rework",
+            )
+        if replan_budget_available:
+            return RecoveryDecision(
+                strategy=models.ReplanStrategy.patch_suffix,
+                strategy_reason="low_confidence_rework_budget_exhausted",
+                should_replan=True,
+                replan_reason="evaluator_low_confidence_auto_repair",
+                require_adaptive=True,
+            )
+        return RecoveryDecision(
+            strategy=models.ReplanStrategy.no_replan,
+            strategy_reason=(
+                "max_replans_exhausted"
+                if adaptive_enabled and replans_used >= max_replans
+                else "rework_budget_exhausted"
+            ),
+        )
+
+    if requested_rework:
+        if rework_budget_available:
+            return RecoveryDecision(
+                strategy=models.ReplanStrategy.rework_step,
+                strategy_reason="critic_requested_rework",
+            )
+        if replan_budget_available:
+            return RecoveryDecision(
+                strategy=models.ReplanStrategy.patch_suffix,
+                strategy_reason="critic_rework_budget_exhausted",
+                should_replan=True,
+                replan_reason="evaluator_rework_exhausted_auto_repair",
+                require_adaptive=True,
+            )
+        return RecoveryDecision(
+            strategy=models.ReplanStrategy.no_replan,
+            strategy_reason=(
+                "max_replans_exhausted"
+                if adaptive_enabled and replans_used >= max_replans
+                else "rework_budget_exhausted"
+            ),
+        )
+
+    return RecoveryDecision(
+        strategy=models.ReplanStrategy.no_replan,
+        strategy_reason="accepted_with_sufficient_confidence",
+    )

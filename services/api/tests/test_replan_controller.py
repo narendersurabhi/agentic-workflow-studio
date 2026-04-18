@@ -51,3 +51,43 @@ def test_decide_manual_replan_returns_full_replan() -> None:
     assert decision.strategy_reason == "manual_replan_requested"
     assert decision.should_replan is True
     assert decision.replan_reason == "manual"
+
+
+def test_decide_task_evaluator_recovery_returns_rework_for_low_confidence() -> None:
+    decision = replan_controller.decide_task_evaluator_recovery(
+        planning_mode=models.PlanningMode.adaptive,
+        has_pending_replan=False,
+        replans_used=0,
+        max_replans=2,
+        requested_rework_count=1,
+        max_reworks=2,
+        evaluator_signal={"confidence": 0.42},
+        requested_rework=False,
+        min_confidence=0.6,
+        replan_confidence_floor=0.35,
+    )
+
+    assert decision.strategy == models.ReplanStrategy.rework_step
+    assert decision.strategy_reason == "low_confidence_needs_rework"
+    assert decision.should_replan is False
+
+
+def test_decide_task_evaluator_recovery_returns_patch_suffix_for_schema_invalid_replan_policy() -> None:
+    decision = replan_controller.decide_task_evaluator_recovery(
+        planning_mode=models.PlanningMode.adaptive,
+        has_pending_replan=False,
+        replans_used=0,
+        max_replans=2,
+        requested_rework_count=1,
+        max_reworks=2,
+        evaluator_signal={"schema_valid": False},
+        requested_rework=True,
+        min_confidence=0.6,
+        replan_confidence_floor=0.35,
+        schema_invalid_strategy=models.ReplanStrategy.patch_suffix,
+    )
+
+    assert decision.strategy == models.ReplanStrategy.patch_suffix
+    assert decision.strategy_reason == "schema_invalid_policy_requires_suffix_replan"
+    assert decision.should_replan is True
+    assert decision.replan_reason == "evaluator_schema_invalid_auto_repair"

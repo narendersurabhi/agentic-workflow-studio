@@ -2415,6 +2415,220 @@ def _seed_run_history_for_replan_fixture(fixture: dict[str, str]) -> str:
     return run_id
 
 
+def _create_adaptive_evaluator_fixture(
+    *,
+    planning_mode: str = "adaptive",
+    max_replans: int = 2,
+    replans_used: int = 0,
+    max_reworks: int = 2,
+    adaptive_policy: dict[str, object] | None = None,
+) -> dict[str, str]:
+    now = _utcnow()
+    job_id = str(uuid.uuid4())
+    plan_id = str(uuid.uuid4())
+    prefix_task_id = str(uuid.uuid4())
+    review_task_id = str(uuid.uuid4())
+    revision_number = max(1, replans_used + 1)
+    policy = {"max_replans": max_replans}
+    if isinstance(adaptive_policy, dict):
+        policy.update(adaptive_policy)
+    metadata = {
+        "planning_mode": planning_mode,
+        "adaptive_policy": policy,
+        "replan_count": replans_used,
+        "current_revision_number": revision_number,
+        "active_plan_id": plan_id,
+        "plan_revision_history": [
+            {
+                "revision_number": revision_number,
+                "plan_id": plan_id,
+                "trigger_reason": "initial_plan" if replans_used == 0 else "retry_exhausted_auto_repair",
+                "created_at": now.isoformat(),
+                "superseded_at": None,
+                "active": True,
+                "task_count": 2,
+            }
+        ],
+    }
+    with SessionLocal() as db:
+        db.add(
+            JobRecord(
+                id=job_id,
+                goal="Repair evaluator rejected workflow output",
+                context_json={},
+                status=models.JobStatus.running.value,
+                created_at=now,
+                updated_at=now,
+                priority=0,
+                metadata_json=metadata,
+            )
+        )
+        db.add(
+            PlanRecord(
+                id=plan_id,
+                job_id=job_id,
+                planner_version="test",
+                created_at=now,
+                tasks_summary="collect input then generate draft",
+                dag_edges=[["CollectInput", "GenerateDraft"]],
+                policy_decision={},
+            )
+        )
+        db.add(
+            TaskRecord(
+                id=prefix_task_id,
+                job_id=job_id,
+                plan_id=plan_id,
+                name="CollectInput",
+                description="Collect input",
+                instruction="Collect input",
+                acceptance_criteria=["input collected"],
+                expected_output_schema_ref="schemas/unknown",
+                status=models.TaskStatus.completed.value,
+                deps=[],
+                attempts=1,
+                max_attempts=3,
+                rework_count=0,
+                max_reworks=1,
+                assigned_to=None,
+                intent="io",
+                tool_requests=["filesystem.workspace.list"],
+                tool_inputs={"filesystem.workspace.list": {}},
+                created_at=now,
+                updated_at=now,
+                critic_required=False,
+            )
+        )
+        db.add(
+            TaskRecord(
+                id=review_task_id,
+                job_id=job_id,
+                plan_id=plan_id,
+                name="GenerateDraft",
+                description="Generate draft",
+                instruction="Generate draft output",
+                acceptance_criteria=["draft generated"],
+                expected_output_schema_ref="schemas/unknown",
+                status=models.TaskStatus.completed.value,
+                deps=["CollectInput"],
+                attempts=1,
+                max_attempts=2,
+                rework_count=0,
+                max_reworks=max_reworks,
+                assigned_to=None,
+                intent="generate",
+                tool_requests=["filesystem.workspace.list"],
+                tool_inputs={"filesystem.workspace.list": {}},
+                created_at=now,
+                updated_at=now,
+                critic_required=True,
+            )
+        )
+        db.add(
+            RunRecord(
+                id=job_id,
+                kind=models.RunKind.planner.value,
+                title="Repair evaluator rejected workflow output",
+                goal="Repair evaluator rejected workflow output",
+                requested_context_json={},
+                status=models.JobStatus.running.value,
+                job_id=job_id,
+                workflow_run_id=None,
+                plan_id=plan_id,
+                source_definition_id=None,
+                source_version_id=None,
+                source_trigger_id=None,
+                user_id=None,
+                run_spec_json={},
+                metadata_json={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            RunStepRecord(
+                id=prefix_task_id,
+                run_id=job_id,
+                job_id=job_id,
+                plan_id=plan_id,
+                spec_step_id="collect-input",
+                name="CollectInput",
+                description="Collect input",
+                instruction="Collect input",
+                status=models.TaskStatus.completed.value,
+                intent="io",
+                capability_request_id="filesystem.workspace.list",
+                execution_request_id=None,
+                capability_id="filesystem.workspace.list",
+                input_bindings_json={},
+                execution_gate_json=None,
+                retry_policy_json={},
+                acceptance_policy_json={},
+                depends_on_json=[],
+                metadata_json={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            RunStepRecord(
+                id=review_task_id,
+                run_id=job_id,
+                job_id=job_id,
+                plan_id=plan_id,
+                spec_step_id="generate-draft",
+                name="GenerateDraft",
+                description="Generate draft",
+                instruction="Generate draft output",
+                status=models.TaskStatus.completed.value,
+                intent="generate",
+                capability_request_id="filesystem.workspace.list",
+                execution_request_id=None,
+                capability_id="filesystem.workspace.list",
+                input_bindings_json={},
+                execution_gate_json=None,
+                retry_policy_json={},
+                acceptance_policy_json={},
+                depends_on_json=[prefix_task_id],
+                metadata_json={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    main._store_task_result(
+        prefix_task_id,
+        {
+            "task_id": prefix_task_id,
+            "status": models.TaskStatus.completed.value,
+            "outputs": {
+                "filesystem.workspace.list": {
+                    "entries": [{"path": "/shared/workspace/input.txt", "type": "file"}]
+                }
+            },
+        },
+    )
+    main._store_task_result(
+        review_task_id,
+        {
+            "task_id": review_task_id,
+            "status": models.TaskStatus.completed.value,
+            "outputs": {
+                "filesystem.workspace.list": {
+                    "entries": [{"path": "/shared/workspace/draft.txt", "type": "file"}]
+                }
+            },
+        },
+    )
+    return {
+        "job_id": job_id,
+        "plan_id": plan_id,
+        "completed_task_id": prefix_task_id,
+        "review_task_id": review_task_id,
+    }
+
+
 def test_retry_exhausted_recoverable_failure_triggers_auto_replan_with_completed_context():
     fixture = _create_adaptive_replan_failure_fixture()
 
@@ -2728,6 +2942,165 @@ def test_retry_exhausted_replan_multiple_revisions_keep_completed_prefix_stable(
         prior_replacement = db.query(TaskRecord).filter(TaskRecord.id == first_replacement_id).first()
         assert prior_replacement is not None
         assert prior_replacement.status == models.TaskStatus.canceled.value
+
+
+def test_task_accepted_low_confidence_triggers_rework_and_records_evaluator_signal():
+    fixture = _create_adaptive_evaluator_fixture()
+
+    main._handle_task_accepted(
+        {
+            "task_id": fixture["review_task_id"],
+            "payload": {
+                "task_id": fixture["review_task_id"],
+                "decision": "accepted",
+                "reasons": ["confidence below threshold"],
+                "confidence": 0.42,
+                "checked_at": _utcnow().isoformat(),
+                "source": "critic",
+            },
+        }
+    )
+
+    response = client.get(f"/jobs/{fixture['job_id']}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["adaptive_status"]["last_strategy"] == "rework_step"
+    assert body["adaptive_status"]["last_strategy_reason"] == "low_confidence_needs_rework"
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.id == fixture["review_task_id"]).first()
+        assert task is not None
+        assert task.rework_count == 1
+        assert task.status == models.TaskStatus.ready.value
+
+    debugger_response = client.get(f"/jobs/{fixture['job_id']}/debugger")
+    assert debugger_response.status_code == 200
+    debugger = debugger_response.json()
+    debugger_tasks = {entry["task"]["name"]: entry for entry in debugger["tasks"]}
+    draft_task = debugger_tasks["GenerateDraft"]
+    assert draft_task["latest_evaluator_signal"]["confidence"] == 0.42
+    assert draft_task["latest_repair_decision"]["selected_strategy"] == "rework_step"
+    assert draft_task["latest_repair_decision"]["strategy_reason"] == "low_confidence_needs_rework"
+
+
+def test_task_rework_requested_schema_invalid_replans_and_excludes_rejected_completed_task():
+    fixture = _create_adaptive_evaluator_fixture(
+        adaptive_policy={"schema_invalid_strategy": "replan"},
+    )
+
+    main._handle_task_rework(
+        {
+            "task_id": fixture["review_task_id"],
+            "payload": {
+                "task_id": fixture["review_task_id"],
+                "decision": "rework",
+                "reasons": ["output failed schema validation"],
+                "schema_valid": False,
+                "checked_at": _utcnow().isoformat(),
+                "source": "critic",
+            },
+        }
+    )
+
+    response = client.get(f"/jobs/{fixture['job_id']}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "planning"
+    assert body["adaptive_status"]["pending_replan"] is True
+    assert body["adaptive_status"]["last_strategy"] == "patch_suffix"
+    assert body["adaptive_status"]["last_strategy_reason"] == "schema_invalid_policy_requires_suffix_replan"
+    assert body["metadata"]["pending_replan"]["reason"] == "evaluator_schema_invalid_auto_repair"
+    assert body["metadata"]["pending_replan"]["excluded_completed_task_ids"] == [fixture["review_task_id"]]
+    assert body["revision_context"]["evaluator_signal"]["schema_valid"] is False
+
+    main._handle_plan_created(
+        {
+            "job_id": fixture["job_id"],
+            "payload": {
+                "job_id": fixture["job_id"],
+                "planner_version": "evaluator-replan",
+                "tasks_summary": "preserve collected input and regenerate the draft",
+                "dag_edges": [],
+                "tasks": [
+                    {
+                        "name": "GenerateDraftV2",
+                        "description": "Generate the corrected draft",
+                        "instruction": "Regenerate the draft with corrected schema handling.",
+                        "acceptance_criteria": ["draft generated"],
+                        "expected_output_schema_ref": "schemas/unknown",
+                        "deps": ["CollectInput"],
+                        "tool_requests": ["filesystem.workspace.list"],
+                        "tool_inputs": {"filesystem.workspace.list": {}},
+                        "critic_required": True,
+                    }
+                ],
+            },
+        }
+    )
+
+    details_response = client.get(f"/jobs/{fixture['job_id']}/details")
+    assert details_response.status_code == 200
+    details = details_response.json()
+    task_names = [task["name"] for task in details["tasks"]]
+    assert task_names == ["CollectInput", "GenerateDraftV2"]
+    assert details["revision_context"]["preserved_task_ids"] == [fixture["completed_task_id"]]
+    assert details["revision_context"]["replacement_task_names"] == ["GenerateDraftV2"]
+    assert details["revision_context"]["evaluator_signal"]["schema_valid"] is False
+    assert all(task["id"] != fixture["review_task_id"] for task in details["tasks"])
+
+    with SessionLocal() as db:
+        rejected_task = db.query(TaskRecord).filter(TaskRecord.id == fixture["review_task_id"]).first()
+        assert rejected_task is not None
+        assert rejected_task.status == models.TaskStatus.canceled.value
+
+
+def test_task_rework_requested_stops_when_evaluator_repair_budgets_are_exhausted():
+    fixture = _create_adaptive_evaluator_fixture(
+        max_replans=1,
+        replans_used=1,
+        max_reworks=1,
+        adaptive_policy={"schema_invalid_strategy": "replan"},
+    )
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.id == fixture["review_task_id"]).first()
+        assert task is not None
+        task.rework_count = 1
+        db.commit()
+
+    main._handle_task_rework(
+        {
+            "task_id": fixture["review_task_id"],
+            "payload": {
+                "task_id": fixture["review_task_id"],
+                "decision": "rework",
+                "reasons": ["output failed schema validation"],
+                "schema_valid": False,
+                "checked_at": _utcnow().isoformat(),
+                "source": "critic",
+            },
+        }
+    )
+
+    response = client.get(f"/jobs/{fixture['job_id']}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["adaptive_status"]["pending_replan"] is False
+    assert body["adaptive_status"]["last_strategy"] == "no_replan"
+    assert body["adaptive_status"]["last_strategy_reason"] == "max_replans_exhausted"
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.id == fixture["review_task_id"]).first()
+        assert task is not None
+        assert task.status == models.TaskStatus.failed.value
+
+    debugger_response = client.get(f"/jobs/{fixture['job_id']}/debugger")
+    assert debugger_response.status_code == 200
+    debugger = debugger_response.json()
+    debugger_tasks = {entry["task"]["name"]: entry for entry in debugger["tasks"]}
+    draft_task = debugger_tasks["GenerateDraft"]
+    assert draft_task["latest_repair_decision"]["selected_strategy"] == "no_replan"
+    assert draft_task["latest_repair_decision"]["strategy_reason"] == "max_replans_exhausted"
 
 
 def test_manual_replan_creates_plan_revision_history_without_deleting_prior_records(

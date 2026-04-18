@@ -297,6 +297,10 @@ _REVISION_CONTEXT_EXCLUDED_KEYS = frozenset(
         "prior_plan_id",
         "selected_strategy",
         "strategy_reason",
+        "evaluator_signal",
+        "excluded_completed_task_ids",
+        "repair_target_task_id",
+        "repair_target_task_name",
         "preserved_task_ids",
         "preserved_task_names",
         "replacement_task_ids",
@@ -341,6 +345,9 @@ def parse_revision_context_from_metadata(
         trigger_reason=_non_empty_string(raw_context.get("reason")),
         selected_strategy=_non_empty_string(raw_context.get("selected_strategy")),
         strategy_reason=_non_empty_string(raw_context.get("strategy_reason")),
+        evaluator_signal=dict(raw_context.get("evaluator_signal"))
+        if isinstance(raw_context.get("evaluator_signal"), Mapping)
+        else {},
         preserved_task_ids=[
             item for item in (_non_empty_string(entry) for entry in raw_context.get("preserved_task_ids", []))
             if item is not None

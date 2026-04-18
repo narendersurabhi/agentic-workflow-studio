@@ -207,6 +207,9 @@ ORCHESTRATOR_RECOVER_IDLE_MS = int(os.getenv("ORCHESTRATOR_RECOVER_IDLE_MS", "60
 REPLAN_MAX = int(os.getenv("REPLAN_MAX", "1"))
 ADAPTIVE_PLANNING_ENABLED = os.getenv("ADAPTIVE_PLANNING_ENABLED", "false").lower() == "true"
 ADAPTIVE_REPLAN_MAX_DEFAULT = max(0, int(os.getenv("ADAPTIVE_REPLAN_MAX_DEFAULT", "2")))
+ADAPTIVE_EVALUATOR_MIN_CONFIDENCE_DEFAULT = 0.6
+ADAPTIVE_EVALUATOR_REPLAN_CONFIDENCE_FLOOR_DEFAULT = 0.35
+ADAPTIVE_SCHEMA_INVALID_STRATEGY_DEFAULT = "rework_step"
 TOOL_INPUT_VALIDATION_ENABLED = os.getenv("TOOL_INPUT_VALIDATION_ENABLED", "true").lower() == "true"
 INTENT_CLARIFICATION_ON_CREATE = (
     os.getenv("INTENT_CLARIFICATION_ON_CREATE", "false").lower() == "true"
@@ -1113,6 +1116,31 @@ def _planning_mode_from_metadata(metadata: Mapping[str, Any] | None) -> models.P
     return _coerce_planning_mode(normalized.get("planning_mode"))
 
 
+def _bounded_probability(value: Any, default: float) -> float:
+    try:
+        bounded = float(value)
+    except (TypeError, ValueError):
+        bounded = float(default)
+    return max(0.0, min(1.0, bounded))
+
+
+def _normalize_schema_invalid_strategy(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    alias_map = {
+        "rework": models.ReplanStrategy.rework_step.value,
+        "rework_step": models.ReplanStrategy.rework_step.value,
+        "replan": models.ReplanStrategy.patch_suffix.value,
+        "patch_suffix": models.ReplanStrategy.patch_suffix.value,
+    }
+    strategy = alias_map.get(normalized, ADAPTIVE_SCHEMA_INVALID_STRATEGY_DEFAULT)
+    if strategy not in {
+        models.ReplanStrategy.rework_step.value,
+        models.ReplanStrategy.patch_suffix.value,
+    }:
+        return ADAPTIVE_SCHEMA_INVALID_STRATEGY_DEFAULT
+    return strategy
+
+
 def _adaptive_policy_from_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     normalized = metadata if isinstance(metadata, Mapping) else {}
     raw_policy = normalized.get("adaptive_policy")
@@ -1123,6 +1151,46 @@ def _adaptive_policy_from_metadata(metadata: Mapping[str, Any] | None) -> dict[s
     except (TypeError, ValueError):
         max_replans = ADAPTIVE_REPLAN_MAX_DEFAULT
     policy["max_replans"] = max(0, min(10, max_replans))
+    min_confidence = _bounded_probability(
+        policy.get(
+            "evaluator_min_confidence",
+            policy.get(
+                "evaluatorMinConfidence",
+                ADAPTIVE_EVALUATOR_MIN_CONFIDENCE_DEFAULT,
+            ),
+        ),
+        ADAPTIVE_EVALUATOR_MIN_CONFIDENCE_DEFAULT,
+    )
+    replan_confidence_floor = _bounded_probability(
+        policy.get(
+            "evaluator_replan_confidence_floor",
+            policy.get(
+                "evaluatorReplanConfidenceFloor",
+                min(
+                    ADAPTIVE_EVALUATOR_REPLAN_CONFIDENCE_FLOOR_DEFAULT,
+                    min_confidence,
+                ),
+            ),
+        ),
+        min(
+            ADAPTIVE_EVALUATOR_REPLAN_CONFIDENCE_FLOOR_DEFAULT,
+            min_confidence,
+        ),
+    )
+    policy["evaluator_min_confidence"] = min_confidence
+    policy["evaluator_replan_confidence_floor"] = min(
+        min_confidence,
+        replan_confidence_floor,
+    )
+    policy["schema_invalid_strategy"] = _normalize_schema_invalid_strategy(
+        policy.get(
+            "schema_invalid_strategy",
+            policy.get(
+                "schemaInvalidStrategy",
+                ADAPTIVE_SCHEMA_INVALID_STRATEGY_DEFAULT,
+            ),
+        )
+    )
     return policy
 
 
@@ -1322,12 +1390,188 @@ def _store_adaptive_strategy_decision(
     return metadata
 
 
+def _normalized_string_list(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        entry = str(item or "").strip()
+        if entry:
+            normalized.append(entry)
+    return normalized
+
+
+def _normalized_evaluator_signal_payload(
+    payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    raw_signal = payload.get("evaluator_signal")
+    source = raw_signal if isinstance(raw_signal, Mapping) else payload
+    signal: dict[str, Any] = {}
+    decision = str(source.get("decision") or "").strip()
+    if decision:
+        signal["decision"] = decision
+    reasons = _normalized_string_list(source.get("reasons"))
+    if reasons:
+        signal["reasons"] = reasons
+    feedback = str(source.get("feedback") or "").strip()
+    if feedback:
+        signal["feedback"] = feedback
+    checked_at = str(source.get("checked_at") or "").strip()
+    if checked_at:
+        signal["checked_at"] = checked_at
+    evaluator_source = str(source.get("source") or "").strip()
+    if evaluator_source:
+        signal["source"] = evaluator_source
+    confidence = source.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        signal["confidence"] = round(max(0.0, min(1.0, float(confidence))), 3)
+    for key in ("schema_valid", "output_valid"):
+        value = source.get(key)
+        if isinstance(value, bool):
+            signal[key] = value
+    validation_error = source.get("validation_error")
+    if isinstance(validation_error, Mapping):
+        signal["validation_error"] = dict(validation_error)
+        signal["schema_valid"] = False
+    return signal
+
+
+def _evaluator_signal_from_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(context, Mapping):
+        return {}
+    raw_signal = context.get("evaluator_signal")
+    if isinstance(raw_signal, Mapping):
+        return _normalized_evaluator_signal_payload({"evaluator_signal": raw_signal})
+    return {}
+
+
+def _excluded_completed_task_ids_from_context(context: Mapping[str, Any] | None) -> list[str]:
+    if not isinstance(context, Mapping):
+        return []
+    excluded = _normalized_string_list(context.get("excluded_completed_task_ids"))
+    if excluded:
+        return excluded
+    repair_target_id = str(context.get("repair_target_task_id") or "").strip()
+    if repair_target_id:
+        return [repair_target_id]
+    return []
+
+
+def _limited_history(
+    entries: Any,
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    if not isinstance(entries, list):
+        return []
+    normalized = [dict(item) for item in entries if isinstance(item, Mapping)]
+    return normalized[-limit:]
+
+
+def _repair_decision_payload(
+    decision: replan_controller.RecoveryDecision,
+    *,
+    decided_at: datetime,
+) -> dict[str, Any]:
+    payload = _adaptive_strategy_decision_payload(decision, decided_at=decided_at)
+    payload["should_replan"] = bool(decision.should_replan)
+    return payload
+
+
+def _record_task_evaluator_state(
+    db: Session,
+    *,
+    task: TaskRecord,
+    evaluator_signal: Mapping[str, Any] | None,
+    repair_decision: Mapping[str, Any] | None = None,
+    occurred_at: datetime,
+) -> None:
+    signal_payload = (
+        dict(evaluator_signal)
+        if isinstance(evaluator_signal, Mapping) and evaluator_signal
+        else None
+    )
+    decision_payload = (
+        dict(repair_decision)
+        if isinstance(repair_decision, Mapping) and repair_decision
+        else None
+    )
+    if signal_payload is None and decision_payload is None:
+        return
+    attempt = _latest_step_attempt_record(db, task.id)
+    if attempt is not None:
+        summary = dict(attempt.result_summary_json or {})
+        if signal_payload is not None:
+            summary["evaluator"] = signal_payload
+        if decision_payload is not None:
+            summary["repair_decision"] = decision_payload
+        attempt.result_summary_json = summary
+        attempt.finished_at = attempt.finished_at or occurred_at
+    step = db.query(RunStepRecord).filter(RunStepRecord.id == task.id).first()
+    if step is not None:
+        metadata = dict(step.metadata_json or {})
+        if signal_payload is not None:
+            metadata["latest_evaluator_signal"] = signal_payload
+            history = _limited_history(metadata.get("evaluator_signal_history"))
+            history.append(signal_payload)
+            metadata["evaluator_signal_history"] = history[-10:]
+        if decision_payload is not None:
+            metadata["latest_repair_decision"] = decision_payload
+            history = _limited_history(metadata.get("repair_decision_history"))
+            history.append(decision_payload)
+            metadata["repair_decision_history"] = history[-10:]
+        step.metadata_json = metadata
+        step.updated_at = occurred_at
+
+
+def _mark_task_failed_from_evaluator(
+    db: Session,
+    *,
+    task: TaskRecord,
+    job: JobRecord | None,
+    payload: Mapping[str, Any],
+    occurred_at: datetime,
+    strategy_reason: str,
+) -> None:
+    attempt = _latest_step_attempt_record(db, task.id)
+    if attempt is not None:
+        attempt.status = models.TaskStatus.failed.value
+        attempt.finished_at = occurred_at
+        attempt.error_code = "evaluator_repair_exhausted"
+        attempt.error_message = strategy_reason
+    _update_execution_request_status(
+        db,
+        job=job,
+        task=task,
+        payload=payload,
+        status=models.TaskStatus.failed.value,
+        step_attempt_id=attempt.id if attempt is not None else _resolve_step_attempt_id_for_event(
+            db, step_id=task.id, payload=payload
+        ),
+    )
+    task.status = models.TaskStatus.failed.value
+    task.updated_at = occurred_at
+    if job is not None:
+        _set_job_status(job, models.JobStatus.failed)
+        job.updated_at = occurred_at
+        _sync_shadow_run_status(db, job)
+
+
 def _remaining_goals_from_plan(
     db: Session,
     plan_record: PlanRecord | None,
+    *,
+    exclude_task_ids: Sequence[str] | None = None,
 ) -> list[str]:
     if plan_record is None:
         return []
+    excluded = {
+        str(task_id or "").strip()
+        for task_id in (exclude_task_ids or [])
+        if str(task_id or "").strip()
+    }
     tasks = (
         db.query(TaskRecord)
         .filter(TaskRecord.plan_id == plan_record.id)
@@ -1336,7 +1580,7 @@ def _remaining_goals_from_plan(
     )
     remaining: list[str] = []
     for task in tasks:
-        if task.status in {
+        if task.id not in excluded and task.status in {
             models.TaskStatus.completed.value,
             models.TaskStatus.accepted.value,
             models.TaskStatus.canceled.value,
@@ -1416,6 +1660,10 @@ _REVISION_CONTEXT_CONSTRAINT_EXCLUDED_KEYS = frozenset(
     {
         "selected_strategy",
         "strategy_reason",
+        "evaluator_signal",
+        "excluded_completed_task_ids",
+        "repair_target_task_id",
+        "repair_target_task_name",
         "failed_task_id",
         "failed_task_name",
         "failed_task_error",
@@ -1439,13 +1687,19 @@ def _build_plan_revision_context(
     context: Mapping[str, Any] | None = None,
     selected_strategy: models.ReplanStrategy | None = None,
     strategy_reason: str | None = None,
+    exclude_completed_task_ids: Sequence[str] | None = None,
 ) -> models.PlanRevisionContext:
     normalized_metadata = metadata if isinstance(metadata, Mapping) else {}
     normalized_context = dict(context) if isinstance(context, Mapping) else {}
+    excluded_completed_task_ids = list(exclude_completed_task_ids or [])
     adaptive_status = _adaptive_replan_status_from_metadata(normalized_metadata)
     completed_steps = [
         models.CompletedStepContext.model_validate(item)
-        for item in _completed_step_snapshots_for_plan(db, active_plan)
+        for item in _completed_step_snapshots_for_plan(
+            db,
+            active_plan,
+            exclude_task_ids=excluded_completed_task_ids,
+        )
         if isinstance(item, Mapping)
     ]
     return models.PlanRevisionContext(
@@ -1454,9 +1708,14 @@ def _build_plan_revision_context(
         trigger_reason=str(reason or "").strip() or None,
         selected_strategy=selected_strategy,
         strategy_reason=str(strategy_reason or "").strip() or None,
+        evaluator_signal=_evaluator_signal_from_context(normalized_context),
         completed_steps=completed_steps,
         failed_step=_build_failed_step_context(normalized_context),
-        remaining_goals=_remaining_goals_from_plan(db, active_plan),
+        remaining_goals=_remaining_goals_from_plan(
+            db,
+            active_plan,
+            exclude_task_ids=excluded_completed_task_ids,
+        ),
         constraints={
             str(key): value
             for key, value in normalized_context.items()
@@ -10051,8 +10310,13 @@ def _handle_plan_created(envelope: dict) -> None:
         pending_replan = (
             job_metadata.get("pending_replan") if isinstance(job_metadata.get("pending_replan"), Mapping) else None
         )
+        excluded_completed_task_ids = _excluded_completed_task_ids_from_context(pending_replan)
         preserved_prefix_candidates = (
-            _completed_task_records_for_plan(db, existing)
+            _completed_task_records_for_plan(
+                db,
+                existing,
+                exclude_task_ids=excluded_completed_task_ids,
+            )
             if _should_preserve_completed_prefix_for_replan(pending_replan)
             else []
         )
@@ -10501,9 +10765,16 @@ def _intent_mismatch_repair_constraints(error: str, task: TaskRecord | None) -> 
 def _completed_step_snapshots_for_plan(
     db: Session,
     plan_record: PlanRecord | None,
+    *,
+    exclude_task_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     if plan_record is None:
         return []
+    excluded = {
+        str(task_id or "").strip()
+        for task_id in (exclude_task_ids or [])
+        if str(task_id or "").strip()
+    }
     tasks = (
         db.query(TaskRecord)
         .filter(TaskRecord.plan_id == plan_record.id)
@@ -10512,6 +10783,8 @@ def _completed_step_snapshots_for_plan(
     )
     snapshots: list[dict[str, Any]] = []
     for task in tasks:
+        if task.id in excluded:
+            continue
         if task.status not in {
             models.TaskStatus.completed.value,
             models.TaskStatus.accepted.value,
@@ -10535,10 +10808,12 @@ def _completed_step_snapshots_for_plan(
 def _completed_task_records_for_plan(
     db: Session,
     plan_record: PlanRecord | None,
+    *,
+    exclude_task_ids: Sequence[str] | None = None,
 ) -> list[TaskRecord]:
     if plan_record is None:
         return []
-    return (
+    query = (
         db.query(TaskRecord)
         .filter(TaskRecord.plan_id == plan_record.id)
         .filter(
@@ -10549,9 +10824,15 @@ def _completed_task_records_for_plan(
                 ]
             )
         )
-        .order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc())
-        .all()
     )
+    excluded = [
+        str(task_id or "").strip()
+        for task_id in (exclude_task_ids or [])
+        if str(task_id or "").strip()
+    ]
+    if excluded:
+        query = query.filter(TaskRecord.id.notin_(excluded))
+    return query.order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc()).all()
 
 
 def _replan_strategy_from_pending_context(
@@ -10720,7 +11001,11 @@ def _preserve_completed_prefix_for_replan(
 ) -> tuple[list[TaskRecord], dict[str, dict[str, Any]]]:
     if prior_plan_record is None or not _should_preserve_completed_prefix_for_replan(pending_replan):
         return [], {}
-    preserved_tasks = _completed_task_records_for_plan(db, prior_plan_record)
+    preserved_tasks = _completed_task_records_for_plan(
+        db,
+        prior_plan_record,
+        exclude_task_ids=_excluded_completed_task_ids_from_context(pending_replan),
+    )
     if not preserved_tasks:
         return [], {}
     strategy = _replan_strategy_from_pending_context(pending_replan)
@@ -10786,9 +11071,15 @@ def _supersede_unfinished_plan_tail(
     reason: str,
     superseded_at: datetime,
     selected_strategy: models.ReplanStrategy | None = None,
+    force_supersede_task_ids: Sequence[str] | None = None,
 ) -> None:
     if plan_record is None:
         return
+    forced_task_ids = {
+        str(task_id or "").strip()
+        for task_id in (force_supersede_task_ids or [])
+        if str(task_id or "").strip()
+    }
     cancelable_statuses = {
         models.TaskStatus.pending.value,
         models.TaskStatus.ready.value,
@@ -10803,12 +11094,12 @@ def _supersede_unfinished_plan_tail(
     }
     tasks = db.query(TaskRecord).filter(TaskRecord.plan_id == plan_record.id).all()
     for task in tasks:
-        if task.status in cancelable_statuses:
+        if task.id in forced_task_ids or task.status in cancelable_statuses:
             task.status = models.TaskStatus.canceled.value
             task.updated_at = superseded_at
     run_steps = db.query(RunStepRecord).filter(RunStepRecord.plan_id == plan_record.id).all()
     for step in run_steps:
-        if step.status in preserved_statuses:
+        if step.id not in forced_task_ids and step.status in preserved_statuses:
             continue
         metadata = dict(step.metadata_json or {})
         metadata["superseded_at"] = superseded_at.isoformat()
@@ -10884,6 +11175,7 @@ def _request_job_replan(
     selected_strategy: models.ReplanStrategy | None = None,
     strategy_reason: str | None = None,
     require_adaptive: bool = False,
+    exclude_completed_task_ids: Sequence[str] | None = None,
 ) -> bool:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
@@ -10900,6 +11192,11 @@ def _request_job_replan(
     current_count = _replan_count_from_metadata(metadata)
     now = _utcnow()
     active_plan = _active_plan_record_for_job(db, job, job_id=job_id)
+    excluded_completed_task_ids = [
+        str(task_id or "").strip()
+        for task_id in (exclude_completed_task_ids or [])
+        if str(task_id or "").strip()
+    ]
     revision_context = _build_plan_revision_context(
         db,
         metadata=metadata,
@@ -10908,6 +11205,7 @@ def _request_job_replan(
         context=context,
         selected_strategy=selected_strategy,
         strategy_reason=strategy_reason,
+        exclude_completed_task_ids=excluded_completed_task_ids,
     )
     max_replans = _effective_max_replans_from_metadata(metadata)
     revision_context.budgets = {
@@ -10921,8 +11219,14 @@ def _request_job_replan(
         "planning_mode": planning_mode.value,
         "prior_revision_number": _current_revision_number_from_metadata(metadata),
         "prior_plan_id": active_plan.id if active_plan is not None else None,
-        "completed_steps": _completed_step_snapshots_for_plan(db, active_plan),
+        "completed_steps": _completed_step_snapshots_for_plan(
+            db,
+            active_plan,
+            exclude_task_ids=excluded_completed_task_ids,
+        ),
     }
+    if excluded_completed_task_ids:
+        replan_context["excluded_completed_task_ids"] = excluded_completed_task_ids
     if selected_strategy is not None:
         replan_context["selected_strategy"] = selected_strategy.value
     if isinstance(strategy_reason, str) and strategy_reason.strip():
@@ -10942,6 +11246,7 @@ def _request_job_replan(
         reason=reason,
         superseded_at=now,
         selected_strategy=selected_strategy,
+        force_supersede_task_ids=excluded_completed_task_ids,
     )
     metadata["replan_count"] = current_count + 1
     metadata["replan_reason"] = reason
@@ -11070,36 +11375,199 @@ def _replan_job_for_intent_mismatch(
     )
 
 
+def _schema_invalid_strategy_for_policy(
+    policy: Mapping[str, Any] | None,
+) -> models.ReplanStrategy:
+    raw = (
+        str((policy or {}).get("schema_invalid_strategy") or ADAPTIVE_SCHEMA_INVALID_STRATEGY_DEFAULT)
+        .strip()
+        .lower()
+    )
+    try:
+        strategy = models.ReplanStrategy(raw)
+    except ValueError:
+        strategy = models.ReplanStrategy.rework_step
+    if strategy not in {
+        models.ReplanStrategy.rework_step,
+        models.ReplanStrategy.patch_suffix,
+    }:
+        return models.ReplanStrategy.rework_step
+    return strategy
+
+
+def _apply_task_evaluator_recovery(
+    db: Session,
+    *,
+    task: TaskRecord,
+    job: JobRecord | None,
+    payload: Mapping[str, Any],
+    occurred_at: datetime,
+    requested_rework: bool,
+) -> tuple[str, str | None, str | None]:
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    policy = _adaptive_policy_from_metadata(metadata)
+    evaluator_signal = _normalized_evaluator_signal_payload(payload)
+    requested_rework_count = max(1, int(task.rework_count or 0) + 1)
+    decision = replan_controller.decide_task_evaluator_recovery(
+        planning_mode=_planning_mode_from_metadata(metadata),
+        has_pending_replan=isinstance(metadata.get("pending_replan"), Mapping),
+        replans_used=_replan_count_from_metadata(metadata),
+        max_replans=_effective_max_replans_from_metadata(metadata),
+        requested_rework_count=requested_rework_count,
+        max_reworks=max(int(task.max_reworks or 0), 0),
+        evaluator_signal=evaluator_signal,
+        requested_rework=requested_rework,
+        min_confidence=float(policy.get("evaluator_min_confidence", ADAPTIVE_EVALUATOR_MIN_CONFIDENCE_DEFAULT)),
+        replan_confidence_floor=float(
+            policy.get(
+                "evaluator_replan_confidence_floor",
+                ADAPTIVE_EVALUATOR_REPLAN_CONFIDENCE_FLOOR_DEFAULT,
+            )
+        ),
+        schema_invalid_strategy=_schema_invalid_strategy_for_policy(policy),
+    )
+    repair_decision = _repair_decision_payload(decision, decided_at=occurred_at)
+    _record_task_evaluator_state(
+        db,
+        task=task,
+        evaluator_signal=evaluator_signal,
+        repair_decision=(
+            repair_decision
+            if requested_rework or decision.strategy_reason != "accepted_with_sufficient_confidence"
+            else None
+        ),
+        occurred_at=occurred_at,
+    )
+
+    if decision.should_replan:
+        _update_latest_step_attempt_status(
+            db,
+            task=task,
+            status=models.TaskStatus.rework_requested.value,
+        )
+        _update_execution_request_status(
+            db,
+            job=job,
+            task=task,
+            payload=payload,
+            status=models.TaskStatus.rework_requested.value,
+            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+        )
+        exclude_completed_task_ids = (
+            [task.id]
+            if task.status in {
+                models.TaskStatus.completed.value,
+                models.TaskStatus.accepted.value,
+            }
+            else []
+        )
+        replan_context: dict[str, Any] = {
+            "evaluator_signal": evaluator_signal,
+            "repair_target_task_id": task.id,
+            "repair_target_task_name": task.name,
+        }
+        if requested_rework:
+            replan_context["critic_requested_rework"] = True
+        replan_done = _request_job_replan(
+            db,
+            task.job_id,
+            reason=str(decision.replan_reason or ""),
+            context=replan_context,
+            selected_strategy=decision.strategy,
+            strategy_reason=decision.strategy_reason,
+            require_adaptive=decision.require_adaptive,
+            exclude_completed_task_ids=exclude_completed_task_ids,
+        )
+        if replan_done:
+            return "replan", None, None
+
+    if decision.strategy == models.ReplanStrategy.rework_step:
+        _store_adaptive_strategy_decision(job, decision, decided_at=occurred_at)
+        _update_latest_step_attempt_status(
+            db,
+            task=task,
+            status=models.TaskStatus.rework_requested.value,
+        )
+        _update_execution_request_status(
+            db,
+            job=job,
+            task=task,
+            payload=payload,
+            status=models.TaskStatus.rework_requested.value,
+            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+        )
+        task.rework_count = requested_rework_count
+        task.status = models.TaskStatus.pending.value
+        task.updated_at = occurred_at
+        return "rework", task.job_id, task.plan_id
+
+    if requested_rework or decision.strategy_reason != "accepted_with_sufficient_confidence":
+        _store_adaptive_strategy_decision(job, decision, decided_at=occurred_at)
+        _mark_task_failed_from_evaluator(
+            db,
+            task=task,
+            job=job,
+            payload=payload,
+            occurred_at=occurred_at,
+            strategy_reason=decision.strategy_reason,
+        )
+        return "failed", None, None
+
+    return "accept", task.job_id, task.plan_id
+
+
 def _handle_task_accepted(envelope: dict) -> None:
     payload = envelope.get("payload") or {}
     task_id = payload.get("task_id") or envelope.get("task_id")
     if not task_id:
         return
     now = _utcnow()
+    occurred_at = _parse_event_datetime(envelope.get("occurred_at")) or now
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
             return
-        task.status = models.TaskStatus.accepted.value
-        task.updated_at = now
-        _update_latest_step_attempt_status(
+        job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
+        action, job_id, plan_id = _apply_task_evaluator_recovery(
             db,
             task=task,
-            status=models.TaskStatus.accepted.value,
-        )
-        _update_execution_request_status(
-            db,
-            job=db.query(JobRecord).filter(JobRecord.id == task.job_id).first(),
-            task=task,
+            job=job,
             payload=payload,
-            status=models.TaskStatus.accepted.value,
-            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+            occurred_at=occurred_at,
+            requested_rework=False,
         )
-        db.commit()
-        job_id = task.job_id
-        plan_id = task.plan_id
-    _dispatch_ready_work_for_job(job_id, plan_id, envelope.get("correlation_id"))
-    _refresh_job_status(job_id)
+        if action == "replan":
+            return
+        if action == "rework":
+            db.commit()
+            assert job_id is not None
+            assert plan_id is not None
+            resolved_job_id = job_id
+            resolved_plan_id = plan_id
+        elif action == "failed":
+            db.commit()
+            return
+        else:
+            task.status = models.TaskStatus.accepted.value
+            task.updated_at = now
+            _update_latest_step_attempt_status(
+                db,
+                task=task,
+                status=models.TaskStatus.accepted.value,
+            )
+            _update_execution_request_status(
+                db,
+                job=job,
+                task=task,
+                payload=payload,
+                status=models.TaskStatus.accepted.value,
+                step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+            )
+            db.commit()
+            resolved_job_id = task.job_id
+            resolved_plan_id = task.plan_id
+    _dispatch_ready_work_for_job(resolved_job_id, resolved_plan_id, envelope.get("correlation_id"))
+    _refresh_job_status(resolved_job_id)
 
 
 def _handle_task_rework(envelope: dict) -> None:
@@ -11108,41 +11576,29 @@ def _handle_task_rework(envelope: dict) -> None:
     if not task_id:
         return
     now = _utcnow()
+    occurred_at = _parse_event_datetime(envelope.get("occurred_at")) or now
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
         if not task:
             return
-        _update_latest_step_attempt_status(
+        job = db.query(JobRecord).filter(JobRecord.id == task.job_id).first()
+        action, job_id, plan_id = _apply_task_evaluator_recovery(
             db,
             task=task,
-            status=models.TaskStatus.rework_requested.value,
-        )
-        _update_execution_request_status(
-            db,
-            job=db.query(JobRecord).filter(JobRecord.id == task.job_id).first(),
-            task=task,
+            job=job,
             payload=payload,
-            status=models.TaskStatus.rework_requested.value,
-            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+            occurred_at=occurred_at,
+            requested_rework=True,
         )
-        task.rework_count = (task.rework_count or 0) + 1
-        if _limit_exceeded(task.rework_count, task.max_reworks):
-            task.status = models.TaskStatus.failed.value
-            task.updated_at = now
+        if action == "replan":
+            return
+        if action == "failed":
             db.commit()
-            _emit_event(
-                "task.failed",
-                _task_payload_with_error(
-                    task, envelope.get("correlation_id"), "max_reworks_exceeded"
-                ),
-            )
             _refresh_job_status(task.job_id)
             return
-        task.status = models.TaskStatus.pending.value
-        task.updated_at = now
         db.commit()
-        job_id = task.job_id
-        plan_id = task.plan_id
+        assert job_id is not None
+        assert plan_id is not None
     _dispatch_ready_work_for_job(job_id, plan_id, envelope.get("correlation_id"))
 
 
@@ -15414,6 +15870,14 @@ def get_job_debugger(
     if plan_record is not None:
         task_query = task_query.filter(TaskRecord.plan_id == plan_record.id)
     task_records = task_query.order_by(TaskRecord.created_at.asc(), TaskRecord.name.asc()).all()
+    step_metadata_by_id: dict[str, dict[str, Any]] = {}
+    if task_records:
+        step_metadata_by_id = {
+            row.id: dict(row.metadata_json or {})
+            for row in db.query(RunStepRecord)
+            .filter(RunStepRecord.id.in_([record.id for record in task_records]))
+            .all()
+        }
     task_models = _resolve_task_deps(task_records)
     task_map = {task.id: task for task in task_models}
     id_to_name = {record.id: record.name for record in task_records}
@@ -15474,6 +15938,14 @@ def get_job_debugger(
                     task_intent_profiles.get(record.id),
                 ).model_dump(mode="json"),
                 "revision_merge": revision_task_annotations.get(record.id),
+                "latest_evaluator_signal": step_metadata_by_id.get(record.id, {}).get("latest_evaluator_signal"),
+                "evaluator_signal_history": _limited_history(
+                    step_metadata_by_id.get(record.id, {}).get("evaluator_signal_history")
+                ),
+                "latest_repair_decision": step_metadata_by_id.get(record.id, {}).get("latest_repair_decision"),
+                "repair_decision_history": _limited_history(
+                    step_metadata_by_id.get(record.id, {}).get("repair_decision_history")
+                ),
                 "resolved_tool_inputs": hydrated_payload.get("tool_inputs", {}),
                 "tool_inputs_validation": hydrated_payload.get("tool_inputs_validation", {}),
                 "tool_inputs_resolved": bool(hydrated_payload.get("tool_inputs_resolved")),
@@ -15699,6 +16171,18 @@ def _run_debugger_payload(
                 ).model_dump(mode="json"),
                 "latest_result": latest_result,
                 "revision_merge": revision_task_annotations.get(step_record.id),
+                "latest_evaluator_signal": (
+                    dict(step_record.metadata_json or {}).get("latest_evaluator_signal")
+                ),
+                "evaluator_signal_history": _limited_history(
+                    dict(step_record.metadata_json or {}).get("evaluator_signal_history")
+                ),
+                "latest_repair_decision": (
+                    dict(step_record.metadata_json or {}).get("latest_repair_decision")
+                ),
+                "repair_decision_history": _limited_history(
+                    dict(step_record.metadata_json or {}).get("repair_decision_history")
+                ),
                 "execution_requests": execution_requests_by_step.get(step_record.id, []),
                 "checkpoints": checkpoints_by_step.get(step_record.id, []),
                 "attempts": attempts_by_task.get(step_record.id, []),
