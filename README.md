@@ -331,6 +331,24 @@ GitHub Actions staging gate:
 - Optional environment secret: `STAGING_API_BEARER_TOKEN`
 - Supports manual `workflow_dispatch` and reusable `workflow_call`
 - Uploads `artifacts/evals/chat_boundary_live_report.json` as a build artifact
+- Can also export `/feedback/examples` from staging, build `artifacts/evals/chat_routing_feedback.jsonl`, write `training/chat_routing_reranker_train.jsonl`, and train `artifacts/evals/chat_routing_calibrator.json`
+
+Build routing calibrator artifacts from an API environment:
+
+```bash
+CHAT_ROUTING_FEEDBACK_BASE_URL=https://staging.example.internal \
+CHAT_ROUTING_FEEDBACK_BEARER_TOKEN=... \
+CHAT_ROUTING_FEEDBACK_LIMIT=5000 \
+CHAT_ROUTING_CALIBRATOR_MIN_EXAMPLES=10 \
+make build-chat-routing-calibrator-from-api
+```
+
+Router calibration controls:
+
+- `CHAT_ROUTING_CALIBRATOR_ENABLED=true`
+- `CHAT_ROUTING_CALIBRATOR_LIVE=false`
+- `CHAT_ROUTING_CALIBRATOR_MIN_PROBABILITY=0.65`
+- `CHAT_ROUTING_CALIBRATOR_MIN_MARGIN=0.08`
 
 ## Kubernetes
 

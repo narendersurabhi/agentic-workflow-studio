@@ -4,6 +4,7 @@
 	eval-chat-boundary-live \
 	build-capability-feedback \
 	build-chat-routing-feedback \
+	build-chat-routing-calibrator-from-api \
 	build-intent-tuning-candidates \
 	build-capability-reranker-dataset \
 	build-chat-routing-reranker-dataset \
@@ -212,6 +213,9 @@ build-capability-feedback:
 
 build-chat-routing-feedback:
 	PYTHONPATH=. python3 scripts/build_chat_routing_feedback.py --output artifacts/evals/chat_routing_feedback.jsonl --training-output training/chat_routing_reranker_train.jsonl
+
+build-chat-routing-calibrator-from-api:
+	PYTHONPATH=. python3 scripts/build_chat_routing_calibrator_from_api.py --feedback-output artifacts/evals/chat_routing_feedback.jsonl --training-output training/chat_routing_reranker_train.jsonl --model-output artifacts/evals/chat_routing_calibrator.json --summary-output artifacts/evals/chat_routing_calibrator_report.json
 
 build-intent-tuning-candidates:
 	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/build_intent_tuning_candidates.py --jsonl-output artifacts/evals/intent_tuning_candidates.jsonl --yaml-output artifacts/evals/intent_tuning_candidates.yaml

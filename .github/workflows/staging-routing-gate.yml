@@ -17,6 +17,21 @@ on:
         required: false
         default: "1.0"
         type: string
+      build_calibrator:
+        description: "Build chat-routing calibrator artifacts from staging feedback"
+        required: false
+        default: true
+        type: boolean
+      feedback_limit:
+        description: "Maximum feedback examples to export for calibrator training"
+        required: false
+        default: "5000"
+        type: string
+      calibrator_min_examples:
+        description: "Minimum reranker examples required before writing a calibrator model"
+        required: false
+        default: "10"
+        type: string
       verbose:
         description: "Print per-case rows"
         required: false
@@ -35,6 +50,18 @@ on:
       min_pass_rate:
         required: false
         default: "1.0"
+        type: string
+      build_calibrator:
+        required: false
+        default: true
+        type: boolean
+      feedback_limit:
+        required: false
+        default: "5000"
+        type: string
+      calibrator_min_examples:
+        required: false
+        default: "10"
         type: string
       verbose:
         required: false
@@ -68,6 +95,9 @@ jobs:
           INPUT_BASE_URL: ${{ inputs.base_url }}
           INPUT_GOLD_PATH: ${{ inputs.gold_path }}
           INPUT_MIN_PASS_RATE: ${{ inputs.min_pass_rate }}
+          INPUT_BUILD_CALIBRATOR: ${{ inputs.build_calibrator }}
+          INPUT_FEEDBACK_LIMIT: ${{ inputs.feedback_limit }}
+          INPUT_CALIBRATOR_MIN_EXAMPLES: ${{ inputs.calibrator_min_examples }}
           INPUT_VERBOSE: ${{ inputs.verbose }}
           SECRET_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
           SECRET_BEARER_TOKEN: ${{ secrets.STAGING_API_BEARER_TOKEN }}
@@ -81,9 +111,14 @@ jobs:
             exit 1
           fi
           echo "CHAT_BOUNDARY_LIVE_BASE_URL=$BASE_URL" >> "$GITHUB_ENV"
+          echo "CHAT_ROUTING_FEEDBACK_BASE_URL=$BASE_URL" >> "$GITHUB_ENV"
           echo "CHAT_BOUNDARY_LIVE_GOLD=${INPUT_GOLD_PATH:-eval/chat_boundary_live_regression.yaml}" >> "$GITHUB_ENV"
           echo "CHAT_BOUNDARY_LIVE_MIN_PASS_RATE=${INPUT_MIN_PASS_RATE:-1.0}" >> "$GITHUB_ENV"
           echo "CHAT_BOUNDARY_LIVE_OUTPUT=artifacts/evals/chat_boundary_live_report.json" >> "$GITHUB_ENV"
+          echo "CHAT_ROUTING_FEEDBACK_LIMIT=${INPUT_FEEDBACK_LIMIT:-5000}" >> "$GITHUB_ENV"
+          echo "CHAT_ROUTING_CALIBRATOR_MIN_EXAMPLES=${INPUT_CALIBRATOR_MIN_EXAMPLES:-10}" >> "$GITHUB_ENV"
+          echo "CHAT_ROUTING_CALIBRATOR_REPORT_OUTPUT=artifacts/evals/chat_routing_calibrator_report.json" >> "$GITHUB_ENV"
+          echo "BUILD_CHAT_ROUTING_CALIBRATOR=${INPUT_BUILD_CALIBRATOR}" >> "$GITHUB_ENV"
           if [ "${INPUT_VERBOSE}" = "true" ]; then
             echo "CHAT_BOUNDARY_LIVE_VERBOSE=1" >> "$GITHUB_ENV"
           else
@@ -91,7 +126,12 @@ jobs:
           fi
           if [ -n "${SECRET_BEARER_TOKEN:-}" ]; then
             echo "CHAT_BOUNDARY_LIVE_BEARER_TOKEN=$SECRET_BEARER_TOKEN" >> "$GITHUB_ENV"
+            echo "CHAT_ROUTING_FEEDBACK_BEARER_TOKEN=$SECRET_BEARER_TOKEN" >> "$GITHUB_ENV"
           fi
+
+      - name: Build chat routing calibrator artifacts from staging feedback
+        if: env.BUILD_CHAT_ROUTING_CALIBRATOR == 'true'
+        run: make build-chat-routing-calibrator-from-api
 
       - name: Run staging chat routing regression
         run: make eval-chat-boundary-live
@@ -102,3 +142,14 @@ jobs:
         with:
           name: chat-boundary-live-report
           path: artifacts/evals/chat_boundary_live_report.json
+
+      - name: Upload calibrator artifacts
+        if: always() && env.BUILD_CHAT_ROUTING_CALIBRATOR == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-routing-calibrator-artifacts
+          path: |
+            artifacts/evals/chat_routing_feedback.jsonl
+            training/chat_routing_reranker_train.jsonl
+            artifacts/evals/chat_routing_calibrator.json
+            artifacts/evals/chat_routing_calibrator_report.json
