@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from libs.core import capability_registry, chat_contracts, intent_contract, models, workflow_contracts
 
-from . import context_service, memory_profile_service
+from . import chat_clarification_normalizer, context_service, memory_profile_service
 from .models import ChatMessageRecord, ChatSessionRecord
 
 logger = logging.getLogger("api.chat_service")
@@ -76,6 +76,46 @@ _CLARIFICATION_INTENT_CHANGE_ACTION_TOKENS = {
 }
 _OUTPUT_FORMAT_TOKENS = {"pdf", "docx", "markdown", "json", "word"}
 _TONE_TOKENS = {"practical", "formal", "conversational", "executive", "technical", "concise"}
+_OUTPUT_FORMAT_BY_EXTENSION = {
+    "pdf": "pdf",
+    "docx": "docx",
+    "md": "md",
+    "markdown": "md",
+    "json": "json",
+    "csv": "csv",
+    "xlsx": "xlsx",
+    "html": "html",
+    "txt": "txt",
+    "text": "txt",
+}
+_CLARIFICATION_FIELD_ALIASES = {
+    "content": "instruction",
+    "contextual_information": "query",
+    "document_instructions": "instruction",
+    "document_intent_title": "topic",
+    "document_name": "path",
+    "document_spec_content": "instruction",
+    "document_spec_title": "topic",
+    "document_title": "topic",
+    "document_topic": "topic",
+    "document_topic_summary": "topic",
+    "filepath": "path",
+    "format": "output_format",
+    "grounding_facts": "query",
+    "output_dir": "path",
+    "output_directory": "path",
+    "output_file_path": "path",
+    "output_filepath": "path",
+    "rendered_document_content": "instruction",
+    "retrieved_content": "query",
+    "target_directory": "path",
+    "target_format": "output_format",
+    "topic_context": "topic",
+    "topic_description": "topic",
+    "topic_query": "query",
+    "user_clarification": "instruction",
+    "user_goal": "instruction",
+}
 
 
 @dataclass(frozen=True)
@@ -213,6 +253,211 @@ def _unique_string_list(*values: Sequence[Any] | None) -> list[str]:
     return normalized
 
 
+def _normalize_clarification_field_key(value: Any) -> str:
+    normalized = intent_contract.normalize_required_input_key(value)
+    if not normalized:
+        return ""
+    return _CLARIFICATION_FIELD_ALIASES.get(normalized, normalized)
+
+
+def _clarification_output_format_from_path(path: Any) -> str | None:
+    if not isinstance(path, str):
+        return None
+    candidate = path.strip().lower()
+    if not candidate or "." not in candidate:
+        return None
+    extension = candidate.rsplit(".", 1)[-1]
+    return _OUTPUT_FORMAT_BY_EXTENSION.get(extension)
+
+
+def _merge_known_clarification_slots(
+    *,
+    slot_values: Mapping[str, Any] | None,
+    slot_provenance: Mapping[str, str] | None,
+    target_values: dict[str, Any],
+    target_provenance: dict[str, str],
+) -> None:
+    if isinstance(slot_values, Mapping):
+        for raw_key, raw_value in slot_values.items():
+            key = _normalize_clarification_field_key(raw_key)
+            if not key or raw_value is None:
+                continue
+            if isinstance(raw_value, str):
+                value = raw_value.strip()
+                if not value:
+                    continue
+            else:
+                value = raw_value
+            target_values[key] = value
+            if isinstance(slot_provenance, Mapping):
+                raw_source = slot_provenance.get(raw_key)
+                if raw_source is None:
+                    raw_source = slot_provenance.get(key)
+                source = str(raw_source or "").strip()
+                if source:
+                    target_provenance[key] = source
+
+    inferred_output_format = _clarification_output_format_from_path(target_values.get("path"))
+    if inferred_output_format and not str(target_values.get("output_format") or "").strip():
+        target_values["output_format"] = inferred_output_format
+        target_provenance.setdefault(
+            "output_format",
+            target_provenance.get("path") or workflow_contracts.SlotProvenance.inferred.value,
+        )
+
+
+def _ensure_inferred_clarification_slots(
+    *,
+    known_slot_values: dict[str, Any],
+    slot_provenance: dict[str, str],
+) -> None:
+    inferred_output_format = _clarification_output_format_from_path(known_slot_values.get("path"))
+    if inferred_output_format and not str(known_slot_values.get("output_format") or "").strip():
+        known_slot_values["output_format"] = inferred_output_format
+        slot_provenance.setdefault(
+            "output_format",
+            slot_provenance.get("path") or workflow_contracts.SlotProvenance.inferred.value,
+        )
+
+
+def _clarification_collectible_fields(
+    capability_ids: Sequence[str] | None,
+) -> set[str]:
+    normalized_capability_ids = [
+        capability_registry.canonicalize_capability_id(capability_id) or str(capability_id or "").strip()
+        for capability_id in (capability_ids or [])
+        if str(capability_id or "").strip()
+    ]
+    if not normalized_capability_ids:
+        return set()
+    try:
+        registry = capability_registry.load_capability_registry()
+    except Exception:  # noqa: BLE001
+        return set()
+
+    allowed: set[str] = set()
+    for capability_id in normalized_capability_ids:
+        spec = registry.get(capability_id)
+        if spec is None:
+            continue
+        planner_hints = dict(spec.planner_hints or {})
+        for collection_name in ("chat_collectible_fields", "chat_required_fields"):
+            raw_fields = planner_hints.get(collection_name)
+            if not isinstance(raw_fields, Sequence) or isinstance(raw_fields, (str, bytes)):
+                continue
+            for raw_field in raw_fields:
+                field = _normalize_clarification_field_key(raw_field)
+                if field:
+                    allowed.add(field)
+    return allowed
+
+
+def _sanitize_clarification_field_queue(
+    *,
+    fields: Sequence[Any] | None,
+    allowed_fields: set[str],
+    known_slot_values: Mapping[str, Any],
+) -> list[str]:
+    ordered: list[str] = []
+    for raw_field in fields or ():
+        field = _normalize_clarification_field_key(raw_field)
+        if not field or field in ordered:
+            continue
+        if allowed_fields and field not in allowed_fields:
+            continue
+        value = known_slot_values.get(field)
+        if value is not None and (not isinstance(value, str) or value.strip()):
+            continue
+        ordered.append(field)
+    return ordered
+
+
+def _clarification_field_from_question(
+    *,
+    question: str | None,
+    candidate_fields: Sequence[Any] = (),
+    goal: str = "",
+) -> str | None:
+    normalized_question = str(question or "").strip()
+    if not normalized_question:
+        return None
+    question_lower = normalized_question.lower()
+    candidates: list[str] = []
+    candidate_set: set[str] = set()
+    for raw_field in candidate_fields:
+        normalized_field = _normalize_clarification_field_key(raw_field)
+        if normalized_field and normalized_field not in candidate_set:
+            candidate_set.add(normalized_field)
+            candidates.append(normalized_field)
+
+    for field in candidates:
+        canonical_question = chat_clarification_normalizer.clarification_question_for_field(
+            field,
+            goal=goal,
+        )
+        if normalized_question == canonical_question:
+            return field
+
+    if "target audience" in question_lower and "audience" in candidate_set:
+        return "audience"
+    if "tone" in question_lower and "tone" in candidate_set:
+        return "tone"
+    if any(
+        token in question_lower
+        for token in (
+            "output format",
+            "what format",
+            "target format",
+            "pdf",
+            "docx",
+            "markdown",
+        )
+    ) and "output_format" in candidate_set:
+        return "output_format"
+    if any(
+        token in question_lower
+        for token in (
+            "output path",
+            "filename",
+            "file name",
+            "name of the document",
+            "exact filename",
+            "save the document",
+            "where should i save",
+        )
+    ) and "path" in candidate_set:
+        return "path"
+    if any(token in question_lower for token in ("main topic", "topic", "title", "subject")) and "topic" in candidate_set:
+        return "topic"
+    if any(
+        token in question_lower
+        for token in (
+            "specifically cover",
+            "what content should be in the document",
+            "what specific content should be in the document",
+            "basis for the content",
+            "detailed prompt",
+            "research",
+        )
+    ):
+        for field in ("instruction", "markdown_text", "query"):
+            if field in candidate_set:
+                return field
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _ordered_clarification_fields(*collections: Sequence[Any] | None) -> list[str]:
+    ordered: list[str] = []
+    for collection in collections:
+        if not isinstance(collection, Sequence) or isinstance(collection, (str, bytes)):
+            continue
+        for raw_field in collection:
+            normalized_field = _normalize_clarification_field_key(raw_field)
+            if normalized_field and normalized_field not in ordered:
+                ordered.append(normalized_field)
+    return ordered
+
+
 def _merge_clarification_state_for_persistence(
     latest: Mapping[str, Any] | None,
     desired: Mapping[str, Any] | None,
@@ -226,12 +471,33 @@ def _merge_clarification_state_for_persistence(
     if desired_state is None:
         return latest_state.model_dump(mode="json", exclude_none=True)
 
-    known_slot_values = dict(latest_state.known_slot_values or {})
-    known_slot_values.update(dict(desired_state.known_slot_values or {}))
-    resolved_slots = dict(latest_state.resolved_slots or {})
-    resolved_slots.update(dict(desired_state.resolved_slots or {}))
-    slot_provenance = dict(latest_state.slot_provenance or {})
-    slot_provenance.update(dict(desired_state.slot_provenance or {}))
+    known_slot_values: dict[str, Any] = {}
+    slot_provenance: dict[str, str] = {}
+    _merge_known_clarification_slots(
+        slot_values=latest_state.known_slot_values,
+        slot_provenance=latest_state.slot_provenance,
+        target_values=known_slot_values,
+        target_provenance=slot_provenance,
+    )
+    _merge_known_clarification_slots(
+        slot_values=latest_state.resolved_slots,
+        slot_provenance=latest_state.slot_provenance,
+        target_values=known_slot_values,
+        target_provenance=slot_provenance,
+    )
+    _merge_known_clarification_slots(
+        slot_values=desired_state.known_slot_values,
+        slot_provenance=desired_state.slot_provenance,
+        target_values=known_slot_values,
+        target_provenance=slot_provenance,
+    )
+    _merge_known_clarification_slots(
+        slot_values=desired_state.resolved_slots,
+        slot_provenance=desired_state.slot_provenance,
+        target_values=known_slot_values,
+        target_provenance=slot_provenance,
+    )
+    resolved_slots = dict(known_slot_values)
     workflow_target = dict(latest_state.execution_frame.workflow_target or {})
     workflow_target.update(dict(desired_state.execution_frame.workflow_target or {}))
 
@@ -273,27 +539,16 @@ def _merge_clarification_state_for_persistence(
         **dict(latest_state.goal_intent_profile or {}),
         **dict(desired_state.goal_intent_profile or {}),
     }
-    merged.current_question = (
-        str(desired_state.current_question or "").strip()
-        or str(latest_state.current_question or "").strip()
-        or None
-    )
-    merged.current_question_field = (
-        str(desired_state.current_question_field or "").strip()
-        or str(latest_state.current_question_field or "").strip()
-        or None
-    )
+    merged.current_question = str(desired_state.current_question or "").strip() or None
+    merged.current_question_field = str(desired_state.current_question_field or "").strip() or None
     merged.pending_questions = _unique_string_list(
         desired_state.pending_questions or desired_state.questions,
-        latest_state.pending_questions if not desired_state.pending_questions else (),
-        latest_state.questions if not desired_state.pending_questions else (),
     )
-    merged.pending_fields = _unique_string_list(
-        desired_state.pending_fields if desired_state.pending_fields else latest_state.pending_fields,
+    merged.pending_fields = _ordered_clarification_fields(
+        desired_state.pending_fields,
     )
-    merged.required_fields = _unique_string_list(
+    merged.required_fields = _ordered_clarification_fields(
         desired_state.required_fields,
-        latest_state.required_fields,
     )
     merged.known_slot_values = known_slot_values
     merged.resolved_slots = resolved_slots
@@ -301,7 +556,7 @@ def _merge_clarification_state_for_persistence(
     merged.pending_fields = [
         field
         for field in merged.pending_fields
-        if str(field).strip() and str(field).strip() not in known_slot_values
+        if field and field not in known_slot_values
     ]
     merged.answered_fields = sorted(
         {
@@ -310,10 +565,23 @@ def _merge_clarification_state_for_persistence(
             *[str(key).strip() for key in known_slot_values.keys() if str(key).strip()],
         }
     )
-    if not merged.current_question_field and merged.pending_fields:
-        merged.current_question_field = str(merged.pending_fields[0]).strip() or None
     if not merged.current_question and merged.pending_questions:
         merged.current_question = str(merged.pending_questions[0]).strip() or None
+    resolved_question_field = _clarification_field_from_question(
+        question=merged.current_question,
+        candidate_fields=merged.pending_fields or merged.required_fields,
+        goal=merged.original_goal,
+    )
+    if resolved_question_field:
+        merged.current_question_field = resolved_question_field
+        if resolved_question_field not in merged.required_fields:
+            merged.required_fields = [resolved_question_field, *merged.required_fields]
+        merged.pending_fields = [
+            resolved_question_field,
+            *[field for field in merged.pending_fields if field != resolved_question_field],
+        ]
+    elif not merged.current_question_field and merged.pending_fields:
+        merged.current_question_field = str(merged.pending_fields[0]).strip() or None
     merged.questions = [merged.current_question] if merged.current_question else []
     merged.question_history = _unique_string_list(
         latest_state.question_history,
@@ -516,7 +784,13 @@ def _active_execution_target(
     existing_state: chat_contracts.ClarificationState | None,
     known_slot_values: Mapping[str, Any] | None,
     pending_fields: Sequence[str] | None,
-) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+    dict[str, Any],
+    intent_contract.ActiveExecutionTarget | None,
+]:
     active_family = existing_state.active_family if existing_state is not None else None
     active_segment_id = existing_state.active_segment_id if existing_state is not None else None
     active_capability_id = existing_state.active_capability_id if existing_state is not None else None
@@ -528,6 +802,7 @@ def _active_execution_target(
     )
 
     envelope = workflow_contracts.parse_normalized_intent_envelope(normalized_intent_envelope)
+    active_target: intent_contract.ActiveExecutionTarget | None = None
     if envelope is not None:
         active_target = intent_contract.select_active_execution_target(
             graph=workflow_contracts.dump_intent_graph(envelope.graph) or {},
@@ -552,7 +827,7 @@ def _active_execution_target(
     if latest_workflow_target:
         workflow_target = latest_workflow_target
         active_family = active_family or "workflow"
-    return active_family, active_segment_id, active_capability_id, workflow_target
+    return active_family, active_segment_id, active_capability_id, workflow_target, active_target
 
 
 def _pending_clarification_state(
@@ -574,55 +849,69 @@ def _pending_clarification_state(
         or resolved_goal
         or ""
     ).strip()
-    known_slot_values = (
-        dict(existing_state.known_slot_values)
-        if existing_state is not None and isinstance(existing_state.known_slot_values, Mapping)
-        else {}
-    )
-    slot_provenance = (
-        dict(existing_state.slot_provenance)
-        if existing_state is not None and isinstance(existing_state.slot_provenance, Mapping)
-        else {}
-    )
+    known_slot_values: dict[str, Any] = {}
+    slot_provenance: dict[str, str] = {}
+    if existing_state is not None:
+        _merge_known_clarification_slots(
+            slot_values=existing_state.known_slot_values,
+            slot_provenance=existing_state.slot_provenance,
+            target_values=known_slot_values,
+            target_provenance=slot_provenance,
+        )
+        _merge_known_clarification_slots(
+            slot_values=existing_state.resolved_slots,
+            slot_provenance=existing_state.slot_provenance,
+            target_values=known_slot_values,
+            target_provenance=slot_provenance,
+        )
     normalized_fields = _normalized_clarification_fields(context_json)
     if isinstance(context_json, Mapping):
         for key in _PENDING_CLARIFICATION_SLOT_KEYS:
             value = context_json.get(key)
-            if isinstance(value, str):
-                if value.strip():
-                    known_slot_values[key] = value.strip()
-                    slot_provenance[key] = (
-                        workflow_contracts.SlotProvenance.clarification_normalized.value
-                        if key in normalized_fields
-                        else workflow_contracts.SlotProvenance.explicit_user.value
-                    )
+            source_key = _normalize_clarification_field_key(key)
+            if not source_key:
                 continue
-            if value is not None:
-                known_slot_values[key] = value
-                slot_provenance[key] = (
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    continue
+                known_slot_values[source_key] = stripped
+                slot_provenance[source_key] = (
                     workflow_contracts.SlotProvenance.clarification_normalized.value
-                    if key in normalized_fields
+                    if source_key in normalized_fields
                     else workflow_contracts.SlotProvenance.explicit_user.value
                 )
+                continue
+            if value is not None:
+                known_slot_values[source_key] = value
+                slot_provenance[source_key] = (
+                    workflow_contracts.SlotProvenance.clarification_normalized.value
+                    if source_key in normalized_fields
+                    else workflow_contracts.SlotProvenance.explicit_user.value
+                )
+    _ensure_inferred_clarification_slots(
+        known_slot_values=known_slot_values,
+        slot_provenance=slot_provenance,
+    )
     pending_fields: list[str] = []
     required_fields: list[str] = []
     if isinstance(assessment, Mapping):
         for raw_field in (assessment.get("missing_slots") or []) + (assessment.get("blocking_slots") or []):
             if isinstance(raw_field, str):
-                field = raw_field.strip()
+                field = _normalize_clarification_field_key(raw_field)
                 if field and field not in required_fields:
                     required_fields.append(field)
                 if field and field not in pending_fields:
                     pending_fields.append(field)
     for raw_field in (existing_state.pending_fields if existing_state is not None else []):
         if isinstance(raw_field, str):
-            field = raw_field.strip()
+            field = _normalize_clarification_field_key(raw_field)
             if field and field not in pending_fields and field not in known_slot_values:
                 pending_fields.append(field)
     if existing_state is not None:
         for raw_field in existing_state.required_fields:
             if isinstance(raw_field, str):
-                field = raw_field.strip()
+                field = _normalize_clarification_field_key(raw_field)
                 if field and field not in required_fields:
                     required_fields.append(field)
     question_history: list[str] = []
@@ -659,13 +948,47 @@ def _pending_clarification_state(
                 value = raw_value.strip()
                 if value and value not in candidate_capabilities:
                     candidate_capabilities.append(value)
-    active_family, active_segment_id, active_capability_id, workflow_target = _active_execution_target(
+    (
+        active_family,
+        active_segment_id,
+        active_capability_id,
+        workflow_target,
+        active_target,
+    ) = _active_execution_target(
         normalized_intent_envelope=normalized_intent_envelope,
         candidate_capabilities=candidate_capabilities,
         context_json=context_json,
         existing_state=existing_state,
         known_slot_values=known_slot_values,
         pending_fields=pending_fields,
+    )
+    allowed_fields = _clarification_collectible_fields(
+        [
+            *(candidate_capabilities or []),
+            *(active_target.capability_ids if active_target is not None else ()),
+            active_capability_id or "",
+        ]
+    )
+    if active_target is not None:
+        for raw_field in (*active_target.required_fields, *active_target.unresolved_fields):
+            field = _normalize_clarification_field_key(raw_field)
+            if field:
+                allowed_fields.add(field)
+    if not allowed_fields:
+        allowed_fields = {
+            _normalize_clarification_field_key(field)
+            for field in _PENDING_CLARIFICATION_SLOT_KEYS
+            if _normalize_clarification_field_key(field)
+        }
+    pending_fields = _sanitize_clarification_field_queue(
+        fields=pending_fields,
+        allowed_fields=allowed_fields,
+        known_slot_values=known_slot_values,
+    )
+    required_fields = _sanitize_clarification_field_queue(
+        fields=required_fields,
+        allowed_fields=allowed_fields,
+        known_slot_values=known_slot_values,
     )
     execution_frame = (
         existing_state.execution_frame.model_copy(deep=True)
@@ -688,6 +1011,24 @@ def _pending_clarification_state(
             active_segment_id or active_capability_id or active_family or "clarification"
         )
 
+    current_question = active_questions[0] if active_questions else None
+    current_question_field = _clarification_field_from_question(
+        question=current_question,
+        candidate_fields=(
+            list(pending_fields)
+            + list(required_fields)
+            + list(active_target.required_fields if active_target is not None else ())
+        ),
+        goal=resolved_goal or original_goal,
+    )
+    if current_question_field:
+        if current_question_field not in required_fields:
+            required_fields = [current_question_field, *required_fields]
+        pending_fields = [
+            current_question_field,
+            *[field for field in pending_fields if field != current_question_field],
+        ]
+
     state = chat_contracts.ClarificationState(
         schema_version="clarification_state_v1",
         state_version=(existing_state.state_version + 1) if existing_state is not None else 1,
@@ -699,8 +1040,8 @@ def _pending_clarification_state(
         goal_intent_profile=dict(assessment or {}),
         questions=active_questions,
         pending_questions=question_queue,
-        current_question=active_questions[0] if active_questions else None,
-        current_question_field=pending_fields[0] if pending_fields else None,
+        current_question=current_question,
+        current_question_field=current_question_field or (pending_fields[0] if pending_fields else None),
         pending_fields=pending_fields,
         required_fields=required_fields,
         known_slot_values=known_slot_values,
@@ -808,6 +1149,11 @@ def _apply_pending_clarification_mapping(
         assessment=assessment,
         session_metadata=session_metadata,
         context_json=updated_context,
+        normalized_intent_envelope=(
+            dict(session_metadata.get("normalized_intent_envelope"))
+            if isinstance(session_metadata.get("normalized_intent_envelope"), Mapping)
+            else None
+        ),
         latest_user_answer=content,
     )
     return updated_goal, updated_envelope, updated_context, updated_metadata, normalization
@@ -823,7 +1169,7 @@ def _resolved_clarification_mapping_fields(
         return []
     resolved: list[str] = []
     for raw_field in payload.get("fields") or []:
-        field = intent_contract.normalize_required_input_key(raw_field)
+        field = _normalize_clarification_field_key(raw_field)
         if field and field not in resolved:
             resolved.append(field)
     return resolved
@@ -839,12 +1185,12 @@ def _clarification_mapping_metadata(
     if before_state is None and not restarted:
         return None
     active_field_before = (
-        intent_contract.normalize_required_input_key(before_state.current_question_field)
+        _normalize_clarification_field_key(before_state.current_question_field)
         if before_state is not None and before_state.current_question_field
         else None
     )
     active_field_after = (
-        intent_contract.normalize_required_input_key(after_state.current_question_field)
+        _normalize_clarification_field_key(after_state.current_question_field)
         if after_state is not None and after_state.current_question_field
         else None
     )
@@ -1154,6 +1500,13 @@ def handle_turn(
         merged_context=route_context,
         messages=chat_messages,
     )
+    normalized_intent_envelope = (
+        dict(turn_plan.get("normalized_intent_envelope"))
+        if isinstance(turn_plan.get("normalized_intent_envelope"), Mapping)
+        else None
+    )
+    if normalized_intent_envelope:
+        session_metadata["normalized_intent_envelope"] = normalized_intent_envelope
     assessment = workflow_contracts.dump_goal_intent_profile(
         turn_plan.get("goal_intent_profile")
     ) or {}
@@ -1213,7 +1566,7 @@ def handle_turn(
             assessment=assessment,
             session_metadata=session_metadata,
             context_json=merged_context,
-            normalized_intent_envelope=turn_plan.get("normalized_intent_envelope"),
+            normalized_intent_envelope=normalized_intent_envelope,
             latest_user_answer=content,
         )
     elif route_type == "submit_job":
@@ -1285,7 +1638,7 @@ def handle_turn(
                     assessment=assessment,
                     session_metadata=session_metadata,
                     context_json=merged_context,
-                    normalized_intent_envelope=turn_plan.get("normalized_intent_envelope"),
+                    normalized_intent_envelope=normalized_intent_envelope,
                     latest_user_answer=content,
                 )
             else:
@@ -1363,7 +1716,7 @@ def handle_turn(
                 assessment=assessment,
                 session_metadata=session_metadata,
                 context_json=merged_context,
-                normalized_intent_envelope=turn_plan.get("normalized_intent_envelope"),
+                normalized_intent_envelope=normalized_intent_envelope,
                 latest_user_answer=content,
             )
         else:
@@ -1395,7 +1748,7 @@ def handle_turn(
                         assessment=assessment,
                         session_metadata=session_metadata,
                         context_json=merged_context,
-                        normalized_intent_envelope=turn_plan.get("normalized_intent_envelope"),
+                        normalized_intent_envelope=normalized_intent_envelope,
                         latest_user_answer=content,
                     )
                     session_metadata["pending_workflow_input"] = dict(next_input)

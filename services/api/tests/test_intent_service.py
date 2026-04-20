@@ -316,3 +316,60 @@ def test_normalize_goal_intent_uses_capability_required_inputs_for_clarification
     assert envelope.profile.missing_slots == ["path"]
     assert envelope.profile.requires_blocking_clarification is True
     assert envelope.clarification.questions == ["What output path or filename should be used?"]
+
+
+def test_normalize_goal_intent_uses_capability_required_document_fields_for_clarification() -> None:
+    envelope = intent_service.normalize_goal_intent(
+        "Create a deployment report.",
+        config=intent_service.IntentNormalizeConfig(
+            include_decomposition=True,
+            assessment_mode="hybrid",
+            assessment_model="gpt-test",
+            decomposition_mode="hybrid",
+            decomposition_model="gpt-test",
+        ),
+        runtime=intent_service.IntentNormalizeRuntime(
+            assess_goal_intent=lambda _goal: workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                source="heuristic",
+                confidence=0.88,
+                risk_level="bounded_write",
+                low_confidence=False,
+                needs_clarification=False,
+                requires_blocking_clarification=False,
+                questions=[],
+                blocking_slots=[],
+                missing_slots=[],
+                slot_values={
+                    "intent_action": "generate",
+                    "instruction": "Create a deployment report.",
+                    "topic": "Deployment report",
+                },
+                clarification_mode="targeted_slot_filling",
+            ),
+            decompose_goal_intent=lambda _goal, **_kwargs: workflow_contracts.IntentGraph(
+                segments=[
+                    workflow_contracts.IntentGraphSegment(
+                        id="s1",
+                        intent="generate",
+                        objective="Generate document spec",
+                        required_inputs=["instruction", "topic"],
+                        suggested_capabilities=["document.spec.generate"],
+                    )
+                ],
+                source="llm",
+            ),
+            capability_required_inputs=lambda capability_id: (
+                ["instruction", "topic", "audience", "tone"]
+                if capability_id == "document.spec.generate"
+                else []
+            ),
+        ),
+    )
+
+    assert envelope.profile.missing_slots == ["audience", "tone"]
+    assert envelope.profile.requires_blocking_clarification is True
+    assert envelope.clarification.questions == [
+        "Who is the target audience?",
+        "What tone should it use?",
+    ]

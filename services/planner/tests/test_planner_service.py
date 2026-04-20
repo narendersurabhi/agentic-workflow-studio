@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from libs.core import llm_provider, models, planner_contracts
+from libs.core import llm_provider, models, planner_contracts, workflow_contracts
 from services.planner.app import planner_service
 
 
@@ -298,6 +298,393 @@ def test_validate_plan_request_accepts_capability_requests_without_tool_requests
     assert reason.startswith(
         "capability_intent_invalid:document.spec.generate:GenerateDocumentSpec:"
     )
+
+
+def test_validate_plan_request_ignores_render_path_context_for_document_spec_generation() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="Create the document and save it as artifacts/runbook.docx",
+        job_context={"output_path": "artifacts/runbook.docx"},
+        capabilities=[
+            planner_contracts.PlanRequestCapability(
+                capability_id="document.spec.generate",
+                planner_hints={"task_intents": ["generate"]},
+            )
+        ],
+        goal_intent_graph=workflow_contracts.IntentGraph(
+            segments=[
+                workflow_contracts.IntentGraphSegment(
+                    id="s1",
+                    intent="generate",
+                    objective="Generate initial DocumentSpec from goal",
+                    required_inputs=["instruction"],
+                    suggested_capabilities=["document.spec.generate"],
+                    slots=workflow_contracts.IntentGraphSlots(
+                        entity="document_spec",
+                        artifact_type="document_spec",
+                        output_format="json",
+                        risk_level="read_only",
+                        must_have_inputs=["instruction"],
+                    ),
+                )
+            ]
+        ),
+    )
+    plan = models.PlanCreate(
+        planner_version="1.0.0",
+        tasks_summary="doc",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="GenerateDocumentSpec",
+                description="Generate a document spec",
+                instruction="Generate a document spec.",
+                acceptance_criteria=["Spec produced"],
+                expected_output_schema_ref="schemas/document_spec",
+                intent=models.ToolIntent.generate,
+                deps=[],
+                capability_requests=["document.spec.generate"],
+                tool_requests=["document.spec.generate"],
+                tool_inputs={
+                    "document.spec.generate": {
+                        "instruction": "Generate the requested document specification."
+                    }
+                },
+                critic_required=False,
+            )
+        ],
+    )
+
+    valid, reason = planner_service.validate_plan_request(
+        plan,
+        request,
+        schema_registry_path="schemas",
+    )
+
+    assert valid is True
+    assert reason == "ok"
+
+
+def test_build_capability_validation_payload_wraps_iterative_document_job() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="cover agentic ai ops at the top tier companies",
+        job_context={
+            "topic": "agentic ai ops at top tier companies",
+            "audience": "architects implementing agentic ai platforms",
+            "tone": "practical",
+            "today": "2026-04-19",
+        },
+        job_payload={
+            "goal": "cover agentic ai ops at the top tier companies",
+            "context_json": {
+                "topic": "agentic ai ops at top tier companies",
+                "audience": "architects implementing agentic ai platforms",
+                "tone": "practical",
+                "today": "2026-04-19",
+            },
+        },
+    )
+    task = models.TaskCreate(
+        name="GenerateDocumentSpec",
+        description="Generate iterative document spec",
+        instruction="cover agentic ai ops at the top tier companies",
+        acceptance_criteria=["Spec produced"],
+        expected_output_schema_ref="schemas/document_spec",
+        intent=models.ToolIntent.generate,
+        deps=[],
+        tool_requests=["document.spec.generate_iterative"],
+        tool_inputs={
+            "document.spec.generate_iterative": {
+                "instruction": "cover agentic ai ops at the top tier companies",
+                "topic": "agentic ai ops at top tier companies",
+                "audience": "architects implementing agentic ai platforms",
+                "tone": "practical",
+            }
+        },
+        critic_required=False,
+    )
+
+    payload = planner_service.build_capability_validation_payload(
+        task,
+        "document.spec.generate_iterative",
+        dict(task.tool_inputs["document.spec.generate_iterative"]),
+        request,
+    )
+
+    assert payload["job"] == {
+        "goal": "cover agentic ai ops at the top tier companies",
+        "topic": "agentic ai ops at top tier companies",
+        "audience": "architects implementing agentic ai platforms",
+        "tone": "practical",
+        "today": "2026-04-19",
+        "context_json": {
+            "topic": "agentic ai ops at top tier companies",
+            "audience": "architects implementing agentic ai platforms",
+            "tone": "practical",
+            "today": "2026-04-19",
+        },
+    }
+
+
+def test_validate_capability_inputs_accepts_iterative_document_generation_fields() -> None:
+    capability = planner_contracts.PlanRequestCapability(
+        capability_id="document.spec.generate_iterative",
+        input_schema_ref="document_spec_iterative_capability_input",
+        planner_hints={"task_intents": ["generate"]},
+    )
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="cover agentic ai ops at the top tier companies",
+        job_context={
+            "topic": "agentic ai ops at top tier companies",
+            "audience": "architects implementing agentic ai platforms",
+            "tone": "practical",
+            "today": "2026-04-19",
+        },
+        job_payload={
+            "goal": "cover agentic ai ops at the top tier companies",
+            "context_json": {
+                "topic": "agentic ai ops at top tier companies",
+                "audience": "architects implementing agentic ai platforms",
+                "tone": "practical",
+                "today": "2026-04-19",
+            },
+        },
+    )
+    task = models.TaskCreate(
+        name="GenerateDocumentSpec",
+        description="Generate iterative document spec",
+        instruction="cover agentic ai ops at the top tier companies",
+        acceptance_criteria=["Spec produced"],
+        expected_output_schema_ref="schemas/document_spec",
+        intent=models.ToolIntent.generate,
+        deps=[],
+        tool_requests=["document.spec.generate_iterative"],
+        tool_inputs={
+            "document.spec.generate_iterative": {
+                "instruction": "cover agentic ai ops at the top tier companies",
+                "topic": "agentic ai ops at top tier companies",
+                "audience": "architects implementing agentic ai platforms",
+                "tone": "practical",
+            }
+        },
+        critic_required=False,
+    )
+
+    error = planner_service.validate_capability_inputs(
+        capability,
+        task,
+        dict(task.tool_inputs["document.spec.generate_iterative"]),
+        request,
+        schema_registry_path="schemas",
+    )
+
+    assert error is None
+
+
+def test_validate_plan_request_accepts_iterative_document_goal_alias() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="cover agentic ai ops at the top tier companies",
+        job_context={
+            "topic": "agentic ai ops at top tier companies",
+            "audience": "architects implementing agentic ai platforms",
+            "tone": "practical",
+            "today": "2026-04-19",
+        },
+        job_payload={
+            "goal": "cover agentic ai ops at the top tier companies",
+            "context_json": {
+                "topic": "agentic ai ops at top tier companies",
+                "audience": "architects implementing agentic ai platforms",
+                "tone": "practical",
+                "today": "2026-04-19",
+            },
+        },
+        capabilities=[
+            planner_contracts.PlanRequestCapability(
+                capability_id="document.spec.generate_iterative",
+                input_schema_ref="document_spec_iterative_capability_input",
+                planner_hints={"task_intents": ["generate"]},
+                risk_tier="read_only",
+            )
+        ],
+        normalized_intent_envelope={
+            "goal": "cover agentic ai ops at the top tier companies",
+            "profile": {"intent": "generate", "source": "llm"},
+            "graph": {
+                "segments": [
+                    {
+                        "id": "s1",
+                        "intent": "generate",
+                        "objective": "Generate initial DocumentSpec from goal",
+                        "required_inputs": ["document_goal"],
+                        "suggested_capabilities": ["document.spec.generate_iterative"],
+                        "slots": {
+                            "entity": "document_spec",
+                            "artifact_type": "document_spec",
+                            "output_format": "json",
+                            "risk_level": "read_only",
+                            "must_have_inputs": ["document_goal"],
+                        },
+                    }
+                ]
+            },
+        },
+    )
+    plan = models.PlanCreate(
+        planner_version="1.0.0",
+        tasks_summary="document generation",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="GenerateDocumentSpec",
+                description="Generate iterative document spec",
+                instruction="cover agentic ai ops at the top tier companies",
+                acceptance_criteria=["Spec produced"],
+                expected_output_schema_ref="schemas/document_spec",
+                intent=models.ToolIntent.generate,
+                deps=[],
+                tool_requests=["document.spec.generate_iterative"],
+                tool_inputs={
+                    "document.spec.generate_iterative": {
+                        "instruction": "cover agentic ai ops at the top tier companies",
+                        "topic": "agentic ai ops at top tier companies",
+                        "audience": "architects implementing agentic ai platforms",
+                        "tone": "practical",
+                    }
+                },
+                critic_required=False,
+            )
+        ],
+    )
+
+    valid, reason = planner_service.validate_plan_request(
+        plan,
+        request,
+        schema_registry_path="schemas",
+    )
+
+    assert valid is True
+    assert reason == "ok"
+
+
+def test_build_capability_validation_payload_backfills_document_generate_from_job_context() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="cover agentic ai ops at the top tier companies",
+        job_context={
+            "topic": "agentic ai ops at top tier companies",
+            "audience": "architects implementing agentic ai platforms",
+            "tone": "practical",
+            "today": "2026-04-19",
+        },
+        job_payload={},
+    )
+    task = models.TaskCreate(
+        name="GenerateDocumentSpec",
+        description="Generate document spec",
+        instruction="cover agentic ai ops at the top tier companies",
+        acceptance_criteria=["Spec produced"],
+        expected_output_schema_ref="schemas/document_spec",
+        intent=models.ToolIntent.generate,
+        deps=[],
+        tool_requests=["document.spec.generate"],
+        tool_inputs={
+            "document.spec.generate": {
+                "instruction": "cover agentic ai ops at the top tier companies",
+                "topic": "agentic ai ops at top tier companies",
+            }
+        },
+        critic_required=False,
+    )
+
+    payload = planner_service.build_capability_validation_payload(
+        task,
+        "document.spec.generate",
+        dict(task.tool_inputs["document.spec.generate"]),
+        request,
+    )
+
+    assert payload["audience"] == "architects implementing agentic ai platforms"
+    assert payload["tone"] == "practical"
+
+
+def test_build_capability_validation_payload_defaults_document_generate_fields_when_missing() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="create a document",
+        job_context={
+            "instruction": "how agentic ai ops is implemented at top companies",
+            "topic": "how agentic ai ops is implemented at top companies",
+            "path": "How Agentic AI Ops is Implemented at Top Companies.docx",
+        },
+        job_payload={},
+    )
+    task = models.TaskCreate(
+        name="GenerateDocumentSpec",
+        description="Generate document spec",
+        instruction="how agentic ai ops is implemented at top companies",
+        acceptance_criteria=["Spec produced"],
+        expected_output_schema_ref="schemas/document_spec",
+        intent=models.ToolIntent.generate,
+        deps=[],
+        tool_requests=["document.spec.generate"],
+        tool_inputs={
+            "document.spec.generate": {
+                "instruction": "how agentic ai ops is implemented at top companies",
+                "topic": "how agentic ai ops is implemented at top companies",
+            }
+        },
+        critic_required=False,
+    )
+
+    payload = planner_service.build_capability_validation_payload(
+        task,
+        "document.spec.generate",
+        dict(task.tool_inputs["document.spec.generate"]),
+        request,
+    )
+
+    assert payload["audience"] == "general professional audience"
+    assert payload["tone"] == "practical"
+
+
+def test_build_capability_validation_payload_defaults_document_topic_from_instruction() -> None:
+    request = planner_contracts.PlanRequest(
+        job_id="job-1",
+        goal="create a document",
+        job_context={
+            "instruction": "Create a document.",
+            "path": "Narender.docx",
+        },
+        job_payload={},
+    )
+    task = models.TaskCreate(
+        name="GenerateDocumentSpec",
+        description="Generate document spec",
+        instruction="Create a document.",
+        acceptance_criteria=["Spec produced"],
+        expected_output_schema_ref="schemas/document_spec",
+        intent=models.ToolIntent.generate,
+        deps=[],
+        tool_requests=["document.spec.generate"],
+        tool_inputs={"document.spec.generate": {"instruction": "Create a document."}},
+        critic_required=False,
+    )
+
+    payload = planner_service.build_capability_validation_payload(
+        task,
+        "document.spec.generate",
+        dict(task.tool_inputs["document.spec.generate"]),
+        request,
+    )
+
+    assert payload["instruction"] == "Create a document."
+    assert payload["topic"] == "Create a document."
+    assert payload["audience"] == "general professional audience"
+    assert payload["tone"] == "practical"
 
 
 def test_validate_plan_request_prefers_normalized_goal_segment_for_ambiguous_task_text(

@@ -2691,14 +2691,15 @@ def _chat_route_goal_intent_profile(
     *,
     goal: str,
 ) -> workflow_contracts.GoalIntentProfile:
-    preserve_intent_disagreement = (
-        str(profile.clarification_mode or "").strip().lower() == "intent_disagreement"
-    )
+    clarification_mode = str(profile.clarification_mode or "").strip().lower()
+    preserve_intent_disagreement = clarification_mode == "intent_disagreement"
+    preserve_capability_required_inputs = clarification_mode == "capability_required_inputs"
     chat_blocking_slots: list[str] = []
     for raw_slot in profile.blocking_slots:
         normalized = intent_contract.normalize_required_input_key(raw_slot)
         if (
-            normalized in CHAT_PRE_SUBMIT_BLOCKING_SLOTS
+            preserve_capability_required_inputs
+            or normalized in CHAT_PRE_SUBMIT_BLOCKING_SLOTS
             or (preserve_intent_disagreement and normalized == "intent_action")
         ) and normalized not in chat_blocking_slots:
             chat_blocking_slots.append(normalized)
@@ -2706,7 +2707,8 @@ def _chat_route_goal_intent_profile(
     for raw_slot in profile.missing_slots:
         normalized = intent_contract.normalize_required_input_key(raw_slot)
         if (
-            normalized in CHAT_PRE_SUBMIT_BLOCKING_SLOTS
+            preserve_capability_required_inputs
+            or normalized in CHAT_PRE_SUBMIT_BLOCKING_SLOTS
             or (preserve_intent_disagreement and normalized == "intent_action")
         ) and normalized not in chat_missing_slots:
             chat_missing_slots.append(normalized)
@@ -6814,6 +6816,19 @@ def _normalize_chat_submit_context(
     accepted_confidence: dict[str, float] = {}
     normalized_capability_ids: list[str] = []
     running_context = dict(submit_context)
+    heuristic_updates = chat_clarification_normalizer.heuristic_field_updates_for_answer(
+        preferred_field=preferred_field,
+        latest_answer=content,
+        allowed_fields=(
+            tuple(pending_state.pending_fields or pending_state.required_fields)
+            if pending_state is not None
+            else ()
+        ),
+    )
+    if heuristic_updates:
+        updates.update(heuristic_updates)
+        running_context.update(heuristic_updates)
+        accepted_confidence.update({field: 1.0 for field in heuristic_updates})
     active_target = _active_execution_target_for_chat(
         normalized=normalized,
         session_metadata=session_metadata,
@@ -6907,16 +6922,69 @@ def _normalize_chat_submit_context(
         else normalized
     )
     refreshed_assessment = refreshed_normalized.profile.model_dump(mode="json", exclude_none=True)
-    requires_blocking_clarification = bool(
-        refreshed_normalized.profile.requires_blocking_clarification
-        or refreshed_normalized.clarification.requires_blocking_clarification
+    effective_intent_context = (
+        context_service.intent_context_view(updated_envelope)
+        if updated_envelope is not None
+        else dict(running_context)
     )
-    clarification_questions = _chat_submit_clarification_questions(
-        refreshed_normalized,
-        goal=goal,
-        unresolved_fields=unresolved,
-        scoped_fields=scoped_fields,
+    reconciled_missing_fields = context_service.derive_missing_inputs(
+        context=effective_intent_context,
+        normalized_intent_envelope=refreshed_normalized,
     )
+    refreshed_assessment["missing_slots"] = list(reconciled_missing_fields)
+    refreshed_assessment["blocking_slots"] = list(reconciled_missing_fields)
+    refreshed_assessment["needs_clarification"] = bool(reconciled_missing_fields)
+    refreshed_assessment["requires_blocking_clarification"] = bool(reconciled_missing_fields)
+    if reconciled_missing_fields:
+        refreshed_assessment["questions"] = [
+            chat_clarification_normalizer.clarification_question_for_field(field, goal=goal)
+            for field in reconciled_missing_fields
+        ]
+        refreshed_assessment["clarification_mode"] = (
+            str(refreshed_assessment.get("clarification_mode") or "").strip()
+            or "capability_required_inputs"
+        )
+    else:
+        refreshed_assessment["questions"] = []
+        refreshed_assessment["clarification_mode"] = None
+    requires_blocking_clarification = bool(reconciled_missing_fields)
+    residual_pending_fields: list[str] = []
+    if pending_state is not None:
+        pending_field_candidates = [
+            *list(pending_state.pending_fields or ()),
+            *list(pending_state.required_fields or ()),
+        ]
+        for raw_field in pending_field_candidates:
+            normalized_field = intent_contract.normalize_required_input_key(raw_field)
+            if not normalized_field or normalized_field in residual_pending_fields:
+                continue
+            if str(effective_intent_context.get(normalized_field) or "").strip():
+                continue
+            residual_pending_fields.append(normalized_field)
+    if residual_pending_fields:
+        requires_blocking_clarification = True
+        reconciled_missing_fields = list(
+            dict.fromkeys([*reconciled_missing_fields, *residual_pending_fields])
+        )
+        refreshed_assessment["missing_slots"] = list(reconciled_missing_fields)
+        refreshed_assessment["blocking_slots"] = list(reconciled_missing_fields)
+        refreshed_assessment["needs_clarification"] = True
+        refreshed_assessment["requires_blocking_clarification"] = True
+    clarification_questions = (
+        _chat_submit_clarification_questions(
+            refreshed_normalized,
+            goal=goal,
+            unresolved_fields=[*reconciled_missing_fields],
+            scoped_fields=scoped_fields,
+        )
+        if reconciled_missing_fields
+        else []
+    )
+    if residual_pending_fields:
+        clarification_questions = [
+            chat_clarification_normalizer.clarification_question_for_field(field, goal=goal)
+            for field in residual_pending_fields
+        ]
     if requires_blocking_clarification and not clarification_questions:
         clarification_questions = [
             str(question).strip()
@@ -13765,14 +13833,12 @@ def _compile_plan_preflight(
                 if isinstance(resolved_payload_raw, Mapping)
                 else {}
             )
-            segment_payload = dict(resolved_payload)
-            segment_payload.setdefault("tool_inputs", task_payload.get("tool_inputs", {}))
-            if (
-                "instruction" not in segment_payload
-                and isinstance(task.instruction, str)
-                and task.instruction.strip()
-            ):
-                segment_payload["instruction"] = task.instruction.strip()
+            segment_payload = _prepare_segment_payload_for_preflight(
+                request_id=request_id,
+                task=task,
+                resolved_payload=resolved_payload,
+                task_payload=task_payload,
+            )
             if request_id == "github.repo.list":
                 github_query = _synthesize_preflight_github_repo_query(
                     task_payload=task_payload,
@@ -13817,6 +13883,35 @@ def _merge_preflight_errors(
         if key not in merged:
             merged[key] = str(message)
     return merged
+
+
+def _prepare_segment_payload_for_preflight(
+    *,
+    request_id: str,
+    task: models.TaskCreate,
+    resolved_payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    segment_payload = dict(resolved_payload)
+    segment_payload.setdefault("tool_inputs", task_payload.get("tool_inputs", {}))
+    if "instruction" not in segment_payload and isinstance(task.instruction, str) and task.instruction.strip():
+        segment_payload["instruction"] = task.instruction.strip()
+    if request_id in {
+        "document.spec.generate",
+        "document.spec.generate_iterative",
+        "document.spec.generate_from_markdown",
+    }:
+        for key in (
+            "output_format",
+            "format",
+            "path",
+            "output_path",
+            "filename",
+            "file_name",
+            "output_filename",
+        ):
+            segment_payload.pop(key, None)
+    return segment_payload
 
 
 def _task_capability_requests_for_runtime_conformance(

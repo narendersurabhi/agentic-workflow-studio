@@ -5275,6 +5275,108 @@ def test_preflight_plan_endpoint_accepts_document_segment_main_topic_alias() -> 
     assert body["errors"] == {}
 
 
+def test_preflight_plan_endpoint_ignores_render_output_format_for_iterative_document_generation() -> None:
+    payload = {
+        "plan": {
+            "planner_version": "ui_chaining_composer_v1",
+            "tasks_summary": "generate and render document",
+            "dag_edges": [["GenerateDocumentSpec", "RenderDocxDocument"]],
+            "tasks": [
+                {
+                    "name": "GenerateDocumentSpec",
+                    "description": "Generate a document spec iteratively",
+                    "instruction": "how do top companies implement agentic ai ops",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "intent": "generate",
+                    "deps": [],
+                    "tool_requests": ["document.spec.generate_iterative"],
+                    "tool_inputs": {
+                        "document.spec.generate_iterative": {
+                            "instruction": "how do top companies implement agentic ai ops",
+                            "job": {
+                                "goal": "how do top companies implement agentic ai ops",
+                                "context_json": {
+                                    "topic": "how top companies implement agentic ai ops",
+                                    "audience": "professionals interested in enterprise AI/AIOps implementation",
+                                    "tone": "practical",
+                                    "today": "2026-04-19",
+                                },
+                            },
+                        }
+                    },
+                    "critic_required": False,
+                },
+                {
+                    "name": "RenderDocxDocument",
+                    "description": "Render DOCX",
+                    "instruction": "Render the document spec to DOCX.",
+                    "acceptance_criteria": ["done"],
+                    "expected_output_schema_ref": "",
+                    "intent": "render",
+                    "deps": ["GenerateDocumentSpec"],
+                    "tool_requests": ["document.docx.render"],
+                    "tool_inputs": {
+                        "document.docx.render": {
+                            "document_spec": {
+                                "$from": "dependencies_by_name.GenerateDocumentSpec.document.spec.generate_iterative.document_spec"
+                            },
+                            "path": "agenticaiops.docx",
+                        }
+                    },
+                    "critic_required": False,
+                },
+            ],
+        },
+        "goal_intent_graph": {
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "generate",
+                    "objective": "Generate content specification for DOCX",
+                    "required_inputs": ["instruction"],
+                    "suggested_capabilities": ["document.spec.generate_iterative"],
+                    "slots": {
+                        "entity": "document_spec",
+                        "artifact_type": "document_spec",
+                        "output_format": "json",
+                        "risk_level": "read_only",
+                        "must_have_inputs": ["instruction"],
+                    },
+                },
+                {
+                    "id": "s2",
+                    "intent": "render",
+                    "objective": "Render DOCX from DocumentSpec",
+                    "required_inputs": ["document_spec"],
+                    "suggested_capabilities": ["document.docx.render"],
+                    "slots": {
+                        "entity": "artifact",
+                        "artifact_type": "document",
+                        "output_format": "docx",
+                        "risk_level": "bounded_write",
+                        "must_have_inputs": ["document_spec"],
+                    },
+                },
+            ]
+        },
+        "job_context": {
+            "instruction": "how do top companies implement agentic ai ops",
+            "topic": "how top companies implement agentic ai ops",
+            "audience": "professionals interested in enterprise AI/AIOps implementation",
+            "tone": "practical",
+            "output_format": "docx",
+            "path": "agenticaiops.docx",
+        },
+    }
+
+    response = client.post("/plans/preflight", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is True
+    assert body["errors"] == {}
+
+
 def test_preflight_task_intent_uses_goal_text_when_task_text_generic() -> None:
     task = models.TaskCreate(
         name="ValidateSpec",

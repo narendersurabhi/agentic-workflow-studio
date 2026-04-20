@@ -1,6 +1,8 @@
 .PHONY: up up-workers down lint format typecheck test schemas eval-intent eval-intent-gate \
 	eval-chat-clarification eval-chat-clarification-gate \
 	eval-capability-search eval-capability-search-gate \
+	eval-deepeval-chat eval-deepeval-planner eval-deepeval-gate \
+	eval-deepeval-staging-replay \
 	eval-chat-boundary-live \
 	build-capability-feedback \
 	build-chat-routing-feedback \
@@ -51,6 +53,9 @@ UV_EVAL_DEPS = \
 	--with redis \
 	--with psycopg2-binary \
 	--with prometheus-client
+DEEPEVAL_DEPS = \
+	$(UV_EVAL_DEPS) \
+	--with deepeval
 
 CHAT_BOUNDARY_LIVE_VERBOSE ?= 1
 CHAT_BOUNDARY_LIVE_VERBOSE_FLAG = $(if $(filter 1 true TRUE yes YES,$(CHAT_BOUNDARY_LIVE_VERBOSE)),--verbose,)
@@ -268,6 +273,18 @@ eval-chat-clarification:
 
 eval-chat-clarification-gate:
 	PYTHONPATH=. uv run $(UV_EVAL_DEPS) python3 scripts/eval_chat_clarification.py --gold eval/chat_clarification_mapping_gold.yaml --min-overall-accuracy 0.95 --min-restart-decision-accuracy 0.95 --min-resolved-active-field-accuracy 0.95 --min-queue-advance-accuracy 0.95 --max-wrong-field-assignment-rate 0.05
+
+eval-deepeval-chat:
+	PYTHONPATH=. uv run $(DEEPEVAL_DEPS) python3 scripts/eval_deepeval_chat.py
+
+eval-deepeval-planner:
+	PYTHONPATH=. uv run $(DEEPEVAL_DEPS) python3 scripts/eval_deepeval_planner.py
+
+eval-deepeval-gate:
+	PYTHONPATH=. uv run $(DEEPEVAL_DEPS) python3 scripts/eval_deepeval_gate.py
+
+eval-deepeval-staging-replay:
+	PYTHONPATH=. uv run $(DEEPEVAL_DEPS) python3 scripts/eval_deepeval_staging_replay.py
 
 build-capability-feedback:
 	PYTHONPATH=. python3 scripts/build_capability_search_feedback.py --source auto --output artifacts/evals/capability_search_feedback.jsonl

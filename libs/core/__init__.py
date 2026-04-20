@@ -17,4 +17,6 @@ __all__ = [
     "logging",
     "memory_client",
     "document_store",
+    "deepeval_support",
+    "deepeval_agents",
 ]

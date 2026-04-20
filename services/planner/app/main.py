@@ -322,10 +322,46 @@ def _parse_llm_plan(content: str) -> models.PlanCreate | None:
     candidates.append(data)
     for candidate in candidates:
         try:
-            return models.PlanCreate.model_validate(candidate)
+            return models.PlanCreate.model_validate(_normalize_plan_candidate_for_parse(candidate))
         except Exception:
             continue
     return None
+
+
+def _normalize_plan_candidate_for_parse(candidate: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(candidate)
+    raw_tasks = normalized.get("tasks")
+    if not isinstance(raw_tasks, list):
+        return normalized
+    tasks: list[Any] = []
+    for raw_task in raw_tasks:
+        if not isinstance(raw_task, dict):
+            tasks.append(raw_task)
+            continue
+        task = dict(raw_task)
+        schema_ref = task.get("expected_output_schema_ref")
+        if not isinstance(schema_ref, str) or not schema_ref.strip():
+            task["expected_output_schema_ref"] = _default_schema_ref_for_task_candidate(task)
+        tasks.append(task)
+    normalized["tasks"] = tasks
+    return normalized
+
+
+def _default_schema_ref_for_task_candidate(task: Mapping[str, Any]) -> str:
+    request_ids: list[str] = []
+    for key in ("capability_requests", "tool_requests"):
+        raw = task.get(key)
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            continue
+        request_ids.extend(str(item or "").strip().lower() for item in raw if str(item or "").strip())
+    request_blob = " ".join(request_ids)
+    if "document.spec.generate" in request_blob or "llm_generate_document_spec" in request_blob:
+        return "schemas/document_spec"
+    if "docx" in request_blob:
+        return "schemas/docx_output"
+    if "pdf" in request_blob:
+        return "schemas/pdf_output"
+    return "TaskResult"
 
 
 def _ensure_llm_tool(plan: models.PlanCreate) -> models.PlanCreate:
@@ -590,17 +626,20 @@ def _ensure_job_inputs_for_request(
     request: planner_contracts.PlanRequest,
 ) -> models.PlanCreate:
     tool_map = {tool.name: tool for tool in request.tools}
+    capability_map = planner_contracts.capability_map(request)
     updated_tasks = []
     for task in plan.tasks:
         tool_inputs = dict(task.tool_inputs) if isinstance(task.tool_inputs, dict) else {}
         changed = False
         for tool_name in task.tool_requests or []:
             tool = tool_map.get(tool_name)
+            capability = capability_map.get(tool_name)
             payload = tool_inputs.get(tool_name)
             payload = dict(payload) if isinstance(payload, dict) else {}
             projected_inputs = job_projection.project_explicit_inputs_for_tool(
                 tool_name,
                 request.job_payload,
+                job_context=request.job_context,
                 default_goal=request.goal,
             )
             if projected_inputs:
@@ -615,17 +654,23 @@ def _ensure_job_inputs_for_request(
                 if changed:
                     tool_inputs[tool_name] = payload
                 continue
-            if tool is None:
+            if tool is None and capability is None:
                 continue
-            schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
-            if not _schema_requires_key(schema, "job"):
+            schema_requires_job = False
+            if tool is not None:
+                schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
+                schema_requires_job = _schema_requires_key(schema, "job")
+            if not schema_requires_job and not job_projection.uses_document_job_payload(tool_name):
                 continue
             existing_job = payload.get("job")
             projected_job_payload = job_projection.project_job_payload_for_tool(
                 tool_name,
                 request.job_payload,
+                job_context=request.job_context,
                 default_goal=request.goal,
             )
+            if not projected_job_payload:
+                continue
             if isinstance(existing_job, dict):
                 # Resolve planner placeholders so downstream contract checks can inspect actual context.
                 marker_keys = {str(key) for key in existing_job.keys()}

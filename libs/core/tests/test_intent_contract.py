@@ -819,6 +819,124 @@ def test_derive_envelope_clarification_requires_path_for_render_without_explicit
     assert clarification["questions"] == ["What output path or filename should be used?"]
 
 
+def test_derive_envelope_clarification_requires_instruction_for_generic_document_request() -> None:
+    clarification = intent_contract.derive_envelope_clarification(
+        goal="create a document\n\nUser clarification: hello.docx",
+        profile={
+            "intent": "render",
+            "low_confidence": False,
+            "slot_values": {"intent_action": "render", "path": "hello.docx", "output_format": "docx"},
+            "blocking_slots": [],
+            "missing_slots": [],
+        },
+        graph={
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "generate",
+                    "objective": "Generate a DocumentSpec based on user request",
+                    "required_inputs": ["document_instruction"],
+                    "suggested_capabilities": ["document.spec.generate"],
+                    "slots": {
+                        "artifact_type": "document_spec",
+                        "must_have_inputs": ["document_instruction"],
+                    },
+                },
+                {
+                    "id": "s2",
+                    "intent": "render",
+                    "objective": "Render the DocumentSpec into a DOCX file",
+                    "required_inputs": ["document_spec", "output_path"],
+                    "suggested_capabilities": ["document.docx.render"],
+                    "slots": {
+                        "output_format": "docx",
+                        "must_have_inputs": ["document_spec", "path"],
+                    },
+                },
+            ]
+        },
+        candidate_required_inputs_by_segment={
+            "s1": ["instruction"],
+            "s2": ["document_spec", "path"],
+        },
+    )
+
+    assert clarification["missing_inputs"] == ["instruction"]
+    assert clarification["questions"] == ["What should this specifically cover?"]
+
+
+def test_derive_envelope_clarification_treats_specific_goal_as_instruction() -> None:
+    clarification = intent_contract.derive_envelope_clarification(
+        goal="Create a two-page Kubernetes incident runbook for SREs in a practical tone.",
+        profile={
+            "intent": "generate",
+            "low_confidence": False,
+            "slot_values": {"intent_action": "generate"},
+            "blocking_slots": [],
+            "missing_slots": [],
+        },
+        graph={
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "generate",
+                    "objective": "Generate a DocumentSpec based on user request",
+                    "required_inputs": ["instruction"],
+                    "suggested_capabilities": ["document.spec.generate"],
+                    "slots": {
+                        "artifact_type": "document_spec",
+                        "must_have_inputs": ["instruction"],
+                    },
+                }
+            ]
+        },
+        candidate_required_inputs_by_segment={"s1": ["instruction"]},
+    )
+
+    assert clarification["missing_inputs"] == []
+
+
+def test_derive_envelope_clarification_uses_capability_required_document_fields() -> None:
+    clarification = intent_contract.derive_envelope_clarification(
+        goal="Create a deployment report",
+        profile={
+            "intent": "generate",
+            "low_confidence": False,
+            "slot_values": {
+                "intent_action": "generate",
+                "instruction": "Create a deployment report",
+                "topic": "Deployment report",
+            },
+            "blocking_slots": [],
+            "missing_slots": [],
+        },
+        graph={
+            "segments": [
+                {
+                    "id": "s1",
+                    "intent": "generate",
+                    "objective": "Generate document spec",
+                    "required_inputs": ["instruction", "topic"],
+                    "suggested_capabilities": ["document.spec.generate"],
+                    "slots": {
+                        "artifact_type": "document_spec",
+                        "must_have_inputs": ["instruction", "topic"],
+                    },
+                }
+            ]
+        },
+        candidate_required_inputs_by_segment={
+            "s1": ["instruction", "topic", "audience", "tone"],
+        },
+    )
+
+    assert clarification["missing_inputs"] == ["audience", "tone"]
+    assert clarification["questions"] == [
+        "Who is the target audience?",
+        "What tone should it use?",
+    ]
+
+
 def test_derive_envelope_clarification_skips_target_system_when_capability_is_specific() -> None:
     clarification = intent_contract.derive_envelope_clarification(
         goal="List GitHub branches and summarize release readiness.",
@@ -889,6 +1007,62 @@ def test_derive_envelope_clarification_detects_intent_disagreement() -> None:
     assert clarification["disagreement"]["reason_code"] == "graph_intent_conflict"
     assert clarification["disagreement"]["capability_intents"] == ["generate"]
     assert "generate new content" in clarification["questions"][0]
+
+
+def test_validate_intent_segment_contract_accepts_document_instruction_alias() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Generate document spec",
+        "slots": {
+            "entity": "document_spec",
+            "artifact_type": "document_spec",
+            "output_format": None,
+            "risk_level": "read_only",
+            "must_have_inputs": ["document_instruction"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="llm_generate_document_spec",
+        payload={"instruction": "Generate a Kubernetes incident runbook."},
+        capability_id="document.spec.generate",
+        capability_risk_tier="read_only",
+    )
+
+    assert mismatch is None
+
+
+def test_validate_intent_segment_contract_accepts_document_goal_aliases() -> None:
+    segment = {
+        "intent": "generate",
+        "objective": "Generate initial DocumentSpec from goal",
+        "slots": {
+            "entity": "document_spec",
+            "artifact_type": "document_spec",
+            "output_format": "json",
+            "risk_level": "read_only",
+            "must_have_inputs": ["document_goal"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="generate",
+        tool_name="document.spec.generate_iterative",
+        payload={
+            "instruction": "cover agentic ai ops at the top tier companies",
+            "job": {
+                "goal": "cover agentic ai ops at the top tier companies",
+                "context_json": {
+                    "topic": "agentic ai ops at top tier companies",
+                },
+            },
+        },
+        capability_id="document.spec.generate_iterative",
+        capability_risk_tier="read_only",
+    )
+
+    assert mismatch is None
 
 
 def test_select_active_execution_target_prefers_segment_with_pending_overlap() -> None:

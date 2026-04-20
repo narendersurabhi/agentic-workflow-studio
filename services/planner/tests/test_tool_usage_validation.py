@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.core import capability_registry, models
+from libs.core import capability_registry, models, planner_contracts
 from services.planner.app import main as planner_main
 from services.planner.app.main import (
     _ensure_default_value_markers,
@@ -235,6 +235,52 @@ def test_ensure_job_inputs_projects_markdown_document_generation_fields() -> Non
         "tone": "neutral",
         "today": "2026-03-16",
         "output_dir": "documents",
+    }
+
+
+def test_ensure_job_inputs_for_request_wraps_iterative_document_generation_capability_job() -> None:
+    job = _job()
+    job.goal = "cover agentic ai ops at the top tier companies"
+    job.context_json = {
+        "topic": "agentic ai ops at top tier companies",
+        "audience": "architects implementing agentic ai platforms",
+        "tone": "practical",
+        "today": "2026-04-19",
+    }
+
+    plan = _plan_with_task(
+        "document.spec.generate_iterative",
+        {
+            "instruction": "cover agentic ai ops at the top tier companies",
+            "topic": "agentic ai ops at top tier companies",
+            "audience": "architects implementing agentic ai platforms",
+            "tone": "practical",
+        },
+    )
+    request = planner_contracts.PlanRequest(
+        job_id=job.id,
+        goal=job.goal,
+        job_context=dict(job.context_json),
+        job_payload=job.model_dump(mode="json"),
+        capabilities=[
+            planner_contracts.PlanRequestCapability(
+                capability_id="document.spec.generate_iterative",
+                input_schema_ref="document_spec_iterative_capability_input",
+                planner_hints={"task_intents": ["generate"]},
+            )
+        ],
+    )
+
+    updated = planner_main._ensure_job_inputs_for_request(plan, request)
+
+    payload = updated.tasks[0].tool_inputs["document.spec.generate_iterative"]
+    assert payload["instruction"] == "cover agentic ai ops at the top tier companies"
+    assert payload["job"]["goal"] == "cover agentic ai ops at the top tier companies"
+    assert payload["job"]["context_json"] == {
+        "topic": "agentic ai ops at top tier companies",
+        "audience": "architects implementing agentic ai platforms",
+        "tone": "practical",
+        "today": "2026-04-19",
     }
 
 

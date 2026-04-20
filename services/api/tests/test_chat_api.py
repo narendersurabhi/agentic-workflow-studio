@@ -1721,6 +1721,789 @@ def test_chat_turn_keeps_pending_clarification_for_output_format_redirect_answer
     assert pending["known_slot_values"]["output_format"] == "docx"
 
 
+def test_chat_submit_normalization_prefers_instruction_for_substantive_answer(
+    monkeypatch,
+) -> None:
+    def _normalize_goal_intent(goal, **kwargs):
+        context_envelope = kwargs.get("context_envelope")
+        intent_context = (
+            main.context_service.intent_context_view(context_envelope)
+            if context_envelope is not None
+            else {}
+        )
+        missing_fields = [
+            field
+            for field in ("instruction", "output_format")
+            if not str(intent_context.get(field) or "").strip()
+        ]
+        questions = [
+            main.chat_clarification_normalizer.clarification_question_for_field(field, goal=goal)
+            for field in missing_fields
+        ]
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=bool(missing_fields),
+                requires_blocking_clarification=bool(missing_fields),
+                questions=questions,
+                blocking_slots=list(missing_fields),
+                missing_slots=list(missing_fields),
+                slot_values={"intent_action": "generate", "risk_level": "bounded_write"},
+                clarification_mode="capability_required_inputs" if missing_fields else None,
+            ),
+            graph=main.workflow_contracts.IntentGraph(),
+            candidate_capabilities={},
+        )
+
+    class _Normalizer:
+        def generate_request_json_object(self, request):
+            return {
+                "normalized_slots": {
+                    "topic": "how agentic ai ops is implemented at the top tier companies"
+                },
+                "field_confidence": {"topic": 0.99},
+                "unresolved_fields": ["instruction"],
+            }
+
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    monkeypatch.setattr(main, "_chat_clarification_normalizer_provider", _Normalizer())
+    monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", True)
+    monkeypatch.setattr(
+        main,
+        "_chat_submit_capability_contracts",
+        lambda _capability_ids: [
+            {
+                "capability_id": "document.spec.generate",
+                "description": "Generate a structured document spec from an instruction.",
+                "required_inputs": ["instruction"],
+                "chat_collectible_fields": ["instruction", "topic"],
+                "chat_required_fields": ["instruction"],
+            }
+        ],
+    )
+
+    pending_state = chat_service._pending_clarification_state(
+        resolved_goal="create a document",
+        questions=[
+            "What should this specifically cover?",
+            "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?",
+        ],
+        assessment={
+            "missing_slots": ["instruction", "output_format"],
+            "blocking_slots": ["instruction", "output_format"],
+        },
+        session_metadata={},
+        context_json={},
+    )
+    session_metadata = {
+        "draft_goal": "create a document",
+        "pending_clarification": pending_state,
+    }
+
+    db = SessionLocal()
+    try:
+        goal = (
+            "create a document\n\nUser clarification: "
+            "Cover how agentic ai ops is implemented at the top tier companies"
+        )
+        context_envelope = main.context_service.build_chat_context_envelope(
+            db=db,
+            goal=goal,
+            session_metadata=session_metadata,
+            session_context={},
+            turn_context={},
+            user_id=None,
+        )
+        result = main._normalize_chat_submit_context(
+            db=db,
+            goal=goal,
+            content="Cover how agentic ai ops is implemented at the top tier companies",
+            session_metadata=session_metadata,
+            merged_context={},
+            context_envelope=context_envelope,
+            user_id=None,
+            messages=[],
+        )
+    finally:
+        db.close()
+
+    assert result is not None
+    assert result.context_json["instruction"] == (
+        "Cover how agentic ai ops is implemented at the top tier companies"
+    )
+    assert result.clarification_questions == [
+        "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?"
+    ]
+    assert result.goal_intent_profile["missing_slots"] == ["output_format"]
+
+
+def test_chat_submit_normalization_treats_docx_as_output_format_not_path(
+    monkeypatch,
+) -> None:
+    def _normalize_goal_intent(goal, **kwargs):
+        context_envelope = kwargs.get("context_envelope")
+        intent_context = (
+            main.context_service.intent_context_view(context_envelope)
+            if context_envelope is not None
+            else {}
+        )
+        missing_fields = [
+            field for field in ("path",) if not str(intent_context.get(field) or "").strip()
+        ]
+        questions = [
+            main.chat_clarification_normalizer.clarification_question_for_field(field, goal=goal)
+            for field in missing_fields
+        ]
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="render",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=bool(missing_fields),
+                requires_blocking_clarification=bool(missing_fields),
+                questions=questions,
+                blocking_slots=list(missing_fields),
+                missing_slots=list(missing_fields),
+                slot_values={
+                    "intent_action": "render",
+                    "risk_level": "bounded_write",
+                    "instruction": "Cover how agentic ai ops is implemented at the top tier companies",
+                    "output_format": str(intent_context.get("output_format") or "").strip(),
+                },
+                clarification_mode="capability_required_inputs" if missing_fields else None,
+            ),
+            graph=main.workflow_contracts.IntentGraph(),
+            candidate_capabilities={},
+        )
+
+    class _Normalizer:
+        def generate_request_json_object(self, request):
+            return {
+                "normalized_slots": {"path": "docx"},
+                "field_confidence": {"path": 1.0},
+                "unresolved_fields": ["output_format"],
+            }
+
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    monkeypatch.setattr(main, "_chat_clarification_normalizer_provider", _Normalizer())
+    monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", True)
+    monkeypatch.setattr(
+        main,
+        "_chat_submit_capability_contracts",
+        lambda _capability_ids: [
+            {
+                "capability_id": "derive_output_filename",
+                "description": "Derive an output filename for a rendered document.",
+                "required_inputs": ["path"],
+                "chat_collectible_fields": ["path"],
+                "chat_required_fields": ["path"],
+            }
+        ],
+    )
+
+    pending_state = chat_service._pending_clarification_state(
+        resolved_goal="create a document",
+        questions=[
+            "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?",
+            "What output path or filename should be used?",
+        ],
+        assessment={
+            "missing_slots": ["output_format", "path"],
+            "blocking_slots": ["output_format", "path"],
+        },
+        session_metadata={},
+        context_json={
+            "instruction": "Cover how agentic ai ops is implemented at the top tier companies"
+        },
+    )
+    session_metadata = {
+        "draft_goal": "create a document",
+        "pending_clarification": pending_state,
+    }
+
+    db = SessionLocal()
+    try:
+        goal = "create a document\n\nUser clarification: docx"
+        context_envelope = main.context_service.build_chat_context_envelope(
+            db=db,
+            goal=goal,
+            session_metadata=session_metadata,
+            session_context={},
+            turn_context={},
+            user_id=None,
+        )
+        result = main._normalize_chat_submit_context(
+            db=db,
+            goal=goal,
+            content="docx",
+            session_metadata=session_metadata,
+            merged_context={},
+            context_envelope=context_envelope,
+            user_id=None,
+            messages=[],
+        )
+    finally:
+        db.close()
+
+    assert result is not None
+    assert result.context_json["output_format"] == "docx"
+    assert "path" not in result.context_json
+    assert result.clarification_questions == ["What output path or filename should be used?"]
+    assert result.goal_intent_profile["missing_slots"] == ["path"]
+
+
+def test_pending_clarification_state_filters_polluted_fields_and_derives_output_format(
+    monkeypatch,
+) -> None:
+    registry = cap_registry.CapabilityRegistry(
+        capabilities={
+            "document.spec.generate": cap_registry.CapabilitySpec(
+                capability_id="document.spec.generate",
+                description="Generate a document spec.",
+                risk_tier="read_only",
+                idempotency="read",
+                group="documents",
+                subgroup="generation",
+                planner_hints={
+                    "chat_collectible_fields": ["instruction", "topic", "audience", "tone"],
+                },
+            ),
+            "document.docx.render": cap_registry.CapabilitySpec(
+                capability_id="document.docx.render",
+                description="Render a DOCX document.",
+                risk_tier="bounded_write",
+                idempotency="safe_write",
+                group="documents",
+                subgroup="rendering",
+                planner_hints={
+                    "chat_collectible_fields": ["path"],
+                },
+            ),
+        }
+    )
+    monkeypatch.setattr(chat_service.capability_registry, "load_capability_registry", lambda: registry)
+
+    existing_state = main.chat_contracts.ClarificationState(
+        original_goal="create a document",
+        active_family="documents",
+        active_segment_id="s1",
+        active_capability_id="document.spec.generate",
+        current_question="What output format do you need (for example PDF, DOCX, JSON, or Markdown)?",
+        current_question_field="output_format",
+        questions=[
+            "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?",
+        ],
+        pending_questions=[
+            "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?",
+        ],
+        pending_fields=[
+            "document_request",
+            "document_spec_context",
+            "docx_content",
+            "output_format",
+            "instruction",
+            "topic",
+            "path",
+        ],
+        required_fields=[
+            "document_request",
+            "document_spec_context",
+            "docx_content",
+            "output_format",
+            "instruction",
+            "topic",
+            "path",
+        ],
+        known_slot_values={
+            "instruction": "Create a document explaining Agentic AI Ops at top tier companies.",
+            "topic": "Agentic AI Ops from Top Tier Companies",
+            "audience": "agentic ai ops architects",
+            "tone": "practical",
+            "path": "artifacts/Narender.docx",
+        },
+        resolved_slots={
+            "instruction": "Create a document explaining Agentic AI Ops at top tier companies.",
+            "topic": "Agentic AI Ops from Top Tier Companies",
+            "audience": "agentic ai ops architects",
+            "tone": "practical",
+            "path": "artifacts/Narender.docx",
+        },
+        candidate_capabilities=["document.spec.generate", "document.docx.render"],
+    )
+
+    pending_state = chat_service._pending_clarification_state(
+        resolved_goal="create a document",
+        questions=[],
+        assessment={"missing_slots": [], "blocking_slots": []},
+        session_metadata={
+            "draft_goal": "create a document",
+            "pending_clarification": existing_state.model_dump(mode="json", exclude_none=True),
+        },
+        context_json={},
+    )
+
+    assert pending_state["pending_fields"] == []
+    assert pending_state["required_fields"] == []
+    assert "current_question_field" not in pending_state
+    assert pending_state["known_slot_values"]["output_format"] == "docx"
+    assert pending_state["slot_provenance"]["output_format"] == "inferred"
+
+
+def test_merge_clarification_state_does_not_revive_stale_pending_queue() -> None:
+    latest = main.chat_contracts.ClarificationState(
+        original_goal="create a document",
+        current_question="What should this specifically cover?",
+        current_question_field="instruction",
+        questions=["What should this specifically cover?"],
+        pending_questions=["What should this specifically cover?"],
+        pending_fields=["instruction"],
+        required_fields=["instruction"],
+        known_slot_values={},
+        resolved_slots={},
+    ).model_dump(mode="json", exclude_none=True)
+
+    desired = main.chat_contracts.ClarificationState(
+        original_goal="create a document",
+        current_question=None,
+        current_question_field=None,
+        questions=[],
+        pending_questions=[],
+        pending_fields=[],
+        required_fields=[],
+        known_slot_values={"instruction": "Cover Agentic AI Ops at top companies."},
+        resolved_slots={"instruction": "Cover Agentic AI Ops at top companies."},
+        slot_provenance={"instruction": "explicit_user"},
+    ).model_dump(mode="json", exclude_none=True)
+
+    merged = chat_service._merge_clarification_state_for_persistence(latest, desired)
+
+    assert merged["pending_fields"] == []
+    assert merged["required_fields"] == []
+    assert merged["pending_questions"] == []
+    assert merged["questions"] == []
+    assert "current_question" not in merged
+    assert "current_question_field" not in merged
+    assert merged["known_slot_values"]["instruction"] == "Cover Agentic AI Ops at top companies."
+
+
+def test_chat_submit_normalization_keeps_document_clarification_open_for_path_only_answer(
+    monkeypatch,
+) -> None:
+    def _normalize_goal_intent(goal, **kwargs):
+        context_envelope = kwargs.get("context_envelope")
+        intent_context = (
+            main.context_service.intent_context_view(context_envelope)
+            if context_envelope is not None
+            else {}
+        )
+        has_path = bool(str(intent_context.get("path") or "").strip())
+        missing_fields = [] if has_path else ["instruction", "topic", "path"]
+        questions = [
+            main.chat_clarification_normalizer.clarification_question_for_field(field, goal=goal)
+            for field in missing_fields
+        ]
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="render" if has_path else "generate",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=bool(missing_fields),
+                requires_blocking_clarification=bool(missing_fields),
+                questions=questions,
+                blocking_slots=list(missing_fields),
+                missing_slots=list(missing_fields),
+                slot_values={
+                    "intent_action": "render" if has_path else "generate",
+                    "risk_level": "bounded_write",
+                    "path": str(intent_context.get("path") or "").strip(),
+                },
+                clarification_mode="capability_required_inputs" if missing_fields else None,
+            ),
+            graph=main.workflow_contracts.IntentGraph(),
+            candidate_capabilities={},
+        )
+
+    class _Normalizer:
+        def generate_request_json_object(self, request):
+            return {
+                "normalized_slots": {"path": "adopts.docx"},
+                "field_confidence": {"path": 0.99},
+                "unresolved_fields": [],
+            }
+
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    monkeypatch.setattr(main, "_chat_clarification_normalizer_provider", _Normalizer())
+    monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", True)
+    monkeypatch.setattr(
+        main,
+        "_chat_submit_capability_contracts",
+        lambda _capability_ids: [
+            {
+                "capability_id": "document.docx.render",
+                "description": "Render a DOCX document.",
+                "required_inputs": ["path"],
+                "chat_collectible_fields": ["path"],
+                "chat_required_fields": ["path"],
+            }
+        ],
+    )
+
+    pending_state = main.chat_contracts.ClarificationState(
+        original_goal="Create a document",
+        active_family="documents",
+        active_segment_id="s1",
+        active_capability_id="document.spec.generate",
+        current_question="What output path or filename should be used?",
+        current_question_field="path",
+        questions=[
+            "What should this specifically cover?",
+            "What is the main topic or title?",
+            "What output path or filename should be used?",
+        ],
+        pending_fields=["instruction", "topic", "path"],
+        required_fields=["instruction", "topic", "path"],
+        known_slot_values={},
+        resolved_slots={},
+        slot_provenance={},
+    )
+    session_metadata = {
+        "draft_goal": "Create a document",
+        "pending_clarification": pending_state.model_dump(mode="json", exclude_none=True),
+    }
+
+    db = SessionLocal()
+    try:
+        goal = "Create a document\n\nUser clarification: adopts.docx"
+        context_envelope = main.context_service.build_chat_context_envelope(
+            db=db,
+            goal=goal,
+            session_metadata=session_metadata,
+            session_context={},
+            turn_context={},
+            user_id=None,
+        )
+        result = main._normalize_chat_submit_context(
+            db=db,
+            goal=goal,
+            content="adopts.docx",
+            session_metadata=session_metadata,
+            merged_context={},
+            context_envelope=context_envelope,
+            user_id=None,
+            messages=[],
+        )
+    finally:
+        db.close()
+
+    assert result is not None
+    assert result.context_json["path"] == "adopts.docx"
+    assert result.requires_blocking_clarification is True
+    assert result.clarification_questions == [
+        "What should this specifically cover?",
+        "What is the main topic or title?",
+    ]
+
+
+def test_chat_submit_normalization_keeps_required_document_fields_when_pending_queue_narrows(
+    monkeypatch,
+) -> None:
+    def _normalize_goal_intent(goal, **kwargs):
+        context_envelope = kwargs.get("context_envelope")
+        intent_context = (
+            main.context_service.intent_context_view(context_envelope)
+            if context_envelope is not None
+            else {}
+        )
+        has_path = bool(str(intent_context.get("path") or "").strip())
+        missing_fields = [] if has_path else ["instruction", "topic", "path"]
+        questions = [
+            main.chat_clarification_normalizer.clarification_question_for_field(field, goal=goal)
+            for field in missing_fields
+        ]
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="render" if has_path else "generate",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=bool(missing_fields),
+                requires_blocking_clarification=bool(missing_fields),
+                questions=questions,
+                blocking_slots=list(missing_fields),
+                missing_slots=list(missing_fields),
+                slot_values={
+                    "intent_action": "render" if has_path else "generate",
+                    "risk_level": "bounded_write",
+                    "path": str(intent_context.get("path") or "").strip(),
+                },
+                clarification_mode="capability_required_inputs" if missing_fields else None,
+            ),
+            graph=main.workflow_contracts.IntentGraph(),
+            candidate_capabilities={},
+        )
+
+    class _Normalizer:
+        def generate_request_json_object(self, request):
+            return {
+                "normalized_slots": {"path": "Narender.docx"},
+                "field_confidence": {"path": 0.99},
+                "unresolved_fields": [],
+            }
+
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    monkeypatch.setattr(main, "_chat_clarification_normalizer_provider", _Normalizer())
+    monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", True)
+    monkeypatch.setattr(
+        main,
+        "_chat_submit_capability_contracts",
+        lambda _capability_ids: [
+            {
+                "capability_id": "document.docx.render",
+                "description": "Render a DOCX document.",
+                "required_inputs": ["path"],
+                "chat_collectible_fields": ["path"],
+                "chat_required_fields": ["path"],
+            }
+        ],
+    )
+
+    pending_state = main.chat_contracts.ClarificationState(
+        original_goal="Create a document",
+        active_family="documents",
+        active_segment_id="s1",
+        active_capability_id="document.spec.generate",
+        current_question="What output path or filename should be used?",
+        current_question_field="path",
+        questions=[
+            "What should this specifically cover?",
+            "What is the main topic or title?",
+            "What output path or filename should be used?",
+        ],
+        pending_fields=["path"],
+        required_fields=["instruction", "topic", "path"],
+        known_slot_values={},
+        resolved_slots={},
+        slot_provenance={},
+    )
+    session_metadata = {
+        "draft_goal": "Create a document",
+        "pending_clarification": pending_state.model_dump(mode="json", exclude_none=True),
+    }
+
+    db = SessionLocal()
+    try:
+        goal = "Create a document\n\nUser clarification: Narender.docx"
+        context_envelope = main.context_service.build_chat_context_envelope(
+            db=db,
+            goal=goal,
+            session_metadata=session_metadata,
+            session_context={},
+            turn_context={},
+            user_id=None,
+        )
+        result = main._normalize_chat_submit_context(
+            db=db,
+            goal=goal,
+            content="Narender.docx",
+            session_metadata=session_metadata,
+            merged_context={},
+            context_envelope=context_envelope,
+            user_id=None,
+            messages=[],
+        )
+    finally:
+        db.close()
+
+    assert result is not None
+    assert result.context_json["path"] == "Narender.docx"
+    assert result.requires_blocking_clarification is True
+    assert result.clarification_questions == [
+        "What should this specifically cover?",
+        "What is the main topic or title?",
+    ]
+
+
+def test_chat_submit_normalization_reconciles_stale_missing_slots_from_context(
+    monkeypatch,
+) -> None:
+    def _normalize_goal_intent(goal, **kwargs):
+        context_envelope = kwargs.get("context_envelope")
+        intent_context = (
+            main.context_service.intent_context_view(context_envelope)
+            if context_envelope is not None
+            else {}
+        )
+        slot_values = {
+            "intent_action": "generate",
+            "risk_level": "bounded_write",
+        }
+        for field in ("instruction", "topic", "audience", "tone", "path", "output_format"):
+            value = intent_context.get(field)
+            if isinstance(value, str) and value.strip():
+                slot_values[field] = value.strip()
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=True,
+                requires_blocking_clarification=True,
+                questions=[
+                    "What should this specifically cover?",
+                    "What is the main topic or title?",
+                    "Who is the target audience?",
+                    "What tone should it use?",
+                ],
+                blocking_slots=["instruction", "topic", "audience", "tone"],
+                missing_slots=["instruction", "topic", "audience", "tone"],
+                slot_values=slot_values,
+                clarification_mode="capability_required_inputs",
+            ),
+            graph=main.workflow_contracts.IntentGraph(
+                segments=[
+                    main.workflow_contracts.IntentGraphSegment(
+                        id="s1",
+                        intent="generate",
+                        objective="Generate document spec",
+                        required_inputs=["instruction", "topic", "audience", "tone"],
+                        suggested_capabilities=["document.spec.generate_iterative"],
+                    )
+                ]
+            ),
+            candidate_capabilities={"s1": ["document.spec.generate_iterative"]},
+            clarification=main.workflow_contracts.ClarificationState(
+                needs_clarification=True,
+                requires_blocking_clarification=True,
+                missing_inputs=["instruction", "topic", "audience", "tone"],
+                questions=[
+                    "What should this specifically cover?",
+                    "What is the main topic or title?",
+                    "Who is the target audience?",
+                    "What tone should it use?",
+                ],
+                blocking_slots=["instruction", "topic", "audience", "tone"],
+                slot_values=slot_values,
+                clarification_mode="capability_required_inputs",
+            ),
+        )
+
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    class _Normalizer:
+        def generate_request_json_object(self, request):
+            return {
+                "normalized_slots": {"tone": "practical"},
+                "field_confidence": {"tone": 0.99},
+                "unresolved_fields": [],
+            }
+
+    monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", True)
+    monkeypatch.setattr(main, "_chat_clarification_normalizer_provider", _Normalizer())
+    monkeypatch.setattr(
+        main,
+        "_chat_submit_capability_contracts",
+        lambda _capability_ids: [
+            {
+                "capability_id": "document.spec.generate_iterative",
+                "description": "Generate a structured document spec iteratively.",
+                "required_inputs": ["instruction", "topic", "audience", "tone"],
+                "chat_collectible_fields": ["instruction", "topic", "audience", "tone"],
+                "chat_required_fields": ["instruction", "topic", "audience", "tone"],
+            }
+        ],
+    )
+
+    pending_state = main.chat_contracts.ClarificationState(
+        original_goal="create a document",
+        active_family="documents",
+        active_segment_id="s1",
+        active_capability_id="document.spec.generate_iterative",
+        current_question="What tone should it use?",
+        current_question_field="tone",
+        questions=["What tone should it use?"],
+        pending_questions=["What tone should it use?"],
+        pending_fields=["tone"],
+        required_fields=["instruction", "topic", "audience", "tone"],
+        known_slot_values={
+            "instruction": "The document should cover agentic ai ops implemented by the top tier companies.",
+            "topic": "agentic ai ops implemented by the top tier companies",
+            "audience": "agentic ai architects",
+            "path": "agenticaiops.docx",
+            "output_format": "docx",
+        },
+        resolved_slots={
+            "instruction": "The document should cover agentic ai ops implemented by the top tier companies.",
+            "topic": "agentic ai ops implemented by the top tier companies",
+            "audience": "agentic ai architects",
+            "path": "agenticaiops.docx",
+            "output_format": "docx",
+        },
+        slot_provenance={
+            "instruction": "explicit_user",
+            "topic": "explicit_user",
+            "audience": "explicit_user",
+            "path": "explicit_user",
+            "output_format": "explicit_user",
+        },
+    )
+    session_metadata = {
+        "draft_goal": "create a document",
+        "pending_clarification": pending_state.model_dump(mode="json", exclude_none=True),
+    }
+
+    db = SessionLocal()
+    try:
+        goal = "create a document\n\nUser clarification: Practical"
+        context_envelope = main.context_service.build_chat_context_envelope(
+            db=db,
+            goal=goal,
+            session_metadata=session_metadata,
+            session_context={},
+            turn_context={},
+            user_id=None,
+        )
+        result = main._normalize_chat_submit_context(
+            db=db,
+            goal=goal,
+            content="Practical",
+            session_metadata=session_metadata,
+            merged_context={},
+            context_envelope=context_envelope,
+            user_id=None,
+            messages=[],
+        )
+    finally:
+        db.close()
+
+    assert result is not None
+    assert result.context_json["tone"] == "practical"
+    assert result.requires_blocking_clarification is False
+    assert result.clarification_questions == []
+    assert result.goal_intent_profile["missing_slots"] == []
+    assert result.goal_intent_profile["blocking_slots"] == []
+    assert result.goal_intent_profile["questions"] == []
+
+
 def test_chat_turn_scopes_follow_up_clarification_to_active_segment(
     monkeypatch,
 ) -> None:
@@ -1854,6 +2637,163 @@ def test_chat_turn_scopes_follow_up_clarification_to_active_segment(
     assert second_body["assistant_message"]["action"]["type"] == "ask_clarification"
     assert "tone" in second_body["assistant_message"]["content"].lower()
     assert "search query" not in second_body["assistant_message"]["content"].lower()
+
+
+def test_chat_turn_document_content_answer_stays_on_document_flow(
+    monkeypatch,
+) -> None:
+    class _Router:
+        def generate_request_json_object(self, request):
+            return {
+                "route": "submit_job",
+                "assistant_response": "",
+                "intent": "generate",
+                "risk_level": "bounded_write",
+                "confidence": 0.97,
+            }
+
+    def _normalize_goal_intent(goal, **kwargs):
+        context_envelope = kwargs.get("context_envelope")
+        intent_context = (
+            main.context_service.intent_context_view(context_envelope)
+            if context_envelope is not None
+            else {}
+        )
+        has_instruction = bool(str(intent_context.get("instruction") or "").strip())
+        has_path = bool(str(intent_context.get("path") or "").strip())
+        if not has_instruction:
+            missing_fields = ["topic_query", "query", "path"]
+            questions = ["What specific content should be in the document?"]
+        elif not has_path:
+            missing_fields = ["path"]
+            questions = ["What output path or filename should be used?"]
+        else:
+            missing_fields = []
+            questions = []
+        return main.workflow_contracts.NormalizedIntentEnvelope(
+            goal=goal,
+            profile=main.workflow_contracts.GoalIntentProfile(
+                intent="generate",
+                source="test",
+                confidence=0.97,
+                risk_level="bounded_write",
+                threshold=0.7,
+                low_confidence=False,
+                needs_clarification=bool(missing_fields),
+                requires_blocking_clarification=bool(missing_fields),
+                questions=questions,
+                blocking_slots=list(missing_fields),
+                missing_slots=list(missing_fields),
+                slot_values={"intent_action": "generate", "risk_level": "bounded_write"},
+                clarification_mode="capability_required_inputs" if missing_fields else None,
+            ),
+            graph=main.workflow_contracts.IntentGraph(
+                segments=[
+                    main.workflow_contracts.IntentGraphSegment(
+                        id="s1",
+                        intent="generate",
+                        objective="Generate document spec",
+                        required_inputs=["instruction", "path"],
+                        suggested_capabilities=["document.spec.generate"],
+                    ),
+                    main.workflow_contracts.IntentGraphSegment(
+                        id="s2",
+                        intent="io",
+                        objective="Search GitHub issues",
+                        required_inputs=["query"],
+                        suggested_capabilities=["github.issue.search"],
+                    ),
+                ]
+            ),
+            candidate_capabilities={
+                "s1": ["document.spec.generate"],
+                "s2": ["github.issue.search"],
+            },
+        )
+
+    registry = cap_registry.CapabilityRegistry(
+        capabilities={
+            "document.spec.generate": cap_registry.CapabilitySpec(
+                capability_id="document.spec.generate",
+                description="Generate a document spec.",
+                risk_tier="bounded_write",
+                idempotency="write",
+                group="documents",
+                subgroup="generation",
+                planner_hints={
+                    "chat_collectible_fields": ["instruction", "path"],
+                    "chat_required_fields": ["instruction", "path"],
+                },
+            ),
+            "github.issue.search": cap_registry.CapabilitySpec(
+                capability_id="github.issue.search",
+                description="Search GitHub issues.",
+                risk_tier="read_only",
+                idempotency="read",
+                group="github",
+                subgroup="issues",
+                planner_hints={
+                    "chat_collectible_fields": ["query"],
+                    "chat_required_fields": ["query"],
+                },
+            ),
+        }
+    )
+
+    monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(chat_service.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", False)
+
+    session = client.post("/chat/sessions", json={}).json()
+
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    first = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Create a document", "context_json": {}, "priority": 0},
+    )
+
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert first_body["assistant_message"]["content"] == "What specific content should be in the document?"
+    first_pending = first_body["session"]["metadata"]["pending_clarification"]
+    assert first_pending["current_question_field"] == "instruction"
+    assert first_pending["active_capability_id"] == "document.spec.generate"
+    assert (
+        first_body["session"]["metadata"]["normalized_intent_envelope"]["candidate_capabilities"]["s1"]
+        == ["document.spec.generate"]
+    )
+
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "always_router")
+    monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    second = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={
+            "content": "The document should cover how the agentic ai ops is implemented at the top tier companies",
+            "context_json": {},
+            "priority": 0,
+        },
+    )
+
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["job"] is None
+    assert second_body["assistant_message"]["action"]["type"] == "ask_clarification"
+    assert (
+        "What output path or filename should be used?"
+        in second_body["assistant_message"]["content"]
+    )
+    assert (
+        "What specific content should be in the document?"
+        not in second_body["assistant_message"]["content"]
+    )
+    second_pending = second_body["session"]["metadata"]["pending_clarification"]
+    assert second_pending["active_capability_id"] == "document.spec.generate"
+    assert (
+        second_body["session"]["metadata"]["context_json"]["instruction"]
+        == "The document should cover how the agentic ai ops is implemented at the top tier companies"
+    )
 
 
 def test_chat_turn_keeps_submit_in_clarification_when_submit_normalization_throws(

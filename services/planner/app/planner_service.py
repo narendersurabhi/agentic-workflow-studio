@@ -674,7 +674,12 @@ def _fill_payload_context_defaults(
     payload: dict[str, Any],
     *,
     job_context: Mapping[str, Any],
+    request_id: str | None = None,
 ) -> None:
+    normalized_request_id = str(request_id or "").strip().lower()
+    allow_path_defaults = not (
+        normalized_request_id.startswith("document.spec.") or "document_spec" in normalized_request_id
+    )
     for key in (
         "instruction",
         "markdown_text",
@@ -701,6 +706,14 @@ def _fill_payload_context_defaults(
         "file_name",
         "output_filename",
     ):
+        if not allow_path_defaults and key in {
+            "path",
+            "output_path",
+            "filename",
+            "file_name",
+            "output_filename",
+        }:
+            continue
         if key in payload:
             continue
         value = job_context.get(key)
@@ -709,7 +722,7 @@ def _fill_payload_context_defaults(
             continue
         if isinstance(value, (int, float, bool)):
             payload[key] = value
-    if "path" not in payload:
+    if allow_path_defaults and "path" not in payload:
         for alias in ("output_path", "filename", "file_name", "output_filename"):
             value = payload.get(alias)
             if isinstance(value, str) and value.strip():
@@ -758,6 +771,7 @@ def build_validation_payload(
     _fill_payload_context_defaults(
         payload,
         job_context=request.job_context if isinstance(request.job_context, dict) else {},
+        request_id=tool.name,
     )
     if "today" not in payload and "date" not in payload:
         payload["today"] = datetime.now(UTC).date().isoformat()
@@ -781,6 +795,7 @@ def build_capability_validation_payload(
             projected_inputs = job_projection.project_explicit_inputs_for_tool(
                 candidate_id,
                 request.job_payload,
+                job_context=request.job_context,
                 default_goal=request.goal,
             )
             if projected_inputs:
@@ -789,6 +804,22 @@ def build_capability_validation_payload(
         payload.pop("job", None)
         for key, value in projected_inputs.items():
             payload.setdefault(key, value)
+    projected_job_payload = job_projection.project_job_payload_for_tool(
+        request_id,
+        request.job_payload,
+        job_context=request.job_context,
+        default_goal=request.goal,
+    )
+    if projected_job_payload and job_projection.uses_document_job_payload(request_id):
+        existing_job = payload.get("job")
+        if isinstance(existing_job, dict):
+            marker_keys = {str(key) for key in existing_job.keys()}
+            if "$default" in marker_keys and bool(existing_job.get("$default")):
+                payload["job"] = projected_job_payload
+            elif marker_keys and marker_keys.issubset({"$default", "$from"}):
+                payload["job"] = projected_job_payload
+        elif existing_job is None and not isinstance(payload.get("document_spec"), dict):
+            payload["job"] = projected_job_payload
     payload.setdefault("tool_inputs", dict(raw_tool_inputs))
     if "instruction" not in payload and isinstance(task.instruction, str) and task.instruction.strip():
         payload["instruction"] = task.instruction.strip()
@@ -796,7 +827,7 @@ def build_capability_validation_payload(
         for key, default_value in dependency_fill_defaults().items():
             payload.setdefault(key, default_value)
     job_context = request.job_context if isinstance(request.job_context, dict) else {}
-    _fill_payload_context_defaults(payload, job_context=job_context)
+    _fill_payload_context_defaults(payload, job_context=job_context, request_id=request_id)
     if task.tool_requests and "github.repo.list" in task.tool_requests:
         github_query = synthesize_github_repo_query(
             raw_tool_inputs=raw_tool_inputs,

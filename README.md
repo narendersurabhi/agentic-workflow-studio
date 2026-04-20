@@ -259,6 +259,10 @@ These Make targets now run through `uv`, so you do not need to preinstall `pytes
 - `make eval-capability-search-gate`
 - `make eval-chat-boundary`
 - `make eval-chat-boundary-gate`
+- `make eval-deepeval-chat`
+- `make eval-deepeval-planner`
+- `make eval-deepeval-gate`
+- `make eval-deepeval-staging-replay`
 - `make k8s-up-local`
 - `make k8s-apply-local`
 - `make k8s-down-local`
@@ -355,6 +359,45 @@ Router calibration controls:
 - `CHAT_ROUTING_CALIBRATOR_LIVE=false`
 - `CHAT_ROUTING_CALIBRATOR_MIN_PROBABILITY=0.65`
 - `CHAT_ROUTING_CALIBRATOR_MIN_MARGIN=0.08`
+
+## DeepEval Agent Gates
+
+DeepEval runs as a second evaluation layer for `chat + planner` without replacing the existing repo-native gold-set gates.
+
+Run locally:
+
+```bash
+make eval-deepeval-chat
+make eval-deepeval-planner
+make eval-deepeval-gate
+```
+
+Replay staging feedback slices:
+
+```bash
+DEEPEVAL_STAGING_BASE_URL=https://staging.example.internal \
+DEEPEVAL_STAGING_BEARER_TOKEN=... \
+make eval-deepeval-staging-replay
+```
+
+Artifacts:
+
+- `artifacts/evals/deepeval_chat_report.json`
+- `artifacts/evals/deepeval_planner_report.json`
+- `artifacts/evals/deepeval_gate_report.json`
+- `artifacts/evals/deepeval_staging_replay_report.json`
+
+Core controls:
+
+- `DEEPEVAL_ENABLED=false`
+- `DEEPEVAL_MODE=local`
+- `DEEPEVAL_JUDGE_PROVIDER=mock`
+- `DEEPEVAL_JUDGE_MODEL=...`
+- `DEEPEVAL_JUDGE_API_KEY=...`
+- `DEEPEVAL_MIN_CHAT_SCORE=0.95`
+- `DEEPEVAL_MIN_PLANNER_SCORE=0.90`
+
+When `DEEPEVAL_ENABLED=false` or `DEEPEVAL_JUDGE_PROVIDER=mock`, the harness still writes normalized reports using deterministic local metrics. When `DEEPEVAL_ENABLED=true` with a real judge provider, the same harness adds DeepEval judge metrics on top of those baseline metrics.
 
 ## Kubernetes
 

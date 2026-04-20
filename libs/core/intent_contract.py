@@ -146,6 +146,12 @@ _SLOT_RISK_RANK: dict[str, int] = {
 }
 
 _CLARIFICATION_REQUIRED_INPUT_KEYS: set[str] = {
+    "instruction",
+    "topic",
+    "main_topic",
+    "audience",
+    "tone",
+    "query",
     "path",
     "output_path",
     "filename",
@@ -153,6 +159,16 @@ _CLARIFICATION_REQUIRED_INPUT_KEYS: set[str] = {
     "target_system",
     "safety_constraints",
     "intent_action",
+}
+
+_NON_COLLECTIBLE_REQUIRED_INPUT_KEYS: set[str] = {
+    "document_spec",
+    "document_spec_data",
+    "input_data",
+    "job",
+    "tool_inputs",
+    "memory",
+    "task_outputs",
 }
 
 _GENERIC_CAPABILITY_SYSTEMS: set[str] = {
@@ -169,6 +185,38 @@ _INTENT_ACTION_PHRASES: dict[str, str] = {
     "validate": "validate or check something",
     "render": "render a final artifact",
     "io": "fetch, inspect, or list data",
+}
+
+_GENERIC_INSTRUCTION_TOKENS: set[str] = {
+    "a",
+    "an",
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+    "please",
+    "create",
+    "generate",
+    "write",
+    "draft",
+    "compose",
+    "produce",
+    "build",
+    "make",
+    "render",
+    "save",
+    "convert",
+    "document",
+    "doc",
+    "docx",
+    "pdf",
+    "file",
+    "artifact",
+    "content",
+    "output",
+    "page",
+    "pages",
 }
 
 _CLAUSE_SPLIT_ACTION_HINTS: tuple[str, ...] = (
@@ -270,6 +318,13 @@ def _extract_required_input_key(value: str) -> str:
     token = token.replace("-", "_").replace(" ", "_")
     token = re.sub(r"[^a-z0-9_]", "", token)
     alias_map = {
+        "artifact_name": "path",
+        "content_instructions": "instruction",
+        "document_content_instructions": "instruction",
+        "document_instruction": "instruction",
+        "document_path": "path",
+        "document_spec_data": "document_spec",
+        "final_document_path": "path",
         "path_or_format": "path",
         "source_or_query": "query",
         "output_path": "path",
@@ -753,6 +808,14 @@ def normalize_intent_segment_slots(
 
 def required_input_question(required_input: str, goal: str) -> str:
     key = normalize_required_input_key(required_input)
+    if key == "instruction":
+        return "What should this specifically cover?"
+    if key in {"topic", "main_topic", "title"}:
+        return "What is the main topic or title?"
+    if key == "audience":
+        return "Who is the target audience?"
+    if key == "tone":
+        return "What tone should it use?"
     if key in {"path", "output_path", "filename"}:
         return "What output path or filename should be used?"
     if key == "output_format":
@@ -773,6 +836,22 @@ def _goal_mentions_explicit_path(goal: str, objective: str) -> bool:
     if re.search(r"(?:^|[\s'\"`])(?:/|\.?/)[^\s]+(?:\.[A-Za-z0-9]{2,8})", blob):
         return True
     return bool(re.search(r"\b[\w./-]+\.(?:pdf|docx|md|txt|html|json|csv|xlsx)\b", blob))
+
+
+def _goal_implies_concrete_instruction(goal: str) -> bool:
+    raw = str(goal or "").strip()
+    if not raw:
+        return False
+    primary = re.split(r"\n+\s*user clarification:\s*", raw, maxsplit=1, flags=re.IGNORECASE)[0]
+    primary = re.sub(r"\b[\w./-]+\.(?:pdf|docx|md|txt|html|json|csv|xlsx)\b", " ", primary, flags=re.IGNORECASE)
+    primary = re.sub(r"(?:^|[\s'\"`])(?:/|\.?/)[^\s]+", " ", primary)
+    tokens = re.findall(r"[a-z0-9]+", primary.lower())
+    informative = [
+        token
+        for token in tokens
+        if token not in _GENERIC_INSTRUCTION_TOKENS and not token.isdigit()
+    ]
+    return bool(informative)
 
 
 def _segment_candidate_format_hints(capability_ids: Iterable[str]) -> set[str]:
@@ -813,6 +892,7 @@ def derive_segment_missing_inputs(
     candidate_formats = _segment_candidate_format_hints(candidate_capabilities)
     candidate_systems = _segment_candidate_system_hints(candidate_capabilities)
     combined_required_inputs: list[str] = []
+    direct_clarification_candidates: set[str] = set(_CLARIFICATION_REQUIRED_INPUT_KEYS)
     for raw_value in (
         list(_coerce_string_tuple(segment.get("required_inputs")))
         + list(_coerce_string_tuple(segment_slots.get("must_have_inputs")))
@@ -821,6 +901,8 @@ def derive_segment_missing_inputs(
         normalized = normalize_required_input_key(raw_value)
         if normalized and normalized not in combined_required_inputs:
             combined_required_inputs.append(normalized)
+        if normalized and normalized not in _NON_COLLECTIBLE_REQUIRED_INPUT_KEYS:
+            direct_clarification_candidates.add(normalized)
 
     def _mapping_has_value(mapping: Mapping[str, Any], *keys: str) -> bool:
         for key in keys:
@@ -851,10 +933,30 @@ def derive_segment_missing_inputs(
         normalize_task_intent(slot_values.get("intent_action"))
         or normalize_task_intent(segment.get("intent"))
     )
+    instruction_present = (
+        _mapping_has_value(
+            segment_slots,
+            "instruction",
+            "document_instruction",
+            "document_content_instructions",
+            "content_instructions",
+        )
+        or _mapping_has_value(
+            slot_values,
+            "instruction",
+            "document_instruction",
+            "document_content_instructions",
+            "content_instructions",
+        )
+        or _goal_implies_concrete_instruction(goal)
+    )
 
     missing_inputs: list[str] = []
     for key in combined_required_inputs:
-        if key not in _CLARIFICATION_REQUIRED_INPUT_KEYS:
+        if key not in direct_clarification_candidates:
+            continue
+        if key == "instruction" and not instruction_present:
+            missing_inputs.append("instruction")
             continue
         if key in {"path", "output_path", "filename"} and not path_present:
             missing_inputs.append("path")
@@ -867,6 +969,9 @@ def derive_segment_missing_inputs(
             continue
         if key == "safety_constraints" and not safety_present:
             missing_inputs.append("safety_constraints")
+            continue
+        if not _mapping_has_value(segment_slots, key) and not _mapping_has_value(slot_values, key):
+            missing_inputs.append(key)
 
     segment_intent = normalize_task_intent(segment.get("intent")) or ""
     if (
@@ -1057,6 +1162,14 @@ def _payload_has_required_input(
     if key in payload_map and _value_present(payload_map.get(key), key=key):
         return True
     aliases: dict[str, tuple[str, ...]] = {
+        "artifact_name": ("path", "output_path", "filename", "file_name", "output_filename"),
+        "content_instructions": ("instruction",),
+        "document_goal": ("instruction", "goal", "topic", "main_topic"),
+        "document_content_instructions": ("instruction",),
+        "document_instruction": ("instruction",),
+        "document_path": ("path", "output_path"),
+        "document_spec_data": ("document_spec",),
+        "final_document_path": ("path", "output_path"),
         "input_data": (
             "document_spec",
             "content",

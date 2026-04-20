@@ -58,6 +58,14 @@ patches:
     target:
       kind: Namespace
       name: awe
+  - path: patch-api.yaml
+    target:
+      kind: Deployment
+      name: api
+  - path: patch-planner.yaml
+    target:
+      kind: Deployment
+      name: planner
   - path: patch-ui.yaml
     target:
       kind: Deployment

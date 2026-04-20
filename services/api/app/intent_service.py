@@ -378,15 +378,7 @@ def blocking_clarification_slots(
 
 
 def slot_question(slot: str, goal: str) -> str:
-    if slot == "intent_action":
-        return "What should the system do first (generate, transform, validate, render, or io)?"
-    if slot == "output_format":
-        return "What output format do you need (for example PDF, DOCX, JSON, or Markdown)?"
-    if slot == "target_system":
-        return "Which target system should this use (for example GitHub, Jira, Slack, filesystem)?"
-    if slot == "safety_constraints":
-        return "What safety constraints must be enforced (for example read-only, no deletes, dry-run)?"
-    return f"Provide clarification for slot '{slot}' for goal: '{goal[:120]}'."
+    return intent_contract.required_input_question(slot, goal)
 
 
 def _infer_goal_risk_level(goal: str, intent: str) -> str:

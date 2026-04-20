@@ -8,6 +8,18 @@ from typing import Any
 from libs.core import intent_contract
 from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 
+_BARE_FORMAT_TOKENS = {
+    "pdf": "pdf",
+    "docx": "docx",
+    "markdown": "md",
+    "md": "md",
+    "json": "json",
+    "csv": "csv",
+    "xlsx": "xlsx",
+    "html": "html",
+    "txt": "txt",
+    "text": "txt",
+}
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "instruction": ("instruction",),
     "topic": ("topic", "main_topic", "document_title", "title", "subject"),
@@ -109,8 +121,19 @@ def normalize_contract_fields_with_llm(
 ) -> tuple[dict[str, str], list[str], dict[str, float]]:
     if not contract.missing_fields:
         return {}, [], {}
+    heuristic_updates = heuristic_field_updates_for_answer(
+        preferred_field=preferred_field,
+        latest_answer=latest_answer,
+        allowed_fields=contract.missing_fields,
+    )
+    heuristic_confidence = {field: 1.0 for field in heuristic_updates}
     if provider is None:
-        return {}, list(contract.required_fields), {}
+        unresolved = [
+            field
+            for field in contract.required_fields
+            if field in contract.missing_fields and field not in heuristic_updates
+        ]
+        return heuristic_updates, unresolved, heuristic_confidence
     normalized_preferred_field = intent_contract.normalize_required_input_key(preferred_field)
     prioritized_missing_fields_list: list[str] = []
     ordered_candidates = (
@@ -191,7 +214,13 @@ def normalize_contract_fields_with_llm(
 
     updates: dict[str, str] = {}
     accepted_confidence: dict[str, float] = {}
+    for field_name, value in heuristic_updates.items():
+        updates[field_name] = value
+        accepted_confidence[field_name] = heuristic_confidence[field_name]
+        unresolved.discard(field_name)
     for field_name in effective_missing_fields:
+        if field_name in updates:
+            continue
         raw_value = slot_map.get(field_name)
         if not isinstance(raw_value, str) or not raw_value.strip():
             if field_name in contract.required_fields:
@@ -225,6 +254,32 @@ def clarification_question_for_field(field: str, *, goal: str = "") -> str:
     if normalized in _FIELD_QUESTION_OVERRIDES:
         return _FIELD_QUESTION_OVERRIDES[normalized]
     return intent_contract.required_input_question(normalized, goal)
+
+
+def heuristic_field_updates_for_answer(
+    *,
+    preferred_field: str | None,
+    latest_answer: str | None,
+    allowed_fields: Sequence[str] = (),
+) -> dict[str, str]:
+    normalized_preferred = intent_contract.normalize_required_input_key(preferred_field)
+    answer = str(latest_answer or "").strip()
+    allowed = {
+        normalized
+        for field in allowed_fields
+        if (normalized := intent_contract.normalize_required_input_key(field))
+    }
+    if not answer or not normalized_preferred:
+        return {}
+    if allowed and normalized_preferred not in allowed:
+        return {}
+    if normalized_preferred == "instruction" and _looks_like_substantive_instruction(answer):
+        return {"instruction": answer}
+    if normalized_preferred == "output_format":
+        normalized_format = _normalize_output_format_token(answer)
+        if normalized_format:
+            return {"output_format": normalized_format}
+    return {}
 
 
 def _existing_fields_for_context(
@@ -332,8 +387,29 @@ def _normalize_field_value(field: str, value: str) -> str:
     if field == "tone":
         return normalized.lower()
     if field == "path":
+        if _normalize_output_format_token(normalized):
+            return ""
         return normalized.strip("\"'")
     return normalized
+
+
+def _normalize_output_format_token(value: str) -> str:
+    normalized = str(value or "").strip().strip("\"'").lower()
+    if not normalized:
+        return ""
+    return _BARE_FORMAT_TOKENS.get(normalized, "")
+
+
+def _looks_like_substantive_instruction(value: str) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    if _normalize_output_format_token(normalized):
+        return False
+    if len(normalized.split()) >= 4:
+        return True
+    lowered = normalized.lower()
+    return any(token in lowered for token in ("cover ", "about ", "include ", "explain ", "how "))
 
 
 def _first_non_empty_str(*values: Any) -> str:
