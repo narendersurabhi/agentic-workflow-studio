@@ -3905,6 +3905,32 @@ def _chat_boundary_failure_response(
     merged_context: Mapping[str, Any] | None = None,
     pending_clarification: bool,
 ) -> dict[str, Any]:
+    if pending_clarification:
+        fallback = _chat_clarification_turn_plan(
+            goal=candidate_goal,
+            clarification_questions=[
+                "Do you want to continue the current workflow request, or should I answer here in chat instead?"
+            ],
+            session_metadata=session_metadata,
+            source="chat_boundary_meta_clarification",
+        )
+        assessment = dict(fallback.get("goal_intent_profile") or {})
+        assessment["source"] = "chat_boundary_fallback"
+        assessment["routing_fallback_reason"] = "boundary_decision_failed"
+        assessment["pending_clarification"] = True
+        fallback["goal_intent_profile"] = (
+            workflow_contracts.dump_goal_intent_profile(assessment) or assessment
+        )
+        fallback["routing_decision"] = chat_contracts.ChatRouteDecision(
+            route=str(fallback.get("type") or "").strip().lower(),
+            fallback_used=True,
+            fallback_reason="boundary_decision_failed",
+            reason_codes=["boundary_decision_failed"],
+            assistant_response=str(fallback.get("assistant_content") or "").strip(),
+            missing_inputs=list(assessment.get("missing_slots") or []),
+            clarification_questions=list(fallback.get("clarification_questions") or []),
+        ).model_dump(mode="json", exclude_none=True)
+        return fallback
     fallback = _fallback_chat_turn_route(
         content=content,
         candidate_goal=candidate_goal,
@@ -5780,7 +5806,9 @@ def _chat_boundary_intent_evidence(
     candidate_goal: str,
     pending_clarification: bool,
 ) -> workflow_contracts.GoalIntentProfile | None:
-    if not pending_clarification and _looks_like_conversational_turn(content):
+    if pending_clarification:
+        return None
+    if _looks_like_conversational_turn(content):
         return None
     try:
         normalized = _normalize_goal_intent(
@@ -6085,8 +6113,7 @@ def _postprocess_chat_boundary_decision(
     if (
         not evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.chat_reply
-        and evidence.execution_signal_strength == "strong"
-        and evidence.conversation_mode_hint != "conversational"
+        and evidence.conversation_mode_hint == "execution_oriented"
     ):
         return boundary.model_copy(
             update={
@@ -6326,6 +6353,30 @@ def _normalize_chat_route(
     execution_oriented = bool(intent and intent not in {"other", "inform", "clarify"}) or not conversational_turn
     clarification_questions = list(decision.clarification_questions or [])
     assistant_response = str(decision.assistant_response or "").strip()
+    if route == "ask_clarification" and missing_slots:
+        filtered_questions: list[str] = []
+        for question in clarification_questions:
+            question_text = str(question or "").strip()
+            if not question_text:
+                continue
+            question_field = chat_service._clarification_field_from_question(
+                question=question_text,
+                candidate_fields=missing_slots,
+                goal=candidate_goal,
+                allow_single_candidate_fallback=False,
+            )
+            if question_field and question_field in missing_slots and question_text not in filtered_questions:
+                filtered_questions.append(question_text)
+        if filtered_questions:
+            clarification_questions = filtered_questions
+        else:
+            clarification_questions = [
+                chat_clarification_normalizer.clarification_question_for_field(
+                    slot_name,
+                    goal=candidate_goal,
+                )
+                for slot_name in missing_slots
+            ]
     selected_candidate_id = str(decision.selected_candidate_id or "").strip()
     top_k_candidates = list(decision.top_k_candidates or [])
     reason_codes = list(decision.reason_codes or [])
@@ -6337,6 +6388,8 @@ def _normalize_chat_route(
         else {}
     )
     workflow_invocation_available = bool(route_request.workflow_context.target_available)
+    if route == "ask_clarification" and not missing_slots and not workflow_invocation_available:
+        clarification_questions = []
     retrieved_candidates = list(route_request.routing_evidence.retrieved_candidates or [])
     candidate_by_id = {candidate.candidate_id: candidate for candidate in retrieved_candidates}
     workflow_candidate_ids = [
@@ -7185,6 +7238,7 @@ def _chat_runtime() -> chat_service.ChatServiceRuntime:
         make_id=lambda: str(uuid.uuid4()),
         normalize_submit_context=_normalize_chat_submit_context,
         is_chat_only_correction=_looks_like_chat_only_correction,
+        defer_pending_clarification_mapping=CHAT_RESPONSE_MODE == "answer_or_handoff",
     )
 
 

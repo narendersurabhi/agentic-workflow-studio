@@ -65,6 +65,7 @@ class ChatServiceRuntime:
     make_id: Callable[[], str]
     normalize_submit_context: Callable[..., "ChatSubmitNormalizationResult | None"] | None = None
     is_chat_only_correction: Callable[[str], bool] | None = None
+    defer_pending_clarification_mapping: bool = False
 
 
 @dataclass(frozen=True)
@@ -297,6 +298,9 @@ def _clarification_lifecycle(
         known_slot_values=known_slot_values,
         goal=state.original_goal,
         profile_requires_clarification=profile_requires_clarification,
+        preserve_single_generic_question=bool(
+            state.current_question_field and state.question_history
+        ),
     )
     current_question = questions[0] if questions else None
     resolved_question_field = _clarification_field_from_question(
@@ -381,6 +385,7 @@ def _active_lifecycle_questions(
     known_slot_values: Mapping[str, Any],
     goal: str,
     profile_requires_clarification: bool,
+    preserve_single_generic_question: bool,
 ) -> list[str]:
     questions: list[str] = []
     candidate_field_list = list(candidate_fields)
@@ -398,6 +403,8 @@ def _active_lifecycle_questions(
             if candidate_field_list and question_field not in candidate_field_list:
                 continue
         elif candidate_field_list:
+            if preserve_single_generic_question and len(raw_questions) == 1:
+                questions.append(question)
             continue
         elif not profile_requires_clarification:
             continue
@@ -833,6 +840,20 @@ def _merge_clarification_state_for_persistence(
     )
     lifecycle = clarification_lifecycle_from_state(merged)
     if not lifecycle.active:
+        latest_had_pending_work = _clarification_state_has_pending_work(latest_state)
+        desired_had_pending_work = _clarification_state_has_pending_work(desired_state)
+        if (
+            not latest_had_pending_work
+            and not desired_had_pending_work
+            and merged.known_slot_values
+        ):
+            merged.questions = []
+            merged.pending_questions = []
+            merged.current_question = None
+            merged.current_question_field = None
+            merged.pending_fields = []
+            merged.required_fields = []
+            return merged.model_dump(mode="json", exclude_none=True)
         return {}
     return _canonical_pending_state_payload(lifecycle)
 
@@ -875,6 +896,7 @@ def _merge_session_metadata_for_persistence(
     if "pending_clarification" in cleared_keys:
         merged.pop("pending_clarification", None)
     else:
+        desired_pending_present = isinstance(desired.get("pending_clarification"), Mapping)
         merged_pending = _merge_clarification_state_for_persistence(
             latest.get("pending_clarification")
             if isinstance(latest.get("pending_clarification"), Mapping)
@@ -885,6 +907,8 @@ def _merge_session_metadata_for_persistence(
         )
         if merged_pending:
             merged["pending_clarification"] = merged_pending
+        elif desired_pending_present:
+            merged.pop("pending_clarification", None)
 
     for key in cleared_keys:
         if key == "pending_clarification":
@@ -1172,9 +1196,19 @@ def _pending_clarification_state(
                     required_fields.append(field)
                 if field and field not in pending_fields:
                     pending_fields.append(field)
+    assessment_source = (
+        str(assessment.get("source") or "").strip() if isinstance(assessment, Mapping) else ""
+    )
+    profile_requires_clarification = bool(
+        isinstance(assessment, Mapping)
+        and (
+            assessment.get("needs_clarification")
+            or assessment.get("requires_blocking_clarification")
+        )
+    )
     reset_existing_pending_fields = (
         isinstance(assessment, Mapping)
-        and str(assessment.get("source") or "").strip() == "chat_boundary_meta_clarification"
+        and assessment_source == "chat_boundary_meta_clarification"
     )
     if not reset_existing_pending_fields:
         for raw_field in (existing_state.pending_fields if existing_state is not None else []):
@@ -1278,6 +1312,8 @@ def _pending_clarification_state(
                 goal=resolved_goal or original_goal,
             )
             if not question_field:
+                if len(question_queue) == 1:
+                    filtered_question_queue.append(question)
                 continue
             value = known_slot_values.get(question_field)
             if value is not None and (not isinstance(value, str) or value.strip()):
@@ -1295,6 +1331,13 @@ def _pending_clarification_state(
         ]
     if question_candidate_fields or filtered_question_queue:
         question_queue = filtered_question_queue
+    elif not pending_fields and not required_fields:
+        if assessment_source == "chat_boundary_meta_clarification" or (
+            profile_requires_clarification and question_queue
+        ):
+            question_queue = _clarification_question_queue(questions)
+        else:
+            question_queue = []
     active_questions = question_queue[:1]
     execution_frame = (
         existing_state.execution_frame.model_copy(deep=True)
@@ -1395,6 +1438,14 @@ def _apply_pending_clarification_mapping(
             context_envelope,
             dict(merged_context or {}),
             updated_metadata,
+            None,
+        )
+    if runtime.defer_pending_clarification_mapping:
+        return (
+            goal,
+            context_envelope,
+            dict(merged_context or {}),
+            dict(session_metadata),
             None,
         )
 
