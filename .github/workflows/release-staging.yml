@@ -197,8 +197,48 @@ jobs:
           name: staging-cluster-snapshot-${{ needs.prepare.outputs.image_tag }}
           path: artifacts/release/staging-cluster-snapshot.txt
 
-  staging-regression:
+  agent-registry-e2e:
     needs: [prepare, deploy-staging]
+    if: needs.prepare.result == 'success' && needs.deploy-staging.result == 'success'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve Agent Registry e2e target
+        env:
+          SECRET_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          SECRET_BEARER_TOKEN: ${{ secrets.STAGING_API_BEARER_TOKEN }}
+        run: |
+          if [ -z "${SECRET_BASE_URL:-}" ]; then
+            echo "::error::Missing STAGING_API_BASE_URL secret."
+            exit 1
+          fi
+          echo "AGENT_REGISTRY_E2E_BASE_URL=${SECRET_BASE_URL}" >> "${GITHUB_ENV}"
+          echo "AGENT_REGISTRY_E2E_OUTPUT=artifacts/evals/agent_registry_staging_e2e_report.json" >> "${GITHUB_ENV}"
+          if [ -n "${SECRET_BEARER_TOKEN:-}" ]; then
+            echo "AGENT_REGISTRY_E2E_BEARER_TOKEN=${SECRET_BEARER_TOKEN}" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Verify Agent Registry profile flow
+        run: make verify-agent-registry-staging
+
+      - name: Upload Agent Registry e2e report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-registry-staging-e2e-${{ needs.prepare.outputs.image_tag }}
+          if-no-files-found: ignore
+          path: artifacts/evals/agent_registry_staging_e2e_report.json
+
+  staging-regression:
+    needs: [prepare, deploy-staging, agent-registry-e2e]
     uses: ./.github/workflows/staging-routing-gate.yml
     with:
       gold_path: ${{ needs.prepare.outputs.gold_path }}

@@ -15,7 +15,7 @@
 	eval-capability-feedback \
 	k8s-apply k8s-delete k8s-apply-local k8s-delete-local \
 	setup-k8s-env-staging k8s-apply-staging k8s-delete-staging \
-	k8s-pin-staging-images k8s-up-staging k8s-restart-staging \
+	k8s-pin-staging-images k8s-migrate-staging k8s-up-staging k8s-restart-staging \
 	setup-k8s-env-production k8s-apply-production \
 	k8s-pin-production-images k8s-up-production k8s-restart-production \
 	k8s-apply-observability k8s-delete-observability \
@@ -24,7 +24,8 @@
 	clear-local-registry \
 	k8s-sync-shared k8s-sync-workspace k8s-sync-artifacts \
 	images-list images-build images-push \
-	k8s-pin-local-images
+	k8s-pin-local-images \
+	verify-agent-registry-staging
 
 IMAGE_REGISTRY ?= localhost:5001
 IMAGE_OWNER ?= localhost
@@ -67,6 +68,9 @@ DEEPEVAL_DEPS = \
 
 CHAT_BOUNDARY_LIVE_VERBOSE ?= 1
 CHAT_BOUNDARY_LIVE_VERBOSE_FLAG = $(if $(filter 1 true TRUE yes YES,$(CHAT_BOUNDARY_LIVE_VERBOSE)),--verbose,)
+AGENT_REGISTRY_E2E_BASE_URL ?= http://127.0.0.1:18000
+AGENT_REGISTRY_E2E_BEARER_TOKEN ?=
+AGENT_REGISTRY_E2E_OUTPUT ?= artifacts/evals/agent_registry_staging_e2e_report.json
 UV_QUALITY_DEPS = \
 	$(UV_EVAL_DEPS) \
 	--with pytest \
@@ -140,6 +144,9 @@ k8s-pin-staging-images:
 	kubectl set image deployment/rag-retriever-mcp -n $(STAGING_NAMESPACE) rag-retriever-mcp=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-rag-retriever-mcp:$(STAGING_IMAGE_TAG)
 	kubectl set image deployment/ui -n $(STAGING_NAMESPACE) ui=$(STAGING_IMAGE_REGISTRY)/$(STAGING_IMAGE_OWNER)/awe-ui:$(STAGING_IMAGE_TAG)
 
+k8s-migrate-staging:
+	kubectl exec -n $(STAGING_NAMESPACE) deploy/api -- python -m alembic -c /app/services/api/app/alembic.ini upgrade head
+
 k8s-pin-production-images:
 	@test -n "$(PRODUCTION_IMAGE_OWNER)" || (echo "PRODUCTION_IMAGE_OWNER is required" >&2; exit 1)
 	kubectl set image deployment/api -n $(PRODUCTION_NAMESPACE) api=$(PRODUCTION_IMAGE_REGISTRY)/$(PRODUCTION_IMAGE_OWNER)/awe-api:$(PRODUCTION_IMAGE_TAG)
@@ -197,6 +204,8 @@ k8s-up-staging:
 	$(MAKE) k8s-apply-staging
 	$(MAKE) k8s-pin-staging-images
 	kubectl rollout status deployment/postgres -n $(STAGING_NAMESPACE) --timeout=180s
+	kubectl rollout status deployment/api -n $(STAGING_NAMESPACE) --timeout=180s
+	$(MAKE) k8s-migrate-staging
 	kubectl rollout status deployment/redis -n $(STAGING_NAMESPACE) --timeout=180s
 	kubectl rollout status deployment/qdrant -n $(STAGING_NAMESPACE) --timeout=180s
 	kubectl rollout status deployment/api -n $(STAGING_NAMESPACE) --timeout=180s
@@ -337,6 +346,12 @@ eval-deepeval-gate:
 
 eval-deepeval-staging-replay:
 	PYTHONPATH=. uv run $(DEEPEVAL_DEPS) python3 scripts/eval_deepeval_staging_replay.py
+
+verify-agent-registry-staging:
+	AGENT_REGISTRY_E2E_BASE_URL="$(AGENT_REGISTRY_E2E_BASE_URL)" \
+	AGENT_REGISTRY_E2E_BEARER_TOKEN="$(AGENT_REGISTRY_E2E_BEARER_TOKEN)" \
+	AGENT_REGISTRY_E2E_OUTPUT="$(AGENT_REGISTRY_E2E_OUTPUT)" \
+		python3 scripts/verify_agent_registry_e2e.py
 
 build-capability-feedback:
 	PYTHONPATH=. python3 scripts/build_capability_search_feedback.py --source auto --output artifacts/evals/capability_search_feedback.jsonl

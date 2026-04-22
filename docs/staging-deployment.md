@@ -78,7 +78,17 @@ The standard flow is:
 2. apply the staging overlay
 3. create or update `awe-config` and `awe-secrets` from `.env.staging`
 4. pin deployments to the selected image tag
-5. wait for rollouts
+5. wait for Postgres and API availability
+6. run API Alembic migrations with the pinned API image
+7. wait for rollouts
+
+The `make k8s-up-staging` target runs the migration step through:
+
+```bash
+make k8s-migrate-staging
+```
+
+Run the same target manually after applying a migration-only API image or when you need to repair a partially applied rollout.
 
 ## Deploy To A Real Staging Cluster
 
@@ -250,6 +260,26 @@ Promotion rule:
 4. only then promote the same image tag to production
 
 The end-to-end staging release workflow is `.github/workflows/release-staging.yml`. It builds and pushes immutable images, deploys the resolved tag to staging, and then calls the staging routing gate.
+
+## Verify Agent Registry
+
+Agent Registry releases have a dedicated live e2e verifier. It creates a temporary Agent Definition, confirms it appears in the enabled profile list, updates it, launches a profile-backed Agent Sandbox run, verifies the persisted `agent_definition_snapshot`, launches an unsaved direct Agent Sandbox run, soft-deletes the profile, and confirms the deleted profile no longer appears by default.
+
+Run it against staging:
+
+```bash
+AGENT_REGISTRY_E2E_BASE_URL=https://staging.example.internal \
+AGENT_REGISTRY_E2E_BEARER_TOKEN=<token> \
+make verify-agent-registry-staging
+```
+
+The report is written to:
+
+```bash
+artifacts/evals/agent_registry_staging_e2e_report.json
+```
+
+The release workflow runs this verifier after staging deployment and before the broader routing regression gate.
 
 ## Troubleshooting
 
