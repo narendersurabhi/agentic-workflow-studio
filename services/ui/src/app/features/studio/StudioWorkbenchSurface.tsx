@@ -4,17 +4,23 @@ import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "
 
 import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
 import {
+  createAgentDefinition,
+  deleteAgentDefinition,
+  fetchAgentDefinitions,
   fetchCapabilityCatalog,
   fetchRunDebugger,
   launchAgentRun,
   launchCapabilityRun,
   searchCapabilities,
+  updateAgentDefinition,
   type CapabilitySearchItem,
   type WorkbenchDebuggerData,
   type WorkbenchRunLaunchResponse,
 } from "./studioApi";
 import { mapDebuggerStepToReplayDraft, mapRunToWorkbenchFork, mapRunToWorkflowPromotion } from "./studioWorkbenchMappings";
 import type {
+  AgentDefinition,
+  AgentDefinitionCreateRequest,
   CapabilityItem,
   ReplayableCapabilityDraft,
   StudioSurface,
@@ -248,6 +254,38 @@ function splitDependencyList(value: string): string[] {
     .filter(Boolean);
 }
 
+function splitConstraintList(value: string): string[] {
+  return value
+    .split(/\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function createAgentProfileInputDraft(definition: AgentDefinition): CapabilityInputDraft {
+  const inputDraft: CapabilityInputDraft = {};
+  if (definition.default_goal.trim()) {
+    inputDraft.goal = definition.default_goal;
+  }
+  const workspacePath =
+    definition.default_workspace_path?.trim() ||
+    (definition.agent_capability_id === DEFAULT_AGENT_CAPABILITY_ID ? DEFAULT_AGENT_WORKSPACE_PATH : "");
+  if (workspacePath) {
+    inputDraft.workspace_path = workspacePath;
+  }
+  if (definition.default_constraints.length > 0) {
+    inputDraft.constraints = definition.default_constraints.join("\n");
+  }
+  const maxSteps =
+    definition.default_max_steps ??
+    (definition.agent_capability_id === DEFAULT_AGENT_CAPABILITY_ID
+      ? Number(DEFAULT_AGENT_MAX_STEPS)
+      : null);
+  if (maxSteps !== null) {
+    inputDraft.max_steps = String(maxSteps);
+  }
+  return inputDraft;
+}
+
 function createAgentStepDraft(capabilityId = "", role: AgentStepRole = "step"): AgentStepDraft {
   const baseId =
     role === "agent"
@@ -266,6 +304,25 @@ function createAgentStepDraft(capabilityId = "", role: AgentStepRole = "step"): 
     inputJsonText: "{\n  \n}",
     retryPolicyText: "",
   };
+}
+
+function createAgentStepDraftFromDefinition(definition: AgentDefinition): AgentStepDraft {
+  const capabilityId = definition.agent_capability_id || DEFAULT_AGENT_CAPABILITY_ID;
+  const inputDraft = createAgentProfileInputDraft(definition);
+  const draft = createAgentStepDraft(capabilityId, "agent");
+  return {
+    ...draft,
+    name: "Agent",
+    description: definition.description?.trim() || defaultStepDescription(capabilityId, "agent"),
+    instruction: definition.instructions || defaultStepInstruction(capabilityId, "agent"),
+    inputDraft,
+    rawInputOverrideEnabled: false,
+    inputJsonText: formatJson(inputDraft),
+  };
+}
+
+function sortAgentDefinitions(definitions: AgentDefinition[]): AgentDefinition[] {
+  return [...definitions].sort((left, right) => right.updated_at.localeCompare(left.updated_at));
 }
 
 function buildCapabilityRunSpecPreview(
@@ -524,6 +581,15 @@ export default function StudioWorkbenchSurface({
     createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent"),
   ]);
   const [agentRawRunSpecText, setAgentRawRunSpecText] = useState("{\n  \n}");
+  const [agentDefinitions, setAgentDefinitions] = useState<AgentDefinition[]>([]);
+  const [agentDefinitionsLoading, setAgentDefinitionsLoading] = useState(false);
+  const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
+  const [selectedAgentDefinitionId, setSelectedAgentDefinitionId] = useState("");
+  const [agentProfileName, setAgentProfileName] = useState("");
+  const [agentProfileDescription, setAgentProfileDescription] = useState("");
+  const [agentProfileError, setAgentProfileError] = useState<string | null>(null);
+  const [agentProfileSaving, setAgentProfileSaving] = useState(false);
+  const [agentProfileDeleting, setAgentProfileDeleting] = useState(false);
   const [launchLoading, setLaunchLoading] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchResponse, setLaunchResponse] = useState<WorkbenchRunLaunchResponse | null>(null);
@@ -576,6 +642,34 @@ export default function StudioWorkbenchSurface({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAgentDefinitions = async () => {
+      setAgentDefinitionsLoading(true);
+      setAgentDefinitionsError(null);
+      try {
+        const response = await fetchAgentDefinitions(workspaceUserId.trim() || undefined);
+        if (!cancelled) {
+          setAgentDefinitions(sortAgentDefinitions(response));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAgentDefinitionsError(
+            error instanceof Error ? error.message : "Failed to load agent profiles."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setAgentDefinitionsLoading(false);
+        }
+      }
+    };
+    void loadAgentDefinitions();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceUserId]);
 
   useEffect(() => {
     const query = deferredCatalogQuery.trim();
@@ -631,6 +725,11 @@ export default function StudioWorkbenchSurface({
         ? catalog.find((item) => item.id === primaryAgentStep.capabilityId) ?? null
         : null,
     [catalog, primaryAgentStep]
+  );
+
+  const selectedAgentDefinition = useMemo(
+    () => agentDefinitions.find((definition) => definition.id === selectedAgentDefinitionId) ?? null,
+    [agentDefinitions, selectedAgentDefinitionId]
   );
 
   const groupOptions = useMemo(
@@ -836,6 +935,16 @@ export default function StudioWorkbenchSurface({
     [agentEditorMode, rawAgentRunSpec, structuredAgentRunSpec]
   );
 
+  useEffect(() => {
+    if (agentEditorMode !== "structured" || structuredAgentRunSpec.error || !structuredAgentRunSpec.value) {
+      return;
+    }
+    const nextRawRunSpecText = formatJson(structuredAgentRunSpec.value);
+    setAgentRawRunSpecText((current) =>
+      current === nextRawRunSpecText ? current : nextRawRunSpecText
+    );
+  }, [agentEditorMode, structuredAgentRunSpec.error, structuredAgentRunSpec.value]);
+
   const predictedExecutionRequestPreview = useMemo(() => {
     const previewValue =
       workbenchMode === "capability" ? capabilityRunSpecPreview : agentRunSpecPreview.value;
@@ -907,6 +1016,189 @@ export default function StudioWorkbenchSurface({
     [debuggerData]
   );
 
+  const applyAgentDefinitionDraft = (definition: AgentDefinition) => {
+    const primaryStep = createAgentStepDraftFromDefinition(definition);
+    setWorkbenchMode("agent");
+    setAgentEditorMode("structured");
+    setSelectedAgentDefinitionId(definition.id);
+    setAgentProfileName(definition.name);
+    setAgentProfileDescription(definition.description ?? "");
+    setAgentTitle(definition.name || "Agent workbench run");
+    setAgentGoal(definition.default_goal || "");
+    setAgentUserId(definition.user_id || workspaceUserId);
+    setAgentSteps([primaryStep]);
+    setAgentProfileError(null);
+    setLaunchError(null);
+    setWorkbenchBanner({
+      tone: "info",
+      message: `Loaded agent profile '${definition.name}'.`,
+    });
+  };
+
+  const buildAgentDefinitionPayload = (): AgentDefinitionCreateRequest => {
+    const primaryStep = primaryAgentStep ?? createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent");
+    const capabilityId = primaryStep.capabilityId.trim() || DEFAULT_AGENT_CAPABILITY_ID;
+    const defaultGoal =
+      agentGoal.trim() || stringInputValue(primaryStep.inputDraft, "goal").trim();
+    const workspacePath = stringInputValue(primaryStep.inputDraft, "workspace_path").trim();
+    const constraints = splitConstraintList(
+      stringInputValue(primaryStep.inputDraft, "constraints")
+    );
+    const maxStepsText = stringInputValue(primaryStep.inputDraft, "max_steps").trim();
+    let maxSteps: number | null = null;
+    if (maxStepsText) {
+      const parsedMaxSteps = Number(maxStepsText);
+      if (!Number.isInteger(parsedMaxSteps) || parsedMaxSteps <= 0) {
+        throw new Error("Agent profile max steps must be a positive whole number.");
+      }
+      maxSteps = parsedMaxSteps;
+    }
+    const allowedCapabilityIds = Array.from(
+      new Set(
+        agentSteps
+          .slice(1)
+          .map((step) => step.capabilityId.trim())
+          .filter(Boolean)
+      )
+    );
+    const fallbackName = defaultGoal ? defaultGoal.slice(0, 96) : "Agent profile";
+    const name =
+      agentProfileName.trim() ||
+      agentTitle.trim() ||
+      fallbackName;
+    const instructions =
+      primaryStep.instruction.trim() || defaultStepInstruction(capabilityId, "agent");
+    return {
+      name,
+      description: agentProfileDescription.trim() || null,
+      agent_capability_id: capabilityId,
+      instructions,
+      default_goal: defaultGoal,
+      default_workspace_path: workspacePath || null,
+      default_constraints: constraints,
+      default_max_steps: maxSteps,
+      model_config: selectedAgentDefinition?.model_config ?? {},
+      allowed_capability_ids: allowedCapabilityIds,
+      memory_policy: selectedAgentDefinition?.memory_policy ?? {},
+      guardrail_policy: selectedAgentDefinition?.guardrail_policy ?? {},
+      workspace_policy: selectedAgentDefinition?.workspace_policy ?? {},
+      user_id: agentUserId.trim() || workspaceUserId.trim() || null,
+      metadata: {
+        ...(selectedAgentDefinition?.metadata ?? {}),
+        surface: "studio_workbench",
+      },
+    };
+  };
+
+  const handleNewAgentProfile = () => {
+    setWorkbenchMode("agent");
+    setAgentEditorMode("structured");
+    setSelectedAgentDefinitionId("");
+    setAgentProfileName("");
+    setAgentProfileDescription("");
+    setAgentTitle("Agent workbench run");
+    setAgentGoal("");
+    setAgentSteps([createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]);
+    setAgentProfileError(null);
+    setLaunchError(null);
+    setWorkbenchBanner({
+      tone: "info",
+      message: "Started a new unsaved agent profile draft.",
+    });
+  };
+
+  const handleSaveAgentProfile = async () => {
+    if (!selectedAgentDefinitionId) {
+      setAgentProfileError("Select a saved profile first, or use Save as to create one.");
+      return;
+    }
+    setAgentProfileSaving(true);
+    setAgentProfileError(null);
+    try {
+      const payload = buildAgentDefinitionPayload();
+      const updated = await updateAgentDefinition(selectedAgentDefinitionId, payload);
+      setAgentDefinitions((current) =>
+        sortAgentDefinitions(
+          current.map((definition) =>
+            definition.id === updated.id ? updated : definition
+          )
+        )
+      );
+      setSelectedAgentDefinitionId(updated.id);
+      setAgentProfileName(updated.name);
+      setAgentProfileDescription(updated.description ?? "");
+      setWorkbenchBanner({
+        tone: "info",
+        message: `Saved agent profile '${updated.name}'.`,
+      });
+    } catch (error) {
+      setAgentProfileError(
+        error instanceof Error ? error.message : "Failed to save agent profile."
+      );
+    } finally {
+      setAgentProfileSaving(false);
+    }
+  };
+
+  const handleSaveAgentProfileAs = async () => {
+    setAgentProfileSaving(true);
+    setAgentProfileError(null);
+    try {
+      const payload = buildAgentDefinitionPayload();
+      const created = await createAgentDefinition(payload);
+      setAgentDefinitions((current) =>
+        sortAgentDefinitions([
+          created,
+          ...current.filter((definition) => definition.id !== created.id),
+        ])
+      );
+      setSelectedAgentDefinitionId(created.id);
+      setAgentProfileName(created.name);
+      setAgentProfileDescription(created.description ?? "");
+      setWorkbenchBanner({
+        tone: "info",
+        message: `Saved new agent profile '${created.name}'.`,
+      });
+    } catch (error) {
+      setAgentProfileError(
+        error instanceof Error ? error.message : "Failed to create agent profile."
+      );
+    } finally {
+      setAgentProfileSaving(false);
+    }
+  };
+
+  const handleDeleteAgentProfile = async () => {
+    if (!selectedAgentDefinitionId) {
+      return;
+    }
+    const definitionName = selectedAgentDefinition?.name || "this agent profile";
+    if (!window.confirm(`Delete ${definitionName}?`)) {
+      return;
+    }
+    setAgentProfileDeleting(true);
+    setAgentProfileError(null);
+    try {
+      await deleteAgentDefinition(selectedAgentDefinitionId);
+      setAgentDefinitions((current) =>
+        current.filter((definition) => definition.id !== selectedAgentDefinitionId)
+      );
+      setSelectedAgentDefinitionId("");
+      setAgentProfileName("");
+      setAgentProfileDescription("");
+      setWorkbenchBanner({
+        tone: "info",
+        message: "Deleted the agent profile.",
+      });
+    } catch (error) {
+      setAgentProfileError(
+        error instanceof Error ? error.message : "Failed to delete agent profile."
+      );
+    } finally {
+      setAgentProfileDeleting(false);
+    }
+  };
+
   const applyCapabilityReplayDraft = (draft: ReplayableCapabilityDraft) => {
     const targetCapability = catalog.find((item) => item.id === draft.capabilityId) ?? null;
     const nextCapabilityState = capabilityEditorStateFromInputs(targetCapability, draft.inputs);
@@ -942,6 +1234,10 @@ export default function StudioWorkbenchSurface({
       return;
     }
     setWorkbenchMode("agent");
+    setSelectedAgentDefinitionId("");
+    setAgentProfileName("");
+    setAgentProfileDescription("");
+    setAgentProfileError(null);
     setAgentTitle(forkResult.draft.title || "Agent workbench run");
     setAgentGoal(forkResult.draft.goal);
     setAgentUserId(forkResult.draft.userId || workspaceUserId);
@@ -1211,6 +1507,9 @@ export default function StudioWorkbenchSurface({
           user_id: agentUserId.trim() || null,
           context_json: agentContextJson.value ?? {},
           run_spec: agentRunSpecPreview.value,
+          ...(selectedAgentDefinitionId
+            ? { agent_definition_id: selectedAgentDefinitionId }
+            : {}),
         });
       }
 
@@ -1631,6 +1930,121 @@ export default function StudioWorkbenchSurface({
                 </div>
               ) : (
                 <div className="mt-4 space-y-4">
+                  <div className="rounded-2xl border border-sky-300/16 bg-sky-400/10 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-white">Agent Profile</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-300/78">
+                          {selectedAgentDefinition
+                            ? `Saved profile updated ${new Date(
+                                selectedAgentDefinition.updated_at
+                              ).toLocaleString()}`
+                            : "Unsaved draft"}
+                        </div>
+                      </div>
+                      <span className="rounded-full border border-sky-300/22 bg-sky-400/12 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-sky-100">
+                        {agentDefinitionsLoading ? "loading" : `${agentDefinitions.length} saved`}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                      <label className="text-xs text-slate-200">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                          Profile
+                        </span>
+                        <select
+                          value={selectedAgentDefinitionId}
+                          onChange={(event) => {
+                            const nextId = event.target.value;
+                            if (!nextId) {
+                              setSelectedAgentDefinitionId("");
+                              setAgentProfileName("");
+                              setAgentProfileDescription("");
+                              setAgentProfileError(null);
+                              return;
+                            }
+                            const definition =
+                              agentDefinitions.find((item) => item.id === nextId) ?? null;
+                            if (definition) {
+                              applyAgentDefinitionDraft(definition);
+                            }
+                          }}
+                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        >
+                          <option value="">Unsaved draft</option>
+                          {agentDefinitions.map((definition) => (
+                            <option key={definition.id} value={definition.id}>
+                              {definition.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-xs text-slate-200">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                          Profile name
+                        </span>
+                        <input
+                          value={agentProfileName}
+                          onChange={(event) => setAgentProfileName(event.target.value)}
+                          placeholder="Agent profile"
+                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-200 lg:col-span-2">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                          Description
+                        </span>
+                        <input
+                          value={agentProfileDescription}
+                          onChange={(event) => setAgentProfileDescription(event.target.value)}
+                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                        onClick={handleNewAgentProfile}
+                      >
+                        New
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => void handleSaveAgentProfile()}
+                        disabled={!selectedAgentDefinitionId || agentProfileSaving}
+                      >
+                        {agentProfileSaving ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-xl border border-sky-300/26 bg-sky-400/16 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-50 transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => void handleSaveAgentProfileAs()}
+                        disabled={agentProfileSaving}
+                      >
+                        {agentProfileSaving ? "Saving..." : "Save as"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-xl border border-rose-300/18 bg-rose-400/12 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-100 transition hover:border-rose-300/28 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => void handleDeleteAgentProfile()}
+                        disabled={!selectedAgentDefinitionId || agentProfileDeleting}
+                      >
+                        {agentProfileDeleting ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
+                    {agentDefinitionsError ? (
+                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                        {agentDefinitionsError}
+                      </div>
+                    ) : null}
+                    {agentProfileError ? (
+                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                        {agentProfileError}
+                      </div>
+                    ) : null}
+                  </div>
+
                   <div className="grid gap-3 lg:grid-cols-2">
                     <label className="text-xs text-slate-200">
                       <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">

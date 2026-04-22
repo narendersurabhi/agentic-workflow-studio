@@ -38,6 +38,52 @@ export type CapabilityCatalog = {
   items: CapabilityItem[];
 };
 
+export type AgentDefinition = {
+  id: string;
+  name: string;
+  description?: string | null;
+  agent_capability_id: string;
+  instructions: string;
+  default_goal: string;
+  default_workspace_path?: string | null;
+  default_constraints: string[];
+  default_max_steps?: number | null;
+  model_config: Record<string, unknown>;
+  allowed_capability_ids: string[];
+  memory_policy: Record<string, unknown>;
+  guardrail_policy: Record<string, unknown>;
+  workspace_policy: Record<string, unknown>;
+  enabled: boolean;
+  user_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentDefinitionCreateRequest = {
+  name: string;
+  description?: string | null;
+  agent_capability_id: string;
+  instructions: string;
+  default_goal?: string;
+  default_workspace_path?: string | null;
+  default_constraints?: string[];
+  default_max_steps?: number | null;
+  model_config?: Record<string, unknown>;
+  allowed_capability_ids?: string[];
+  memory_policy?: Record<string, unknown>;
+  guardrail_policy?: Record<string, unknown>;
+  workspace_policy?: Record<string, unknown>;
+  user_id?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type AgentDefinitionUpdateRequest = Partial<
+  AgentDefinitionCreateRequest & {
+    enabled: boolean;
+  }
+>;
+
 export type StudioSurface = "workflow" | "workbench";
 
 export type ComposerInputBinding =

@@ -7,7 +7,13 @@
  * stay free of raw fetch logic and retry handling.
  */
 
-import type { AdaptiveReplanStatus, CapabilityCatalog } from "./types";
+import type {
+  AdaptiveReplanStatus,
+  AgentDefinition,
+  AgentDefinitionCreateRequest,
+  AgentDefinitionUpdateRequest,
+  CapabilityCatalog,
+} from "./types";
 
 const apiUrl =
   typeof process !== "undefined"
@@ -82,6 +88,7 @@ export type WorkbenchAgentRunRequest = {
   user_id?: string | null;
   context_json?: Record<string, unknown>;
   run_spec: Record<string, unknown>;
+  agent_definition_id?: string | null;
 };
 
 export type WorkbenchDebuggerStep = {
@@ -153,6 +160,28 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${apiUrl}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail: string;
+    try {
+      const err = await res.json();
+      detail =
+        typeof err?.detail === "string"
+          ? err.detail
+          : JSON.stringify(err?.detail ?? err);
+    } catch {
+      detail = res.statusText;
+    }
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${apiUrl}${path}`, { method: "GET" });
   if (!res.ok) {
@@ -169,6 +198,59 @@ async function getJson<T>(path: string): Promise<T> {
     throw new Error(`${res.status}: ${detail}`);
   }
   return res.json() as Promise<T>;
+}
+
+async function deleteJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${apiUrl}${path}`, { method: "DELETE" });
+  if (!res.ok) {
+    let detail: string;
+    try {
+      const err = await res.json();
+      detail =
+        typeof err?.detail === "string"
+          ? err.detail
+          : JSON.stringify(err?.detail ?? err);
+    } catch {
+      detail = res.statusText;
+    }
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+// ─── Agent definitions ───────────────────────────────────────────────────────
+
+export async function fetchAgentDefinitions(
+  userId?: string,
+  includeDisabled = false
+): Promise<AgentDefinition[]> {
+  const params = new URLSearchParams();
+  const normalizedUserId = userId?.trim();
+  if (normalizedUserId) {
+    params.set("user_id", normalizedUserId);
+  }
+  if (includeDisabled) {
+    params.set("include_disabled", "true");
+  }
+  const query = params.toString();
+  return getJson<AgentDefinition[]>(`/agents/definitions${query ? `?${query}` : ""}`);
+}
+
+export async function createAgentDefinition(
+  req: AgentDefinitionCreateRequest
+): Promise<AgentDefinition> {
+  return postJson<AgentDefinition>("/agents/definitions", req);
+}
+
+export async function updateAgentDefinition(
+  agentId: string,
+  req: AgentDefinitionUpdateRequest
+): Promise<AgentDefinition> {
+  return putJson<AgentDefinition>(`/agents/definitions/${encodeURIComponent(agentId)}`, req);
+}
+
+export async function deleteAgentDefinition(agentId: string): Promise<{ ok: boolean }> {
+  return deleteJson<{ ok: boolean }>(`/agents/definitions/${encodeURIComponent(agentId)}`);
 }
 
 // ─── Workbench launch ─────────────────────────────────────────────────────────
