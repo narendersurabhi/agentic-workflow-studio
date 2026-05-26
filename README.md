@@ -2,6 +2,74 @@
 
 Agentic Workflow Studio is a full-stack platform for authoring and running AI-powered workflows through chat and a visual DAG editor, backed by typed execution contracts, reusable capabilities, memory, triggers, and Kubernetes-native orchestration.
 
+## Business Objective
+
+Agentic Workflow Studio helps organizations turn AI-assisted work from ad hoc prompt experiments into governed, repeatable business workflows. The platform is intended to reduce the time required to design, approve, run, and audit complex knowledge-work processes by combining conversational intake, reusable capabilities, visual workflow authoring, and production-grade execution controls.
+
+The business goal is to provide a shared automation foundation that can:
+
+- Accelerate delivery of AI-enabled internal tools, operational workflows, and document/report generation processes.
+- Improve reliability and accountability by making plans, tool calls, approvals, memory usage, artifacts, and outcomes traceable.
+- Reduce duplicated one-off agent development through reusable capabilities, typed contracts, and common runtime services.
+- Support safer adoption of AI automation with policy gates, execution governance, feedback analytics, and observable runs.
+- Enable teams to move from prototype workflows to production-style deployments across local and Kubernetes environments.
+
+### Online Metrics Captured
+
+The platform captures live Prometheus metrics so operators can measure adoption, reliability, routing quality, and feedback loops while workflows are running:
+
+- Job and orchestration health: `jobs_created_total`, `orchestrator_loop_errors_total`, `orchestrator_handle_errors_total`, and `orchestrator_recovered_events_total`.
+- Intent understanding and clarification: `intent_assessments_total`, `intent_clarification_required_total`, `intent_threshold_evaluations_total`, `intent_confidence_outcomes_total`, `intent_decompose_requests_total`, `intent_decompose_failures_total`, and `intent_segment_rejections_total`.
+- Intent graph quality signals: `intent_decompose_segments_total`, `intent_fact_candidates_total`, `intent_fact_supported_total`, `intent_fact_stripped_total`, `intent_capability_suggestions_total`, and `intent_capability_suggestions_matched_total`.
+- Memory and context summarization: `intent_memory_hint_candidates_total`, `intent_memory_hints_selected_total`, `interaction_summary_compactions_total`, `interaction_summary_tokens_in_total`, `interaction_summary_tokens_out_total`, and `interaction_summary_memory_persist_total`.
+- Capability discovery and execution: `capability_search_requests_total`, `capability_search_results_total`, `planner_capability_selection_total`, and `capability_execution_outcomes_total`.
+- Explicit user feedback and analytics usage: `feedback_submitted_total`, `feedback_reason_total`, `feedback_summary_requests_total`, and `feedback_examples_export_total`.
+- Chat routing, boundary, and clarification quality: `chat_boundary_decisions_total`, `chat_boundary_reason_total`, `chat_boundary_feedback_total`, `chat_routing_feedback_total`, `chat_clarification_slot_loss_feedback_total`, `chat_clarification_family_alignment_feedback_total`, and `chat_clarification_mapping_feedback_total`.
+
+These online metrics are exposed through the API `/metrics` endpoint and the deployed Prometheus metrics endpoints for planner, worker, policy, and coder services. The Kubernetes observability overlay includes Grafana dashboards for job and capability metrics.
+
+### Baseline and Success Criteria
+
+Baseline measurement starts from the current deployed or staging environment before a workflow, prompt, model, routing, or capability change is promoted. The baseline should include the current Prometheus metric rates, feedback summary, exported negative/partial feedback examples, and offline eval reports for intent, chat boundary routing, capability search, and DeepEval-backed chat/planner quality when enabled.
+
+Success is measured by improving business outcomes without regressing operational safety:
+
+- Adoption: increased `jobs_created_total`, workflow runs, and capability usage for intended automation scenarios.
+- Reliability: stable or lower orchestrator error rates, higher capability execution completion ratio, and no increase in recovered-event or retry pressure.
+- Intent and routing quality: lower clarification churn for well-specified requests, lower false chat-reply rate on execution requests, and passing `make eval-intent-gate` and `make eval-chat-boundary-gate`.
+- Capability quality: higher capability search hit rate, planner selection relevance, and execution success rate compared with the baseline.
+- User-perceived quality: higher chat helpfulness, intent agreement, plan approval, and job outcome positive rates from `GET /feedback/summary`.
+- Governance: no increase in policy violations, unsafe tool use, schema validation failures, or untraceable artifact-producing runs.
+- Release readiness: staging live regressions and configured quality gates pass before production promotion, with dashboards showing no material regression from the baseline window.
+
+### Back-of-the-Envelope Calculations
+
+Use these lightweight calculations to estimate business value before deeper measurement is available. Replace the assumptions with observed values from `/metrics`, `GET /feedback/summary`, run history, and team cost models.
+
+- Time saved per workflow:
+  - `manual_minutes_per_run - automated_minutes_per_run = minutes_saved_per_run`
+  - Example: `45 manual minutes - 10 supervised automation minutes = 35 minutes saved per run`.
+- Monthly capacity returned:
+  - `minutes_saved_per_run * successful_runs_per_month / 60 = hours_returned_per_month`
+  - Example: `35 minutes * 200 successful runs / 60 = 116.7 hours returned per month`.
+- Labor value:
+  - `hours_returned_per_month * blended_hourly_rate = monthly_labor_value`
+  - Example: `116.7 hours * $75/hour = $8,752.50 per month`.
+- Rework avoided:
+  - `baseline_failed_or_reworked_runs - current_failed_or_reworked_runs = avoided_rework_runs`
+  - `avoided_rework_runs * average_rework_minutes / 60 * blended_hourly_rate = rework_value`
+- Quality lift:
+  - `current_positive_feedback_rate - baseline_positive_feedback_rate = feedback_rate_lift`
+  - Track separately for chat helpfulness, intent agreement, plan approval, and job outcome positive rate.
+- Reliability lift:
+  - `current_successful_runs / total_runs - baseline_successful_runs / baseline_total_runs = run_success_rate_lift`
+  - Pair this with orchestrator error rates and capability execution outcomes so success does not hide unsafe retries or failures.
+- Payback period:
+  - `implementation_cost / monthly_labor_value = months_to_payback`
+  - Include platform operating cost, model spend, engineering time, and review/approval time in `implementation_cost`.
+
+These estimates are intentionally directional. Production decisions should use the observed baseline window, online metrics, feedback exports, and staging regression gates described above.
+
 ## Agentic Pattern
 
 This project uses a hybrid **agentic execution** pattern with three execution lanes:
