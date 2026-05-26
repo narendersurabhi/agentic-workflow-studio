@@ -72,16 +72,20 @@ These estimates are intentionally directional. Production decisions should use t
 
 ## Agentic Pattern
 
-This project uses a hybrid **agentic execution** pattern with three execution lanes:
+This project uses a hybrid **agentic execution** pattern with three user-facing execution lanes:
 
 1. **Planner-led jobs**: the planner creates a typed task DAG from a goal for goal-driven work.
 2. **Direct chat execution**: chat can answer normally or invoke a single safe read-only capability when no durable workflow is needed.
 3. **Studio-authored workflows**: manually designed workflow versions and triggers compile and run directly without planner involvement.
-4. **Worker executors** run ready tasks with tool calls and capability adapters (including MCP-backed services).
-5. **Critic/Policy** optionally enforce quality and guardrails.
-6. **API/UI** expose job state, workflow runs, task outputs, streaming events, and downloadable artifacts.
 
 Operationally this is a control-plane/data-plane split with typed contracts, shared job context, and task output handoff across planner, chat, and workflow-studio paths.
+
+Runtime components support those lanes:
+
+- **API/UI** expose chat, job state, workflow runs, task outputs, streaming events, and downloadable artifacts.
+- **Worker executors** run ready tasks with tool calls and capability adapters, including MCP-backed services.
+- **Policy** can enforce execution governance and guardrails; **Critic** is an optional review/rework service but is not part of the default Kubernetes staging deployment.
+- **Supporting services** such as coder, GitHub MCP, RAG retriever MCP, Qdrant, and Jaeger are deployed in Kubernetes environments that enable code, retrieval, vector search, and tracing workflows.
 
 ## Architecture
 
@@ -110,9 +114,13 @@ flowchart LR
 
   API -. "optional policy checks" .-> POLICY["Policy Gate"]
   WORKER -. "optional rework checks" .-> CRITIC["Critic Service"]
+  EXEC --> CODER["Coder service"]
+  EXEC --> MCP["MCP services<br/>GitHub • RAG retriever"]
+  MCP --> QDRANT[("Qdrant<br/>vector search")]
 
   API --> DB[("Postgres<br/>jobs, plans, chat sessions,<br/>workflow definitions, versions,<br/>triggers, runs, and memory")]
   API -->|"REST + SSE"| UI
+  API -. "trace links" .-> JAEGER["Jaeger"]
 ```
 
 If your Markdown viewer does not support Mermaid, use this fallback:
@@ -127,7 +135,9 @@ API -> Redis Streams -> Worker executors
 API -> Postgres (jobs, plans, chat sessions, workflow definitions, versions, triggers, runs, memory)
 API -> UI (REST + SSE)
 Planner -> API
-Policy and Critic are optional guardrail/rework services
+Policy is deployed as the policy gate; Critic is an optional review/rework service
+Worker execution can call supporting coder, GitHub MCP, and RAG retriever MCP services
+Qdrant backs vector retrieval; Jaeger provides trace navigation
 ```
 
 Related design docs:
@@ -149,7 +159,12 @@ Related design docs:
 - `planner`: builds typed task DAGs for planner-led jobs
 - `worker`: executes ready tasks through tool and capability runtimes, including memory-aware payload resolution
 - `policy`: optional policy gate service
-- `critic`: optional rework/review service
+- `critic`: optional rework/review service; not part of the default Kubernetes staging deployment
+- `coder`: MCP-backed coding service used by coding and repository workflows
+- `github-mcp`: GitHub MCP server used when GitHub capabilities are enabled
+- `rag-retriever-mcp`: retrieval service for RAG-backed workflows
+- `qdrant`: vector database used by retrieval services
+- `jaeger`: trace collection and navigation service
 - `ui`: Next.js frontend for Home, Chat, Compose, Studio, Memory, and feedback insights
 
 ## Recent Platform Features
