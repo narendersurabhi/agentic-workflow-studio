@@ -48,7 +48,7 @@
 
 - Add canonical APIs: `/runs`, `/runs/{id}`, `/runs/{id}/steps`, `/runs/{id}/debugger`, `/runs/{id}/cancel`, `/runs/{id}/continue`, `/runs/{id}/retry`.
 - Add canonical types: `Run`, `RunSpec`, `StepSpec`, `ExecutionRequest`, `StepCheckpoint`, `AcceptanceDecision`, `RoutingDecision`, `CapabilityInvocationRecord`.
-- Change event schema to run and step terminology: `run.created`, `step.ready`, `step.started`, `step.completed`, `step.failed`, `routing.decision`, `acceptance.decision`, `checkpoint.saved`, `checkpoint.resumed`.
+- Change event schema to run and step terminology: `run.created`, `step.ready`, `step.started`, `step.completed`, `step.failed`, `routing.decision`, `acceptance.decision`, `checkpoint.saved`, `checkpoint.replayed`.
 - Keep temporary translation for existing event consumers until final cutover.
 - Persist capability id as the orchestration contract on every step. Tool and adapter identifiers remain diagnostic metadata only.
 
