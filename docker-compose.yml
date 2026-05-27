@@ -41,6 +41,8 @@ services:
       JOB_RECOVERY_ENABLED: ${JOB_RECOVERY_ENABLED:-true}
       CAPABILITY_MODE: ${CAPABILITY_MODE:-enabled}
       CAPABILITY_REGISTRY_PATH: ${CAPABILITY_REGISTRY_PATH:-/app/config/capability_registry.yaml}
+      TOOL_HTTP_FETCH_ENABLED: ${TOOL_HTTP_FETCH_ENABLED:-false}
+      WORKER_MODE: ${WORKER_MODE:-llm}
     ports:
       - "18000:8000"
     depends_on:
