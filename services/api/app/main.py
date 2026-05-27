@@ -52,9 +52,11 @@ from libs.core.llm_provider import (
     LLMProviderError,
     LLMRequest,
     MockLLMProvider,
+    PromptBlock,
+    Stability,
     resolve_provider,
 )
-from libs.core.cache_session_store import CacheSessionStore
+from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
 from .database import Base, SessionLocal, engine
 from .models import (
     AgentDefinitionRecord,
@@ -591,7 +593,12 @@ def _build_chat_router_provider() -> LLMProvider | None:
         return None
 
 
-_chat_router_provider = _build_chat_router_provider()
+_chat_router_provider_raw = _build_chat_router_provider()
+_chat_router_provider: LLMProvider | None = (
+    CachingLLMProvider(_chat_router_provider_raw, _cache_session_store)
+    if _chat_router_provider_raw is not None
+    else None
+)
 
 
 def _build_chat_response_provider() -> LLMProvider | None:
@@ -618,7 +625,12 @@ def _build_chat_response_provider() -> LLMProvider | None:
         return None
 
 
-_chat_response_provider = _build_chat_response_provider()
+_chat_response_provider_raw = _build_chat_response_provider()
+_chat_response_provider: LLMProvider | None = (
+    CachingLLMProvider(_chat_response_provider_raw, _cache_session_store)
+    if _chat_response_provider_raw is not None
+    else None
+)
 
 
 def _build_chat_pending_correction_provider() -> LLMProvider | None:
@@ -4769,6 +4781,7 @@ def _route_chat_turn_legacy(
             candidate_goal=candidate_goal,
             merged_context=merged_context,
             messages=messages,
+            session_metadata=session_metadata,
         )
     if _chat_router_provider is None:
         return _finalize_chat_turn_plan(
@@ -4777,6 +4790,7 @@ def _route_chat_turn_legacy(
             candidate_goal=candidate_goal,
             merged_context=merged_context,
             messages=messages,
+            session_metadata=session_metadata,
         )
     try:
         route_request = _build_chat_route_request(
@@ -4789,6 +4803,7 @@ def _route_chat_turn_legacy(
         prompt = _build_chat_router_prompt(
             route_request=route_request,
         )
+        chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
         parsed = _chat_router_provider.generate_request_json_object(
             LLMRequest(
                 prompt=prompt,
@@ -4806,6 +4821,7 @@ def _route_chat_turn_legacy(
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
                     "request_id": route_request.request_id,
+                    **({"job_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
@@ -4820,6 +4836,7 @@ def _route_chat_turn_legacy(
             candidate_goal=candidate_goal,
             merged_context=merged_context,
             messages=messages,
+            session_metadata=session_metadata,
         )
     except Exception:  # noqa: BLE001
         logger.exception("chat_router_failed")
@@ -4829,6 +4846,7 @@ def _route_chat_turn_legacy(
             candidate_goal=candidate_goal,
             merged_context=merged_context,
             messages=messages,
+            session_metadata=session_metadata,
         )
 
 
@@ -4861,6 +4879,7 @@ def _route_chat_turn_with_router(
         prompt = _build_chat_router_prompt(
             route_request=route_request,
         )
+        chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
         parsed = _chat_router_provider.generate_request_json_object(
             LLMRequest(
                 prompt=prompt,
@@ -4878,6 +4897,7 @@ def _route_chat_turn_with_router(
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
                     "request_id": route_request.request_id,
+                    **({"job_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
@@ -4892,6 +4912,7 @@ def _route_chat_turn_with_router(
             candidate_goal=candidate_goal,
             merged_context=merged_context,
             messages=messages,
+            session_metadata=session_metadata,
         )
     except Exception:  # noqa: BLE001
         logger.exception("chat_router_failed")
@@ -6322,9 +6343,11 @@ def _generate_chat_response(
     merged_context: Mapping[str, Any] | None,
     messages: Sequence[chat_contracts.ChatMessage] | None,
     fallback_response: str,
+    session_metadata: Mapping[str, Any] | None = None,
 ) -> str:
     if _chat_response_provider is None:
         return fallback_response
+    chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     try:
         response = _chat_response_provider.generate_request(
             LLMRequest(
@@ -6340,7 +6363,10 @@ def _generate_chat_response(
                     "Do not claim to have executed tools, created jobs, or run workflows unless the system already did so. "
                     "Be concise, technically accurate, and grounded in the provided context."
                 ),
-                metadata={"component": "chat_response"},
+                metadata={
+                    "component": "chat_response",
+                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                },
             )
         )
     except Exception:  # noqa: BLE001
@@ -6539,6 +6565,7 @@ def _finalize_chat_turn_plan(
     candidate_goal: str,
     merged_context: Mapping[str, Any] | None,
     messages: Sequence[chat_contracts.ChatMessage] | None,
+    session_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     finalized = dict(turn_plan)
     route_type = str(finalized.get("type") or "").strip().lower()
@@ -6558,6 +6585,7 @@ def _finalize_chat_turn_plan(
         merged_context=merged_context,
         messages=messages,
         fallback_response=fallback_response or _fallback_chat_response(content),
+        session_metadata=session_metadata,
     )
     return finalized
 
@@ -17316,12 +17344,23 @@ def create_chat_session(
     raw_request: Request,
     db: Session = Depends(get_db),
 ) -> chat_contracts.ChatSession:
-    return chat_service.create_session(
+    session = chat_service.create_session(
         db,
         request,
         runtime=_chat_runtime(),
         user_id=_chat_authenticated_user_id(raw_request),
     )
+    # Open a provider-side cache session keyed by the chat session ID so that
+    # stable system-prompt content (rules, catalog) is cached for all turns.
+    provider = _chat_router_provider or _chat_response_provider
+    if provider is not None:
+        try:
+            static_blocks = [PromptBlock(text="system", stability=Stability.STATIC)]
+            ref = provider.open_cache_session(session.id, static_blocks)
+            _cache_session_store.save(session.id, ref)
+        except Exception:  # noqa: BLE001
+            logger.warning("chat_cache_session_open_failed", extra={"session_id": session.id})
+    return session
 
 
 @app.get("/chat/sessions/{session_id}", response_model=chat_contracts.ChatSession)
