@@ -1,16 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../../lib/auth";
+import { apiFetch, useAuth } from "../../lib/auth";
 
 import AppShell from "../../components/AppShell";
 import ScreenHeader from "../../components/ScreenHeader";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
-const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
 const DEFAULT_COLLECTION = "rag_default";
 const DEFAULT_NAMESPACE = "docs";
-const DEFAULT_USER_ID = "default-user";
 
 type IndexMode = "markdown" | "text" | "workspace_file" | "workspace_directory";
 
@@ -139,9 +137,10 @@ function RagModeButton({
 }
 
 export default function RagKnowledgeScreen() {
+  const { user: authUser } = useAuth();
   const [collectionName, setCollectionName] = useState(DEFAULT_COLLECTION);
   const [namespace, setNamespace] = useState(DEFAULT_NAMESPACE);
-  const [userId, setUserId] = useState(DEFAULT_USER_ID);
+  const [userId, setUserId] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -171,21 +170,10 @@ export default function RagKnowledgeScreen() {
   const [replacing, setReplacing] = useState(false);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
+    if (authUser?.user_id) {
+      setUserId(authUser.user_id);
     }
-    const stored = window.localStorage.getItem(MEMORY_USER_ID_KEY);
-    if (stored && stored.trim()) {
-      setUserId(stored.trim());
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(MEMORY_USER_ID_KEY, userId);
-  }, [userId]);
+  }, [authUser?.user_id]);
 
   const selectedDocument = useMemo(() => {
     if (chunkResponse?.document && chunkResponse.document.document_id === selectedDocumentId) {
@@ -541,15 +529,6 @@ export default function RagKnowledgeScreen() {
                 onChange={(event) => setNamespace(event.target.value)}
                 className={fieldInputClassName}
                 placeholder="docs"
-              />
-            </label>
-            <label className={fieldGroupClassName}>
-              <span className={fieldLabelClassName}>Context User ID</span>
-              <input
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
-                className={fieldInputClassName}
-                placeholder="default-user"
               />
             </label>
             <label className={fieldGroupClassName}>
