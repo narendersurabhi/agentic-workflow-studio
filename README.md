@@ -507,33 +507,79 @@ See full deployment details in `deploy/k8s/README.md`.
 
 ### Local Kubernetes quickstart (Docker Desktop)
 
+**Prerequisites:** Docker Desktop with Kubernetes enabled.
+
+**1. Set up environment**
+
 ```bash
-kubectl config use-context docker-desktop
+cp .env.example .env
+```
+
+Set at minimum in `.env`:
+
+```bash
+OPENAI_API_KEY=<your-key>
+OPENAI_MODEL=<your-model>   # e.g. gpt-4o
+```
+
+**2. Build, push, and deploy**
+
+```bash
 make k8s-up-local
 ```
 
-This builds and pushes local images to `localhost:5001`, applies the local overlay manifests, syncs `.env`-backed config/secrets into the cluster, and rolls the application deployments.
+This one command:
+- Starts a local registry at `localhost:5001` if not already running
+- Builds all service images and pushes them to the local registry
+- Applies Kubernetes manifests from `deploy/k8s/overlays/local`
+- Syncs `.env`-backed secrets and config into the cluster
+- Pins image tags and waits for all deployments to roll out
 
-Useful follow-up targets:
+**3. Forward ports**
 
-- `make k8s-apply-local`: reapply the local overlay and refresh cluster env/config from `.env`
-- `make k8s-restart-local`: restart the deployed application workloads after env/config changes
-- `make k8s-down-local`: tear down local app deployments while keeping persistent data
-- `make k8s-sync-workspace` / `make k8s-sync-artifacts` / `make k8s-sync-shared`: copy shared files back to the local checkout
-
-### Port forwarding
-
-Use the command set in `docs/k8s-port-forward.md`.
-
-Common forwards:
+Open separate terminals (or use `&`) for the services you need:
 
 ```bash
+# Required — API and UI
 kubectl port-forward -n awe svc/api 18000:8000
-kubectl port-forward -n awe svc/ui 8510:80
-kubectl port-forward -n awe svc/coder 18001:8000
-kubectl port-forward -n awe svc/grafana 3000:3000
-kubectl port-forward -n awe svc/jaeger 16686:16686
+kubectl port-forward -n awe svc/ui  8510:80
+
+# Optional — observability and supporting services
+kubectl port-forward -n awe svc/coder      18001:8000
+kubectl port-forward -n awe svc/grafana    3000:3000
+kubectl port-forward -n awe svc/jaeger     16686:16686
 kubectl port-forward -n awe svc/prometheus 9090:9090
+```
+
+**4. Open the app**
+
+| Service | URL |
+|---|---|
+| UI | http://localhost:8510 |
+| API | http://localhost:18000 |
+| API docs | http://localhost:18000/docs |
+| Grafana | http://localhost:3000 |
+| Jaeger | http://localhost:16686 |
+
+---
+
+**Follow-up targets**
+
+| Target | When to use |
+|---|---|
+| `make k8s-apply-local` | Re-apply manifests and refresh cluster config from `.env` |
+| `make k8s-restart-local` | Restart app pods after env/config changes (no rebuild) |
+| `make k8s-down-local` | Tear down app deployments, keep persistent data |
+| `make k8s-apply-observability` | Deploy Prometheus + Grafana + Loki dashboards |
+
+To rebuild and redeploy a single service after a code change (e.g. the UI):
+
+```bash
+NEW_TAG="local-$(date +%Y%m%d%H%M%S)"
+IMAGE_REGISTRY=localhost:5001 IMAGE_OWNER=localhost IMAGE_TAG="${NEW_TAG}" ./scripts/docker_images.sh build
+IMAGE_REGISTRY=localhost:5001 IMAGE_OWNER=localhost IMAGE_TAG="${NEW_TAG}" ./scripts/docker_images.sh push
+kubectl set image deployment/ui -n awe ui="localhost:5001/localhost/awe-ui:${NEW_TAG}"
+kubectl rollout status deployment/ui -n awe
 ```
 
 ## Guides
