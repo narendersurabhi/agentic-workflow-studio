@@ -252,7 +252,7 @@ Good uses for `user_profile`:
 Good uses for `semantic_memory`:
 
 - short facts
-- reusable resume statements
+- reusable profile statements
 - user preferences stated in natural language
 
 Important rule:

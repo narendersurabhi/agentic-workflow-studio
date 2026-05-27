@@ -395,7 +395,7 @@ def test_ensure_default_value_markers_replaces_default_marker_with_context_value
 def test_validate_plan_ignores_unmatched_goal_segment_for_task() -> None:
     plan = _plan_with_task(
         "document.spec.validate",
-        {"document_spec": {"blocks": [{"type": "heading", "text": "Resume"}]}},
+        {"document_spec": {"blocks": [{"type": "heading", "text": "Report"}]}},
         intent=models.ToolIntent.validate,
     )
     tools = [
@@ -1369,13 +1369,13 @@ def test_ensure_renderer_required_inputs_autowires_document_spec_only() -> None:
                 critic_required=False,
             ),
             models.TaskCreate(
-                name="RenderResumeDocx",
+                name="RenderDocxDocument",
                 description="render",
                 instruction="render",
                 acceptance_criteria=["ok"],
                 expected_output_schema_ref="schemas/docx_output",
-                intent=models.ToolIntent.transform,
-                deps=[],
+                intent=models.ToolIntent.render,
+                deps=["GenerateDocumentSpec", "PathDerive"],
                 tool_requests=["docx_render_from_spec"],
                 tool_inputs={},
                 critic_required=False,
@@ -1383,7 +1383,7 @@ def test_ensure_renderer_required_inputs_autowires_document_spec_only() -> None:
         ],
     )
     updated = _ensure_renderer_required_inputs(plan)
-    render_task = next(item for item in updated.tasks if item.name == "RenderResumeDocx")
+    render_task = next(item for item in updated.tasks if item.name == "RenderDocxDocument")
     payload = dict(render_task.tool_inputs["docx_render_from_spec"])
     assert payload["document_spec"] == {
         "$from": "dependencies_by_name.GenerateDocumentSpec.document.spec.generate.document_spec"
@@ -1410,7 +1410,7 @@ def test_ensure_renderer_required_inputs_autowires_legacy_renderer_aliases() -> 
                 critic_required=False,
             ),
             models.TaskCreate(
-                name="RenderResumeDocx",
+                name="RenderDocxDocument",
                 description="render",
                 instruction="render",
                 acceptance_criteria=["ok"],
@@ -1425,7 +1425,7 @@ def test_ensure_renderer_required_inputs_autowires_legacy_renderer_aliases() -> 
     )
 
     updated = _ensure_renderer_required_inputs(plan)
-    render_task = next(item for item in updated.tasks if item.name == "RenderResumeDocx")
+    render_task = next(item for item in updated.tasks if item.name == "RenderDocxDocument")
     payload = dict(render_task.tool_inputs["docx_generate_from_spec"])
     assert payload["document_spec"] == {
         "$from": "dependencies_by_name.GenerateDocumentSpec.document.spec.generate.document_spec"
@@ -1660,7 +1660,7 @@ def test_ensure_renderer_required_inputs_repairs_invalid_reference_task_names() 
                 critic_required=False,
             ),
             models.TaskCreate(
-                name="RenderResumeDocx",
+                name="RenderDocxDocument",
                 description="render",
                 instruction="render",
                 acceptance_criteria=["ok"],
@@ -1683,7 +1683,7 @@ def test_ensure_renderer_required_inputs_repairs_invalid_reference_task_names() 
         ],
     )
     updated = _ensure_renderer_required_inputs(plan)
-    render_task = next(item for item in updated.tasks if item.name == "RenderResumeDocx")
+    render_task = next(item for item in updated.tasks if item.name == "RenderDocxDocument")
     payload = dict(render_task.tool_inputs["docx_render_from_spec"])
     assert payload["document_spec"] == {
         "$from": "dependencies_by_name.Generate DocumentSpec.document.spec.generate.document_spec"
@@ -1717,7 +1717,7 @@ def test_validate_plan_rejects_dependency_derived_render_path_for_raw_jobs() -> 
                 critic_required=False,
             ),
             models.TaskCreate(
-                name="RenderResumeDocx",
+                name="RenderDocxDocument",
                 description="render",
                 instruction="render",
                 acceptance_criteria=["ok"],
@@ -1748,7 +1748,7 @@ def test_validate_plan_rejects_dependency_derived_render_path_for_raw_jobs() -> 
             tool_intent=models.ToolIntent.io,
         ),
         _tool(
-            "docx_render_from_spec",
+            "document.docx.render",
             {
                 "type": "object",
                 "properties": {
@@ -1764,7 +1764,7 @@ def test_validate_plan_rejects_dependency_derived_render_path_for_raw_jobs() -> 
     valid, reason = _validate_plan(plan, tools, job)
 
     assert valid is False
-    assert reason == "render_path_derived_not_allowed:document.docx.render:task=RenderResumeDocx"
+    assert reason == "render_path_derived_not_allowed:document.docx.render:task=RenderDocxDocument"
 
 
 def test_validate_plan_allows_dependency_derived_render_path_for_auto_mode_jobs() -> None:
@@ -1794,7 +1794,7 @@ def test_validate_plan_allows_dependency_derived_render_path_for_auto_mode_jobs(
                 critic_required=False,
             ),
             models.TaskCreate(
-                name="RenderResumeDocx",
+                name="RenderDocxDocument",
                 description="render",
                 instruction="render",
                 acceptance_criteria=["ok"],
@@ -1825,7 +1825,7 @@ def test_validate_plan_allows_dependency_derived_render_path_for_auto_mode_jobs(
             tool_intent=models.ToolIntent.io,
         ),
         _tool(
-            "docx_render_from_spec",
+            "document.docx.render",
             {
                 "type": "object",
                 "properties": {
@@ -1840,7 +1840,7 @@ def test_validate_plan_allows_dependency_derived_render_path_for_auto_mode_jobs(
 
     valid, reason = _validate_plan(plan, tools, job)
 
-    assert valid is True
+    assert valid is True, reason
     assert reason == "ok"
 
 

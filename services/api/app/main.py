@@ -13198,11 +13198,11 @@ def _task_checkpoint_recovery_context(
     )
     if not lineage:
         return {
-            "resume_supported": False,
+            "checkpoint_replay_supported": False,
             "max_checkpoint_replays": max_checkpoint_replays,
         }
     return {
-        "resume_supported": True,
+        "checkpoint_replay_supported": True,
         "max_checkpoint_replays": max_checkpoint_replays,
         "checkpoint_lineage": lineage,
     }
@@ -13238,7 +13238,7 @@ def _schedule_task_retry_same_step(
                 int((checkpoint_context or {}).get("max_checkpoint_replays", 0) or 0),
             )
             checkpoint_record.replay_count = max(int(checkpoint_record.replay_count or 0), 0) + 1
-            checkpoint_record.outcome = "scheduled_resume"
+            checkpoint_record.outcome = "scheduled_replay"
             checkpoint_record.updated_at = occurred_at
             checkpoint_payload = _checkpoint_lineage_from_record(
                 checkpoint_record,
@@ -13249,10 +13249,10 @@ def _schedule_task_retry_same_step(
         if checkpoint_payload is not None:
             checkpoint_payload["strategy_reason"] = strategy_reason
             checkpoint_payload["scheduled_at"] = occurred_at.isoformat()
-            checkpoint_payload["resumed_after_attempt_exhausted"] = (
-                strategy_reason == "checkpoint_resume_after_retry_budget_exhausted"
+            checkpoint_payload["replayed_after_attempt_exhausted"] = (
+                strategy_reason == "checkpoint_replay_after_retry_budget_exhausted"
             )
-            checkpoint_payload["resume_mode"] = "checkpoint_resume"
+            checkpoint_payload["replay_mode"] = "checkpoint_replay"
     task.attempts = next_attempt
     task.status = models.TaskStatus.ready.value
     task.assigned_to = None
@@ -18537,8 +18537,8 @@ def cancel_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     return _run_from_record(run_record, job_record=job)
 
 
-@app.post("/runs/{run_id}/resume", response_model=models.Run)
-def resume_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
+@app.post("/runs/{run_id}/continue", response_model=models.Run)
+def continue_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
     if run_record is None:
         raise HTTPException(status_code=404, detail="run_not_found")
@@ -18617,8 +18617,8 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     return _job_from_record(job)
 
 
-@app.post("/jobs/{job_id}/resume", response_model=models.Job)
-def resume_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
+@app.post("/jobs/{job_id}/continue", response_model=models.Job)
+def continue_job(job_id: str, db: Session = Depends(get_db)) -> models.Job:
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

@@ -716,7 +716,7 @@ def test_validate_intent_segment_contract_ignores_wrong_explicit_artifact_for_do
         segment=segment,
         task_intent="generate",
         tool_name="llm_generate_document_spec",
-        payload={"instruction": "Generate a resume document spec."},
+        payload={"instruction": "Generate a document spec."},
         capability_id="document.spec.generate",
         capability_risk_tier="read_only",
     )
@@ -782,7 +782,7 @@ def test_validate_intent_segment_contract_accepts_collapsed_documentspec_objecti
         segment=segment,
         task_intent="generate",
         tool_name="llm_generate_document_spec",
-        payload={"instruction": "Generate a compact resume document spec."},
+        payload={"instruction": "Generate a compact document spec."},
         capability_id="document.spec.generate",
         capability_risk_tier="read_only",
     )
@@ -1003,7 +1003,7 @@ def test_validate_intent_segment_contract_accepts_length_with_instruction() -> N
         segment=segment,
         task_intent="generate",
         tool_name="llm_generate_document_spec",
-        payload={"instruction": "Generate a concise one-page resume style document spec."},
+        payload={"instruction": "Generate a concise one-page document spec."},
         capability_id="document.spec.generate",
         capability_risk_tier="read_only",
     )

@@ -31,7 +31,7 @@ def resolve_mcp_timeout_s() -> float:
             return max(1.0, float(env_timeout))
         except ValueError:
             return 45.0
-    for key in ("TAILOR_OPENAI_TIMEOUT_S", "TAILOR_EVAL_OPENAI_TIMEOUT_S", "OPENAI_TIMEOUT_S"):
+    for key in ("OPENAI_TIMEOUT_S",):
         env_timeout = os.getenv(key)
         if not env_timeout:
             continue
