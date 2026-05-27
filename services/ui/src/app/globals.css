@@ -228,6 +228,24 @@ body {
   background-color: rgb(15 23 42 / 0.3);
 }
 
+.studio-contrast-surface [class~="text-white"],
+.studio-contrast-surface [class*="text-white/"],
+.studio-contrast-surface [class~="text-slate-50"],
+.studio-contrast-surface [class~="text-slate-100"],
+.studio-contrast-surface [class*="text-slate-100/"] {
+  color: rgb(248 250 252);
+}
+
+.studio-contrast-surface [class~="text-slate-200"],
+.studio-contrast-surface [class*="text-slate-200/"] {
+  color: rgb(241 245 249 / 0.94);
+}
+
+.studio-contrast-surface [class~="text-slate-300"],
+.studio-contrast-surface [class*="text-slate-300/"] {
+  color: rgb(226 232 240 / 0.9);
+}
+
 .studio-contrast-surface [class~="text-slate-900"],
 .studio-contrast-surface [class~="text-slate-800"] {
   color: rgb(255 255 255);
