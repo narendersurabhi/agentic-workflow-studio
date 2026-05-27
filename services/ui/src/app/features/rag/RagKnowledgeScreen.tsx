@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../../lib/auth";
 
 import AppShell from "../../components/AppShell";
 import ScreenHeader from "../../components/ScreenHeader";
@@ -233,7 +234,7 @@ export default function RagKnowledgeScreen() {
     setDocumentsError(null);
     try {
       const params = buildScopeParams();
-      const response = await fetch(`${apiUrl}/rag/documents?${params.toString()}`);
+      const response = await apiFetch(`${apiUrl}/rag/documents?${params.toString()}`);
       const body = (await response.json()) as RagDocumentListResponse | { detail?: string };
       if (!response.ok) {
         throw new Error(
@@ -264,7 +265,7 @@ export default function RagKnowledgeScreen() {
     try {
       const params = buildScopeParams();
       params.set("document_id", documentId);
-      const response = await fetch(`${apiUrl}/rag/documents/chunks?${params.toString()}`);
+      const response = await apiFetch(`${apiUrl}/rag/documents/chunks?${params.toString()}`);
       const body = (await response.json()) as RagDocumentChunksResponse | { detail?: string };
       if (!response.ok) {
         throw new Error(
@@ -353,7 +354,7 @@ export default function RagKnowledgeScreen() {
     }
     setIndexing(true);
     try {
-      const response = await fetch(`${apiUrl}/rag/index`, {
+      const response = await apiFetch(`${apiUrl}/rag/index`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -406,7 +407,7 @@ export default function RagKnowledgeScreen() {
     }
     setReplacing(true);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/rag/documents?document_id=${encodeURIComponent(selectedDocumentId)}`,
         {
           method: "PUT",
@@ -448,7 +449,7 @@ export default function RagKnowledgeScreen() {
     try {
       const params = buildScopeParams();
       params.set("document_id", selectedDocumentId);
-      const response = await fetch(`${apiUrl}/rag/documents?${params.toString()}`, {
+      const response = await apiFetch(`${apiUrl}/rag/documents?${params.toString()}`, {
         method: "DELETE",
       });
       const body = (await response.json()) as RagDeleteResponse | { detail?: string };

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../../lib/auth";
 
 import AppShell from "../../components/AppShell";
 import ScreenHeader from "../../components/ScreenHeader";
@@ -84,7 +85,7 @@ export default function GlobalMemoryScreen() {
       setSpecsLoading(true);
       setSpecsError(null);
       try {
-        const response = await fetch(`${apiUrl}/memory/specs`);
+        const response = await apiFetch(`${apiUrl}/memory/specs`);
         const body = (await response.json()) as MemorySpec[] | { detail?: string };
         if (!response.ok) {
           throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory specs (${response.status})`);
@@ -136,7 +137,7 @@ export default function GlobalMemoryScreen() {
         user_id: userId.trim(),
         limit: "200",
       });
-      const response = await fetch(`${apiUrl}/memory/read?${params.toString()}`);
+      const response = await apiFetch(`${apiUrl}/memory/read?${params.toString()}`);
       const body = (await response.json()) as MemoryEntry[] | { detail?: string };
       if (!response.ok) {
         throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory entries (${response.status})`);
@@ -200,7 +201,7 @@ export default function GlobalMemoryScreen() {
     }
     setSaving(true);
     try {
-      const response = await fetch(`${apiUrl}/memory/write`, {
+      const response = await apiFetch(`${apiUrl}/memory/write`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -250,7 +251,7 @@ export default function GlobalMemoryScreen() {
       if (key) {
         params.set("key", key);
       }
-      const response = await fetch(`${apiUrl}/memory/delete?${params.toString()}`, {
+      const response = await apiFetch(`${apiUrl}/memory/delete?${params.toString()}`, {
         method: "DELETE",
       });
       const body = (await response.json()) as MemoryEntry | { detail?: string };

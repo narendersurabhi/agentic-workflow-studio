@@ -1,6 +1,7 @@
 import { Fraunces, Manrope } from "next/font/google";
 import "./globals.css";
 import { AppThemeProvider } from "./lib/theme";
+import { AuthProvider } from "./lib/auth";
 
 const displayFont = Fraunces({
   subsets: ["latin"],
@@ -29,7 +30,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${displayFont.variable} ${bodyFont.variable} min-h-screen font-body`}>
         <AppThemeProvider>
-          <div className="w-full px-6 py-8">{children}</div>
+          <AuthProvider>
+            <div className="w-full px-6 py-8">{children}</div>
+          </AuthProvider>
         </AppThemeProvider>
       </body>
     </html>

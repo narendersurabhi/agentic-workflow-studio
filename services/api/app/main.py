@@ -73,12 +73,14 @@ from .models import (
     StepAttemptRecord,
     TaskRecord,
     TaskResultRecord,
+    UserRecord,
     WorkflowDefinitionRecord,
     WorkflowRunRecord,
     WorkflowTriggerRecord,
     WorkflowVersionRecord,
 )
 from . import (
+    auth_service,
     chat_clarification_normalizer,
     chat_execution_service,
     chat_service,
@@ -124,6 +126,18 @@ app.add_middleware(
 
 metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
+
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    token = auth_service.extract_bearer_token(request.headers.get("Authorization"))
+    if token:
+        session = auth_service.get_session(redis_client, token)
+        if session:
+            request.state.authenticated_user_id = session.get("user_id")
+            request.state.auth_user = session
+            request.state.auth_token = token
+    return await call_next(request)
 
 
 def _parse_confidence_threshold_map(
@@ -17242,6 +17256,58 @@ def _debugger_timeline_for_job(job_id: str, *, limit: int, db: Session) -> list[
     if durable_rows:
         return [_debugger_timeline_entry_from_run_event(row) for row in durable_rows]
     return _read_task_events_for_job(job_id, limit)
+
+
+@app.post("/auth/register")
+def auth_register(body: Dict[str, Any], db: Session = Depends(get_db)) -> Dict[str, Any]:
+    username = str(body.get("username") or "").strip().lower()
+    display_name = str(body.get("display_name") or "").strip() or username
+    password = str(body.get("password") or "")
+    if not username or not password:
+        raise HTTPException(status_code=422, detail="username and password required")
+    if len(password) < 6:
+        raise HTTPException(status_code=422, detail="password_too_short")
+    if db.query(UserRecord).filter(UserRecord.username == username).first():
+        raise HTTPException(status_code=409, detail="username_taken")
+    user = UserRecord(
+        id=str(uuid.uuid4()),
+        username=username,
+        display_name=display_name,
+        password_hash=auth_service.hash_password(password),
+        created_at=_utcnow(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    token = auth_service.create_token(redis_client, user.id, user.username, user.display_name)
+    return {"token": token, "user": {"id": user.id, "username": user.username, "display_name": user.display_name}}
+
+
+@app.post("/auth/login")
+def auth_login(body: Dict[str, Any], db: Session = Depends(get_db)) -> Dict[str, Any]:
+    username = str(body.get("username") or "").strip().lower()
+    password = str(body.get("password") or "")
+    user = db.query(UserRecord).filter(UserRecord.username == username).first()
+    if not user or not auth_service.verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="invalid_credentials")
+    token = auth_service.create_token(redis_client, user.id, user.username, user.display_name)
+    return {"token": token, "user": {"id": user.id, "username": user.username, "display_name": user.display_name}}
+
+
+@app.get("/auth/me")
+def auth_me(request: Request) -> Dict[str, Any]:
+    user = getattr(request.state, "auth_user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    return user
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request) -> Dict[str, Any]:
+    token = getattr(request.state, "auth_token", None)
+    if token:
+        auth_service.revoke_token(redis_client, token)
+    return {"ok": True}
 
 
 @app.post("/chat/sessions", response_model=chat_contracts.ChatSession)

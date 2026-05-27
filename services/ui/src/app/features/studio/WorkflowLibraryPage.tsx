@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { apiFetch } from "../../lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
@@ -63,7 +64,7 @@ export default function WorkflowLibraryPage() {
       if (normalizedUserId) {
         params.set("user_id", normalizedUserId);
       }
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions${params.size > 0 ? `?${params.toString()}` : ""}`
       );
       const body = (await response.json()) as WorkflowDefinition[] | { detail?: unknown };
@@ -91,7 +92,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowVersionsLoading(true);
     setWorkflowVersionsError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/versions`
       );
       const body = (await response.json()) as WorkflowVersion[] | { detail?: unknown };
@@ -121,7 +122,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowTriggersLoading(true);
     setWorkflowTriggersError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/triggers`
       );
       const body = (await response.json()) as WorkflowTrigger[] | { detail?: unknown };
@@ -149,7 +150,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowRunsLoading(true);
     setWorkflowRunsError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/runs?limit=12`
       );
       const body = (await response.json()) as WorkflowRun[] | { detail?: unknown };
@@ -219,7 +220,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowActionLoading("delete");
     setDeletingWorkflowDefinitionId(definition.id);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}`,
         { method: "DELETE" }
       );
@@ -244,7 +245,7 @@ export default function WorkflowLibraryPage() {
     }
     setWorkflowActionLoading("save");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(activeWorkflowDefinitionId)}/triggers`,
         {
           method: "POST",
@@ -275,7 +276,7 @@ export default function WorkflowLibraryPage() {
   const invokeWorkflowTrigger = async (trigger: WorkflowTrigger) => {
     setWorkflowActionLoading("run");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/triggers/${encodeURIComponent(trigger.id)}/invoke`,
         {
           method: "POST",
