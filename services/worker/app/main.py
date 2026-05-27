@@ -27,6 +27,7 @@ from libs.core import (
     payload_resolver,
     tracing as core_tracing,
 )
+from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
 from libs.core.memory_client import MemoryClient
 from services.worker.app.memory_semantics import (
     apply_memory_defaults,
@@ -152,9 +153,10 @@ _SEMANTIC_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 _METRICS_SERVER_STARTED = False
 
 
+_CACHE_SESSION_STORE: CacheSessionStore | None = None
 LLM_PROVIDER_INSTANCE = None
 if LLM_ENABLED:
-    LLM_PROVIDER_INSTANCE = llm_provider.resolve_provider(
+    _base_provider = llm_provider.resolve_provider(
         LLM_PROVIDER,
         api_key=OPENAI_API_KEY,
         model=OPENAI_MODEL,
@@ -164,6 +166,8 @@ if LLM_ENABLED:
         timeout_s=_parse_optional_float(OPENAI_TIMEOUT_S),
         max_retries=_parse_optional_int(OPENAI_MAX_RETRIES),
     )
+    _CACHE_SESSION_STORE = CacheSessionStore(redis_client)
+    LLM_PROVIDER_INSTANCE = CachingLLMProvider(_base_provider, _CACHE_SESSION_STORE)
 
 
 def execute_task(task_payload: dict) -> models.TaskResult:

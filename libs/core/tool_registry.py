@@ -1314,17 +1314,16 @@ def _coding_agent_publish_pr(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _llm_generate(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:
     prompt = payload.get("text") or payload.get("prompt") or ""
-    response = provider.generate_request(
-        LLMRequest(
-            prompt=prompt,
-            metadata={
-                "component": "tools",
-                "tool": "llm_generate",
-                "operation": "generate_text",
-                "prompt_len": len(prompt),
-            },
-        )
-    )
+    meta: Dict[str, Any] = {
+        "component": "tools",
+        "tool": "llm_generate",
+        "operation": "generate_text",
+        "prompt_len": len(prompt),
+    }
+    job_id = payload.get("job_id")
+    if job_id:
+        meta["job_id"] = job_id
+    response = provider.generate_request(LLMRequest(prompt=prompt, metadata=meta))
     return {"text": response.content}
 
 
@@ -1341,19 +1340,23 @@ def _llm_generate_with_context(payload: Dict[str, Any], provider: LLMProvider) -
     temperature = raw_temperature if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool) else None
     raw_max_tokens = payload.get("max_output_tokens")
     max_output_tokens = raw_max_tokens if isinstance(raw_max_tokens, int) and not isinstance(raw_max_tokens, bool) else None
+    meta: Dict[str, Any] = {
+        "component": "tools",
+        "tool": "llm_generate_with_context",
+        "operation": "generate_text_with_context",
+        "prompt_len": len(prompt),
+        "has_context": context_value is not None,
+    }
+    job_id = payload.get("job_id")
+    if job_id:
+        meta["job_id"] = job_id
     response = provider.generate_request(
         LLMRequest(
             prompt=prompt_with_context,
             system_prompt=system_prompt,
             temperature=float(temperature) if temperature is not None else None,
             max_output_tokens=max_output_tokens,
-            metadata={
-                "component": "tools",
-                "tool": "llm_generate_with_context",
-                "operation": "generate_text_with_context",
-                "prompt_len": len(prompt),
-                "has_context": context_value is not None,
-            },
+            metadata=meta,
         )
     )
     return {"text": response.content}

@@ -21,6 +21,7 @@ from libs.core import (
     planner_contracts,
     tool_registry,
 )
+from libs.core.cache_session_store import CacheSessionStore
 
 
 @dataclass(frozen=True)
@@ -1296,11 +1297,14 @@ def llm_plan(
     *,
     config: PlannerServiceConfig,
     runtime: PlannerServiceRuntime,
+    session_store: CacheSessionStore | None = None,
 ) -> models.PlanCreate:
     logger = core_logging.get_logger("planner")
     blocks = build_llm_prompt_blocks(request)
     static_blocks = [b for b in blocks if b.stability == llm_provider.Stability.STATIC]
     session = provider.open_cache_session(request.job_id or "", static_blocks)
+    if session_store is not None and request.job_id:
+        session_store.save(request.job_id, session)
     base_meta = {
         "component": "planner",
         "job_id": request.job_id,
@@ -1365,6 +1369,7 @@ def plan_job(
     provider: llm_provider.LLMProvider | None,
     config: PlannerServiceConfig,
     runtime: PlannerServiceRuntime,
+    session_store: CacheSessionStore | None = None,
 ) -> models.PlanCreate:
     request = build_plan_request(
         job,
@@ -1376,5 +1381,5 @@ def plan_job(
     if config.mode == "llm":
         if provider is None:
             raise ValueError("LLM planner mode requires a provider")
-        return llm_plan(request, provider, config=config, runtime=runtime)
+        return llm_plan(request, provider, config=config, runtime=runtime, session_store=session_store)
     return rule_based_plan(request)
