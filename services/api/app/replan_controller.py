@@ -55,7 +55,9 @@ def decide_task_failure_recovery(
     checkpoint_available = bool(checkpoint_lineage.get("checkpoint_id")) or bool(
         checkpoint_lineage.get("checkpoint_key")
     )
-    resume_supported = bool(checkpoint.get("resume_supported", checkpoint_available))
+    checkpoint_replay_supported = bool(
+        checkpoint.get("checkpoint_replay_supported", checkpoint_available)
+    )
     try:
         max_checkpoint_replays = max(0, int(checkpoint.get("max_checkpoint_replays", 0) or 0))
     except (TypeError, ValueError):
@@ -65,7 +67,7 @@ def decide_task_failure_recovery(
     except (TypeError, ValueError):
         replay_count = 0
     checkpoint_budget_available = (
-        resume_supported
+        checkpoint_replay_supported
         and checkpoint_available
         and max_checkpoint_replays > 0
         and replay_count < max_checkpoint_replays
@@ -119,9 +121,9 @@ def decide_task_failure_recovery(
         return RecoveryDecision(
             strategy=models.ReplanStrategy.retry_same_step,
             strategy_reason=(
-                "checkpoint_resume_after_retry_budget_exhausted"
+                "checkpoint_replay_after_retry_budget_exhausted"
                 if exhausted
-                else "checkpoint_resume_available"
+                else "checkpoint_replay_available"
             ),
             context=checkpoint,
         )

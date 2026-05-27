@@ -30,8 +30,8 @@ def _make_registry() -> ToolRegistry:
 def test_generates_docx_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARTIFACTS_DIR", str(_artifact_dir(tmp_path)))
     registry = _make_registry()
-    spec = _load_fixture("resume_ats_single_column_spec.json")
-    payload = {"document_spec": spec, "path": "tests/resume.docx"}
+    spec = _load_fixture("agent_memory_single_column_spec.json")
+    payload = {"document_spec": spec, "path": "tests/agent_memory.docx"}
     call = registry.execute("docx_render_from_spec", payload, "id", "trace")
     assert call.status == "completed"
     output_path = Path(call.output_or_error["path"])
@@ -42,7 +42,7 @@ def test_generates_docx_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_path_traversal_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARTIFACTS_DIR", str(_artifact_dir(tmp_path)))
     registry = _make_registry()
-    spec = _load_fixture("resume_ats_single_column_spec.json")
+    spec = _load_fixture("agent_memory_single_column_spec.json")
     with pytest.raises(ToolExecutionError):
         registry.get("docx_render_from_spec").handler(
             {"document_spec": spec, "path": "../evil.docx"}
@@ -54,7 +54,7 @@ def test_invalid_validation_report_blocks_render(
 ) -> None:
     monkeypatch.setenv("ARTIFACTS_DIR", str(_artifact_dir(tmp_path)))
     registry = _make_registry()
-    spec = _load_fixture("resume_ats_single_column_spec.json")
+    spec = _load_fixture("agent_memory_single_column_spec.json")
     with pytest.raises(ToolExecutionError, match="document_spec validation failed"):
         registry.get("docx_render_from_spec").handler(
             {
@@ -81,7 +81,7 @@ def test_missing_path_is_rejected() -> None:
     monkeypatch = MonkeyPatch()
     monkeypatch.setenv("ARTIFACTS_DIR", str(_artifact_dir(Path(tempfile.mkdtemp()))))
     registry = _make_registry()
-    spec = _load_fixture("resume_ats_single_column_spec.json")
+    spec = _load_fixture("agent_memory_single_column_spec.json")
     try:
         call = registry.execute("docx_render_from_spec", {"document_spec": spec}, "id", "trace")
         assert call.status == "failed"

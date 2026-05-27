@@ -17,17 +17,17 @@
 
 ### 2. Single Scheduler and Prepared Execution Requests
 
-- Introduce one scheduler stage that owns dependency resolution, readiness, retry policy, acceptance transitions, cancellation, resume, and terminal state transitions.
+- Introduce one scheduler stage that owns dependency resolution, readiness, retry policy, acceptance transitions, cancellation, continuation, and terminal state transitions.
 - Persist a prepared `ExecutionRequest` snapshot per step attempt before executor pickup. It must include resolved bindings, selected capability, policy decisions, deadlines, retry class, and context provenance.
 - Add lease and heartbeat semantics for running attempts, stale-attempt reclamation, and deterministic retry classification.
 - Extend retry policy beyond `max_attempts` to include retry class, backoff, jitter, timeout budget, retryable versus terminal errors, and max reworks.
-- Add cooperative cancellation, pause, and resume. Executors must check cancellation before each capability invocation and after long-running adapter boundaries.
+- Add cooperative cancellation, pause, and continuation. Executors must check cancellation before each capability invocation and after long-running adapter boundaries.
 
 ### 3. Durable Checkpointing and Replay
 
 - Add `StepCheckpoint` persistence for long or multi-phase steps so partial progress, intermediate artifacts, and resumable substate survive worker loss.
-- Support replayable resume from the last valid checkpoint instead of only restarting the whole step.
-- Record checkpoint metadata in the debugger and run timeline, including checkpoint source, input digest, resume count, and replay outcome.
+- Support replay from the last valid checkpoint instead of only restarting the whole step.
+- Record checkpoint metadata in the debugger and run timeline, including checkpoint source, input digest, replay count, and replay outcome.
 - Keep legacy non-checkpointed steps supported, but default all new long-running or side-effectful capabilities to explicit checkpoint policy.
 
 ### 4. Agentic Decision Quality
@@ -40,15 +40,15 @@
 ### 5. Observability, Governance, and Compatibility
 
 - Promote the debugger to the canonical run observability surface with run timeline, step context metadata, resolved input provenance, routing decisions, acceptance history, checkpoint events, retry classification, and invocation request and response capture.
-- Emit unified metrics for first-pass acceptance, fallback rate, checkpoint resume success, cancel latency, stale-lease recovery, cost by capability, and retry distribution by error class.
+- Emit unified metrics for first-pass acceptance, fallback rate, checkpoint replay success, cancel latency, stale-lease recovery, cost by capability, and retry distribution by error class.
 - Keep current `/jobs` and workflow-run APIs as compatibility facades during migration, but every response must surface canonical `run_id`.
 - Keep planner, policy, and critic deployable as separate services initially, but convert them into scheduler stages conceptually so they stop owning separate lifecycle semantics.
 
 ## Public APIs, Types, and Contracts
 
-- Add canonical APIs: `/runs`, `/runs/{id}`, `/runs/{id}/steps`, `/runs/{id}/debugger`, `/runs/{id}/cancel`, `/runs/{id}/resume`, `/runs/{id}/retry`.
+- Add canonical APIs: `/runs`, `/runs/{id}`, `/runs/{id}/steps`, `/runs/{id}/debugger`, `/runs/{id}/cancel`, `/runs/{id}/continue`, `/runs/{id}/retry`.
 - Add canonical types: `Run`, `RunSpec`, `StepSpec`, `ExecutionRequest`, `StepCheckpoint`, `AcceptanceDecision`, `RoutingDecision`, `CapabilityInvocationRecord`.
-- Change event schema to run and step terminology: `run.created`, `step.ready`, `step.started`, `step.completed`, `step.failed`, `routing.decision`, `acceptance.decision`, `checkpoint.saved`, `checkpoint.resumed`.
+- Change event schema to run and step terminology: `run.created`, `step.ready`, `step.started`, `step.completed`, `step.failed`, `routing.decision`, `acceptance.decision`, `checkpoint.saved`, `checkpoint.replayed`.
 - Keep temporary translation for existing event consumers until final cutover.
 - Persist capability id as the orchestration contract on every step. Tool and adapter identifiers remain diagnostic metadata only.
 
@@ -63,7 +63,7 @@
 
 ### Phase 2: Scheduler Cut-In
 
-- Move readiness, retries, policy gating, acceptance transitions, and resume and cancel into the new scheduler.
+- Move readiness, retries, policy gating, acceptance transitions, continuation, and cancel into the new scheduler.
 - Persist prepared `ExecutionRequest` snapshots and lease and heartbeat state.
 - Cut executors over to consume prepared execution requests rather than reconstruct orchestration state ad hoc.
 
@@ -71,7 +71,7 @@
 
 - Introduce checkpoint persistence and replay for long-running and side-effectful capabilities.
 - Add stale-attempt recovery and replay-aware retry logic.
-- Add cancel, pause, and resume enforcement at executor boundaries.
+- Add cancel, pause, and continuation enforcement at executor boundaries.
 
 ### Phase 4: Agentic Runtime Quality
 
@@ -88,8 +88,8 @@
 ## Test Plan and Acceptance Criteria
 
 - Migration and parity: dual-write records must match legacy state transitions and debugger output for planner, Studio, trigger, and chat-direct lanes.
-- Scheduler invariants: dependency ordering, retry and backoff behavior, rework limits, cancel and resume transitions, and policy and acceptance state changes must be covered by deterministic tests.
-- Recovery: stale lease reclaim, worker crash during execution, checkpoint resume, replay after API restart, and outbox and event delivery recovery must all be exercised.
+- Scheduler invariants: dependency ordering, retry and backoff behavior, rework limits, cancel and continuation transitions, and policy and acceptance state changes must be covered by deterministic tests.
+- Recovery: stale lease reclaim, worker crash during execution, checkpoint replay, replay after API restart, and outbox and event delivery recovery must all be exercised.
 - Agentic behavior: routing shadow-versus-live comparison, low-confidence fallback, runtime replan triggers, and acceptance-engine pass and rework decisions must be tested end to end.
 - Performance: no regression beyond agreed scheduler and debugger SLOs. Routing and checkpointing must stay within bounded latency budgets.
 - Success targets for final cutover:

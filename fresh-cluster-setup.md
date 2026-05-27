@@ -28,7 +28,6 @@ curl -s http://localhost:5001/v2/localhost/awe-api/tags/list
 curl -s http://localhost:5001/v2/localhost/awe-planner/tags/list
 curl -s http://localhost:5001/v2/localhost/awe-worker/tags/list
 curl -s http://localhost:5001/v2/localhost/awe-coder/tags/list
-curl -s http://localhost:5001/v2/localhost/awe-tailor/tags/list
 curl -s http://localhost:5001/v2/localhost/awe-ui/tags/list
 ```
 

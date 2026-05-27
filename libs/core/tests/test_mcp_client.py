@@ -135,8 +135,6 @@ def test_post_mcp_tool_call_does_not_retry_tool_error(monkeypatch: pytest.Monkey
 def test_resolve_mcp_timeout_fallback_and_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MCP_TOOL_TIMEOUT_S", raising=False)
     monkeypatch.delenv("MCP_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("TAILOR_OPENAI_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("TAILOR_EVAL_OPENAI_TIMEOUT_S", raising=False)
     monkeypatch.setenv("OPENAI_TIMEOUT_S", "600")
     assert mcp_client.resolve_mcp_timeout_s() == 180.0
     monkeypatch.setenv("OPENAI_TIMEOUT_S", "60")
