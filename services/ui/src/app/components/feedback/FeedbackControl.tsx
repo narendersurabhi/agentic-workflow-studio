@@ -90,9 +90,9 @@ export default function FeedbackControl({
   };
 
   return (
-    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+    <div className="mt-3 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-xs text-text-md">
       <div className="flex items-center justify-between gap-2">
-        <span className="font-medium text-slate-700">{title}</span>
+        <span className="font-medium text-text-hi">{title}</span>
         {existing ? (
           <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">
             Saved
@@ -108,8 +108,8 @@ export default function FeedbackControl({
               type="button"
               className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${
                 isActive
-                  ? "border-slate-800 bg-slate-900 text-slate-50"
-                  : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                  ? "border-sky-300/50 bg-sky-500/20 text-text-hi"
+                  : "border-subtle bg-surface-2 text-text-md hover:border-default hover:text-text-hi"
               }`}
               disabled={submitting}
               onClick={() => void handleSentimentSelect(option.value)}
@@ -131,7 +131,7 @@ export default function FeedbackControl({
                   className={`rounded-full border px-2 py-1 text-[11px] transition ${
                     isActive
                       ? "border-amber-300 bg-amber-100 text-amber-900"
-                      : "border-slate-300 bg-white text-slate-600 hover:border-slate-400"
+                      : "border-subtle bg-surface-2 text-text-md hover:border-default hover:text-text-hi"
                   }`}
                   onClick={() => toggleReason(reason.code)}
                 >
@@ -141,7 +141,7 @@ export default function FeedbackControl({
             })}
           </div>
           <textarea
-            className="min-h-[4.5rem] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-slate-400 focus:outline-none"
+            className="min-h-[4.5rem] w-full rounded-lg border border-subtle bg-surface-input px-3 py-2 text-xs text-text-hi placeholder:text-text-placeholder focus:border-default focus:outline-none"
             placeholder="Optional comment"
             value={comment}
             onChange={(event) => setComment(event.target.value)}
@@ -149,7 +149,7 @@ export default function FeedbackControl({
           <div className="flex items-center justify-end gap-2">
             <button
               type="button"
-              className="rounded-full border border-slate-300 px-3 py-1 text-[11px] text-slate-600"
+              className="rounded-full border border-subtle px-3 py-1 text-[11px] text-text-md hover:border-default hover:text-text-hi"
               onClick={() => setIsExpanded(false)}
             >
               Cancel
