@@ -11225,18 +11225,42 @@ const openTemplateModal = (template: Template) => {
         )}
       </section>
 
-      <section className="animate-fade-up-delayed-more rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+      <section
+        className={`animate-fade-up-delayed-more rounded-2xl p-6 ${
+          useStudioSurfaceTheme
+            ? "border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+            : "border border-slate-100 bg-white shadow-sm"
+        }`}
+      >
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-[22px] font-semibold tracking-[-0.03em]">Recent Events</h2>
-            <p className="mt-1 text-xs text-slate-500">Live event stream snapshots.</p>
+            <h2
+              className={`text-[22px] font-semibold tracking-[-0.03em] ${
+                useStudioSurfaceTheme ? "text-white" : "text-slate-900"
+              }`}
+            >
+              Recent Events
+            </h2>
+            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-500"}`}>
+              Live event stream snapshots.
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+            <div
+              className={`rounded-full px-3 py-1 text-xs ${
+                useStudioSurfaceTheme
+                  ? "border border-white/10 bg-white/[0.05] text-slate-200"
+                  : "bg-slate-100 text-slate-500"
+              }`}
+            >
               {events.length} shown
             </div>
             <button
-              className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+              className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
+                useStudioSurfaceTheme
+                  ? "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                  : "border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800"
+              }`}
               onClick={() => setShowRecentEvents((prev) => !prev)}
             >
               {showRecentEvents ? "Hide" : "Show"}
@@ -11250,12 +11274,26 @@ const openTemplateModal = (template: Template) => {
               return (
                 <li
                   key={index}
-                  className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"
+                  className={`rounded-xl border px-3 py-2 ${
+                    useStudioSurfaceTheme
+                      ? "border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                      : "border-slate-100 bg-slate-50"
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="font-medium text-slate-700">{event.type}</div>
+                    <div
+                      className={`font-medium ${
+                        useStudioSurfaceTheme ? "text-slate-100" : "text-slate-700"
+                      }`}
+                    >
+                      {event.type}
+                    </div>
                     <button
-                      className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500"
+                      className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.2em] transition ${
+                        useStudioSurfaceTheme
+                          ? "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                          : "border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800"
+                      }`}
                       onClick={() =>
                         setExpandedRecentEvents((prev) => {
                           const next = new Set(prev);
@@ -11272,18 +11310,30 @@ const openTemplateModal = (template: Template) => {
                     </button>
                   </div>
                   {isExpanded ? (
-                    <pre className="mt-2 whitespace-pre-wrap text-slate-500">
+                    <pre
+                      className={`mt-2 whitespace-pre-wrap ${
+                        useStudioSurfaceTheme ? "text-slate-300/78" : "text-slate-500"
+                      }`}
+                    >
                       {JSON.stringify(event.payload, null, 2)}
                     </pre>
                   ) : (
-                    <div className="mt-2 text-[11px] text-slate-500">Collapsed.</div>
+                    <div
+                      className={`mt-2 text-[11px] ${
+                        useStudioSurfaceTheme ? "text-slate-300/72" : "text-slate-500"
+                      }`}
+                    >
+                      Collapsed.
+                    </div>
                   )}
                 </li>
               );
             })}
           </ul>
         ) : (
-          <div className="mt-4 text-xs text-slate-500">Hidden by default.</div>
+          <div className={`mt-4 text-xs ${useStudioSurfaceTheme ? "text-slate-300/72" : "text-slate-500"}`}>
+            Hidden by default.
+          </div>
         )}
       </section>
       </div>
