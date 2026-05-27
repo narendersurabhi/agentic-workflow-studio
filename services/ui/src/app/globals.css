@@ -160,6 +160,122 @@ body {
   border-color: rgb(255 255 255 / 0.16);
 }
 
+.studio-contrast-surface [class~="border-slate-100"],
+.studio-contrast-surface [class~="border-slate-200"],
+.studio-contrast-surface [class~="border-slate-300"],
+.studio-contrast-surface [class*="border-slate-200/"],
+.studio-contrast-surface [class*="border-slate-300/"] {
+  border-color: rgb(255 255 255 / 0.12);
+}
+
+.studio-contrast-surface [class~="border-sky-200"] {
+  border-color: rgb(125 211 252 / 0.28);
+}
+
+.studio-contrast-surface [class~="border-emerald-200"] {
+  border-color: rgb(110 231 183 / 0.28);
+}
+
+.studio-contrast-surface [class~="border-amber-200"] {
+  border-color: rgb(252 211 77 / 0.3);
+}
+
+.studio-contrast-surface [class~="border-rose-200"] {
+  border-color: rgb(253 164 175 / 0.3);
+}
+
+.studio-contrast-surface [class~="bg-white"],
+.studio-contrast-surface [class*="bg-white/"],
+.studio-contrast-surface [class~="bg-slate-50"],
+.studio-contrast-surface [class*="bg-slate-50/"],
+.studio-contrast-surface [class~="bg-slate-100"],
+.studio-contrast-surface [class*="bg-slate-100/"],
+.studio-contrast-surface [class~="bg-slate-200"],
+.studio-contrast-surface [class*="bg-slate-200/"] {
+  background-color: rgb(255 255 255 / 0.06);
+}
+
+.studio-contrast-surface [class~="bg-sky-50"],
+.studio-contrast-surface [class~="bg-sky-100"],
+.studio-contrast-surface [class*="bg-sky-50/"],
+.studio-contrast-surface [class*="bg-sky-100/"] {
+  background-color: rgb(56 189 248 / 0.12);
+}
+
+.studio-contrast-surface [class~="bg-emerald-50"],
+.studio-contrast-surface [class~="bg-emerald-100"],
+.studio-contrast-surface [class*="bg-emerald-50/"],
+.studio-contrast-surface [class*="bg-emerald-100/"] {
+  background-color: rgb(52 211 153 / 0.12);
+}
+
+.studio-contrast-surface [class~="bg-amber-50"],
+.studio-contrast-surface [class~="bg-amber-100"],
+.studio-contrast-surface [class*="bg-amber-50/"],
+.studio-contrast-surface [class*="bg-amber-100/"] {
+  background-color: rgb(251 191 36 / 0.13);
+}
+
+.studio-contrast-surface [class~="bg-rose-50"],
+.studio-contrast-surface [class~="bg-rose-100"],
+.studio-contrast-surface [class*="bg-rose-50/"],
+.studio-contrast-surface [class*="bg-rose-100/"] {
+  background-color: rgb(251 113 133 / 0.13);
+}
+
+.studio-contrast-surface [class*="focus:bg-white"]:focus,
+.studio-contrast-surface [class*="focus:bg-slate-50"]:focus {
+  background-color: rgb(15 23 42 / 0.3);
+}
+
+.studio-contrast-surface [class~="text-slate-900"],
+.studio-contrast-surface [class~="text-slate-800"] {
+  color: rgb(255 255 255);
+}
+
+.studio-contrast-surface [class~="text-slate-700"] {
+  color: rgb(226 232 240);
+}
+
+.studio-contrast-surface [class~="text-slate-600"] {
+  color: rgb(203 213 225 / 0.88);
+}
+
+.studio-contrast-surface [class~="text-slate-500"] {
+  color: rgb(203 213 225 / 0.76);
+}
+
+.studio-contrast-surface [class~="text-sky-700"] {
+  color: rgb(224 242 254);
+}
+
+.studio-contrast-surface [class~="text-emerald-700"] {
+  color: rgb(209 250 229);
+}
+
+.studio-contrast-surface [class~="text-amber-700"],
+.studio-contrast-surface [class~="text-amber-800"],
+.studio-contrast-surface [class~="text-amber-900"] {
+  color: rgb(254 243 199);
+}
+
+.studio-contrast-surface [class~="text-rose-700"],
+.studio-contrast-surface [class~="text-rose-800"],
+.studio-contrast-surface [class~="text-rose-900"] {
+  color: rgb(255 228 230);
+}
+
+.studio-contrast-surface input,
+.studio-contrast-surface select,
+.studio-contrast-surface textarea {
+  color: rgb(255 255 255);
+}
+
+.studio-contrast-surface input::placeholder,
+.studio-contrast-surface textarea::placeholder {
+  color: rgb(203 213 225 / 0.62);
+}
+
 .font-body {
   font-family: var(--font-body), "Helvetica Neue", sans-serif;
 }
