@@ -43,10 +43,10 @@ type PaletteSection =
     };
 
 const inputClassName =
-  "w-full rounded-xl border border-white/10 bg-slate-950/20 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/45 focus:border-sky-300/35 focus:bg-slate-950/28";
+  "w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/35 focus:bg-surface-1";
 
 const panelClassName =
-  "rounded-[16px] border border-white/10 bg-[linear-gradient(180deg,rgba(26,36,48,0.78),rgba(35,46,59,0.86))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
+  "rounded-[16px] border border-subtle bg-gradient-panel p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 
 const formatPaletteLabel = (value: string) => {
   const acronyms = new Set(["ai", "api", "csv", "html", "json", "llm", "pdf", "sql", "ui", "url", "xml"]);
@@ -169,17 +169,17 @@ export default function StudioCapabilityPalette({
   };
 
   return (
-    <aside className="flex h-full min-h-0 flex-col px-3 py-3 text-slate-100">
+    <aside className="flex h-full min-h-0 flex-col px-3 py-3 text-text-hi">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-[12px] font-semibold uppercase tracking-[0.16em] text-slate-300/76">
+          <div className="text-[12px] font-semibold uppercase tracking-[0.16em] text-text-md">
             Palette Scope
           </div>
-          <div className="mt-1 text-[15px] font-semibold text-white">
+          <div className="mt-1 text-[15px] font-semibold text-text-hi">
             {selectedGroup === "all" ? "All sections" : formatPaletteLabel(selectedGroup)}
           </div>
         </div>
-        <div className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+        <div className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
           {visibleNodeCount} nodes
         </div>
       </div>
@@ -207,7 +207,7 @@ export default function StudioCapabilityPalette({
           {hasFilters ? (
             <button
               type="button"
-              className="shrink-0 rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-white/18 hover:bg-white/[0.08]"
+              className="shrink-0 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-surface-1"
               onClick={() => {
                 onQueryChange("");
                 onGroupChange("all");
@@ -220,12 +220,12 @@ export default function StudioCapabilityPalette({
       </div>
 
       {loading ? (
-        <div className="mt-3 rounded-[14px] border border-sky-300/15 bg-sky-400/10 px-3 py-2 text-sm text-sky-100">
+        <div className="mt-3 rounded-[14px] border border-sky-300/15 bg-accent-sky px-3 py-2 text-sm text-text-sky-token">
           Loading capability catalog...
         </div>
       ) : null}
       {error ? (
-        <div className="mt-3 rounded-[14px] border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">
+        <div className="mt-3 rounded-[14px] border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
           {error}
         </div>
       ) : null}
@@ -252,17 +252,17 @@ export default function StudioCapabilityPalette({
                   <div>
                     <div
                       className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                        isControlSection ? "text-amber-100/88" : "text-slate-300/78"
+                        isControlSection ? "text-text-amber-token" : "text-text-md"
                       }`}
                     >
                       {section.title}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+                    <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
                       {section.items.length}
                     </span>
-                    <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-[12px] text-slate-200">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-subtle bg-surface-1 text-[12px] text-text-md">
                       {isCollapsed ? "+" : "−"}
                     </span>
                   </div>
@@ -281,7 +281,7 @@ export default function StudioCapabilityPalette({
                             <button
                               key={`studio-control-${item.kind}`}
                               type="button"
-                              className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-white/22 hover:bg-white/[0.06]"
+                              className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1"
                               style={{
                                 borderColor: hexToRgba(visual.stroke, 0.28),
                                 background: `linear-gradient(180deg, ${hexToRgba(
@@ -293,14 +293,14 @@ export default function StudioCapabilityPalette({
                             >
                               <WorkflowNodePlateIcon visual={visual} size={36} />
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-[13px] font-semibold text-white">
+                                <div className="truncate text-[13px] font-semibold text-text-hi">
                                   {item.title}
                                 </div>
-                                <div className="mt-0.5 truncate text-[11px] text-slate-300/76">
+                                <div className="mt-0.5 truncate text-[11px] text-text-md">
                                   {item.description}
                                 </div>
                               </div>
-                              <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-lg leading-none text-slate-100 transition group-hover:border-sky-300/30 group-hover:bg-sky-400/12">
+                              <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
                                 +
                               </span>
                             </button>
@@ -316,7 +316,7 @@ export default function StudioCapabilityPalette({
                             <button
                               key={`studio-capability-${item.id}`}
                               type="button"
-                              className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-white/22 hover:bg-white/[0.06] disabled:cursor-not-allowed"
+                              className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1 disabled:cursor-not-allowed"
                               style={{
                                 borderColor: hexToRgba(visual.stroke, item.enabled ? 0.26 : 0.14),
                                 background: item.enabled
@@ -332,20 +332,20 @@ export default function StudioCapabilityPalette({
                             >
                               <WorkflowNodePlateIcon visual={visual} size={36} />
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-[13px] font-semibold text-white">
+                                <div className="truncate text-[13px] font-semibold text-text-hi">
                                   {taskNameFromCapability(item.id)}
                                 </div>
-                                <div className="mt-0.5 truncate text-[11px] text-slate-300/76">
+                                <div className="mt-0.5 truncate text-[11px] text-text-md">
                                   {item.id}
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
                                 {requiredInputs.length > 0 ? (
-                                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
                                     {requiredInputs.length} req
                                   </span>
                                 ) : null}
-                                <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-lg leading-none text-slate-100 transition group-hover:border-sky-300/30 group-hover:bg-sky-400/12">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
                                   +
                                 </span>
                               </div>
@@ -359,7 +359,7 @@ export default function StudioCapabilityPalette({
           })}
 
           {capabilities.length === 0 && !loading ? (
-            <div className="rounded-[16px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-5 text-sm text-slate-300/72">
+            <div className="rounded-[16px] border border-dashed border-subtle bg-surface-1 px-4 py-5 text-sm text-text-md">
               No capability nodes match the current filters.
             </div>
           ) : null}

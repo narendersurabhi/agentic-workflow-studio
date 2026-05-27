@@ -319,13 +319,13 @@ export default function WorkflowLibraryPage() {
         <>
           <Link
             href="/studio"
-            className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
           >
             Open Studio
           </Link>
           <Link
             href="/studio?mode=new"
-            className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
           >
             New Workflow
           </Link>
@@ -333,20 +333,20 @@ export default function WorkflowLibraryPage() {
       }
     >
       {notice ? (
-        <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-sky-400/10 px-4 py-3 text-sm text-sky-50">
+        <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {notice}
         </div>
       ) : null}
       <section className="relative">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
                     Saved Workflows
                   </div>
-                  <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
+                  <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
                     Saved Workflows
                   </h2>
-                  <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
+                  <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
                     Manage reusable workflows, versions, triggers, and published automations.
                   </p>
                 </div>
@@ -355,7 +355,7 @@ export default function WorkflowLibraryPage() {
                   {summaryChips.map((chip) => (
                     <span
                       key={chip}
-                      className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100"
+                      className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi"
                     >
                       {chip}
                     </span>
@@ -363,19 +363,19 @@ export default function WorkflowLibraryPage() {
                 </div>
               </div>
 
-              <div className="mt-4 flex flex-wrap items-end justify-between gap-3 rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,79,95,0.54),rgba(47,60,74,0.68))] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+              <div className="mt-4 flex flex-wrap items-end justify-between gap-3 rounded-[24px] border border-subtle bg-gradient-panel-mid px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
                 <label className="min-w-[260px] flex-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                     Workspace User ID
                   </div>
                   <input
-                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                    className="mt-2 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
                     value={workspaceUserId}
                     onChange={(event) => setWorkspaceUserId(event.target.value)}
                     placeholder="narendersurabhi"
                   />
                 </label>
-                <div className="max-w-xl text-sm leading-6 text-slate-300/82">
+                <div className="max-w-xl text-sm leading-6 text-text-md">
                   Select a saved workflow to inspect its versions, triggers, and run history here.
                   Open Draft and Open Version send you back to Studio with the selected record loaded.
                 </div>

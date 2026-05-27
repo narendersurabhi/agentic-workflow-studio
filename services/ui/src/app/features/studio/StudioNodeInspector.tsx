@@ -146,7 +146,7 @@ const schemaPropertyDefault = (property: Record<string, unknown> | null) => {
 };
 
 const inspectorPanelClassName =
-  "h-full px-3 py-3 text-slate-100 [&_.border-slate-100]:border-white/8 [&_.border-slate-200]:border-white/10 [&_.border-slate-300]:border-white/12 [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-amber-200]:border-amber-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-white/[0.04] [&_.bg-slate-100]:bg-white/[0.07] [&_.bg-white]:bg-white/[0.05] [&_.bg-sky-50]:bg-sky-400/10 [&_.bg-sky-100]:bg-sky-400/12 [&_.bg-emerald-50]:bg-emerald-400/10 [&_.bg-emerald-100]:bg-emerald-400/12 [&_.bg-rose-50]:bg-rose-400/10 [&_.bg-rose-100]:bg-rose-400/12 [&_.bg-amber-50]:bg-amber-400/10 [&_.bg-amber-100]:bg-amber-400/12 [&_.text-slate-900]:text-white [&_.text-slate-800]:text-slate-100 [&_.text-slate-700]:text-slate-200 [&_.text-slate-600]:text-slate-300/82 [&_.text-slate-500]:text-slate-400 [&_.text-sky-700]:text-sky-100 [&_.text-emerald-700]:text-emerald-100 [&_.text-rose-700]:text-rose-100 [&_.text-amber-700]:text-amber-100 [&_.text-amber-800]:text-amber-100 [&_.text-amber-900]:text-amber-50 [&_input]:text-white [&_select]:text-white [&_textarea]:text-white [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-sky-100";
+  "h-full px-3 py-3 text-text-hi [&_.border-slate-100]:border-white/8 [&_.border-slate-200]:border-subtle [&_.border-slate-300]:border-subtle [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-amber-200]:border-amber-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-surface-1 [&_.bg-slate-100]:bg-surface-1 [&_.bg-white]:bg-surface-1 [&_.bg-sky-50]:bg-accent-sky [&_.bg-sky-100]:bg-accent-sky [&_.bg-emerald-50]:bg-accent-emerald [&_.bg-emerald-100]:bg-accent-emerald [&_.bg-rose-50]:bg-accent-rose [&_.bg-rose-100]:bg-accent-rose [&_.bg-amber-50]:bg-accent-amber [&_.bg-amber-100]:bg-accent-amber [&_.text-slate-900]:text-text-hi [&_.text-slate-800]:text-text-hi [&_.text-slate-700]:text-text-md [&_.text-slate-600]:text-text-md [&_.text-text-lo]:text-text-lo [&_.text-sky-700]:text-text-sky-token [&_.text-emerald-700]:text-text-emerald-token [&_.text-rose-700]:text-text-rose-token [&_.text-amber-700]:text-text-amber-token [&_.text-amber-800]:text-text-amber-token [&_.text-amber-900]:text-amber-50 [&_input]:text-text-hi [&_select]:text-text-hi [&_textarea]:text-text-hi [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-text-sky-token";
 
 export default function StudioNodeInspector({
   selectedDagNode,
@@ -195,7 +195,7 @@ export default function StudioNodeInspector({
 
   if (!selectedDagNode) {
     return (
-      <section className="rounded-[22px] border border-dashed border-white/12 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(9,17,27,0.94))] px-4 py-4 text-sm text-slate-300/78 shadow-[0_18px_44px_rgba(2,8,23,0.18)]">
+      <section className="rounded-[22px] border border-dashed border-subtle bg-gradient-panel-deep px-4 py-4 text-sm text-text-md shadow-[0_18px_44px_rgba(2,8,23,0.18)]">
         Select a node to configure its inputs, outputs, and design variables.
       </section>
     );
@@ -218,11 +218,11 @@ export default function StudioNodeInspector({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/68">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
             Step Inspector
           </div>
-          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">{selectedDagNode.taskName}</h2>
-          <div className="mt-1 text-xs text-slate-400">{selectedDagNode.capabilityId}</div>
+          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-text-hi">{selectedDagNode.taskName}</h2>
+          <div className="mt-1 text-xs text-text-lo">{selectedDagNode.capabilityId}</div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -256,7 +256,7 @@ export default function StudioNodeInspector({
 
       <div className="mt-3 grid gap-2.5">
         <label className="block">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
             Task Name
           </div>
           <input
@@ -268,7 +268,7 @@ export default function StudioNodeInspector({
           />
         </label>
         <label className="block">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
             {isControlNode ? "Control Node Id" : "Capability Id"}
           </div>
           <input
@@ -283,10 +283,10 @@ export default function StudioNodeInspector({
         </label>
         <label className="block">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
               Primary Output Path
             </div>
-            <div className="text-xs text-slate-500">
+            <div className="text-xs text-text-lo">
               {selectedDagNode.outputs.length} extra output{selectedDagNode.outputs.length === 1 ? "" : "s"}
             </div>
           </div>
@@ -315,7 +315,7 @@ export default function StudioNodeInspector({
           </div>
           <div className="mt-4 grid gap-3">
             <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                 Expression
               </div>
               <input
@@ -335,7 +335,7 @@ export default function StudioNodeInspector({
             {selectedDagNode.controlKind === "if_else" ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                     True Label
                   </div>
                   <input
@@ -348,7 +348,7 @@ export default function StudioNodeInspector({
                   />
                 </label>
                 <label className="block">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                     False Label
                   </div>
                   <input
@@ -365,7 +365,7 @@ export default function StudioNodeInspector({
 
             {selectedDagNode.controlKind === "parallel" ? (
               <label className="block">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                   Parallel Mode
                 </div>
                 <select
@@ -387,10 +387,10 @@ export default function StudioNodeInspector({
               <div className="rounded-2xl border border-slate-200 bg-white p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                       Cases
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">Add labels and match values for each route.</div>
+                    <div className="mt-1 text-xs text-text-lo">Add labels and match values for each route.</div>
                   </div>
                   <button
                     className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-semibold text-slate-700"
@@ -404,7 +404,7 @@ export default function StudioNodeInspector({
                     <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
                         <label className="block">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                             Case Label
                           </div>
                           <input
@@ -417,7 +417,7 @@ export default function StudioNodeInspector({
                           />
                         </label>
                         <label className="block">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                             Match Value
                           </div>
                           <input
@@ -450,10 +450,10 @@ export default function StudioNodeInspector({
       <div className="mt-5 border-t border-slate-100 pt-3.5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
               Inputs
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-text-lo">
               Schema-defined fields are listed automatically. Each field can point at context data, step outputs, literals, memory, or workflow interface bindings.
             </div>
           </div>
@@ -491,7 +491,7 @@ export default function StudioNodeInspector({
 
         <div className="mt-2.5 space-y-2.5">
           {inputFields.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-text-lo">
               No inputs configured for this node.
             </div>
           ) : null}
@@ -532,7 +532,7 @@ export default function StudioNodeInspector({
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${
                           status.required
-                            ? "bg-slate-900 text-white"
+                            ? "bg-slate-900 text-slate-50"
                             : status.custom
                               ? "border border-slate-300 bg-white text-slate-600"
                               : "bg-sky-50 text-sky-700"
@@ -554,18 +554,18 @@ export default function StudioNodeInspector({
                         {status.status}
                       </span>
                     </div>
-                    <div className="mt-1 text-[11px] text-slate-500">
+                    <div className="mt-1 text-[11px] text-text-lo">
                       {status.schemaType}
                       {status.schemaDescription ? ` • ${status.schemaDescription}` : ""}
                     </div>
                     {enumOptions.length > 0 || schemaDefaultValue ? (
-                      <div className="mt-1 text-[11px] text-slate-500">
+                      <div className="mt-1 text-[11px] text-text-lo">
                         {enumOptions.length > 0 ? `Allowed: ${enumOptions.join(", ")}` : ""}
                         {enumOptions.length > 0 && schemaDefaultValue ? " • " : ""}
                         {schemaDefaultValue ? `Default: ${schemaDefaultValue}` : ""}
                       </div>
                     ) : null}
-                    <div className="mt-1 text-[11px] text-slate-500">{status.detail}</div>
+                    <div className="mt-1 text-[11px] text-text-lo">{status.detail}</div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {status.status === "missing" && sourceNodes.length > 0 && bindingMode !== "from" ? (
@@ -594,7 +594,7 @@ export default function StudioNodeInspector({
                 </div>
 
                 <div className="mt-2.5 flex items-center gap-2">
-                  <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-lo">
                     Mapping
                   </label>
                   <select
@@ -718,7 +718,7 @@ export default function StudioNodeInspector({
                         placeholder="literal value"
                       />
                     )}
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-[11px] text-text-lo">
                       Literal values are stored as text in the draft and coerced by the target capability at run time.
                     </div>
                   </div>
@@ -740,7 +740,7 @@ export default function StudioNodeInspector({
                         <option key={`${contextPathListId}-${option}`} value={option} />
                       ))}
                     </datalist>
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-[11px] text-text-lo">
                       Select a value from <code>context_json</code> or type a custom path.
                     </div>
                   </div>
@@ -806,7 +806,7 @@ export default function StudioNodeInspector({
                         </option>
                       ))}
                     </select>
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-[11px] text-text-lo">
                       Bind this field to a workflow-level input.
                     </div>
                   </div>
@@ -832,7 +832,7 @@ export default function StudioNodeInspector({
                         </option>
                       ))}
                     </select>
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-[11px] text-text-lo">
                       Bind this field to a workflow-level variable.
                     </div>
                   </div>
@@ -846,10 +846,10 @@ export default function StudioNodeInspector({
       <div className="mt-6 border-t border-slate-100 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
               Outputs
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-text-lo">
               Model the fields other nodes should be able to reference from this step.
             </div>
           </div>
@@ -866,7 +866,7 @@ export default function StudioNodeInspector({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-slate-800">Available Schema Outputs</div>
-                <div className="mt-1 text-[11px] text-slate-500">
+                <div className="mt-1 text-[11px] text-text-lo">
                   Derived from the capability output schema for {selectedCapability?.id || selectedDagNode.capabilityId}.
                 </div>
               </div>
@@ -888,7 +888,7 @@ export default function StudioNodeInspector({
                       </span>
                     </div>
                     {field.description ? (
-                      <div className="mt-1 text-[11px] text-slate-500">{field.description}</div>
+                      <div className="mt-1 text-[11px] text-text-lo">{field.description}</div>
                     ) : null}
                   </div>
                   <button
@@ -905,7 +905,7 @@ export default function StudioNodeInspector({
 
         <div className="mt-3 space-y-3">
           {selectedDagNode.outputs.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-text-lo">
               No extra outputs defined. Downstream nodes can still use the primary output path above.
             </div>
           ) : null}
@@ -961,10 +961,10 @@ export default function StudioNodeInspector({
       <div className="mt-6 border-t border-slate-100 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
               Variables
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-text-lo">
               Design-time notes and aliases for this node. These are kept in the Studio draft only.
             </div>
           </div>
@@ -978,7 +978,7 @@ export default function StudioNodeInspector({
 
         <div className="mt-3 space-y-3">
           {selectedDagNode.variables.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-text-lo">
               No variables yet. Add names and values to capture local workflow intent while designing.
             </div>
           ) : null}

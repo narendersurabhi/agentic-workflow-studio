@@ -241,14 +241,14 @@ export default function ComponentsGalleryPage() {
       />
 
       <section className="mt-6 overflow-hidden rounded-[30px] border border-slate-900/10 bg-[#07111d] shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
-        <div className="border-b border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(10,16,28,0.94))] px-6 py-4">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-200/78">
+        <div className="border-b border-subtle bg-gradient-panel-deep px-6 py-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-text-sky-token">
             Node Showcase
           </div>
-          <h2 className="mt-2 text-4xl font-semibold tracking-[-0.04em] text-white md:text-5xl">
+          <h2 className="mt-2 text-4xl font-semibold tracking-[-0.04em] text-text-hi md:text-5xl">
             Shared Workflow Node Variants
           </h2>
-          <p className="mt-3 max-w-3xl text-base text-slate-300/78">
+          <p className="mt-3 max-w-3xl text-base text-text-md">
             Single-source visuals for LLM, control, validation, and memory nodes. The Studio
             canvas and future workflow gallery should now render from this same card system.
           </p>
@@ -349,7 +349,7 @@ export default function ComponentsGalleryPage() {
               ))}
             </svg>
 
-            <div className="absolute left-[220px] top-[250px] h-[290px] w-[780px] rounded-[26px] border border-white/10 bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]" />
+            <div className="absolute left-[220px] top-[250px] h-[290px] w-[780px] rounded-[26px] border border-subtle bg-surface-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]" />
           </div>
         </div>
       </section>
