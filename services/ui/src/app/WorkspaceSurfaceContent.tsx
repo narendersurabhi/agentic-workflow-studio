@@ -8811,43 +8811,6 @@ const openTemplateModal = (template: Template) => {
             </>
           }
         >
-            <div
-              className={`mt-4 px-4 py-3 ${
-                useStudioSurfaceTheme
-                  ? "rounded-[24px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-                  : "rounded-2xl border border-subtle bg-surface-1 text-text-hi"
-              }`}
-            >
-              <div className="flex flex-wrap items-end gap-3">
-                <label className="min-w-[220px] flex-1">
-                  <div
-                    className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                      useStudioSurfaceTheme ? "text-text-sky-token" : "text-text-sky-token"
-                    }`}
-                  >
-                    Context User ID
-                  </div>
-                  <input
-                    className={`mt-2 w-full rounded-2xl px-3 py-2 text-sm outline-none transition ${
-                      useStudioSurfaceTheme
-                        ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:bg-surface-1"
-                        : "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-hi focus:border-default-theme focus:bg-surface-2"
-                    }`}
-                    value={workspaceUserId}
-                    onChange={(event) => setWorkspaceUserId(event.target.value)}
-                    placeholder="narendersurabhi"
-                  />
-                </label>
-                <div
-                  className={`max-w-xl text-xs leading-5 ${
-                    useStudioSurfaceTheme ? "text-text-md" : "text-text-md"
-                  }`}
-                >
-                  Chat, Run from Prompt, and direct memory reads will use this user id by default unless a
-                  request overrides it explicitly.
-                </div>
-              </div>
-            </div>
             <div className={`mt-4 grid gap-4 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
               {showComposeScreen ? (
               <div className={composeModePrimarySectionClassName}>
