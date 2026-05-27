@@ -44,19 +44,36 @@ async function proxy(request: Request, path: string[] | undefined): Promise<Resp
   if (method !== "GET" && method !== "HEAD") {
     init.body = await request.text();
   }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60_000);
+  init.signal = controller.signal;
   try {
     const upstream = await fetch(upstreamUrl, init);
+    clearTimeout(timeoutId);
     return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,
       headers: copyResponseHeaders(upstream.headers),
     });
   } catch (error) {
+    clearTimeout(timeoutId);
     const fallbackResponse = DEMO_FALLBACK ? await demoResponse(demoRequest, path) : null;
     if (fallbackResponse) {
       return fallbackResponse;
     }
-    throw error;
+    const isTimeout =
+      (error instanceof Error && error.name === "AbortError") ||
+      (error instanceof Error && (error as NodeJS.ErrnoException).code === "UND_ERR_HEADERS_TIMEOUT");
+    if (isTimeout) {
+      return new Response(JSON.stringify({ detail: "Upstream timeout" }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ detail: "Upstream unavailable" }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
   }
 }
 
