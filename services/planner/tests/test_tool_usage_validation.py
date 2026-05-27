@@ -395,7 +395,7 @@ def test_ensure_default_value_markers_replaces_default_marker_with_context_value
 def test_validate_plan_ignores_unmatched_goal_segment_for_task() -> None:
     plan = _plan_with_task(
         "document.spec.validate",
-        {"document_spec": {"blocks": [{"type": "heading", "text": "Resume"}]}},
+        {"document_spec": {"blocks": [{"type": "heading", "text": "Report"}]}},
         intent=models.ToolIntent.validate,
     )
     tools = [

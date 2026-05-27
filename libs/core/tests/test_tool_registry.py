@@ -600,8 +600,6 @@ def test_post_mcp_tool_call_biases_first_attempt_timeout(monkeypatch) -> None:
 def test_resolve_mcp_timeout_falls_back_to_openai_timeout(monkeypatch) -> None:
     monkeypatch.delenv("MCP_TOOL_TIMEOUT_S", raising=False)
     monkeypatch.delenv("MCP_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("TAILOR_OPENAI_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("TAILOR_EVAL_OPENAI_TIMEOUT_S", raising=False)
     monkeypatch.setenv("OPENAI_TIMEOUT_S", "60")
     assert tool_registry_module._resolve_mcp_timeout_s() == 60.0
 
@@ -609,8 +607,6 @@ def test_resolve_mcp_timeout_falls_back_to_openai_timeout(monkeypatch) -> None:
 def test_resolve_mcp_timeout_clamps_large_openai_timeout(monkeypatch) -> None:
     monkeypatch.delenv("MCP_TOOL_TIMEOUT_S", raising=False)
     monkeypatch.delenv("MCP_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("TAILOR_OPENAI_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("TAILOR_EVAL_OPENAI_TIMEOUT_S", raising=False)
     monkeypatch.setenv("OPENAI_TIMEOUT_S", "600")
     assert tool_registry_module._resolve_mcp_timeout_s() == 180.0
 

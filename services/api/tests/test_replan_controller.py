@@ -24,7 +24,7 @@ def test_decide_task_failure_recovery_returns_retry_same_step_when_retry_budget_
     assert decision.should_replan is False
 
 
-def test_decide_task_failure_recovery_prefers_checkpoint_resume_when_retry_budget_is_exhausted() -> None:
+def test_decide_task_failure_recovery_prefers_checkpoint_replay_when_retry_budget_is_exhausted() -> None:
     decision = replan_controller.decide_task_failure_recovery(
         planning_mode=models.PlanningMode.adaptive,
         has_pending_replan=False,
@@ -38,7 +38,7 @@ def test_decide_task_failure_recovery_prefers_checkpoint_resume_when_retry_budge
         attempt_number=3,
         max_attempts=3,
         checkpoint_context={
-            "resume_supported": True,
+            "checkpoint_replay_supported": True,
             "max_checkpoint_replays": 1,
             "checkpoint_lineage": {
                 "checkpoint_id": "checkpoint-1",
@@ -49,7 +49,7 @@ def test_decide_task_failure_recovery_prefers_checkpoint_resume_when_retry_budge
     )
 
     assert decision.strategy == models.ReplanStrategy.retry_same_step
-    assert decision.strategy_reason == "checkpoint_resume_after_retry_budget_exhausted"
+    assert decision.strategy_reason == "checkpoint_replay_after_retry_budget_exhausted"
     assert decision.should_replan is False
     assert decision.context["checkpoint_lineage"]["checkpoint_id"] == "checkpoint-1"
 
@@ -69,7 +69,7 @@ def test_decide_task_failure_recovery_replans_when_checkpoint_budget_is_exhauste
         max_attempts=3,
         retry_context={"failed_task_id": "task-1"},
         checkpoint_context={
-            "resume_supported": True,
+            "checkpoint_replay_supported": True,
             "max_checkpoint_replays": 1,
             "checkpoint_lineage": {
                 "checkpoint_id": "checkpoint-1",

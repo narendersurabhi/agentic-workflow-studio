@@ -657,7 +657,7 @@ curl http://localhost:18000/jobs/<job_id>/tasks
 
 - `POST /jobs/{job_id}/replan`
 - `POST /jobs/{job_id}/cancel`
-- `POST /jobs/{job_id}/resume`
+- `POST /jobs/{job_id}/continue`
 - `POST /jobs/{job_id}/retry`
 - `POST /jobs/{job_id}/retry_failed`
 - `POST /jobs/{job_id}/tasks/{task_id}/retry`
@@ -724,7 +724,7 @@ curl "http://localhost:18000/memory/read?name=user_profile&scope=user&user_id=<y
 # Semantic search
 curl -X POST http://localhost:18000/memory/semantic/search \
   -H "Content-Type: application/json" \
-  -d '{"query":"education and certifications","namespace":"resume_profile","user_id":"<your-user-id>"}'
+  -d '{"query":"skills and certifications","namespace":"user_profile","user_id":"<your-user-id>"}'
 ```
 
 - `GET /memory/specs`

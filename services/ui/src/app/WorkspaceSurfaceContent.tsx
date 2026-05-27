@@ -6708,8 +6708,8 @@ const openTemplateModal = (template: Template) => {
     }
   };
 
-  const resumeExecution = async (jobId: string) => {
-    const response = await fetch(`${apiUrl}/jobs/${jobId}/resume`, { method: "POST" });
+  const continueExecution = async (jobId: string) => {
+    const response = await fetch(`${apiUrl}/jobs/${jobId}/continue`, { method: "POST" });
     if (response.ok) {
       loadJobs();
     }
@@ -9890,9 +9890,9 @@ const openTemplateModal = (template: Template) => {
                   </button>
                   <button
                     className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}
-                    onClick={() => resumeExecution(job.id)}
+                    onClick={() => continueExecution(job.id)}
                   >
-                    Resume Run
+                    Continue Run
                   </button>
                   <button
                     className={`rounded-full px-3 py-1 transition ${studioSurfaceButtonClassName}`}

@@ -444,9 +444,9 @@ def test_run_control_endpoints_delegate_to_job_lifecycle(monkeypatch) -> None:
         assert job_record is not None
         assert job_record.status == models.JobStatus.canceled.value
 
-    resume_response = client.post(f"/runs/{run_id}/resume")
-    assert resume_response.status_code == 200
-    assert resume_response.json()["status"] == models.JobStatus.planning.value
+    continue_response = client.post(f"/runs/{run_id}/continue")
+    assert continue_response.status_code == 200
+    assert continue_response.json()["status"] == models.JobStatus.planning.value
 
     with SessionLocal() as db:
         job_record = db.query(JobRecord).filter(JobRecord.id == job["id"]).first()

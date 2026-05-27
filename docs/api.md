@@ -93,7 +93,7 @@ Use `details` when you want a combined view of job, plan, and task state.
 
 - `POST /jobs/{job_id}/replan`
 - `POST /jobs/{job_id}/cancel`
-- `POST /jobs/{job_id}/resume`
+- `POST /jobs/{job_id}/continue`
 - `POST /jobs/{job_id}/retry`
 - `POST /jobs/{job_id}/retry_failed`
 - `POST /jobs/{job_id}/tasks/{task_id}/retry`
@@ -304,8 +304,8 @@ Minimal semantic search request:
 
 ```json
 {
-  "query": "education and certifications",
-  "namespace": "resume_profile",
+  "query": "skills and certifications",
+  "namespace": "profile",
   "user_id": "narendersurabhi"
 }
 ```

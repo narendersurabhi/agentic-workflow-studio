@@ -2458,7 +2458,7 @@ def _seed_checkpoint_for_task(
     fixture: dict[str, str],
     *,
     task_id: str,
-    checkpoint_key: str = "resume-point",
+    checkpoint_key: str = "continue-point",
     replay_count: int = 0,
     input_digest: str = "digest-1",
     source: str = "test",
@@ -3018,7 +3018,7 @@ def test_retry_exhausted_replan_multiple_revisions_keep_completed_prefix_stable(
         assert prior_replacement.status == models.TaskStatus.canceled.value
 
 
-def test_retry_exhausted_failure_with_checkpoint_replays_same_step_and_records_resume_context():
+def test_retry_exhausted_failure_with_checkpoint_replays_same_step_and_records_replay_context():
     fixture = _create_adaptive_replan_failure_fixture()
     _seed_run_history_for_replan_fixture(fixture)
     checkpoint_id = _seed_checkpoint_for_task(
@@ -3046,7 +3046,7 @@ def test_retry_exhausted_failure_with_checkpoint_replays_same_step_and_records_r
     assert body["adaptive_status"]["last_strategy"] == models.ReplanStrategy.retry_same_step.value
     assert (
         body["adaptive_status"]["last_strategy_reason"]
-        == "checkpoint_resume_after_retry_budget_exhausted"
+        == "checkpoint_replay_after_retry_budget_exhausted"
     )
     assert "pending_replan" not in body["metadata"]
 
@@ -3068,12 +3068,12 @@ def test_retry_exhausted_failure_with_checkpoint_replays_same_step_and_records_r
         assert task.attempts == 4
         assert checkpoint is not None
         assert checkpoint.replay_count == 1
-        assert checkpoint.outcome == "scheduled_resume"
+        assert checkpoint.outcome == "scheduled_replay"
         assert execution_request is not None
         assert execution_request.request_json["replay_context"]["checkpoint_id"] == checkpoint_id
         assert (
             execution_request.request_json["replay_context"]["strategy_reason"]
-            == "checkpoint_resume_after_retry_budget_exhausted"
+            == "checkpoint_replay_after_retry_budget_exhausted"
         )
         assert step is not None
         assert step.status == models.TaskStatus.ready.value
@@ -6836,7 +6836,7 @@ def test_task_payload_from_record_resolves_task_level_path_reference() -> None:
         acceptance_criteria=["docx created"],
         expected_output_schema_ref="schemas/output_path",
         status=models.TaskStatus.ready.value,
-        deps=["DeriveResumeOutputPath"],
+        deps=["DeriveOutputPath"],
         attempts=0,
         max_attempts=3,
         rework_count=0,
@@ -6848,7 +6848,7 @@ def test_task_payload_from_record_resolves_task_level_path_reference() -> None:
             "docx_render_from_spec": {
                 "document_spec": {"blocks": []},
                 "output_path": {
-                    "$from": "dependencies_by_name.DeriveResumeOutputPath.path"
+                    "$from": "dependencies_by_name.DeriveOutputPath.path"
                 },
             }
         },
@@ -6858,7 +6858,7 @@ def test_task_payload_from_record_resolves_task_level_path_reference() -> None:
     )
     context = {
         "dependencies_by_name": {
-            "DeriveResumeOutputPath": {
+            "DeriveOutputPath": {
                 "derive_output_filename": {"path": "artifacts/output.docx"}
             }
         },
