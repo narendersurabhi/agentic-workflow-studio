@@ -39,6 +39,10 @@ services:
       ORCHESTRATOR_RECOVER_PENDING: ${ORCHESTRATOR_RECOVER_PENDING:-true}
       ORCHESTRATOR_RECOVER_IDLE_MS: ${ORCHESTRATOR_RECOVER_IDLE_MS:-60000}
       JOB_RECOVERY_ENABLED: ${JOB_RECOVERY_ENABLED:-true}
+      CAPABILITY_MODE: ${CAPABILITY_MODE:-enabled}
+      CAPABILITY_REGISTRY_PATH: ${CAPABILITY_REGISTRY_PATH:-/app/config/capability_registry.yaml}
+      TOOL_HTTP_FETCH_ENABLED: ${TOOL_HTTP_FETCH_ENABLED:-false}
+      WORKER_MODE: ${WORKER_MODE:-llm}
     ports:
       - "18000:8000"
     depends_on:
@@ -51,6 +55,8 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       PLANNER_MODE: llm
+      CAPABILITY_MODE: ${CAPABILITY_MODE:-enabled}
+      CAPABILITY_REGISTRY_PATH: ${CAPABILITY_REGISTRY_PATH:-/app/config/capability_registry.yaml}
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL}
@@ -70,6 +76,8 @@ services:
       dockerfile: services/worker/Dockerfile
     environment:
       REDIS_URL: redis://redis:6379/0
+      CAPABILITY_MODE: ${CAPABILITY_MODE:-enabled}
+      CAPABILITY_REGISTRY_PATH: ${CAPABILITY_REGISTRY_PATH:-/app/config/capability_registry.yaml}
       TOOL_HTTP_FETCH_ENABLED: "false"
       TOOL_HTTP_FETCH_ALLOWLIST: ${TOOL_HTTP_FETCH_ALLOWLIST:-}
       TOOL_OUTPUT_SIZE_CAP: ${TOOL_OUTPUT_SIZE_CAP:-50000}
