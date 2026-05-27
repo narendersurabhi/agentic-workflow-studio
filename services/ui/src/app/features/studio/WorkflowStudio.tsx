@@ -5957,7 +5957,11 @@ export default function WorkflowStudio() {
           </div>
         </div>
         {!isMinimized ? (
-          <div className={`min-h-0 flex-1 overflow-auto ${options.bodyClassName || ""}`.trim()}>
+          <div
+            className={`studio-contrast-surface min-h-0 flex-1 overflow-auto ${
+              options.bodyClassName || ""
+            }`.trim()}
+          >
             {content}
           </div>
         ) : null}
@@ -6041,7 +6045,11 @@ export default function WorkflowStudio() {
           </div>
         </div>
         {!isMinimized ? (
-          <div className={`min-h-0 flex-1 overflow-auto ${options.bodyClassName || ""}`.trim()}>
+          <div
+            className={`studio-contrast-surface min-h-0 flex-1 overflow-auto ${
+              options.bodyClassName || ""
+            }`.trim()}
+          >
             {content}
           </div>
         ) : null}
@@ -6695,7 +6703,7 @@ export default function WorkflowStudio() {
                         {!studioBottomTray.collapsed && activeBottomTrayDefinition ? (
                           <div
                             id={activeBottomTrayDefinition.panelDomId}
-                            className={`min-h-0 flex-1 overflow-auto ${
+                            className={`studio-contrast-surface min-h-0 flex-1 overflow-auto ${
                               activeBottomTrayDefinition.bodyClassName || ""
                             }`.trim()}
                           >
