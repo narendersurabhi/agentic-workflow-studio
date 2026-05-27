@@ -257,45 +257,40 @@ In-repo template:
 
 ## Local Development (Docker Compose)
 
-Prerequisites:
+**Prerequisites:** Docker Desktop or Docker Engine with Docker Compose.
 
-- Docker Desktop or Docker Engine with Docker Compose
-- `uv` for host-side quality checks (`make test`, `make lint`, `make typecheck`, eval targets)
-
-1. Create local env from template and set required OpenAI credentials.
+**1. Set up environment**
 
 ```bash
 cp .env.example .env
 ```
 
-Set at minimum:
+Set at minimum in `.env`:
 
 ```bash
 OPENAI_API_KEY=<your-key>
-OPENAI_MODEL=<your-model>
+OPENAI_MODEL=<your-model>   # e.g. gpt-4o
 ```
 
-Optional for Kubernetes or custom local setups that enable GitHub capabilities:
+Docker Compose runs the planner and worker in OpenAI-backed LLM mode, so these credentials are required for a functional local stack. GitHub capabilities are not included in the default Compose stack (`github-mcp` is omitted).
 
-```bash
-GITHUB_CLASSIC_TOKEN=<your-token>
-```
-
-Docker Compose runs the planner and worker in OpenAI-backed LLM mode, so these credentials are required for a functional local stack.
-GitHub capabilities are not part of the default Docker Compose workflow because the Compose stack does not include `github-mcp`.
-
-2. Start the stack.
+**2. Start the stack**
 
 ```bash
 make up
 ```
 
-3. Access services.
+**3. Open the app**
 
-- UI: `http://localhost:3002`
-- API: `http://localhost:18000`
+| Service | URL |
+|---|---|
+| UI | http://localhost:3002 |
+| API | http://localhost:18000 |
+| API docs | http://localhost:18000/docs |
 
-4. Run quality checks.
+---
+
+**Quality checks** (requires `uv` — no manual dependency install needed)
 
 ```bash
 make test
@@ -305,8 +300,6 @@ make eval-intent
 make eval-capability-search
 make eval-chat-boundary
 ```
-
-These Make targets now run through `uv`, so you do not need to preinstall `pytest`, `ruff`, `mypy`, or the Python runtime dependencies manually.
 
 ## Configuration
 
