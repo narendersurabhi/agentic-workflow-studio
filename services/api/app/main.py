@@ -6387,6 +6387,7 @@ def _generate_chat_boundary_decision(
 ) -> chat_contracts.ChatBoundaryDecision | None:
     if CHAT_RESPONSE_MODE != "answer_or_handoff" or _chat_response_provider is None:
         return None
+    chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     boundary_evidence = _build_chat_boundary_evidence(
         content=content,
         candidate_goal=candidate_goal,
@@ -6422,7 +6423,10 @@ def _generate_chat_boundary_decision(
                     "For chat_reply, exit_pending_to_chat, and meta_clarification, include assistant_response. "
                     "Do not choose execution_request just because the user wants a structured conversation or repeated turns."
                 ),
-                metadata={"component": "chat_boundary_decision"},
+                metadata={
+                    "component": "chat_boundary_decision",
+                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                },
             )
         )
     except Exception:  # noqa: BLE001
