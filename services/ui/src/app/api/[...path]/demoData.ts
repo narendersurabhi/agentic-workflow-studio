@@ -631,7 +631,7 @@ const userMemoryEntries = [
     user_id: USER_ID,
     payload: {
       audience: "product owners and implementation leads",
-      preferred_terms: ["workflow builder", "knowledge base", "run monitor"],
+      preferred_terms: ["Workflow Studio", "knowledge base", "run monitor"],
       avoid_terms: ["DAG", "operator chat"],
     },
     metadata: { source: "demo_seed" },
@@ -1064,7 +1064,7 @@ export async function demoResponse(
           chunk_id: `${document.document_id}#1`,
           document_id: document.document_id,
           source_uri: document.source_uri,
-          text: "Product-owner demos should show the workflow lifecycle: request, builder, readiness check, saved workflows, run monitor, knowledge, and context.",
+          text: "Product-owner demos should show the workflow lifecycle: run from prompt, Workflow Studio, readiness check, saved workflows, run monitor, knowledge, and context.",
           chunk_index: 1,
           metadata: { heading: "Demo guidance" },
         },

@@ -87,7 +87,7 @@ const DAG_CANVAS_ZOOM_MAX = 1.5;
 const DAG_CANVAS_ZOOM_STEP = 0.1;
 
 const initialStudioDraft = (): ComposerDraft => ({
-  summary: "Workflow Builder draft",
+  summary: "Workflow Studio draft",
   nodes: [],
   edges: [],
 });
@@ -805,7 +805,7 @@ const restorePersistedWorkflowDraft = (
       summary:
         typeof draft?.summary === "string" && draft.summary.trim()
           ? draft.summary
-          : fallbackGoal || "Workflow Builder draft",
+          : fallbackGoal || "Workflow Studio draft",
       nodes,
       edges: normalizeComposerEdges(nodes, normalizePersistedEdges(draft?.edges)),
     },
@@ -4018,7 +4018,7 @@ export default function WorkflowStudio() {
       : withWorkspaceUserContext(contextState.context);
     return {
       draft: {
-        summary: composerDraft.summary || "Workflow Builder draft",
+        summary: composerDraft.summary || "Workflow Studio draft",
         nodes: visualChainNodes.map((node) => ({
           id: node.id,
           taskName: node.taskName,
@@ -4051,7 +4051,7 @@ export default function WorkflowStudio() {
       : withWorkspaceUserContext(contextState.context);
     return {
       draft: {
-        summary: composerDraft.summary || "Workflow Builder draft",
+        summary: composerDraft.summary || "Workflow Studio draft",
         nodes: visualChainNodes.map((node) => ({
           id: node.id,
           taskName: node.taskName,
@@ -4083,7 +4083,7 @@ export default function WorkflowStudio() {
 
   const persistedWorkflowDraft = useMemo(
     () => ({
-      summary: composerDraft.summary || "Workflow Builder draft",
+      summary: composerDraft.summary || "Workflow Studio draft",
       goal: goal.trim() || undefined,
       contextJsonText: contextJson,
       nodePositions: composerNodePositions,
@@ -4472,7 +4472,7 @@ export default function WorkflowStudio() {
           method: savedWorkflowDefinition ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            title: composerDraft.summary || goal.trim() || "Workflow Builder draft",
+            title: composerDraft.summary || goal.trim() || "Workflow Studio draft",
             goal: goal.trim(),
             context_json: withWorkspaceUserContext(contextState.context),
             draft: persistedWorkflowDraft,
@@ -5037,7 +5037,7 @@ export default function WorkflowStudio() {
             Draft
           </div>
           <div className="mt-1 line-clamp-2 text-sm text-slate-100">
-            {composerDraft.summary.trim() || "Workflow Builder draft"}
+            {composerDraft.summary.trim() || "Workflow Studio draft"}
           </div>
         </div>
         <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
@@ -5093,7 +5093,7 @@ export default function WorkflowStudio() {
                 onChange={(event) =>
                   setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
                 }
-                placeholder="Workflow Builder draft"
+                placeholder="Workflow Studio draft"
               />
             </label>
             <label className="block">
@@ -6366,11 +6366,11 @@ export default function WorkflowStudio() {
   const studioShellTitle =
     activeStudioSurface === "workbench"
       ? "Process Flow Designer"
-      : `Workflow Builder: ${composerDraft.summary.trim() || "Pipeline Alpha"}`;
+      : `Workflow Studio: ${composerDraft.summary.trim() || "Pipeline Alpha"}`;
   const studioShellBreadcrumbLabel =
     activeStudioSurface === "workbench"
       ? "Process Flow Designer"
-      : composerDraft.summary.trim() || "Workflow Builder draft";
+      : composerDraft.summary.trim() || "Workflow Studio draft";
 
   return (
     <AppShell
@@ -6395,7 +6395,7 @@ export default function WorkflowStudio() {
                 }`}
                 onClick={() => switchStudioSurface(surface)}
               >
-                {surface === "workflow" ? "builder" : "canvas"}
+                {surface === "workflow" ? "studio" : "canvas"}
               </button>
             ))}
           </div>
@@ -6446,7 +6446,7 @@ export default function WorkflowStudio() {
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
-                      Workflow Builder
+                      Workflow Studio
                     </div>
                     <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
                       Process Flow Designer

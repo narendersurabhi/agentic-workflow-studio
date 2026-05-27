@@ -235,7 +235,7 @@ export default function ComponentsGalleryPage() {
       <ScreenHeader
         eyebrow="Agentic Workflow Studio"
         title="Node Component System Gallery"
-        description="Detailed views of shared node variants for the AI workflow builder. This page is the visual calibration surface for the Studio graph."
+        description="Detailed views of shared node variants for Workflow Studio. This page is the visual calibration surface for the Studio graph."
         activeScreen="components"
         compact
       />
