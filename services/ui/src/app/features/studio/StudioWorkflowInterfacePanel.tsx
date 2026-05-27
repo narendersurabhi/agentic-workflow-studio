@@ -26,7 +26,7 @@ type StudioWorkflowInterfacePanelProps = {
 };
 
 const interfacePanelClassName =
-  "h-full px-3 py-3 text-slate-100 [&_.border-slate-200]:border-white/10 [&_.border-slate-300]:border-white/12 [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-white/[0.04] [&_.bg-slate-100]:bg-white/[0.07] [&_.bg-white]:bg-white/[0.05] [&_.bg-sky-50]:bg-sky-400/10 [&_.bg-emerald-50]:bg-emerald-400/10 [&_.bg-rose-50]:bg-rose-400/10 [&_.text-slate-900]:text-white [&_.text-slate-800]:text-slate-100 [&_.text-slate-700]:text-slate-200 [&_.text-slate-600]:text-slate-300/82 [&_.text-slate-500]:text-slate-400 [&_.text-sky-700]:text-sky-100 [&_.text-emerald-700]:text-emerald-100 [&_.text-rose-700]:text-rose-100 [&_input]:text-white [&_select]:text-white [&_textarea]:text-white [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-sky-100";
+  "h-full px-3 py-3 text-text-hi [&_.border-slate-200]:border-subtle [&_.border-slate-300]:border-subtle [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-surface-1 [&_.bg-slate-100]:bg-surface-1 [&_.bg-white]:bg-surface-1 [&_.bg-sky-50]:bg-accent-sky [&_.bg-emerald-50]:bg-accent-emerald [&_.bg-rose-50]:bg-accent-rose [&_.text-slate-900]:text-text-hi [&_.text-slate-800]:text-text-hi [&_.text-slate-700]:text-text-md [&_.text-slate-600]:text-text-md [&_.text-text-lo]:text-text-lo [&_.text-sky-700]:text-text-sky-token [&_.text-emerald-700]:text-text-emerald-token [&_.text-rose-700]:text-text-rose-token [&_input]:text-text-hi [&_select]:text-text-hi [&_textarea]:text-text-hi [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-text-sky-token";
 
 const workflowBindingMode = (
   binding: WorkflowBinding | null | undefined,
@@ -111,11 +111,11 @@ export default function StudioWorkflowInterfacePanel({
     <section className={interfacePanelClassName}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100/68">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-sky-token">
             Workflow Inputs
           </div>
-          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-white">Workflow Request Contract</h2>
-          <p className="mt-1.5 max-w-3xl text-sm leading-5 text-slate-300/78">
+          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-text-hi">Workflow Request Contract</h2>
+          <p className="mt-1.5 max-w-3xl text-sm leading-5 text-text-md">
             Define the information this workflow needs once, then reuse it across the steps instead
             of re-entering raw context.
           </p>
@@ -126,10 +126,10 @@ export default function StudioWorkflowInterfacePanel({
         <div>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                 Inputs
               </div>
-              <div className="mt-1 text-xs text-slate-500">
+              <div className="mt-1 text-xs text-text-lo">
                 External values the workflow expects at run time.
               </div>
             </div>
@@ -142,7 +142,7 @@ export default function StudioWorkflowInterfacePanel({
           </div>
           <div className="mt-3 space-y-3">
             {workflowInterface.inputs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
                 No workflow inputs yet.
               </div>
             ) : null}
@@ -229,7 +229,7 @@ export default function StudioWorkflowInterfacePanel({
                   </div>
 
                   <div className="mt-3 grid gap-2">
-                    <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-lo">
                       Binding
                     </label>
                     <select
@@ -365,10 +365,10 @@ export default function StudioWorkflowInterfacePanel({
         <div>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                 Variables
               </div>
-              <div className="mt-1 text-xs text-slate-500">
+              <div className="mt-1 text-xs text-text-lo">
                 Derived values resolved once and reused across node bindings.
               </div>
             </div>
@@ -381,7 +381,7 @@ export default function StudioWorkflowInterfacePanel({
           </div>
           <div className="mt-3 space-y-3">
             {workflowInterface.variables.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
                 No workflow variables yet.
               </div>
             ) : null}
@@ -591,10 +591,10 @@ export default function StudioWorkflowInterfacePanel({
         <div>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
                 Outputs
               </div>
-              <div className="mt-1 text-xs text-slate-500">
+              <div className="mt-1 text-xs text-text-lo">
                 Public outputs you expect callers or downstream systems to consume.
               </div>
             </div>
@@ -607,7 +607,7 @@ export default function StudioWorkflowInterfacePanel({
           </div>
           <div className="mt-3 space-y-3">
             {workflowInterface.outputs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
                 No workflow outputs yet.
               </div>
             ) : null}

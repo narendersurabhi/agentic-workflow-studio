@@ -37,19 +37,19 @@ type StudioWorkflowLibraryProps = {
 };
 
 const libraryPanelClassName =
-  "studio-contrast-surface rounded-[32px] border border-[#22304a] bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(9,17,27,0.96))] p-4 text-slate-100 shadow-[0_24px_60px_rgba(2,8,23,0.24)] [&_.border-slate-200]:border-white/10 [&_.border-slate-300]:border-white/12 [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-amber-200]:border-amber-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-white/[0.04] [&_.bg-slate-100]:bg-white/[0.07] [&_.bg-slate-200]:bg-white/[0.07] [&_.bg-white]:bg-white/[0.05] [&_.bg-sky-50]:bg-sky-400/10 [&_.bg-emerald-50]:bg-emerald-400/10 [&_.bg-amber-50]:bg-amber-400/10 [&_.bg-amber-100]:bg-amber-400/12 [&_.bg-rose-50]:bg-rose-400/10 [&_.bg-rose-100]:bg-rose-400/12 [&_.bg-sky-100]:bg-sky-400/12 [&_.bg-emerald-100]:bg-emerald-400/12 [&_.text-slate-900]:text-white [&_.text-slate-700]:text-slate-200 [&_.text-slate-600]:text-slate-300/82 [&_.text-slate-500]:text-slate-400 [&_.text-amber-700]:text-amber-100 [&_.text-amber-800]:text-amber-100 [&_.text-amber-900]:text-amber-50 [&_.text-rose-700]:text-rose-100 [&_.text-rose-800]:text-rose-100 [&_.text-rose-900]:text-rose-50 [&_.text-sky-700]:text-sky-100 [&_.text-emerald-700]:text-emerald-100 [&_article]:border-white/10 [&_article]:bg-white/[0.04]";
+  "rounded-[32px] border border-subtle bg-gradient-panel p-4 text-text-hi shadow-card";
 const librarySectionHeadingClassName =
-  "text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300/75";
+  "text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md";
 const libraryCardClassName =
-  "rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
+  "rounded-2xl border border-subtle bg-surface-1 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 const libraryActiveSkyCardClassName =
-  "rounded-2xl border border-sky-300/28 bg-sky-400/10 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
+  "rounded-2xl border border-sky-300/28 bg-accent-sky px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 const libraryActiveEmeraldCardClassName =
-  "rounded-2xl border border-emerald-300/28 bg-emerald-400/10 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
+  "rounded-2xl border border-emerald-300/28 bg-accent-emerald px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 const libraryPillClassName =
-  "rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-slate-200";
+  "rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-md";
 const libraryActionButtonClassName =
-  "rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-sky-300/40 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50";
+  "rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-hi transition hover:border-sky-300/40 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50";
 
 export default function StudioWorkflowLibrary({
   workflowDefinitions,
@@ -82,35 +82,35 @@ export default function StudioWorkflowLibrary({
     <section className={libraryPanelClassName}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-100/68">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-text-sky-token">
             Saved Workflows
           </div>
-          <h3 className="mt-1 font-display text-2xl text-white">Workflow Versions</h3>
+          <h3 className="mt-1 font-display text-2xl text-text-hi">Workflow Versions</h3>
         </div>
         <button
-          className="rounded-full border border-white/12 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-300/40 hover:bg-white/[0.08]"
+          className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/40 hover:bg-surface-1"
           onClick={onRefresh}
         >
           Refresh
         </button>
       </div>
 
-      <p className="mt-3 text-sm leading-6 text-slate-300/82">
+      <p className="mt-3 text-sm leading-6 text-text-md">
         Manage reusable workflow definitions, versions, triggers, and published automations.
       </p>
 
       <div className="mt-4">
         <div className={librarySectionHeadingClassName}>Definitions</div>
         {workflowDefinitionsLoading ? (
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="mt-3 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-md">
             Loading saved workflows...
           </div>
         ) : workflowDefinitionsError ? (
-          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mt-3 rounded-2xl border border-subtle bg-accent-rose px-4 py-3 text-sm text-text-rose-token">
             {workflowDefinitionsError}
           </div>
         ) : workflowDefinitions.length === 0 ? (
-          <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
             Save a Studio draft to start building version history.
           </div>
         ) : (
@@ -121,7 +121,7 @@ export default function StudioWorkflowLibrary({
                 <article
                   key={definition.id}
                   className={`${isActive ? libraryActiveSkyCardClassName : libraryCardClassName} ${
-                    onSelectDefinition ? "cursor-pointer transition hover:border-sky-300/40 hover:bg-white/[0.06]" : ""
+                    onSelectDefinition ? "cursor-pointer transition hover:border-sky-300/40 hover:bg-surface-1" : ""
                   }`}
                   onClick={() => {
                     onSelectDefinition?.(definition);
@@ -129,20 +129,20 @@ export default function StudioWorkflowLibrary({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-slate-900">
+                      <div className="truncate text-sm font-semibold text-text-hi">
                         {definition.title}
                       </div>
-                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">
+                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-md">
                         {definition.goal || "No goal recorded for this workflow."}
                       </div>
                     </div>
                     {isActive ? (
-                      <span className="rounded-full border border-sky-300/25 bg-sky-400/14 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-100">
+                      <span className="rounded-full border border-sky-300/25 bg-accent-sky px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-sky-token">
                         Active
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                  <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-text-lo">
                     <span className={libraryPillClassName}>
                       updated {formatTimestamp(definition.updated_at)}
                     </span>
@@ -163,7 +163,7 @@ export default function StudioWorkflowLibrary({
                       {openDefinitionLabel}
                     </button>
                     <button
-                      className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-400 hover:text-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={(event) => {
                         event.stopPropagation();
                         onDeleteDefinition(definition);
@@ -192,19 +192,19 @@ export default function StudioWorkflowLibrary({
           </button>
         </div>
         {!activeWorkflowDefinitionId ? (
-          <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
             Open a saved workflow definition before configuring triggers.
           </div>
         ) : workflowTriggersLoading ? (
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="mt-3 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-md">
             Loading triggers...
           </div>
         ) : workflowTriggersError ? (
-          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mt-3 rounded-2xl border border-subtle bg-accent-rose px-4 py-3 text-sm text-text-rose-token">
             {workflowTriggersError}
           </div>
         ) : workflowTriggers.length === 0 ? (
-          <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
             No triggers yet. Create a manual trigger to invoke the latest published version.
           </div>
         ) : (
@@ -216,18 +216,18 @@ export default function StudioWorkflowLibrary({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-slate-900">
+                    <div className="truncate text-sm font-semibold text-text-hi">
                       {trigger.title}
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                    <div className="mt-1 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-text-lo">
                       <span className={libraryPillClassName}>
                         {trigger.trigger_type}
                       </span>
                       <span
                         className={`rounded-full border px-2.5 py-1 ${
                           trigger.enabled
-                            ? "border-emerald-300/25 bg-emerald-400/14 text-emerald-100"
-                            : "border-white/10 bg-white/[0.06] text-slate-300/82"
+                            ? "border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
+                            : "border-subtle bg-surface-1 text-text-md"
                         }`}
                       >
                         {trigger.enabled ? "enabled" : "disabled"}
@@ -251,19 +251,19 @@ export default function StudioWorkflowLibrary({
       <div className="mt-6">
         <div className={librarySectionHeadingClassName}>Version History</div>
         {!activeWorkflowDefinitionId ? (
-          <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
             Open a saved workflow definition to browse its published versions.
           </div>
         ) : workflowVersionsLoading ? (
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="mt-3 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-md">
             Loading version history...
           </div>
         ) : workflowVersionsError ? (
-          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mt-3 rounded-2xl border border-subtle bg-accent-rose px-4 py-3 text-sm text-text-rose-token">
             {workflowVersionsError}
           </div>
         ) : workflowVersions.length === 0 ? (
-          <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
             Publish a version to make this workflow runnable and restorable.
           </div>
         ) : (
@@ -275,7 +275,7 @@ export default function StudioWorkflowLibrary({
                   key={version.id}
                   className={`${isActive ? libraryActiveEmeraldCardClassName : libraryCardClassName} ${
                     onSelectVersion
-                      ? "cursor-pointer transition hover:border-emerald-300/40 hover:bg-white/[0.06]"
+                      ? "cursor-pointer transition hover:border-emerald-300/40 hover:bg-surface-1"
                       : ""
                   }`}
                   onClick={() => {
@@ -284,20 +284,20 @@ export default function StudioWorkflowLibrary({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">
+                      <div className="text-sm font-semibold text-text-hi">
                         v{version.version_number}
                       </div>
-                      <div className="mt-1 text-xs text-slate-500">
+                      <div className="mt-1 text-xs text-text-lo">
                         {formatTimestamp(version.created_at)}
                       </div>
                     </div>
                     {isActive ? (
-                      <span className="rounded-full border border-emerald-300/25 bg-emerald-400/14 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-100">
+                      <span className="rounded-full border border-emerald-300/25 bg-accent-emerald px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-emerald-token">
                         Loaded
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-3 line-clamp-2 text-xs leading-5 text-slate-600">
+                  <div className="mt-3 line-clamp-2 text-xs leading-5 text-text-md">
                     {version.goal || version.title || "Published workflow version"}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -321,19 +321,19 @@ export default function StudioWorkflowLibrary({
       <div className="mt-6">
         <div className={librarySectionHeadingClassName}>Run History</div>
         {!activeWorkflowDefinitionId ? (
-          <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
             Open a saved workflow definition to browse its run history.
           </div>
         ) : workflowRunsLoading ? (
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="mt-3 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-md">
             Loading workflow runs...
           </div>
         ) : workflowRunsError ? (
-          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mt-3 rounded-2xl border border-subtle bg-accent-rose px-4 py-3 text-sm text-text-rose-token">
             {workflowRunsError}
           </div>
         ) : workflowRuns.length === 0 ? (
-          <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
             No runs yet. Publish and run a workflow, or invoke a trigger, to populate history.
           </div>
         ) : (
@@ -345,26 +345,26 @@ export default function StudioWorkflowLibrary({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-slate-900">{run.title}</div>
-                    <div className="mt-1 text-xs text-slate-500">
+                    <div className="truncate text-sm font-semibold text-text-hi">{run.title}</div>
+                    <div className="mt-1 text-xs text-text-lo">
                       {formatTimestamp(run.updated_at || run.created_at)}
                     </div>
                   </div>
                   <span
                     className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
                       run.job_status === "succeeded"
-                        ? "border border-emerald-300/25 bg-emerald-400/14 text-emerald-100"
+                        ? "border border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
                         : run.job_status === "failed"
-                          ? "border border-rose-300/25 bg-rose-400/14 text-rose-100"
+                          ? "border border-rose-300/25 bg-accent-rose text-text-rose-token"
                           : run.job_status === "running"
-                            ? "border border-sky-300/25 bg-sky-400/14 text-sky-100"
-                            : "border border-white/10 bg-white/[0.06] text-slate-300/82"
+                            ? "border border-sky-300/25 bg-accent-sky text-text-sky-token"
+                            : "border border-subtle bg-surface-1 text-text-md"
                     }`}
                   >
                     {run.job_status || "queued"}
                   </span>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-text-lo">
                   <span className={libraryPillClassName}>
                     job {run.job_id.slice(0, 8)}
                   </span>
@@ -381,18 +381,18 @@ export default function StudioWorkflowLibrary({
                   ) : null}
                 </div>
                 {run.latest_task_error ? (
-                  <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs leading-5 text-rose-700">
-                    <div className="font-semibold uppercase tracking-[0.14em] text-rose-800">
+                  <div className="mt-3 rounded-2xl border border-subtle bg-accent-rose px-3 py-3 text-xs leading-5 text-text-rose-token">
+                    <div className="font-semibold uppercase tracking-[0.14em]">
                       Latest Task Error
                     </div>
-                    <div className="mt-1 text-rose-900">
+                    <div className="mt-1">
                       {run.latest_task_name ? `${run.latest_task_name}: ` : null}
                       {run.latest_task_error}
                     </div>
                   </div>
                 ) : run.job_error ? (
-                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-800">
-                    <div className="font-semibold uppercase tracking-[0.14em] text-amber-900">
+                  <div className="mt-3 rounded-2xl border border-subtle bg-accent-amber px-3 py-3 text-xs leading-5 text-text-amber-token">
+                    <div className="font-semibold uppercase tracking-[0.14em]">
                       Run Error
                     </div>
                     <div className="mt-1">{run.job_error}</div>

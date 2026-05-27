@@ -4984,13 +4984,13 @@ export default function WorkflowStudio() {
   };
 
   const workflowSetupPanel = (
-    <section className="px-3 py-3 text-slate-100">
+    <section className="px-3 py-3 text-text-hi">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100/68">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-sky-token">
             Workflow Setup
           </div>
-          <h2 className="mt-1 text-base font-semibold tracking-[-0.02em] text-white">
+          <h2 className="mt-1 text-base font-semibold tracking-[-0.02em] text-text-hi">
             Goal, context, and validation
           </h2>
         </div>
@@ -4998,8 +4998,8 @@ export default function WorkflowStudio() {
           <span
             className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
               goal.trim()
-                ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-200"
-                : "border-white/10 bg-white/[0.05] text-slate-200"
+                ? "border-emerald-300/25 bg-accent-emerald text-emerald-200"
+                : "border-subtle bg-surface-1 text-text-md"
             }`}
           >
             {goal.trim() ? "goal set" : "goal empty"}
@@ -5007,15 +5007,15 @@ export default function WorkflowStudio() {
           <span
             className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
               contextState.invalid
-                ? "border-rose-300/25 bg-rose-400/12 text-rose-200"
-                : "border-sky-300/25 bg-sky-400/12 text-sky-100"
+                ? "border-rose-300/25 bg-accent-rose text-rose-200"
+                : "border-sky-300/25 bg-accent-sky text-text-sky-token"
             }`}
           >
             {contextState.invalid ? "json invalid" : "json ready"}
           </span>
           <button
             type="button"
-            className="rounded-full border border-white/10 bg-slate-950/16 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-white/16 hover:bg-slate-950/24"
+            className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-surface-1"
             onClick={() => setWorkflowSetupExpanded((prev) => !prev)}
           >
             {workflowSetupExpanded ? "Hide Setup" : "Expand Setup"}
@@ -5024,46 +5024,46 @@ export default function WorkflowStudio() {
       </div>
 
       <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
-        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
             Goal
           </div>
-          <div className="mt-1 line-clamp-2 text-sm text-slate-100">
+          <div className="mt-1 line-clamp-2 text-sm text-text-hi">
             {goal.trim() || "Set the workflow objective."}
           </div>
         </div>
-        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
             Draft
           </div>
-          <div className="mt-1 line-clamp-2 text-sm text-slate-100">
+          <div className="mt-1 line-clamp-2 text-sm text-text-hi">
             {composerDraft.summary.trim() || "Workflow Studio draft"}
           </div>
         </div>
-        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
             Context User
           </div>
-          <div className="mt-1 truncate text-sm text-slate-100">
+          <div className="mt-1 truncate text-sm text-text-hi">
             {workspaceUserId.trim() || "Not set"}
           </div>
         </div>
-        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
             Context Paths
           </div>
-          <div className="mt-1 text-sm text-slate-100">
+          <div className="mt-1 text-sm text-text-hi">
             {contextState.invalid ? "Unavailable" : `${contextPathSuggestions.length} detected`}
           </div>
         </div>
-        <div className="rounded-2xl border border-white/8 bg-slate-950/14 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/58">
+        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
             Execution Mode
           </div>
-          <div className="mt-1 text-sm text-slate-100">
+          <div className="mt-1 text-sm text-text-hi">
             {workflowRuntimeSettings.executionMode === "adaptive" ? "Adaptive" : "Static"}
           </div>
-          <div className="mt-1 text-[11px] text-slate-300/60">
+          <div className="mt-1 text-[11px] text-text-md">
             Max replans {workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
           </div>
         </div>
@@ -5073,22 +5073,22 @@ export default function WorkflowStudio() {
         <div className="mt-3 space-y-3 border-t border-white/8 pt-3">
           <div className="grid gap-3 lg:grid-cols-4">
             <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                 Goal
               </div>
               <input
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
                 value={goal}
                 onChange={(event) => setGoal(event.target.value)}
                 placeholder="Generate a document pipeline with validation and render output"
               />
             </label>
             <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                 Draft Summary
               </div>
               <input
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
                 value={composerDraft.summary}
                 onChange={(event) =>
                   setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
@@ -5097,26 +5097,26 @@ export default function WorkflowStudio() {
               />
             </label>
             <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                 Context User ID
               </div>
               <input
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-300/42 focus:border-sky-300/40 focus:bg-slate-950/28"
+                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
                 value={workspaceUserId}
                 onChange={(event) => setWorkspaceUserId(event.target.value)}
                 placeholder="narendersurabhi"
               />
-              <div className="mt-2 text-xs leading-5 text-slate-200/62">
+              <div className="mt-2 text-xs leading-5 text-text-md">
                 User-scoped memory bindings inherit this id automatically unless a node overrides it
                 explicitly.
               </div>
             </label>
             <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                 Execution Mode
               </div>
               <select
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/40 focus:bg-slate-950/28"
+                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
                 value={workflowRuntimeSettings.executionMode || "static"}
                 onChange={(event) =>
                   setWorkflowRuntimeSettings((prev) => ({
@@ -5130,21 +5130,21 @@ export default function WorkflowStudio() {
                 <option value="static">Static</option>
                 <option value="adaptive">Adaptive</option>
               </select>
-              <div className="mt-2 text-xs leading-5 text-slate-200/62">
+              <div className="mt-2 text-xs leading-5 text-text-md">
                 Adaptive mode only affects published workflow runs. Draft compile and preflight stay deterministic.
               </div>
             </label>
           </div>
 
           <label className="block max-w-xs">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
               Max Adaptive Replans
             </div>
             <input
               type="number"
               min={0}
               max={10}
-              className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/18 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/40 focus:bg-slate-950/28"
+              className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
               value={workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
               onChange={(event) =>
                 setWorkflowRuntimeSettings((prev) => ({
@@ -5155,22 +5155,22 @@ export default function WorkflowStudio() {
                 }))
               }
             />
-            <div className="mt-2 text-xs leading-5 text-slate-200/62">
+            <div className="mt-2 text-xs leading-5 text-text-md">
               Used only when execution mode is adaptive.
             </div>
           </label>
 
           <label className="block">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/72">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                 Context JSON
               </div>
-              <div className="text-xs text-slate-300/55">
+              <div className="text-xs text-text-md">
                 {contextState.invalid ? "Invalid JSON" : "Object ready"}
               </div>
             </div>
             <textarea
-              className="mt-1 min-h-[180px] w-full rounded-[18px] border border-white/8 bg-[#233142] px-3 py-3 font-mono text-xs text-slate-100 outline-none transition placeholder:text-slate-400/40 focus:border-sky-300/40 focus:bg-[#1c2939]"
+              className="mt-1 min-h-[180px] w-full rounded-[18px] border border-white/8 bg-[#233142] px-3 py-3 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-[#1c2939]"
               value={contextJson}
               onChange={(event) => setContextJson(event.target.value)}
             />
@@ -5237,16 +5237,16 @@ export default function WorkflowStudio() {
   );
 
   const workflowLibraryLauncherPanel = (
-    <section className="flex h-full flex-col px-3 py-3 text-slate-100">
+    <section className="flex h-full flex-col px-3 py-3 text-text-hi">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-100/68">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-text-sky-token">
             Saved Workflows
           </div>
-          <h3 className="mt-1 text-2xl text-white">Workflow Launcher</h3>
+          <h3 className="mt-1 text-2xl text-text-hi">Workflow Launcher</h3>
         </div>
         <button
-          className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-sky-300/40 hover:bg-white/[0.08]"
+          className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-hi transition hover:border-sky-300/40 hover:bg-surface-1"
           onClick={() => {
             void refreshWorkflowDefinitions();
             if (activeWorkflowDefinitionId) {
@@ -5260,61 +5260,61 @@ export default function WorkflowStudio() {
         </button>
       </div>
 
-      <p className="mt-3 text-sm leading-6 text-slate-300/82">
+      <p className="mt-3 text-sm leading-6 text-text-md">
         Keep Studio focused on editing. Use the full Workflows page for version history, triggers,
         run history, and draft management.
       </p>
 
       <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-        <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-slate-100">
+        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
           drafts {workflowDefinitions.length}
         </span>
-        <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-slate-100">
+        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
           versions {workflowVersions.length}
         </span>
-        <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-slate-100">
+        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
           runs {workflowRuns.length}
         </span>
-        <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-slate-100">
+        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
           {activeWorkflowVersionId ? "version linked" : "draft only"}
         </span>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300/60">
+      <div className="mt-4 rounded-2xl border border-subtle bg-surface-1 px-3 py-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
           Current Workflow
         </div>
         {savedWorkflowDefinition ? (
           <>
-            <div className="mt-2 truncate text-sm font-semibold text-white">
+            <div className="mt-2 truncate text-sm font-semibold text-text-hi">
               {savedWorkflowDefinition.title}
             </div>
-            <div className="mt-1 text-xs leading-5 text-slate-300/76">
+            <div className="mt-1 text-xs leading-5 text-text-md">
               {savedWorkflowDefinition.goal || "No goal recorded for this workflow."}
             </div>
-            <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">
-              <span className="rounded-full bg-white/[0.06] px-2.5 py-1">
+            <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-text-lo">
+              <span className="rounded-full bg-surface-1 px-2.5 py-1">
                 updated {formatTimestamp(savedWorkflowDefinition.updated_at)}
               </span>
-              <span className="rounded-full bg-white/[0.06] px-2.5 py-1">
+              <span className="rounded-full bg-surface-1 px-2.5 py-1">
                 {activeWorkflowVersionId ? `version ${activeWorkflowVersionId.slice(0, 8)}` : "draft"}
               </span>
             </div>
           </>
         ) : (
-          <div className="mt-2 text-sm leading-6 text-slate-300/72">
+          <div className="mt-2 text-sm leading-6 text-text-md">
             Save a draft or open one from Workflows to make this Studio session shareable.
           </div>
         )}
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300/75">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
           Recent Drafts
         </div>
         <Link
           href="/workflows"
-          className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+          className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
         >
           Open Workflows
         </Link>
@@ -5322,15 +5322,15 @@ export default function WorkflowStudio() {
 
       <div className="mt-3 flex-1 space-y-2 overflow-auto pr-1">
         {workflowDefinitionsLoading ? (
-          <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-sm text-slate-300/72">
+          <div className="rounded-2xl border border-subtle bg-surface-1 px-3 py-3 text-sm text-text-md">
             Loading saved workflows...
           </div>
         ) : workflowDefinitionsError ? (
-          <div className="rounded-2xl border border-rose-300/24 bg-rose-400/10 px-3 py-3 text-sm text-rose-100">
+          <div className="rounded-2xl border border-rose-300/24 bg-accent-rose px-3 py-3 text-sm text-text-rose-token">
             {workflowDefinitionsError}
           </div>
         ) : workflowDefinitions.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/12 bg-white/[0.03] px-3 py-4 text-sm text-slate-300/72">
+          <div className="rounded-2xl border border-dashed border-subtle bg-surface-1 px-3 py-4 text-sm text-text-md">
             No saved workflows yet. Save this draft, then use Workflows for deeper history and
             management.
           </div>
@@ -5342,31 +5342,31 @@ export default function WorkflowStudio() {
                 key={definition.id}
                 className={`rounded-2xl border px-3 py-3 ${
                   isActive
-                    ? "border-sky-300/24 bg-sky-400/10"
-                    : "border-white/10 bg-white/[0.04]"
+                    ? "border-sky-300/24 bg-accent-sky"
+                    : "border-subtle bg-surface-1"
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-white">
+                    <div className="truncate text-sm font-semibold text-text-hi">
                       {definition.title}
                     </div>
-                    <div className="mt-1 text-xs text-slate-300/70">
+                    <div className="mt-1 text-xs text-text-md">
                       updated {formatTimestamp(definition.updated_at)}
                     </div>
                   </div>
                   {isActive ? (
-                    <span className="rounded-full border border-sky-300/24 bg-sky-400/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-100">
+                    <span className="rounded-full border border-sky-300/24 bg-accent-sky px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-sky-token">
                       Active
                     </span>
                   ) : null}
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-3">
-                  <div className="line-clamp-2 text-xs leading-5 text-slate-300/76">
+                  <div className="line-clamp-2 text-xs leading-5 text-text-md">
                     {definition.goal || "No goal recorded for this workflow."}
                   </div>
                   <button
-                    className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                    className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
                     onClick={() => restoreWorkflowDefinition(definition)}
                   >
                     Open
@@ -5916,7 +5916,7 @@ export default function WorkflowStudio() {
       <div
         id={options.panelDomId}
         key={`docked-studio-panel-${panelId}`}
-        className="flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(37,49,61,0.86),rgba(16,24,34,0.9))] shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl"
+        className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl"
       >
         <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.46)] px-3 py-2">
           <div className="flex items-center gap-3">
@@ -5936,21 +5936,21 @@ export default function WorkflowStudio() {
                 onClick={() => restoreFloatingStudioPanel(panelId)}
               />
             </div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-100">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
               {title}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-white/16 hover:bg-white/[0.1]"
+              className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-white/[0.1]"
               onClick={() => toggleFloatingStudioPanelMode(panelId)}
             >
               Float
             </button>
             {renderStudioPanelActionMenu(panelId)}
             {options.badge ? (
-              <div className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+              <div className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
                 {options.badge}
               </div>
             ) : null}
@@ -5958,7 +5958,7 @@ export default function WorkflowStudio() {
         </div>
         {!isMinimized ? (
           <div
-            className={`studio-contrast-surface min-h-0 flex-1 overflow-auto ${
+            className={`min-h-0 flex-1 overflow-auto ${
               options.bodyClassName || ""
             }`.trim()}
           >
@@ -5984,7 +5984,7 @@ export default function WorkflowStudio() {
           floatingStudioPanelRefs.current[panelId] = node;
         }}
         key={`floating-studio-panel-${panelId}`}
-        className="pointer-events-auto absolute flex flex-col overflow-hidden rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(40,53,67,0.62),rgba(19,28,39,0.72))] shadow-[0_28px_64px_rgba(15,23,42,0.34)] backdrop-blur-xl"
+        className="studio-contrast-surface pointer-events-auto absolute flex flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-mid shadow-[0_28px_64px_rgba(15,23,42,0.34)] backdrop-blur-xl"
         style={{
           left: layout.x,
           top: layout.y,
@@ -6021,14 +6021,14 @@ export default function WorkflowStudio() {
                 onClick={() => restoreFloatingStudioPanel(panelId)}
               />
             </div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-100">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
               {title}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-white/16 hover:bg-white/[0.1]"
+              className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-white/[0.1]"
               onMouseDown={(event) => {
                 event.stopPropagation();
               }}
@@ -6038,7 +6038,7 @@ export default function WorkflowStudio() {
             </button>
             {renderStudioPanelActionMenu(panelId, { stopMouseDownPropagation: true })}
             {options.badge ? (
-              <div className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+              <div className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
                 {options.badge}
               </div>
             ) : null}
@@ -6046,7 +6046,7 @@ export default function WorkflowStudio() {
         </div>
         {!isMinimized ? (
           <div
-            className={`studio-contrast-surface min-h-0 flex-1 overflow-auto ${
+            className={`min-h-0 flex-1 overflow-auto ${
               options.bodyClassName || ""
             }`.trim()}
           >
@@ -6058,7 +6058,7 @@ export default function WorkflowStudio() {
             {FLOATING_STUDIO_PANEL_RESIZE_HANDLES.map((handle) => (
               <div
                 key={`${panelId}-${handle.direction}`}
-                className={`${handle.className} transition hover:bg-white/[0.06]`.trim()}
+                className={`${handle.className} transition hover:bg-surface-1`.trim()}
                 onMouseDown={(event) =>
                   beginFloatingStudioPanelResize(panelId, handle.direction, event)
                 }
@@ -6170,8 +6170,8 @@ export default function WorkflowStudio() {
           type="button"
           className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
             isOpen
-              ? "border-sky-300/35 bg-sky-400/18 text-sky-50"
-              : "border-white/10 bg-white/[0.06] text-slate-100 hover:border-white/16 hover:bg-white/[0.1]"
+              ? "border-sky-300/35 bg-accent-sky text-text-hi"
+              : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-white/[0.1]"
           }`}
           aria-label={`${getWorkspacePanelTitle(panelId)} menu`}
           aria-expanded={isOpen}
@@ -6182,7 +6182,7 @@ export default function WorkflowStudio() {
           Panel
         </button>
         {isOpen ? (
-          <div className="absolute right-0 top-full z-40 mt-2 w-44 overflow-hidden rounded-2xl border border-white/12 bg-[rgba(12,19,31,0.96)] p-1 shadow-[0_24px_48px_rgba(2,6,23,0.4)] backdrop-blur-xl">
+          <div className="absolute right-0 top-full z-40 mt-2 w-44 overflow-hidden rounded-2xl border border-subtle bg-[rgba(12,19,31,0.96)] p-1 shadow-[0_24px_48px_rgba(2,6,23,0.4)] backdrop-blur-xl">
             {STUDIO_PANEL_ALLOWED_DOCK_ZONES[panelId].map((dockZone) => {
               const isActiveDock =
                 current.mode === "docked" && current.dockZone === dockZone && !current.minimized;
@@ -6191,21 +6191,21 @@ export default function WorkflowStudio() {
                   key={`${panelId}-${dockZone}`}
                   type="button"
                   disabled={isActiveDock}
-                  className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:bg-white/[0.08] disabled:cursor-default disabled:opacity-45"
+                  className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:bg-surface-1 disabled:cursor-default disabled:opacity-45"
                   onClick={() => {
                     setFloatingStudioPanelDocked(panelId, dockZone);
                     setActiveStudioPanelMenuId(null);
                   }}
                 >
                   <span>{STUDIO_DOCK_ZONE_LABELS[dockZone]}</span>
-                  {isActiveDock ? <span className="text-sky-100/72">Active</span> : null}
+                  {isActiveDock ? <span className="text-text-sky-token">Active</span> : null}
                 </button>
               );
             })}
             <button
               type="button"
               disabled={current.mode === "floating" && !current.minimized}
-              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:bg-white/[0.08] disabled:cursor-default disabled:opacity-45"
+              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:bg-surface-1 disabled:cursor-default disabled:opacity-45"
               onClick={() => {
                 setFloatingStudioPanelFloating(panelId);
                 setActiveStudioPanelMenuId(null);
@@ -6216,7 +6216,7 @@ export default function WorkflowStudio() {
             <button
               type="button"
               disabled={current.minimized}
-              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:bg-white/[0.08] disabled:cursor-default disabled:opacity-45"
+              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:bg-surface-1 disabled:cursor-default disabled:opacity-45"
               onClick={() => {
                 setFloatingStudioPanelMinimized(panelId, true);
                 setActiveStudioPanelMenuId(null);
@@ -6226,7 +6226,7 @@ export default function WorkflowStudio() {
             </button>
             <button
               type="button"
-              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:bg-white/[0.08]"
+              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:bg-surface-1"
               onClick={() => {
                 restoreFloatingStudioPanel(panelId);
                 setActiveStudioPanelMenuId(null);
@@ -6391,15 +6391,15 @@ export default function WorkflowStudio() {
       ]}
       actions={
         <>
-          <div className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.04] p-1">
+          <div className="inline-flex items-center gap-1 rounded-xl border border-subtle bg-surface-1 p-1">
             {(["workflow", "workbench"] as StudioSurface[]).map((surface) => (
               <button
                 key={surface}
                 type="button"
                 className={`rounded-lg px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
                   activeStudioSurface === surface
-                    ? "bg-sky-400/18 text-sky-50"
-                    : "text-slate-100 hover:bg-white/[0.08]"
+                    ? "bg-accent-sky text-text-hi"
+                    : "text-text-hi hover:bg-surface-1"
                 }`}
                 onClick={() => switchStudioSurface(surface)}
               >
@@ -6410,27 +6410,27 @@ export default function WorkflowStudio() {
           {activeStudioSurface === "workflow" ? (
             <>
               <button
-                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
                 onClick={startFreshStudioDraft}
               >
                 New Workflow
               </button>
               <button
-                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={saveWorkflowDefinition}
                 disabled={workflowActionLoading !== null}
               >
                 {workflowActionLoading === "save" ? "Saving..." : "Save"}
               </button>
               <button
-                className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={publishWorkflowVersion}
                 disabled={workflowActionLoading !== null}
               >
                 {workflowActionLoading === "publish" ? "Publishing..." : "Publish"}
               </button>
               <button
-                className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={runWorkflowVersion}
                 disabled={workflowActionLoading !== null}
               >
@@ -6442,7 +6442,7 @@ export default function WorkflowStudio() {
       }
     >
       {activeStudioSurface === "workflow" && studioNotice ? (
-        <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-sky-400/10 px-4 py-3 text-sm text-sky-50">
+        <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {studioNotice}
         </div>
       ) : null}
@@ -6453,13 +6453,13 @@ export default function WorkflowStudio() {
               <div className="relative">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
                       Workflow Studio
                     </div>
-                    <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
+                    <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
                       Process Flow Designer
                     </h2>
-                    <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
+                    <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
                       Map business logic into clear steps, decisions, tools, and AI actions before
                       running the automation.
                     </p>
@@ -6470,8 +6470,8 @@ export default function WorkflowStudio() {
                       type="button"
                       className={`rounded-full border px-3 py-1 transition ${
                         studioWorkspaceMode === "focus_graph"
-                          ? "border-sky-300/35 bg-sky-400/18 text-sky-50"
-                          : "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                          ? "border-sky-300/35 bg-accent-sky text-text-hi"
+                          : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
                       }`}
                       onClick={toggleFocusGraphMode}
                     >
@@ -6479,25 +6479,25 @@ export default function WorkflowStudio() {
                     </button>
                     <button
                       type="button"
-                      className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100 transition hover:border-white/16 hover:bg-white/[0.08]"
+                      className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi transition hover:border-subtle hover:bg-surface-1"
                       onClick={resetFloatingStudioWorkspaceLayout}
                     >
                       reset layout
                     </button>
-                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                    <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                       steps {visualChainSummary.steps}
                     </span>
-                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                    <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                       edges {visualChainSummary.dagEdges}
                     </span>
-                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                    <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                       zoom {Math.round(dagCanvasZoom * 100)}%
                     </span>
                     <span
                       className={`rounded-full border px-3 py-1 ${
                         visualChainSummary.missingInputs > 0
-                          ? "border-rose-300/25 bg-rose-400/12 text-rose-100"
-                          : "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
+                          ? "border-rose-300/25 bg-accent-rose text-text-rose-token"
+                          : "border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
                       }`}
                     >
                       {visualChainSummary.missingInputs > 0
@@ -6510,13 +6510,13 @@ export default function WorkflowStudio() {
                 <div
                   ref={studioWorkspaceStageRef}
                   id="studio-graph-section"
-                  className={`relative mt-4 h-[calc(100vh-184px)] min-h-[980px] overflow-hidden rounded-[30px] bg-[linear-gradient(180deg,rgba(75,92,109,0.58),rgba(45,57,71,0.72))] shadow-[0_22px_56px_rgba(15,23,42,0.16)] ${
+                  className={`studio-contrast-surface relative mt-4 h-[calc(100vh-184px)] min-h-[980px] overflow-hidden rounded-[30px] bg-gradient-panel-mid shadow-[0_22px_56px_rgba(15,23,42,0.16)] ${
                     studioWorkspaceMode === "focus_graph"
                       ? "ring-2 ring-sky-300/25"
                       : "ring-1 ring-white/10"
                   }`}
                 >
-                  <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-100/58">
+                  <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-hi">
                     {studioWorkspaceMode === "focus_graph"
                       ? "Focus Graph active. Press F to restore your workspace."
                       : "Minimized panels collapse into the stage shelf so the graph stays clear"}
@@ -6591,7 +6591,7 @@ export default function WorkflowStudio() {
                       }}
                     >
                       <div
-                        className="absolute inset-y-0 right-0 z-20 w-2 cursor-ew-resize transition hover:bg-white/[0.08]"
+                        className="absolute inset-y-0 right-0 z-20 w-2 cursor-ew-resize transition hover:bg-surface-1"
                         onMouseDown={(event) =>
                           beginFloatingStudioPanelResize(dockedLeftPanelIds[0], "e", event)
                         }
@@ -6622,7 +6622,7 @@ export default function WorkflowStudio() {
                       }}
                     >
                       <div
-                        className="absolute inset-y-0 left-0 z-20 w-2 cursor-ew-resize transition hover:bg-white/[0.08]"
+                        className="absolute inset-y-0 left-0 z-20 w-2 cursor-ew-resize transition hover:bg-surface-1"
                         onMouseDown={(event) =>
                           beginFloatingStudioPanelResize(dockedRightPanelIds[0], "w", event)
                         }
@@ -6652,9 +6652,9 @@ export default function WorkflowStudio() {
                         height: bottomDockRect.height,
                       }}
                     >
-                      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(37,49,61,0.88),rgba(16,24,34,0.92))] shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl">
+                      <div className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl">
                         <div
-                          className="h-2 cursor-ns-resize transition hover:bg-white/[0.08]"
+                          className="h-2 cursor-ns-resize transition hover:bg-surface-1"
                           onMouseDown={beginStudioBottomTrayResize}
                           title="Resize bottom tray"
                         />
@@ -6669,8 +6669,8 @@ export default function WorkflowStudio() {
                                   type="button"
                                   className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
                                     isActive
-                                      ? "border-sky-300/35 bg-sky-400/18 text-sky-50"
-                                      : "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                                      ? "border-sky-300/35 bg-accent-sky text-text-hi"
+                                      : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
                                   }`}
                                   onClick={() =>
                                     setStudioBottomTray((prev) => ({
@@ -6682,7 +6682,7 @@ export default function WorkflowStudio() {
                                 >
                                   <span>{getWorkspacePanelTitle(panelId)}</span>
                                   {badge ? (
-                                    <span className="rounded-full border border-white/10 bg-white/[0.08] px-2 py-0.5 text-[9px] tracking-[0.18em] text-slate-200">
+                                    <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.18em] text-text-md">
                                       {badge}
                                     </span>
                                   ) : null}
@@ -6693,7 +6693,7 @@ export default function WorkflowStudio() {
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-white/16 hover:bg-white/[0.1]"
+                              className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-white/[0.1]"
                               onClick={toggleStudioBottomTrayCollapsed}
                             >
                               {studioBottomTray.collapsed ? "Expand" : "Collapse"}
@@ -6703,14 +6703,14 @@ export default function WorkflowStudio() {
                         {!studioBottomTray.collapsed && activeBottomTrayDefinition ? (
                           <div
                             id={activeBottomTrayDefinition.panelDomId}
-                            className={`studio-contrast-surface min-h-0 flex-1 overflow-auto ${
+                            className={`min-h-0 flex-1 overflow-auto ${
                               activeBottomTrayDefinition.bodyClassName || ""
                             }`.trim()}
                           >
                             {activeBottomTrayDefinition.content}
                           </div>
                         ) : (
-                          <div className="flex h-full items-center justify-between px-4 py-3 text-xs uppercase tracking-[0.18em] text-slate-300/68">
+                          <div className="flex h-full items-center justify-between px-4 py-3 text-xs uppercase tracking-[0.18em] text-text-md">
                             <span>
                               {activeBottomTrayPanelId
                                 ? `${getWorkspacePanelTitle(activeBottomTrayPanelId)} ready`
@@ -6733,8 +6733,8 @@ export default function WorkflowStudio() {
                         height: minimizedShelfRect.height,
                       }}
                     >
-                      <div className="flex h-full items-center gap-3 overflow-x-auto rounded-[22px] border border-white/10 bg-[rgba(9,16,27,0.52)] px-3 shadow-[0_18px_40px_rgba(15,23,42,0.2)] backdrop-blur-xl">
-                        <div className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-100/62">
+                      <div className="flex h-full items-center gap-3 overflow-x-auto rounded-[22px] border border-subtle bg-[rgba(9,16,27,0.52)] px-3 shadow-[0_18px_40px_rgba(15,23,42,0.2)] backdrop-blur-xl">
+                        <div className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-hi">
                           Minimized
                         </div>
                         <div className="flex min-w-0 items-center gap-2">
@@ -6745,18 +6745,18 @@ export default function WorkflowStudio() {
                               <button
                                 key={`minimized-panel-${panelId}`}
                                 type="button"
-                                className="flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/30 hover:bg-white/[0.11]"
+                                className="flex shrink-0 items-center gap-2 rounded-full border border-subtle bg-surface-1 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/30 hover:bg-surface-2"
                                 aria-label={`Restore ${title}`}
                                 title={`Restore ${title}`}
                                 onClick={() => setFloatingStudioPanelMinimized(panelId, false)}
                               >
                                 <span>{title}</span>
                                 {badge ? (
-                                  <span className="rounded-full border border-white/10 bg-white/[0.08] px-2 py-0.5 text-[9px] tracking-[0.18em] text-slate-200">
+                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.18em] text-text-md">
                                     {badge}
                                   </span>
                                 ) : null}
-                                <span className="text-[9px] tracking-[0.18em] text-sky-100/78">
+                                <span className="text-[9px] tracking-[0.18em] text-text-sky-token">
                                   Restore
                                 </span>
                               </button>

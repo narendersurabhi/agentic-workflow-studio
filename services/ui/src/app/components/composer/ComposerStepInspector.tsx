@@ -97,7 +97,7 @@ export default function ComposerStepInspector({
 }: ComposerStepInspectorProps) {
   if (!selectedDagNode) {
     return (
-      <div className="mt-2 rounded-lg border border-dashed border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-500">
+      <div className="mt-2 rounded-lg border border-dashed border-slate-200 bg-white px-2 py-2 text-[11px] text-text-lo">
         Click a node in the canvas to edit required input mappings.
       </div>
     );
@@ -107,11 +107,11 @@ export default function ComposerStepInspector({
     <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
             Step Inspector
           </div>
           <div className="text-xs font-semibold text-slate-800">{selectedDagNode.taskName}</div>
-          <div className="text-[11px] text-slate-500">{selectedDagNode.capabilityId}</div>
+          <div className="text-[11px] text-text-lo">{selectedDagNode.capabilityId}</div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -184,7 +184,7 @@ export default function ComposerStepInspector({
                     {status.status}
                   </span>
                 </div>
-                <div className="mt-1 text-[11px] text-slate-500">{status.detail}</div>
+                <div className="mt-1 text-[11px] text-text-lo">{status.detail}</div>
                 <div className="mt-1 flex items-center gap-2">
                   <label className="text-[11px] text-slate-600">Mode</label>
                   <select
@@ -319,7 +319,7 @@ export default function ComposerStepInspector({
           })}
         </div>
       ) : (
-        <div className="mt-2 text-[11px] text-slate-500">No required inputs for this node.</div>
+        <div className="mt-2 text-[11px] text-text-lo">No required inputs for this node.</div>
       )}
     </div>
   );
