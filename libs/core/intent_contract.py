@@ -1368,6 +1368,11 @@ def _segment_task_intent_compatible(segment_intent: str, task_intent: str) -> bo
     # output filename, before the final render/write step.
     if segment_intent == "generate" and task_intent == "transform":
         return True
+    # Generate segments can include a final confirmation/save step. Keyword
+    # inference often classifies tasks that mention "save" or "store" as io,
+    # but they legitimately belong to the generate workflow phase.
+    if segment_intent == "generate" and task_intent == "io":
+        return True
     return False
 
 

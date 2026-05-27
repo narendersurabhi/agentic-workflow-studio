@@ -645,6 +645,13 @@ def _ensure_job_inputs_for_request(
             capability = capability_map.get(tool_name)
             payload = tool_inputs.get(tool_name)
             payload = dict(payload) if isinstance(payload, dict) else {}
+            explicit_render_path = _explicit_render_path_for_request(tool_name, request.job_context)
+            if explicit_render_path:
+                existing_path = payload.get("path")
+                if not isinstance(existing_path, str) or not existing_path.strip():
+                    payload["path"] = explicit_render_path
+                    tool_inputs[tool_name] = payload
+                    changed = True
             projected_inputs = job_projection.project_explicit_inputs_for_tool(
                 tool_name,
                 request.job_payload,
@@ -699,6 +706,21 @@ def _ensure_job_inputs_for_request(
         else:
             updated_tasks.append(task)
     return plan.model_copy(update={"tasks": updated_tasks})
+
+
+def _explicit_render_path_for_request(
+    request_id: str,
+    job_context: Mapping[str, Any] | None,
+) -> str:
+    if not planner_contracts.is_render_request_id(request_id) or not isinstance(
+        job_context, Mapping
+    ):
+        return ""
+    for key in ("path", "output_path", "filename", "file_name", "output_filename"):
+        value = job_context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _ensure_default_value_markers(plan: models.PlanCreate, job: models.Job) -> models.PlanCreate:
