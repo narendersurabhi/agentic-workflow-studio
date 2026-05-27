@@ -2,11 +2,140 @@
 
 Agentic Workflow Studio is a full-stack platform for authoring and running AI-powered workflows through chat and a visual DAG editor, backed by typed execution contracts, reusable capabilities, memory, triggers, and Kubernetes-native orchestration.
 
+---
+
+## Quick Start — Docker Compose
+
+**Prerequisites:** Docker Desktop or Docker Engine with Docker Compose.
+
+**1. Set up environment**
+
+```bash
+cp .env.example .env
+```
+
+Set at minimum in `.env`:
+
+```bash
+OPENAI_API_KEY=<your-key>
+OPENAI_MODEL=<your-model>   # e.g. gpt-4o
+```
+
+Docker Compose runs the planner and worker in OpenAI-backed LLM mode, so these credentials are required for a functional local stack. GitHub capabilities are not included in the default Compose stack (`github-mcp` is omitted).
+
+**2. Start the stack**
+
+```bash
+make up
+```
+
+**3. Open the app**
+
+| Service | URL |
+|---|---|
+| UI | http://localhost:3002 |
+| API | http://localhost:18000 |
+| API docs | http://localhost:18000/docs |
+
+---
+
+**Quality checks** (requires `uv` — no manual dependency install needed)
+
+```bash
+make test
+make lint
+make typecheck
+make eval-intent
+make eval-capability-search
+make eval-chat-boundary
+```
+
+---
+
+## Quick Start — Local Kubernetes (Docker Desktop)
+
+**Prerequisites:** Docker Desktop with Kubernetes enabled.
+
+**1. Set up environment**
+
+```bash
+cp .env.example .env
+```
+
+Set at minimum in `.env`:
+
+```bash
+OPENAI_API_KEY=<your-key>
+OPENAI_MODEL=<your-model>   # e.g. gpt-4o
+```
+
+**2. Build, push, and deploy**
+
+```bash
+make k8s-up-local
+```
+
+This one command:
+- Starts a local registry at `localhost:5001` if not already running
+- Builds all service images and pushes them to the local registry
+- Applies Kubernetes manifests from `deploy/k8s/overlays/local`
+- Syncs `.env`-backed secrets and config into the cluster
+- Pins image tags and waits for all deployments to roll out
+
+**3. Forward ports**
+
+Open separate terminals (or use `&`) for the services you need:
+
+```bash
+# Required — API and UI
+kubectl port-forward -n awe svc/api 18000:8000
+kubectl port-forward -n awe svc/ui  8510:80
+
+# Optional — observability and supporting services
+kubectl port-forward -n awe svc/coder      18001:8000
+kubectl port-forward -n awe svc/grafana    3000:3000
+kubectl port-forward -n awe svc/jaeger     16686:16686
+kubectl port-forward -n awe svc/prometheus 9090:9090
+```
+
+**4. Open the app**
+
+| Service | URL |
+|---|---|
+| UI | http://localhost:8510 |
+| API | http://localhost:18000 |
+| API docs | http://localhost:18000/docs |
+| Grafana | http://localhost:3000 |
+| Jaeger | http://localhost:16686 |
+
+---
+
+**Follow-up targets**
+
+| Target | When to use |
+|---|---|
+| `make k8s-apply-local` | Re-apply manifests and refresh cluster config from `.env` |
+| `make k8s-restart-local` | Restart app pods after env/config changes (no rebuild) |
+| `make k8s-down-local` | Delete app deployments; Postgres and Redis PVCs are preserved |
+| `make k8s-apply-observability` | Deploy Prometheus + Grafana + Loki dashboards |
+
+To rebuild and redeploy a single service after a code change (e.g. the UI):
+
+```bash
+NEW_TAG="local-$(date +%Y%m%d%H%M%S)"
+IMAGE_REGISTRY=localhost:5001 IMAGE_OWNER=localhost IMAGE_TAG="${NEW_TAG}" ./scripts/docker_images.sh build
+IMAGE_REGISTRY=localhost:5001 IMAGE_OWNER=localhost IMAGE_TAG="${NEW_TAG}" ./scripts/docker_images.sh push
+kubectl set image deployment/ui -n awe ui="localhost:5001/localhost/awe-ui:${NEW_TAG}"
+kubectl rollout status deployment/ui -n awe
+```
+
+---
+
 ## Business Objective
 
-Agentic Workflow Studio helps organizations turn AI-assisted work from ad hoc prompt experiments into governed, repeatable business workflows. The platform is intended to reduce the time required to design, approve, run, and audit complex knowledge-work processes by combining conversational intake, reusable capabilities, visual workflow authoring, and production-grade execution controls.
+Agentic Workflow Studio helps organizations turn AI-assisted work from ad hoc prompt experiments into governed, repeatable business workflows. The platform reduces the time required to design, approve, run, and audit complex knowledge-work processes by combining conversational intake, reusable capabilities, visual workflow authoring, and production-grade execution controls.
 
-The business goal is to provide a shared automation foundation that can:
+The platform is intended to:
 
 - Accelerate delivery of AI-enabled internal tools, operational workflows, and document/report generation processes.
 - Improve reliability and accountability by making plans, tool calls, approvals, memory usage, artifacts, and outcomes traceable.
@@ -14,61 +143,9 @@ The business goal is to provide a shared automation foundation that can:
 - Support safer adoption of AI automation with policy gates, execution governance, feedback analytics, and observable runs.
 - Enable teams to move from prototype workflows to production-style deployments across local and Kubernetes environments.
 
-### Online Metrics Captured
+For online metrics, success criteria, and ROI calculations see [docs/feedback-model-optimization-playbook.md](docs/feedback-model-optimization-playbook.md).
 
-The platform captures live Prometheus metrics so operators can measure adoption, reliability, routing quality, and feedback loops while workflows are running:
-
-- Job and orchestration health: `jobs_created_total`, `orchestrator_loop_errors_total`, `orchestrator_handle_errors_total`, and `orchestrator_recovered_events_total`.
-- Intent understanding and clarification: `intent_assessments_total`, `intent_clarification_required_total`, `intent_threshold_evaluations_total`, `intent_confidence_outcomes_total`, `intent_decompose_requests_total`, `intent_decompose_failures_total`, and `intent_segment_rejections_total`.
-- Intent graph quality signals: `intent_decompose_segments_total`, `intent_fact_candidates_total`, `intent_fact_supported_total`, `intent_fact_stripped_total`, `intent_capability_suggestions_total`, and `intent_capability_suggestions_matched_total`.
-- Memory and context summarization: `intent_memory_hint_candidates_total`, `intent_memory_hints_selected_total`, `interaction_summary_compactions_total`, `interaction_summary_tokens_in_total`, `interaction_summary_tokens_out_total`, and `interaction_summary_memory_persist_total`.
-- Capability discovery and execution: `capability_search_requests_total`, `capability_search_results_total`, `planner_capability_selection_total`, and `capability_execution_outcomes_total`.
-- Explicit user feedback and analytics usage: `feedback_submitted_total`, `feedback_reason_total`, `feedback_summary_requests_total`, and `feedback_examples_export_total`.
-- Chat routing, boundary, and clarification quality: `chat_boundary_decisions_total`, `chat_boundary_reason_total`, `chat_boundary_feedback_total`, `chat_routing_feedback_total`, `chat_clarification_slot_loss_feedback_total`, `chat_clarification_family_alignment_feedback_total`, and `chat_clarification_mapping_feedback_total`.
-
-These online metrics are exposed through the API `/metrics` endpoint and the deployed Prometheus metrics endpoints for planner, worker, policy, and coder services. The Kubernetes observability overlay includes Grafana dashboards for job and capability metrics.
-
-### Baseline and Success Criteria
-
-Baseline measurement starts from the current deployed or staging environment before a workflow, prompt, model, routing, or capability change is promoted. The baseline should include the current Prometheus metric rates, feedback summary, exported negative/partial feedback examples, and offline eval reports for intent, chat boundary routing, capability search, and DeepEval-backed chat/planner quality when enabled.
-
-Success is measured by improving business outcomes without regressing operational safety:
-
-- Adoption: increased `jobs_created_total`, workflow runs, and capability usage for intended automation scenarios.
-- Reliability: stable or lower orchestrator error rates, higher capability execution completion ratio, and no increase in recovered-event or retry pressure.
-- Intent and routing quality: lower clarification churn for well-specified requests, lower false chat-reply rate on execution requests, and passing `make eval-intent-gate` and `make eval-chat-boundary-gate`.
-- Capability quality: higher capability search hit rate, planner selection relevance, and execution success rate compared with the baseline.
-- User-perceived quality: higher chat helpfulness, intent agreement, plan approval, and job outcome positive rates from `GET /feedback/summary`.
-- Governance: no increase in policy violations, unsafe tool use, schema validation failures, or untraceable artifact-producing runs.
-- Release readiness: staging live regressions and configured quality gates pass before production promotion, with dashboards showing no material regression from the baseline window.
-
-### Back-of-the-Envelope Calculations
-
-Use these lightweight calculations to estimate business value before deeper measurement is available. Replace the assumptions with observed values from `/metrics`, `GET /feedback/summary`, run history, and team cost models.
-
-- Time saved per workflow:
-  - `manual_minutes_per_run - automated_minutes_per_run = minutes_saved_per_run`
-  - Example: `45 manual minutes - 10 supervised automation minutes = 35 minutes saved per run`.
-- Monthly capacity returned:
-  - `minutes_saved_per_run * successful_runs_per_month / 60 = hours_returned_per_month`
-  - Example: `35 minutes * 200 successful runs / 60 = 116.7 hours returned per month`.
-- Labor value:
-  - `hours_returned_per_month * blended_hourly_rate = monthly_labor_value`
-  - Example: `116.7 hours * $75/hour = $8,752.50 per month`.
-- Rework avoided:
-  - `baseline_failed_or_reworked_runs - current_failed_or_reworked_runs = avoided_rework_runs`
-  - `avoided_rework_runs * average_rework_minutes / 60 * blended_hourly_rate = rework_value`
-- Quality lift:
-  - `current_positive_feedback_rate - baseline_positive_feedback_rate = feedback_rate_lift`
-  - Track separately for chat helpfulness, intent agreement, plan approval, and job outcome positive rate.
-- Reliability lift:
-  - `current_successful_runs / total_runs - baseline_successful_runs / baseline_total_runs = run_success_rate_lift`
-  - Pair this with orchestrator error rates and capability execution outcomes so success does not hide unsafe retries or failures.
-- Payback period:
-  - `implementation_cost / monthly_labor_value = months_to_payback`
-  - Include platform operating cost, model spend, engineering time, and review/approval time in `implementation_cost`.
-
-These estimates are intentionally directional. Production decisions should use the observed baseline window, online metrics, feedback exports, and staging regression gates described above.
+---
 
 ## Agentic Pattern
 
@@ -86,6 +163,8 @@ Runtime components support those lanes:
 - **Worker executors** run ready tasks with tool calls and capability adapters, including MCP-backed services.
 - **Policy** can enforce execution governance and guardrails; **Critic** is an optional review/rework service but is not part of the default Kubernetes staging deployment.
 - **Supporting services** such as coder, GitHub MCP, RAG retriever MCP, Qdrant, and Jaeger are deployed in Kubernetes environments that enable code, retrieval, vector search, and tracing workflows.
+
+---
 
 ## Architecture
 
@@ -153,6 +232,8 @@ Related design docs:
 - [`docs/top-companies-intent-normalization-patterns.md`](docs/top-companies-intent-normalization-patterns.md)
 - [`docs/top-companies-minimum-agent-capabilities.md`](docs/top-companies-minimum-agent-capabilities.md)
 
+---
+
 ## Application Services
 
 - `api`: control plane for chat, jobs, plans, workflow definitions/versions/triggers/runs, memory APIs, feedback APIs, downloads, and SSE
@@ -167,14 +248,83 @@ Related design docs:
 - `jaeger`: trace collection and navigation service
 - `ui`: Next.js frontend for Home, Chat, Run from Prompt, Studio, Memory, and feedback insights
 
-## Recent Platform Features
+---
 
-- Hybrid capability discovery and intent routing: chat and planner use a mix of heuristics, lexical search, and vector-backed retrieval to improve capability relevance and fuzzy intent matching.
-- Canonical render capabilities: document rendering is now modeled as `document.docx.render` and `document.pdf.render`, with compatibility aliases for legacy `*.generate` identifiers.
-- Explicit render-path enforcement for raw API automation: raw `/plans/preflight` and raw planner execution require explicit caller-provided render paths for DOCX/PDF rendering, while chat and Workflow Studio still support auto-derived filenames.
-- Profile-aware chat memory: chat can bind server-derived user identity, hydrate exact `user_profile` data, and promote safe explicit preferences into long-term memory with redaction and schema controls.
-- User feedback loop: the UI collects explicit feedback for chat responses, intent understanding, plans, and final outcomes, and the API stores snapshots plus normalized dimensions for analysis.
-- Feedback analytics and dataset export: operators can inspect `GET /feedback/summary`, export negative and partial examples with `GET /feedback/examples`, and use the resulting JSONL slices for evals, prompt tuning, and model selection.
+## Configuration
+
+- Non-secret runtime variables are documented in `.env.example`.
+- Keep secrets in `.env` only.
+- Common non-secret configuration:
+  - `OPENAI_MODEL`
+  - `OPENAI_BASE_URL`
+  - `PLANNER_MODE`
+  - `WORKER_MODE`
+  - `NEXT_PUBLIC_API_URL`
+- Typical secrets:
+  - `OPENAI_API_KEY`
+  - `GITHUB_CLASSIC_TOKEN` preferred, with fallback to `GITHUB_TOKEN`
+  - `AWS_ACCESS_KEY_ID`
+  - `AWS_SECRET_ACCESS_KEY`
+
+---
+
+## LLM Planner and Worker Modes
+
+Docker Compose runs planner and worker in LLM mode. Before `make up`, choose one provider contract.
+
+For OpenAI:
+
+```bash
+LLM_PROVIDER=openai
+OPENAI_MODEL=<model>
+OPENAI_API_KEY=<key>
+OPENAI_BASE_URL=https://api.openai.com
+OPENAI_TEMPERATURE=
+OPENAI_MAX_OUTPUT_TOKENS=
+OPENAI_TIMEOUT_S=60
+OPENAI_MAX_RETRIES=2
+```
+
+For an OpenAI fine-tuned model, keep `LLM_PROVIDER=openai` and set `OPENAI_MODEL` to the fine-tuned model ID.
+
+For a fine-tuned or self-hosted model behind an OpenAI-compatible Chat Completions endpoint:
+
+```bash
+LLM_PROVIDER=openai_compatible
+OPENAI_MODEL=<model>
+OPENAI_API_KEY=<key>
+OPENAI_BASE_URL=<chat-completions-compatible-base-url>
+OPENAI_TIMEOUT_S=60
+OPENAI_MAX_RETRIES=2
+```
+
+For Gemini:
+
+```bash
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=<key>
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+OPENAI_TIMEOUT_S=60
+OPENAI_MAX_RETRIES=2
+```
+
+In Docker Compose, `planner` and `worker` modes are fixed by `docker-compose.yml` as `PLANNER_MODE=llm` and `WORKER_MODE=llm`; `LLM_PROVIDER` selects OpenAI, Gemini, or mock provider behavior.
+
+The API also supports narrower model knobs for chat and intent paths:
+
+```bash
+CHAT_ROUTER_MODEL=<model>
+CHAT_RESPONSE_MODEL=<model>
+CHAT_PENDING_CORRECTION_MODEL=<model>
+CHAT_CLARIFICATION_NORMALIZER_MODEL=<lighter-model>
+INTENT_ASSESS_MODEL=<model>
+INTENT_DECOMPOSE_MODEL=<model>
+```
+
+Use those knobs when you want to swap or fine-tune only one subsystem instead of changing the entire stack-wide `OPENAI_MODEL`. See [Feedback, Evaluation, and Fine-Tuning Playbook](docs/feedback-model-optimization-playbook.md) for the recommended rollout pattern.
+
+---
 
 ## Tooling Architecture
 
@@ -193,8 +343,6 @@ Tool assembly is coordinated through `libs/core/tool_bootstrap.py`, with respons
 - `libs/tools/openapi_iterative.py`: iterative OpenAPI spec generation loops
 - `libs/tools/mcp_client.py`: MCP transport, retry, timeout budget, process/thread isolation
 - `libs/tools/coder_tools.py`: coding-agent request/plan/step execution logic
-
-This keeps tool bootstrap, governance, plugin loading, and tool-family implementations separated while preserving a compatibility layer for existing call sites.
 
 ### Plug-and-Play Tool Loading
 
@@ -255,99 +403,45 @@ In-repo template:
 - `plugins/example_tool_plugin.py`
 - load with `TOOL_PLUGIN_MODULES=plugins.example_tool_plugin`
 
-## Local Development (Docker Compose)
-
-**Prerequisites:** Docker Desktop or Docker Engine with Docker Compose.
-
-**1. Set up environment**
-
-```bash
-cp .env.example .env
-```
-
-Set at minimum in `.env`:
-
-```bash
-OPENAI_API_KEY=<your-key>
-OPENAI_MODEL=<your-model>   # e.g. gpt-4o
-```
-
-Docker Compose runs the planner and worker in OpenAI-backed LLM mode, so these credentials are required for a functional local stack. GitHub capabilities are not included in the default Compose stack (`github-mcp` is omitted).
-
-**2. Start the stack**
-
-```bash
-make up
-```
-
-**3. Open the app**
-
-| Service | URL |
-|---|---|
-| UI | http://localhost:3002 |
-| API | http://localhost:18000 |
-| API docs | http://localhost:18000/docs |
-
 ---
-
-**Quality checks** (requires `uv` — no manual dependency install needed)
-
-```bash
-make test
-make lint
-make typecheck
-make eval-intent
-make eval-capability-search
-make eval-chat-boundary
-```
-
-## Configuration
-
-- Non-secret runtime variables are documented in `.env.example`.
-- Keep secrets in `.env` only.
-- Common non-secret configuration:
-  - `OPENAI_MODEL`
-  - `OPENAI_BASE_URL`
-  - `PLANNER_MODE`
-  - `WORKER_MODE`
-  - `NEXT_PUBLIC_API_URL`
-- Typical secrets:
-  - `OPENAI_API_KEY`
-  - `GITHUB_CLASSIC_TOKEN` preferred, with fallback to `GITHUB_TOKEN`
-  - `AWS_ACCESS_KEY_ID`
-  - `AWS_SECRET_ACCESS_KEY`
 
 ## Key Make Targets
 
-- `make up` / `make down`
-- `make up-workers`
-- `make test`
-- `make lint`
-- `make typecheck`
-- `make format`
-- `make schemas`
-- `make images-list`
-- `make images-build`
-- `make images-push`
-- `make eval-intent`
-- `make eval-intent-gate`
-- `make eval-capability-search`
-- `make eval-capability-search-gate`
-- `make eval-chat-boundary`
-- `make eval-chat-boundary-gate`
-- `make eval-deepeval-chat`
-- `make eval-deepeval-planner`
-- `make eval-deepeval-gate`
-- `make eval-deepeval-staging-replay`
-- `make k8s-up-local`
-- `make k8s-apply-local`
-- `make k8s-down-local`
-- `make k8s-restart-local`
-- `make k8s-up-staging`
-- `make k8s-up-production`
-- `make k8s-sync-workspace`
-- `make k8s-sync-artifacts`
-- `make k8s-sync-shared`
+| Target | What it does |
+|---|---|
+| `make up` | Start the full Docker Compose stack |
+| `make down` | Stop and remove Docker Compose containers |
+| `make up-workers` | Start only the worker services |
+| `make test` | Run the Python test suite via uv |
+| `make lint` | Run ruff linter via uv |
+| `make typecheck` | Run mypy type checks via uv |
+| `make format` | Auto-format Python source with ruff |
+| `make schemas` | Regenerate JSON schemas from Python models |
+| `make images-list` | List all service image names and tags |
+| `make images-build` | Build all service Docker images |
+| `make images-push` | Push built images to the configured registry |
+| `make k8s-up-local` | Full local k8s setup: build, push, apply, roll out |
+| `make k8s-apply-local` | Re-apply local manifests and refresh cluster config |
+| `make k8s-restart-local` | Restart all app pods without rebuilding |
+| `make k8s-down-local` | Delete app deployments (Postgres/Redis PVCs preserved) |
+| `make k8s-up-staging` | Deploy to the staging namespace |
+| `make k8s-up-production` | Deploy to the production namespace |
+| `make k8s-apply-observability` | Deploy Prometheus + Grafana + Loki |
+| `make k8s-sync-workspace` | Copy workspace files from cluster to local |
+| `make k8s-sync-artifacts` | Copy artifact files from cluster to local |
+| `make k8s-sync-shared` | Copy shared files from cluster to local |
+| `make eval-intent` | Run intent decomposition gold-set eval |
+| `make eval-intent-gate` | Run intent eval with pass/fail threshold |
+| `make eval-capability-search` | Run capability search quality eval |
+| `make eval-capability-search-gate` | Run capability search eval with threshold |
+| `make eval-chat-boundary` | Run chat boundary routing gold-set eval |
+| `make eval-chat-boundary-gate` | Run chat boundary eval with pass/fail threshold |
+| `make eval-deepeval-chat` | Run DeepEval judge on chat quality |
+| `make eval-deepeval-planner` | Run DeepEval judge on planner quality |
+| `make eval-deepeval-gate` | Combined DeepEval gate with pass/fail threshold |
+| `make eval-deepeval-staging-replay` | Replay staging feedback slices through DeepEval |
+
+---
 
 ## CI/CD
 
@@ -358,51 +452,33 @@ The repo ships with a Docker plus Kubernetes GitHub Actions pipeline.
 - Production promotion: `.github/workflows/promote-production.yml`
 - Staging regression gate: `.github/workflows/staging-routing-gate.yml`
 
-Setup details and required secrets are documented in [docs/cicd-pipeline.md](/Users/narendersurabhi/planner-executer-agentic-platform/docs/cicd-pipeline.md).
+Setup details and required secrets are documented in [docs/cicd-pipeline.md](docs/cicd-pipeline.md).
+
+---
 
 ## Intent Eval Harness
 
 Use the gold-set harness to track intent decomposition quality over time.
 
-Gold cases:
-
-- `eval/intent_gold.yaml`
-
-Run locally:
+Gold cases: `eval/intent_gold.yaml`
 
 ```bash
-make eval-intent
+make eval-intent        # run locally
+make eval-intent-gate   # CI gate with pass/fail threshold
 ```
-
-CI gate (thresholded):
-
-```bash
-make eval-intent-gate
-```
-
-The Make targets above are the recommended path because they wrap the required dependencies with `uv`.
 
 ## Chat Boundary Eval Harness
 
 Use the gold-set harness to keep `response_first` chat boundary behavior stable as routing rules evolve.
 
-Gold cases:
-
-- `eval/chat_boundary_gold.yaml`
-
-Run locally:
+Gold cases: `eval/chat_boundary_gold.yaml`
 
 ```bash
-make eval-chat-boundary
+make eval-chat-boundary        # run locally
+make eval-chat-boundary-gate   # CI gate with pass/fail threshold
 ```
 
-Run the live staging-style regression against an API environment:
-
-```bash
-make eval-chat-boundary-live
-```
-
-Override the target environment without editing the script:
+Run a live staging-style regression against an API environment:
 
 ```bash
 CHAT_BOUNDARY_LIVE_BASE_URL=https://staging.example.internal \
@@ -411,20 +487,7 @@ CHAT_BOUNDARY_LIVE_MIN_PASS_RATE=1.0 \
 make eval-chat-boundary-live
 ```
 
-CI gate (thresholded):
-
-```bash
-make eval-chat-boundary-gate
-```
-
-GitHub Actions staging gate:
-
-- Workflow: `.github/workflows/staging-routing-gate.yml`
-- Environment secret: `STAGING_API_BASE_URL`
-- Optional environment secret: `STAGING_API_BEARER_TOKEN`
-- Supports manual `workflow_dispatch` and reusable `workflow_call`
-- Uploads `artifacts/evals/chat_boundary_live_report.json` as a build artifact
-- Can also export `/feedback/examples` from staging, build `artifacts/evals/chat_routing_feedback.jsonl`, write `training/chat_routing_reranker_train.jsonl`, and train `artifacts/evals/chat_routing_calibrator.json`
+GitHub Actions staging gate: `.github/workflows/staging-routing-gate.yml` — supports `workflow_dispatch` and `workflow_call`, uploads `artifacts/evals/chat_boundary_live_report.json`.
 
 Build routing calibrator artifacts from an API environment:
 
@@ -434,12 +497,6 @@ CHAT_ROUTING_FEEDBACK_BEARER_TOKEN=... \
 CHAT_ROUTING_FEEDBACK_LIMIT=5000 \
 CHAT_ROUTING_CALIBRATOR_MIN_EXAMPLES=10 \
 make build-chat-routing-calibrator-from-api
-```
-
-Replay the trained calibrator against exported routing feedback to see whether disagreements look better or worse than deterministic routing:
-
-```bash
-make eval-chat-routing-calibrator
 ```
 
 Router calibration controls:
@@ -452,8 +509,6 @@ Router calibration controls:
 ## DeepEval Agent Gates
 
 DeepEval runs as a second evaluation layer for `chat + planner` without replacing the existing repo-native gold-set gates.
-
-Run locally:
 
 ```bash
 make eval-deepeval-chat
@@ -469,13 +524,6 @@ DEEPEVAL_STAGING_BEARER_TOKEN=... \
 make eval-deepeval-staging-replay
 ```
 
-Artifacts:
-
-- `artifacts/evals/deepeval_chat_report.json`
-- `artifacts/evals/deepeval_planner_report.json`
-- `artifacts/evals/deepeval_gate_report.json`
-- `artifacts/evals/deepeval_staging_replay_report.json`
-
 Core controls:
 
 - `DEEPEVAL_ENABLED=false`
@@ -486,7 +534,9 @@ Core controls:
 - `DEEPEVAL_MIN_CHAT_SCORE=0.95`
 - `DEEPEVAL_MIN_PLANNER_SCORE=0.90`
 
-When `DEEPEVAL_ENABLED=false` or `DEEPEVAL_JUDGE_PROVIDER=mock`, the harness still writes normalized reports using deterministic local metrics. When `DEEPEVAL_ENABLED=true` with a real judge provider, the same harness adds DeepEval judge metrics on top of those baseline metrics.
+When `DEEPEVAL_ENABLED=false` or `DEEPEVAL_JUDGE_PROVIDER=mock`, the harness writes normalized reports using deterministic local metrics. When `DEEPEVAL_ENABLED=true` with a real judge provider, it adds DeepEval judge metrics on top.
+
+---
 
 ## Kubernetes
 
@@ -496,113 +546,37 @@ Kubernetes manifests live under `deploy/k8s`.
 - Optional KEDA scaler for worker queue depth
 - Optional observability stack (Prometheus/Grafana/Loki/Jaeger)
 
-See full deployment details in `deploy/k8s/README.md`.
+See full deployment details in [deploy/k8s/README.md](deploy/k8s/README.md).
 
-### Local Kubernetes quickstart (Docker Desktop)
-
-**Prerequisites:** Docker Desktop with Kubernetes enabled.
-
-**1. Set up environment**
+For staging and production:
 
 ```bash
-cp .env.example .env
+make k8s-up-staging      # deploy to staging namespace
+make k8s-up-production   # deploy to production namespace
 ```
-
-Set at minimum in `.env`:
-
-```bash
-OPENAI_API_KEY=<your-key>
-OPENAI_MODEL=<your-model>   # e.g. gpt-4o
-```
-
-**2. Build, push, and deploy**
-
-```bash
-make k8s-up-local
-```
-
-This one command:
-- Starts a local registry at `localhost:5001` if not already running
-- Builds all service images and pushes them to the local registry
-- Applies Kubernetes manifests from `deploy/k8s/overlays/local`
-- Syncs `.env`-backed secrets and config into the cluster
-- Pins image tags and waits for all deployments to roll out
-
-**3. Forward ports**
-
-Open separate terminals (or use `&`) for the services you need:
-
-```bash
-# Required — API and UI
-kubectl port-forward -n awe svc/api 18000:8000
-kubectl port-forward -n awe svc/ui  8510:80
-
-# Optional — observability and supporting services
-kubectl port-forward -n awe svc/coder      18001:8000
-kubectl port-forward -n awe svc/grafana    3000:3000
-kubectl port-forward -n awe svc/jaeger     16686:16686
-kubectl port-forward -n awe svc/prometheus 9090:9090
-```
-
-**4. Open the app**
-
-| Service | URL |
-|---|---|
-| UI | http://localhost:8510 |
-| API | http://localhost:18000 |
-| API docs | http://localhost:18000/docs |
-| Grafana | http://localhost:3000 |
-| Jaeger | http://localhost:16686 |
 
 ---
 
-**Follow-up targets**
+## Observability
 
-| Target | When to use |
-|---|---|
-| `make k8s-apply-local` | Re-apply manifests and refresh cluster config from `.env` |
-| `make k8s-restart-local` | Restart app pods after env/config changes (no rebuild) |
-| `make k8s-down-local` | Tear down app deployments, keep persistent data |
-| `make k8s-apply-observability` | Deploy Prometheus + Grafana + Loki dashboards |
+- **Metrics**: API exposes `/metrics`; planner, worker, policy, and coder also expose Prometheus endpoints. Key metric families:
+  - Jobs and orchestration: `jobs_created_total`, `orchestrator_loop_errors_total`
+  - Intent quality: `intent_assessments_total`, `intent_decompose_requests_total`, `intent_clarification_required_total`
+  - Capability discovery: `capability_search_requests_total`, `capability_execution_outcomes_total`
+  - Feedback: `feedback_submitted_total`, `feedback_reason_total`, `feedback_examples_export_total`
+  - Chat routing: `chat_boundary_decisions_total`, `chat_routing_feedback_total`
 
-To rebuild and redeploy a single service after a code change (e.g. the UI):
+- **Tracing**: OTLP tracing via `OTEL_EXPORTER_OTLP_ENDPOINT`; trace IDs are surfaced through task/job runtime data and linked from the UI debugger.
+
+- **Observability stack** (Prometheus + Grafana + Loki + prebuilt dashboards):
 
 ```bash
-NEW_TAG="local-$(date +%Y%m%d%H%M%S)"
-IMAGE_REGISTRY=localhost:5001 IMAGE_OWNER=localhost IMAGE_TAG="${NEW_TAG}" ./scripts/docker_images.sh build
-IMAGE_REGISTRY=localhost:5001 IMAGE_OWNER=localhost IMAGE_TAG="${NEW_TAG}" ./scripts/docker_images.sh push
-kubectl set image deployment/ui -n awe ui="localhost:5001/localhost/awe-ui:${NEW_TAG}"
-kubectl rollout status deployment/ui -n awe
+make k8s-apply-observability
 ```
 
-## Guides
+Jaeger is deployed separately in the base Kubernetes manifests and port-forwarded independently (`svc/jaeger 16686:16686`).
 
-- [User Guide](docs/user-guide.md)
-- [API Guide](docs/api.md)
-- [Architecture](docs/architecture.md)
-- [AI Agents as Capabilities](docs/agent-capabilities.md)
-- [RAG Playbook](docs/rag-playbook.md)
-- [Semantic Memory](docs/semantic-memory.md)
-- [Feedback, Evaluation, and Fine-Tuning Playbook](docs/feedback-model-optimization-playbook.md)
-
-## Chat, Memory, and Feedback
-
-- Chat remains conversational by default, but it can also surface assistant-visible capabilities, answer scoped capability questions such as "what can you do related to GitHub?", and hand off to a safe direct capability when appropriate.
-- Chat sessions can bind a server-derived user identity when present, hydrate exact `user_profile` memory, and write safe profile updates without trusting client-provided `user_id` fields.
-- Long-term memory stays split by purpose:
-  - `user_profile` for exact structured preferences
-  - `semantic_memory` for reusable facts and patterns
-  - `interaction_summaries` / `interaction_summaries_compact` for compact conversation summaries
-- The UI can capture explicit feedback on:
-  - assistant chat messages
-  - intent understanding
-  - generated plans
-  - final job outcomes
-- Operators can use:
-  - `GET /feedback/summary` for aggregate rates and breakdowns
-  - `GET /feedback/examples` for negative/partial example export
-  - `GET /feedback/chat-boundary/review` for a lightweight queue of likely boundary misroutes
-  - the Feedback Insights panel in the UI for quick operational review
+---
 
 ## Worker Reliability and Scaling
 
@@ -618,6 +592,8 @@ Workers consume `task.ready` from Redis Streams consumer group `workers`.
   - Queue-depth autoscaling with KEDA: `deploy/k8s/keda-worker-scaledobject.yaml`
 - Multi-worker filesystem execution expects shared storage that supports `ReadWriteMany` for the `shared-data` PVC.
 - Queue-depth scaling follows Redis Stream backlog for `tasks.events` and consumer group `workers`.
+
+---
 
 ## Artifact and Document Storage
 
@@ -636,40 +612,28 @@ Workers consume `task.ready` from Redis Streams consumer group `workers`.
 
 In S3 mode, workers upload artifact files after generation and API artifact download falls back to object store if the local file is not found.
 
-Artifact download endpoint:
+Artifact download endpoint: `GET /artifacts/download?path=<relative_path>`
 
-- `GET /artifacts/download?path=<relative_path>`
+Workspace download endpoint: `GET /workspace/download?path=<relative_path>` — always served from shared workspace storage, does not fall back to S3.
 
-Workspace download endpoint:
+---
 
-- `GET /workspace/download?path=<relative_path>`
+## Chat, Memory, and Feedback
 
-`/workspace/download` is always served from shared workspace storage. It does not fall back to S3/object storage.
+- Chat remains conversational by default, but it can also surface assistant-visible capabilities, answer scoped capability questions such as "what can you do related to GitHub?", and hand off to a safe direct capability when appropriate.
+- Chat sessions can bind a server-derived user identity when present, hydrate exact `user_profile` memory, and write safe profile updates without trusting client-provided `user_id` fields.
+- Long-term memory stays split by purpose:
+  - `user_profile` for exact structured preferences
+  - `semantic_memory` for reusable facts and patterns
+  - `interaction_summaries` / `interaction_summaries_compact` for compact conversation summaries
+- The UI captures explicit feedback on chat messages, intent understanding, generated plans, and final job outcomes.
+- Operators can use:
+  - `GET /feedback/summary` for aggregate rates and breakdowns
+  - `GET /feedback/examples` for negative/partial example export
+  - `GET /feedback/chat-boundary/review` for a lightweight queue of likely boundary misroutes
+  - the Feedback Insights panel in the UI for quick operational review
 
-## Observability
-
-- Metrics:
-  - API exposes `/metrics`
-  - Planner, worker, policy, and coder also expose Prometheus metrics endpoints in the deployed stack
-  - Feedback collection exports:
-    - `feedback_submitted_total{target_type,sentiment}`
-    - `feedback_reason_total{target_type,reason_code}`
-    - `feedback_summary_requests_total`
-    - `feedback_examples_export_total`
-- Tracing:
-  - OTLP tracing is supported via `OTEL_EXPORTER_OTLP_ENDPOINT`
-  - Worker currently configures OTLP trace export explicitly
-  - Trace IDs are also surfaced through task/job runtime data and linked from the UI debugger
-- Optional Kubernetes observability stack via `make k8s-apply-observability`:
-  - Prometheus
-  - Grafana
-  - Loki
-  - Prebuilt dashboards
-- Jaeger is deployed separately in the base Kubernetes manifests and can be port-forwarded independently
-
-```bash
-make k8s-apply-observability
-```
+---
 
 ## API Quick Reference
 
@@ -677,23 +641,16 @@ Assume the API is available at `http://localhost:18000`.
 
 ### Jobs
 
-Create a job:
-
 ```bash
+# Create a job
 curl -X POST http://localhost:18000/jobs \
   -H "Content-Type: application/json" \
   -d '{"goal":"Generate an implementation checklist and artifact summary","context_json":{},"priority":1}'
-```
 
-List jobs:
-
-```bash
+# List jobs
 curl http://localhost:18000/jobs
-```
 
-Job details and tasks:
-
-```bash
+# Job details and tasks
 curl http://localhost:18000/jobs/<job_id>/details
 curl http://localhost:18000/jobs/<job_id>/tasks
 ```
@@ -710,41 +667,30 @@ curl http://localhost:18000/jobs/<job_id>/tasks
 
 ### Chat
 
-Create a chat session:
-
 ```bash
+# Create a session
 curl -X POST http://localhost:18000/chat/sessions \
   -H "Content-Type: application/json" \
   -d '{"title":"Workspace assistant"}'
-```
 
-Send a chat turn:
-
-```bash
+# Send a turn
 curl -X POST http://localhost:18000/chat/sessions/<session_id>/messages \
   -H "Content-Type: application/json" \
   -d '{"content":"List the workspace files","context_json":{},"priority":0}'
 ```
 
 - `GET /chat/sessions/{session_id}`
-
-When server-side identity is available, chat binds the authenticated user to the session and can use profile-aware memory hydration. Explicit feedback for a session is available through:
-
 - `GET /chat/sessions/{session_id}/feedback`
 
 ### Workflows
 
-Create a workflow definition:
-
 ```bash
+# Create a workflow definition
 curl -X POST http://localhost:18000/workflows/definitions \
   -H "Content-Type: application/json" \
-  -d '{"title":"Document pipeline","goal":"Generate and render a document","draft":{},"context_json":{},"user_id":"narendersurabhi"}'
-```
+  -d '{"title":"Document pipeline","goal":"Generate and render a document","draft":{},"context_json":{},"user_id":"<your-user-id>"}'
 
-Publish and run:
-
-```bash
+# Publish and run
 curl -X POST http://localhost:18000/workflows/definitions/<definition_id>/publish \
   -H "Content-Type: application/json" \
   -d '{}'
@@ -766,47 +712,34 @@ curl -X POST http://localhost:18000/workflows/versions/<version_id>/run \
 
 ### Memory
 
-Write a user profile entry:
-
 ```bash
+# Write a user profile entry
 curl -X POST http://localhost:18000/memory/write \
   -H "Content-Type: application/json" \
-  -d '{"name":"user_profile","scope":"user","user_id":"narendersurabhi","key":"profile","payload":{"full_name":"Narender Rao Surabhi"},"metadata":{"source":"manual"}}'
-```
+  -d '{"name":"user_profile","scope":"user","user_id":"<your-user-id>","key":"profile","payload":{"full_name":"Your Name"},"metadata":{"source":"manual"}}'
 
-Read and semantic-search memory:
+# Read memory
+curl "http://localhost:18000/memory/read?name=user_profile&scope=user&user_id=<your-user-id>&key=profile"
 
-```bash
-curl "http://localhost:18000/memory/read?name=user_profile&scope=user&user_id=narendersurabhi&key=profile"
-
+# Semantic search
 curl -X POST http://localhost:18000/memory/semantic/search \
   -H "Content-Type: application/json" \
-  -d '{"query":"education and certifications","namespace":"resume_profile","user_id":"narendersurabhi"}'
+  -d '{"query":"education and certifications","namespace":"resume_profile","user_id":"<your-user-id>"}'
 ```
 
 - `GET /memory/specs`
 - `DELETE /memory/delete?...`
 - `POST /memory/semantic/write`
 
-Memory notes:
-
-- `user_profile` is the canonical exact store for stable user preferences and profile attributes.
-- `semantic_memory` and compact interaction summaries are used for fuzzy retrieval and reuse.
-- Feedback-driven optimization and eval export are separate from memory; feedback lives in its own first-class store.
-
 ### Feedback
 
-Submit explicit feedback for a rated artifact:
-
 ```bash
+# Submit feedback
 curl -X POST http://localhost:18000/feedback \
   -H "Content-Type: application/json" \
   -d '{"target_type":"chat_message","target_id":"<message_id>","sentiment":"negative","reason_codes":["missed_request"],"comment":"It ignored the main ask."}'
-```
 
-Inspect aggregate feedback health and export reusable eval examples:
-
-```bash
+# Inspect aggregate feedback and export examples
 curl "http://localhost:18000/feedback/summary?target_type=plan"
 
 curl "http://localhost:18000/feedback/examples?target_type=chat_message&sentiment=negative&format=jsonl" \
@@ -824,8 +757,6 @@ curl "http://localhost:18000/feedback/chat-boundary/review?review_label=likely_f
 
 ### Composer and Capabilities
 
-Compile a Studio/composer draft:
-
 ```bash
 curl -X POST http://localhost:18000/composer/compile \
   -H "Content-Type: application/json" \
@@ -839,70 +770,9 @@ curl -X POST http://localhost:18000/composer/compile \
 - `POST /intent/decompose`
 - `POST /plans/preflight`
 
-Capability and planning notes:
+Canonical render capability IDs are `document.docx.render` and `document.pdf.render`. Raw `/plans/preflight` requires explicit caller-provided render paths; chat and Workflow Studio auto-derive them.
 
-- Capability search and chat capability discovery support lexical plus vector-backed relevance for fuzzier queries.
-- Canonical render capability IDs are `document.docx.render` and `document.pdf.render`.
-- Raw `/plans/preflight` and raw API automation require explicit caller-provided render paths for render tasks.
-- Chat and Workflow Studio can still auto-derive output filenames for render flows.
-
-## LLM Planner and Worker Modes
-
-Docker Compose runs planner and worker in LLM mode. Before `make up`, choose one provider contract.
-
-For OpenAI:
-
-```bash
-LLM_PROVIDER=openai
-OPENAI_MODEL=<model>
-OPENAI_API_KEY=<key>
-OPENAI_BASE_URL=https://api.openai.com
-OPENAI_TEMPERATURE=
-OPENAI_MAX_OUTPUT_TOKENS=
-OPENAI_TIMEOUT_S=60
-OPENAI_MAX_RETRIES=2
-```
-
-For an OpenAI fine-tuned model, keep `LLM_PROVIDER=openai` and set `OPENAI_MODEL` to the fine-tuned model ID.
-
-For a fine-tuned or self-hosted model behind an OpenAI-compatible Chat Completions endpoint:
-
-```bash
-LLM_PROVIDER=openai_compatible
-OPENAI_MODEL=<model>
-OPENAI_API_KEY=<key>
-OPENAI_BASE_URL=<chat-completions-compatible-base-url>
-OPENAI_TIMEOUT_S=60
-OPENAI_MAX_RETRIES=2
-```
-
-For Gemini:
-
-```bash
-LLM_PROVIDER=gemini
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_API_KEY=<key>
-GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-OPENAI_TIMEOUT_S=60
-OPENAI_MAX_RETRIES=2
-```
-
-In Docker Compose, `planner` and `worker` modes are fixed by `docker-compose.yml` as `PLANNER_MODE=llm` and `WORKER_MODE=llm`; `LLM_PROVIDER` selects OpenAI, Gemini, or mock provider behavior.
-
-The API also supports narrower model knobs for chat and intent paths:
-
-```bash
-CHAT_ROUTER_MODEL=<model>
-CHAT_RESPONSE_MODEL=<model>
-CHAT_PENDING_CORRECTION_MODEL=<model>
-CHAT_CLARIFICATION_NORMALIZER_MODEL=<lighter-model>
-INTENT_ASSESS_MODEL=<model>
-INTENT_DECOMPOSE_MODEL=<model>
-```
-
-Use those knobs when you want to swap or fine-tune only one subsystem instead of changing the entire stack-wide `OPENAI_MODEL`. See [Feedback, Evaluation, and Fine-Tuning Playbook](docs/feedback-model-optimization-playbook.md) for the recommended rollout pattern.
-
-If you are not using Docker Compose and want a reduced local path for isolated development, you can still run individual services or tests in mock/rule-based modes explicitly through environment overrides.
+---
 
 ## Add a New Tool
 
@@ -914,9 +784,23 @@ If you are not using Docker Compose and want a reduced local path for isolated d
 6. Add/update tests in `libs/core/tests` and/or service tests.
 7. Update planner prompts/tool usage guidance only if needed.
 
+---
+
+## Guides
+
+- [User Guide](docs/user-guide.md)
+- [API Guide](docs/api.md)
+- [Architecture](docs/architecture.md)
+- [AI Agents as Capabilities](docs/agent-capabilities.md)
+- [RAG Playbook](docs/rag-playbook.md)
+- [Semantic Memory](docs/semantic-memory.md)
+- [Feedback, Evaluation, and Fine-Tuning Playbook](docs/feedback-model-optimization-playbook.md)
+
+---
+
 ## Troubleshooting
 
-- If UI shows connection errors, verify the API forward is active on `localhost:18000` and the UI forward is active on your chosen local port. See `docs/k8s-port-forward.md`.
-- If artifact download returns not found, confirm whether you are using shared-filesystem mode or S3/object-store fallback, and verify the file is visible to the API in the configured storage mode.
-- If pods are `ImagePullBackOff` in local Kubernetes, use a fixed image tag, re-pin images, and restart rollouts. See `docs/runbook.md`.
-- If planner/worker behavior differs after env changes, re-sync config/secrets and restart deployments with `make k8s-apply-local` or `make k8s-restart-local`.
+- **UI connection errors**: verify the API port-forward is active on `localhost:18000` and the UI forward is active on your chosen local port. See `docs/k8s-port-forward.md`.
+- **Artifact download not found**: confirm whether you are using shared-filesystem mode or S3/object-store fallback, and verify the file is visible to the API in the configured storage mode.
+- **`ImagePullBackOff` in local Kubernetes**: use a fixed image tag, re-pin images, and restart rollouts. See `docs/runbook.md`.
+- **Planner/worker behavior differs after env changes**: re-sync config/secrets and restart deployments with `make k8s-apply-local` or `make k8s-restart-local`.
