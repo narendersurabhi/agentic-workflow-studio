@@ -1949,19 +1949,19 @@ const TemplatePreview = memo(function TemplatePreview({
   isValid: boolean;
 }) {
   return (
-    <div className="mt-4 rounded-lg border border-white/10 bg-white/10 p-3">
-      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-200">
+    <div className="mt-4 rounded-lg border border-subtle bg-surface-1 p-3">
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-text-md">
         Preview
       </div>
       <div className="mt-3 space-y-2">
         <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-200">Goal</div>
+          <div className="text-[11px] uppercase tracking-[0.2em] text-text-md">Goal</div>
           <div className="mt-1 rounded-md bg-white/90 px-3 py-2 text-xs text-slate-900">
             {goal || "—"}
           </div>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-200">
+          <div className="text-[11px] uppercase tracking-[0.2em] text-text-md">
             Context JSON
           </div>
           {!isValid ? (
@@ -6889,7 +6889,7 @@ const openTemplateModal = (template: Template) => {
         "Capture the goal, context, files, and requirements before starting a one-off run.",
       cta: "Open Run from Prompt",
       badge: "inputs",
-      accentClassName: "text-sky-100/72",
+      accentClassName: "text-text-sky-token",
       marker: "C",
     },
     {
@@ -6900,7 +6900,7 @@ const openTemplateModal = (template: Template) => {
         "Describe what you need in plain language and turn it into an executable workflow.",
       cta: "Open Assistant",
       badge: "dialogue",
-      accentClassName: "text-emerald-100/72",
+      accentClassName: "text-text-emerald-token",
       marker: "H",
     },
     {
@@ -6911,7 +6911,7 @@ const openTemplateModal = (template: Template) => {
         "Design reusable workflow steps, decisions, tools, and AI actions.",
       cta: "Open Studio",
       badge: "graph",
-      accentClassName: "text-amber-100/78",
+      accentClassName: "text-text-amber-token",
       marker: "S",
     },
     {
@@ -6948,19 +6948,19 @@ const openTemplateModal = (template: Template) => {
           <>
             <Link
               href="/project"
-              className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
             >
               Project
             </Link>
             <Link
               href="/workflows"
-              className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
             >
               Saved Workflows
             </Link>
             <Link
               href="/studio"
-              className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
             >
               Open Studio
             </Link>
@@ -6970,32 +6970,32 @@ const openTemplateModal = (template: Template) => {
         <section className="relative">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
                 AI Workflow Workspace
               </div>
-              <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
+              <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
                 Start, Manage, and Monitor AI Workflows
               </h2>
-              <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
+              <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
                 Launch prompt-based runs, chat-assisted requests, saved workflows, knowledge, and
                 reusable context from one product workspace.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-              <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                 run from prompt
               </span>
-              <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                 workflow chat
               </span>
-              <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                 studio
               </span>
-              <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                 context
               </span>
-              <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                 knowledge
               </span>
             </div>
@@ -7006,7 +7006,7 @@ const openTemplateModal = (template: Template) => {
               <Link
                 key={card.href}
                 href={card.href}
-                className="group rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-[linear-gradient(180deg,rgba(71,88,106,0.66),rgba(42,56,70,0.86))]"
+                className="group rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-gradient-panel"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -7015,22 +7015,22 @@ const openTemplateModal = (template: Template) => {
                     >
                       {card.eyebrow}
                     </div>
-                    <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-white">
+                    <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
                       {card.title}
                     </h3>
                   </div>
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/18 text-sm font-semibold uppercase tracking-[0.18em] text-slate-100">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-subtle bg-surface-1 text-sm font-semibold uppercase tracking-[0.18em] text-text-hi">
                     {card.marker}
                   </div>
                 </div>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300/82">
+                <p className="mt-3 max-w-xl text-sm leading-6 text-text-md">
                   {card.description}
                 </p>
                 <div className="mt-5 flex items-center justify-between gap-3">
-                  <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-100">
+                  <span className="inline-flex items-center rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-hi">
                     {card.badge}
                   </span>
-                  <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition group-hover:border-sky-300/30 group-hover:bg-white/[0.08]">
+                  <span className="inline-flex items-center rounded-full border border-subtle bg-surface-1 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-surface-1">
                     {card.cta}
                   </span>
                 </div>
@@ -7044,44 +7044,44 @@ const openTemplateModal = (template: Template) => {
 
   const useStudioSurfaceTheme = showChatScreen || showComposeScreen;
   const studioSurfacePrimarySectionClassName = useStudioSurfaceTheme
-    ? "rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+    ? "rounded-[30px] border border-subtle bg-gradient-panel p-6 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
     : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm";
   const studioSurfaceSecondarySectionClassName = useStudioSurfaceTheme
-    ? "rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(37,49,61,0.86),rgba(16,24,34,0.9))] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-    : "rounded-2xl border border-white/15 bg-white/10 text-white/95";
+    ? "rounded-[24px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+    : "rounded-2xl border border-subtle bg-surface-1 text-text-hi";
   const composeModePrimarySectionClassName = showComposeScreen
-    ? `${studioSurfacePrimarySectionClassName} [&_.compose-copy]:text-slate-300/74 [&_.compose-copy-strong]:text-white [&_.compose-copy-muted]:text-slate-300/68 [&_.compose-soft-surface]:border-white/10 [&_.compose-soft-surface]:bg-slate-950/18 [&_.compose-soft-surface]:text-slate-200 [&_.compose-chip]:border-white/10 [&_.compose-chip]:bg-white/[0.05] [&_.compose-chip]:text-slate-100`
+    ? `${studioSurfacePrimarySectionClassName} [&_.compose-copy]:text-text-md [&_.compose-copy-strong]:text-text-hi [&_.compose-copy-muted]:text-text-md [&_.compose-soft-surface]:border-subtle [&_.compose-soft-surface]:bg-surface-1 [&_.compose-soft-surface]:text-text-md [&_.compose-chip]:border-subtle [&_.compose-chip]:bg-surface-1 [&_.compose-chip]:text-text-hi`
     : "rounded-2xl bg-white/95 p-6 text-slate-900 shadow-lg ring-1 ring-white/30";
   const studioSurfaceCardClassName = useStudioSurfaceTheme
-    ? "border border-white/10 bg-slate-950/18"
+    ? "border border-subtle bg-surface-1"
     : "border border-slate-200 bg-slate-50";
   const studioSurfaceInnerCardClassName = useStudioSurfaceTheme
-    ? "border border-white/10 bg-slate-950/24"
+    ? "border border-subtle bg-surface-1"
     : "border border-slate-200 bg-white";
   const studioSurfaceFieldClassName = useStudioSurfaceTheme
-    ? "border border-white/10 bg-slate-950/24 text-white placeholder:text-slate-400/68 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+    ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
     : "border border-slate-200 bg-white text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200";
   const studioSurfaceButtonClassName = useStudioSurfaceTheme
-    ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+    ? "border border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
     : "border border-slate-300 text-slate-700 hover:border-slate-400";
   const studioSurfacePrimaryButtonClassName = useStudioSurfaceTheme
-    ? "border border-white/10 bg-slate-950/28 text-white hover:border-white/16 hover:bg-slate-950/38"
-    : "bg-slate-900 text-white hover:bg-slate-800";
+    ? "border border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-slate-950/38"
+    : "bg-slate-900 text-slate-50 hover:bg-slate-800";
   const studioSurfaceDestructiveButtonClassName = useStudioSurfaceTheme
-    ? "border border-rose-400/20 bg-rose-400/10 text-rose-100 hover:border-rose-300/30 hover:bg-rose-400/14"
+    ? "border border-rose-400/20 bg-accent-rose text-text-rose-token hover:border-rose-300/30 hover:bg-accent-rose"
     : "border border-rose-200 text-rose-600 hover:border-rose-300 hover:text-rose-700";
   const studioSurfaceWarningButtonClassName = useStudioSurfaceTheme
-    ? "border border-amber-300/20 bg-amber-300/10 text-amber-100 hover:border-amber-200/30 hover:bg-amber-300/14"
+    ? "border border-amber-300/20 bg-accent-amber text-text-amber-token hover:border-amber-200/30 hover:bg-accent-amber"
     : "border border-amber-200 text-amber-700 hover:border-amber-300 hover:text-amber-800";
-  const studioSurfaceTextClassName = useStudioSurfaceTheme ? "text-white" : "text-slate-800";
+  const studioSurfaceTextClassName = useStudioSurfaceTheme ? "text-text-hi" : "text-slate-800";
   const studioSurfaceMutedTextClassName = useStudioSurfaceTheme
-    ? "text-slate-300/68"
-    : "text-slate-500";
+    ? "text-text-md"
+    : "text-text-lo";
   const studioSurfaceLabelClassName = useStudioSurfaceTheme
-    ? "text-slate-200"
+    ? "text-text-md"
     : "text-slate-700";
   const studioSurfaceChipClassName = useStudioSurfaceTheme
-    ? "border border-white/10 bg-white/[0.05] text-slate-200"
+    ? "border border-subtle bg-surface-1 text-text-md"
     : "border border-slate-200 bg-slate-100 text-slate-600";
   const sidebarToggleTopClassName = useStudioSurfaceTheme ? "top-[92px]" : "top-4";
 
@@ -7101,7 +7101,7 @@ const openTemplateModal = (template: Template) => {
       <button
         className={`fixed left-4 ${sidebarToggleTopClassName} z-40 px-3 py-2 text-xs font-semibold lg:hidden ${
           useStudioSurfaceTheme
-            ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+            ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
             : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
         }`}
         onClick={() => setSidebarOpen(true)}
@@ -7112,7 +7112,7 @@ const openTemplateModal = (template: Template) => {
         <button
           className={`fixed left-4 ${sidebarToggleTopClassName} z-40 hidden px-3 py-2 text-xs font-semibold lg:inline-flex ${
             useStudioSurfaceTheme
-              ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+              ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
               : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
           }`}
           onClick={() => setSidebarOpen(true)}
@@ -7123,7 +7123,7 @@ const openTemplateModal = (template: Template) => {
       <button
         className={`fixed right-4 ${sidebarToggleTopClassName} z-40 px-3 py-2 text-xs font-semibold lg:hidden ${
           useStudioSurfaceTheme
-            ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+            ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
             : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
         }`}
         onClick={() => setCapabilitySidebarOpen(true)}
@@ -7134,7 +7134,7 @@ const openTemplateModal = (template: Template) => {
         <button
           className={`fixed right-4 ${sidebarToggleTopClassName} z-40 hidden px-3 py-2 text-xs font-semibold lg:inline-flex ${
             useStudioSurfaceTheme
-              ? "rounded-xl border border-white/12 bg-white/[0.04] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+              ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
               : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
           }`}
           onClick={() => setCapabilitySidebarOpen(true)}
@@ -7145,7 +7145,7 @@ const openTemplateModal = (template: Template) => {
       <aside
         className={`fixed bottom-0 left-0 top-[78px] z-50 transform transition-transform duration-300 ${
           useStudioSurfaceTheme
-            ? "border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
+            ? "border-r border-subtle bg-gradient-sidebar text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
             : "bg-white/95 shadow-xl"
         } ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
@@ -7154,17 +7154,17 @@ const openTemplateModal = (template: Template) => {
       >
         <div
           className={`flex items-center justify-between px-5 py-4 ${
-            useStudioSurfaceTheme ? "border-b border-white/10" : "border-b border-slate-100"
+            useStudioSurfaceTheme ? "border-b border-subtle" : "border-b border-slate-100"
           }`}
         >
-          <div className={`text-lg font-semibold tracking-[-0.02em] ${useStudioSurfaceTheme ? "text-white" : "text-slate-900"}`}>
+          <div className={`text-lg font-semibold tracking-[-0.02em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-900"}`}>
             Template Vault
           </div>
           <div className="flex items-center gap-2">
             <button
               className={`rounded-full px-2 py-1 text-xs lg:hidden ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  ? "border border-subtle bg-surface-1 text-text-hi"
                   : "border border-slate-200 text-slate-600"
               }`}
               onClick={() => setSidebarOpen(false)}
@@ -7174,7 +7174,7 @@ const openTemplateModal = (template: Template) => {
             <button
               className={`hidden rounded-full px-2 py-1 text-xs lg:inline-flex ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  ? "border border-subtle bg-surface-1 text-text-hi"
                   : "border border-slate-200 text-slate-600"
               }`}
               onClick={() => setSidebarOpen(false)}
@@ -7185,7 +7185,7 @@ const openTemplateModal = (template: Template) => {
         </div>
         <div
           className={`absolute right-0 top-0 hidden h-full w-2 cursor-col-resize bg-transparent transition lg:block ${
-            useStudioSurfaceTheme ? "hover:bg-white/[0.08]" : "hover:bg-slate-200/50"
+            useStudioSurfaceTheme ? "hover:bg-surface-1" : "hover:bg-slate-200/50"
           }`}
           onMouseDown={(event) => {
             event.preventDefault();
@@ -7195,18 +7195,18 @@ const openTemplateModal = (template: Template) => {
         <div className="h-full overflow-y-auto px-5 pb-8 pt-4">
           <section className="space-y-4">
             <div className="flex items-center justify-between">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-text-lo">
                 Templates
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  className="text-xs text-slate-500 underline decoration-slate-300 underline-offset-4"
+                  className="text-xs text-text-lo underline decoration-slate-300 underline-offset-4"
                   onClick={() => setIsReorderMode((prev) => !prev)}
                 >
                   {isReorderMode ? "Done" : "Reorder"}
                 </button>
                 <button
-                  className="text-xs text-slate-500 underline decoration-slate-300 underline-offset-4"
+                  className="text-xs text-text-lo underline decoration-slate-300 underline-offset-4"
                   onClick={() => {
                     setTemplates(BUILT_IN_TEMPLATES);
                     if (typeof window !== "undefined") {
@@ -7222,7 +7222,7 @@ const openTemplateModal = (template: Template) => {
               {templates.map((template, index) => (
                 <div
                   key={template.id}
-                  className={`rounded-xl border border-slate-200/70 bg-slate-50/80 p-3 transition hover:border-slate-300 hover:bg-white ${
+                  className={`rounded-xl border border-subtle bg-slate-50/80 p-3 transition hover:border-slate-300 hover:bg-white ${
                     isReorderMode ? "cursor-move" : ""
                   } ${draggingTemplateId === template.id ? "opacity-60" : ""}`}
                   draggable={isReorderMode}
@@ -7272,8 +7272,8 @@ const openTemplateModal = (template: Template) => {
                         <span
                           className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] ${
                             useStudioSurfaceTheme
-                              ? "border border-white/10 bg-white/[0.05] text-slate-200"
-                              : "bg-slate-100 text-slate-500"
+                              ? "border border-subtle bg-surface-1 text-text-md"
+                              : "bg-slate-100 text-text-lo"
                           }`}
                         >
                           Built-in
@@ -7338,8 +7338,8 @@ const openTemplateModal = (template: Template) => {
           <section
             className={`mt-6 rounded-2xl p-4 ${
               showComposeScreen
-                ? "border border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-                : "border border-slate-200/70 bg-white shadow-sm"
+                ? "border border-subtle bg-surface-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                : "border border-subtle bg-white shadow-sm"
             }`}
           >
             <div className={`text-sm font-semibold ${studioSurfaceTextClassName}`}>
@@ -7465,8 +7465,8 @@ const openTemplateModal = (template: Template) => {
           <section
             className={`mt-6 rounded-2xl p-4 ${
               showComposeScreen
-                ? "border border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-                : "border border-slate-200/70 bg-white shadow-sm"
+                ? "border border-subtle bg-surface-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                : "border border-subtle bg-white shadow-sm"
             }`}
           >
             <div className="flex items-center justify-between">
@@ -7517,7 +7517,7 @@ const openTemplateModal = (template: Template) => {
       <aside
         className={`fixed bottom-0 right-0 top-[78px] z-50 transform transition-transform duration-300 ${
           useStudioSurfaceTheme
-            ? "border-l border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
+            ? "border-l border-subtle bg-gradient-sidebar text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
             : "bg-white/95 shadow-xl"
         } ${
           capabilitySidebarOpen ? "translate-x-0" : "translate-x-full"
@@ -7528,17 +7528,17 @@ const openTemplateModal = (template: Template) => {
       >
         <div
           className={`flex items-center justify-between px-5 py-4 ${
-            useStudioSurfaceTheme ? "border-b border-white/10" : "border-b border-slate-100"
+            useStudioSurfaceTheme ? "border-b border-subtle" : "border-b border-slate-100"
           }`}
         >
-          <div className={`text-lg font-semibold tracking-[-0.02em] ${useStudioSurfaceTheme ? "text-white" : "text-slate-900"}`}>
+          <div className={`text-lg font-semibold tracking-[-0.02em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-900"}`}>
             Capability Catalog
           </div>
           <div className="flex items-center gap-2">
             <button
               className={`rounded-full px-2 py-1 text-xs lg:hidden ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  ? "border border-subtle bg-surface-1 text-text-hi"
                   : "border border-slate-200 text-slate-600"
               }`}
               onClick={() => setCapabilitySidebarOpen(false)}
@@ -7548,7 +7548,7 @@ const openTemplateModal = (template: Template) => {
             <button
               className={`hidden rounded-full px-2 py-1 text-xs lg:inline-flex ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-white/[0.05] text-slate-100"
+                  ? "border border-subtle bg-surface-1 text-text-hi"
                   : "border border-slate-200 text-slate-600"
               }`}
               onClick={() => setCapabilitySidebarOpen(false)}
@@ -7559,7 +7559,7 @@ const openTemplateModal = (template: Template) => {
         </div>
         <div
           className={`absolute left-0 top-0 hidden h-full w-2 cursor-col-resize bg-transparent transition lg:block ${
-            useStudioSurfaceTheme ? "hover:bg-white/[0.08]" : "hover:bg-slate-200/50"
+            useStudioSurfaceTheme ? "hover:bg-surface-1" : "hover:bg-slate-200/50"
           }`}
           onMouseDown={(event) => {
             event.preventDefault();
@@ -7570,7 +7570,7 @@ const openTemplateModal = (template: Template) => {
           <div
             className={`rounded-xl px-3 py-3 ${
               showComposeScreen
-                ? "border border-white/10 bg-slate-950/18"
+                ? "border border-subtle bg-surface-1"
                 : "border border-slate-200 bg-slate-50"
             }`}
           >
@@ -7608,7 +7608,7 @@ const openTemplateModal = (template: Template) => {
                             <div key={subgroupKey} className={`rounded-lg p-2 ${studioSurfaceCardClassName}`}>
                               <button
                                 type="button"
-                                className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-[11px] font-semibold ${studioSurfaceInnerCardClassName} ${useStudioSurfaceTheme ? "text-slate-200" : "text-slate-600"}`}
+                                className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-[11px] font-semibold ${studioSurfaceInnerCardClassName} ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}
                                 onClick={() =>
                                   toggleCapabilitySubgroup(group.groupName, subgroup.subgroupName)
                                 }
@@ -7658,7 +7658,7 @@ const openTemplateModal = (template: Template) => {
                                               {required.map((field) => (
                                                 <span
                                                   key={`${item.id}-required-${field}`}
-                                                  className={`rounded-full px-2 py-1 text-[11px] ${useStudioSurfaceTheme ? "border border-white/10 bg-white/[0.05] text-slate-200" : "bg-slate-100 text-slate-700"}`}
+                                                  className={`rounded-full px-2 py-1 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-1 text-text-md" : "bg-slate-100 text-slate-700"}`}
                                                 >
                                                   required: {field}
                                                 </span>
@@ -7705,7 +7705,7 @@ const openTemplateModal = (template: Template) => {
           <div
             className={`mt-4 rounded-xl px-3 py-3 ${
               showComposeScreen
-                ? "border border-white/10 bg-slate-950/18"
+                ? "border border-subtle bg-surface-1"
                 : "border border-slate-200 bg-slate-50"
             }`}
           >
@@ -7844,7 +7844,7 @@ const openTemplateModal = (template: Template) => {
               </div>
               {displayedCapabilityRecommendations.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                  <span className="text-slate-500">
+                  <span className="text-text-lo">
                     Recommended
                     {llmCapabilityRecommendationSource
                       ? ` (${llmCapabilityRecommendationSource})`
@@ -7858,7 +7858,7 @@ const openTemplateModal = (template: Template) => {
                       semantic_search
                     </span>
                   ) : null}
-                  <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                  <div className="flex flex-wrap items-center gap-1 text-[10px] text-text-lo">
                     <span>Legend:</span>
                     {["semantic_search", "llm", "heuristic"].map((source) => (
                       <span
@@ -7905,7 +7905,7 @@ const openTemplateModal = (template: Template) => {
                           {item.score.toFixed(1)}
                         </span>
                       </button>
-                      <div className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden min-w-[240px] whitespace-pre-line rounded-lg border border-slate-200 bg-slate-950 px-3 py-2 text-[10px] leading-4 text-white shadow-xl group-hover:block">
+                      <div className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden min-w-[240px] whitespace-pre-line rounded-lg border border-slate-200 bg-slate-950 px-3 py-2 text-[10px] leading-4 text-text-hi shadow-xl group-hover:block">
                         {capabilityHoverCardText(item)}
                       </div>
                     </div>
@@ -7913,7 +7913,7 @@ const openTemplateModal = (template: Template) => {
                 </div>
               ) : null}
               {semanticGoalCapabilityLoading && llmCapabilityRecommendations.length === 0 ? (
-                <div className="text-[11px] text-slate-500">Finding capabilities related to the goal...</div>
+                <div className="text-[11px] text-text-lo">Finding capabilities related to the goal...</div>
               ) : null}
               {llmCapabilityRecommendationWarning ? (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
@@ -7926,7 +7926,7 @@ const openTemplateModal = (template: Template) => {
                 </div>
               ) : null}
               {semanticCapabilitySearchLoading ? (
-                <div className="text-[11px] text-slate-500">Searching capability catalog...</div>
+                <div className="text-[11px] text-text-lo">Searching capability catalog...</div>
               ) : null}
               {filteredChainCapabilityOptions.length === 0 ? (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
@@ -8091,7 +8091,7 @@ const openTemplateModal = (template: Template) => {
             </div>
             <div className="mt-3 space-y-2">
               {visualChainNodesWithStatus.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-[11px] text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-[11px] text-text-lo">
                   No chain steps yet. Click <span className="font-semibold">Add Step</span> to start.
                 </div>
               ) : (
@@ -8137,11 +8137,11 @@ const openTemplateModal = (template: Template) => {
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <div className="text-[11px] uppercase tracking-[0.15em] text-slate-500">
+                            <div className="text-[11px] uppercase tracking-[0.15em] text-text-lo">
                               Step {index + 1}
                             </div>
                             <div className="text-xs font-semibold text-slate-800">{node.taskName}</div>
-                            <div className="text-[11px] text-slate-500">{node.capabilityId}</div>
+                            <div className="text-[11px] text-text-lo">{node.capabilityId}</div>
                           </div>
                           <div className="flex flex-wrap items-center justify-end gap-1">
                             <span
@@ -8200,7 +8200,7 @@ const openTemplateModal = (template: Template) => {
                           </div>
                         </div>
                         {isCollapsed ? (
-                          <div className="mt-2 text-[11px] text-slate-500">
+                          <div className="mt-2 text-[11px] text-text-lo">
                             {requiredStatus.length === 0
                               ? "No required inputs."
                               : `${resolvedCount}/${requiredStatus.length} required inputs resolved.`}
@@ -8244,11 +8244,11 @@ const openTemplateModal = (template: Template) => {
                               />
                             </div>
                             <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-2 py-2">
-                              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                              <div className="text-[11px] uppercase tracking-[0.2em] text-text-lo">
                                 DAG Dependencies
                               </div>
                               {visualChainNodes.length <= 1 ? (
-                                <div className="mt-1 text-[11px] text-slate-500">
+                                <div className="mt-1 text-[11px] text-text-lo">
                                   Add more steps to configure dependencies.
                                 </div>
                               ) : (
@@ -8289,11 +8289,11 @@ const openTemplateModal = (template: Template) => {
                               )}
                             </div>
                             <div className="mt-3">
-                              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                              <div className="text-[11px] uppercase tracking-[0.2em] text-text-lo">
                                 Bindings Table
                               </div>
                               {requiredStatus.length === 0 ? (
-                                <div className="mt-1 text-[11px] text-slate-500">
+                                <div className="mt-1 text-[11px] text-text-lo">
                                   No required inputs.
                                 </div>
                               ) : (
@@ -8353,11 +8353,11 @@ const openTemplateModal = (template: Template) => {
                                           </span>
                                         </div>
                                         {status.schemaDescription ? (
-                                          <div className="mt-1 text-[11px] text-slate-500">
+                                          <div className="mt-1 text-[11px] text-text-lo">
                                             {status.schemaDescription}
                                           </div>
                                         ) : null}
-                                        <div className="mt-1 text-[11px] text-slate-500">
+                                        <div className="mt-1 text-[11px] text-text-lo">
                                           {status.detail}
                                         </div>
                                         <div className="mt-2 space-y-2">
@@ -8485,7 +8485,7 @@ const openTemplateModal = (template: Template) => {
                                                 }
                                                 placeholder='Literal value (supports JSON like {"x":1} or true)'
                                               />
-                                              <div className="text-[10px] text-slate-500">
+                                              <div className="text-[10px] text-text-lo">
                                                 JSON values are parsed automatically during
                                                 preflight/apply.
                                               </div>
@@ -8564,7 +8564,7 @@ const openTemplateModal = (template: Template) => {
                         )}
                       </div>
                       {index < visualChainNodesWithStatus.length - 1 ? (
-                        <div className="py-1 text-center text-xs text-slate-400">↓</div>
+                        <div className="py-1 text-center text-xs text-text-lo">↓</div>
                       ) : null}
                     </div>
                   );
@@ -8682,12 +8682,12 @@ const openTemplateModal = (template: Template) => {
                     {activeTemplate.description}
                   </p>
                 ) : null}
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-text-lo">
                   Fill values for this run. Defaults are saved automatically.
                 </p>
               </div>
               <button
-                className="text-sm text-slate-500"
+                className="text-sm text-text-lo"
                 onClick={closeTemplateModal}
               >
                 Close
@@ -8699,7 +8699,7 @@ const openTemplateModal = (template: Template) => {
                   ?.filter((variable) => !AUTO_TEMPLATE_KEYS.has(variable.key))
                   .map((variable) => (
                   <div key={variable.key}>
-                    <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    <label className="text-xs font-semibold uppercase tracking-[0.2em] text-text-lo">
                       {variable.label} {variable.scope === "per_run" ? "· per run" : "· default"}
                     </label>
                     <textarea
@@ -8739,7 +8739,7 @@ const openTemplateModal = (template: Template) => {
                 Save defaults
               </button>
               <button
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-50"
                 onClick={applyTemplateFromModal}
               >
                 Apply template
@@ -8774,7 +8774,7 @@ const openTemplateModal = (template: Template) => {
                   <button
                     className={
                       useStudioSurfaceTheme
-                        ? "rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                        ? "rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                         : screenHeaderSecondaryActionClassName
                     }
                     onClick={() => analyzeIntentGraph(goal)}
@@ -8785,7 +8785,7 @@ const openTemplateModal = (template: Template) => {
                   <button
                     className={
                       useStudioSurfaceTheme
-                        ? "rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+                        ? "rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
                         : screenHeaderPrimaryActionClassName
                     }
                     onClick={submitJob}
@@ -8800,7 +8800,7 @@ const openTemplateModal = (template: Template) => {
                 <button
                   className={
                     showChatScreen
-                      ? "rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                      ? "rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                       : screenHeaderSecondaryActionClassName
                   }
                   onClick={resetChatSession}
@@ -8815,15 +8815,15 @@ const openTemplateModal = (template: Template) => {
             <div
               className={`mt-4 px-4 py-3 ${
                 useStudioSurfaceTheme
-                  ? "rounded-[24px] border border-white/12 bg-[linear-gradient(180deg,rgba(37,49,61,0.86),rgba(16,24,34,0.9))] text-slate-100 shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-                  : "rounded-2xl border border-white/15 bg-white/10 text-white/95"
+                  ? "rounded-[24px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+                  : "rounded-2xl border border-subtle bg-surface-1 text-text-hi"
               }`}
             >
               <div className="flex flex-wrap items-end gap-3">
                 <label className="min-w-[220px] flex-1">
                   <div
                     className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                      useStudioSurfaceTheme ? "text-sky-100/72" : "text-sky-100"
+                      useStudioSurfaceTheme ? "text-text-sky-token" : "text-text-sky-token"
                     }`}
                   >
                     Context User ID
@@ -8831,8 +8831,8 @@ const openTemplateModal = (template: Template) => {
                   <input
                     className={`mt-2 w-full rounded-2xl px-3 py-2 text-sm outline-none transition ${
                       useStudioSurfaceTheme
-                        ? "border border-white/10 bg-slate-950/18 text-white placeholder:text-slate-400/52 focus:border-sky-300/40 focus:bg-slate-950/28"
-                        : "border border-white/15 bg-white/10 text-white placeholder:text-white/45 focus:border-white/40 focus:bg-white/15"
+                        ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:bg-surface-1"
+                        : "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-hi focus:border-default-theme focus:bg-surface-2"
                     }`}
                     value={workspaceUserId}
                     onChange={(event) => setWorkspaceUserId(event.target.value)}
@@ -8841,7 +8841,7 @@ const openTemplateModal = (template: Template) => {
                 </label>
                 <div
                   className={`max-w-xl text-xs leading-5 ${
-                    useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-200"
+                    useStudioSurfaceTheme ? "text-text-md" : "text-text-md"
                   }`}
                 >
                   Chat, Run from Prompt, and direct memory reads will use this user id by default unless a
@@ -8853,16 +8853,16 @@ const openTemplateModal = (template: Template) => {
               {showComposeScreen ? (
               <div className={composeModePrimarySectionClassName}>
                 <div className="flex items-center justify-between">
-                  <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${showComposeScreen ? "text-white" : ""}`}>Workflow Request</h2>
-                  <span className={`text-xs ${showComposeScreen ? "text-slate-300/68" : "text-slate-500"}`}>
+                  <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${showComposeScreen ? "text-text-hi" : ""}`}>Workflow Request</h2>
+                  <span className={`text-xs ${showComposeScreen ? "text-text-md" : "text-text-lo"}`}>
                     Ready to submit
                   </span>
                 </div>
                 <div
                   className={`mt-3 rounded-xl px-3 py-2 text-xs ${
                     showComposeScreen
-                      ? "border border-white/10 bg-slate-950/18 text-slate-300/68"
-                      : "border border-slate-100 bg-slate-50 text-slate-500"
+                      ? "border border-subtle bg-surface-1 text-text-md"
+                      : "border border-slate-100 bg-slate-50 text-text-lo"
                   }`}
                 >
                   Tip: Use templates for repeatable workflows. Defaults are remembered for you.
@@ -8871,24 +8871,24 @@ const openTemplateModal = (template: Template) => {
                   <div className="mt-3 text-sm text-rose-600">{submitError}</div>
                 ) : null}
                 {intentClarificationLoading ? (
-                  <div className={`mt-3 text-xs ${showComposeScreen ? "text-slate-300/68" : "text-slate-500"}`}>
+                  <div className={`mt-3 text-xs ${showComposeScreen ? "text-text-md" : "text-text-lo"}`}>
                     Checking goal intent clarity...
                   </div>
                 ) : null}
                 {jobSubmitLoading ? (
-                  <div className={`mt-3 text-xs ${showComposeScreen ? "text-slate-300/68" : "text-slate-500"}`}>
+                  <div className={`mt-3 text-xs ${showComposeScreen ? "text-text-md" : "text-text-lo"}`}>
                     Submitting job...
                   </div>
                 ) : null}
                 <div className="mt-4 grid gap-4">
                   <div>
-                    <label className={`text-sm font-medium ${showComposeScreen ? "text-white" : "text-slate-700"}`}>
+                    <label className={`text-sm font-medium ${showComposeScreen ? "text-text-hi" : "text-slate-700"}`}>
                       Goal
                     </label>
                     <input
                       className={`mt-1 w-full rounded-xl px-3 py-2 text-sm shadow-sm ${
                         showComposeScreen
-                          ? "border border-white/10 bg-slate-950/18 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                          ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
                           : "border border-slate-200 bg-white focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
                       }`}
                       value={goal}
@@ -9059,7 +9059,7 @@ const openTemplateModal = (template: Template) => {
                                               </span>
                                             ) : null}
                                           </button>
-                                          <div className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden min-w-[240px] whitespace-pre-line rounded-lg border border-slate-200 bg-slate-950 px-3 py-2 text-[10px] leading-4 text-white shadow-xl group-hover:block">
+                                          <div className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden min-w-[240px] whitespace-pre-line rounded-lg border border-slate-200 bg-slate-950 px-3 py-2 text-[10px] leading-4 text-text-hi shadow-xl group-hover:block">
                                             {capabilityHoverCardText({
                                               reason:
                                                 ranking?.reason ||
@@ -9199,7 +9199,7 @@ const openTemplateModal = (template: Template) => {
                       })}
                     </div>
 
-                    <div className={`mt-4 border-t pt-3 ${useStudioSurfaceTheme ? "border-white/10" : "border-slate-200"}`}>
+                    <div className={`mt-4 border-t pt-3 ${useStudioSurfaceTheme ? "border-subtle" : "border-slate-200"}`}>
                       <div className={`text-xs font-semibold uppercase tracking-[0.12em] ${studioSurfaceMutedTextClassName}`}>
                         Additional Fields
                       </div>
@@ -9513,14 +9513,14 @@ const openTemplateModal = (template: Template) => {
                     )}
                   </div>
                   <div>
-                    <label className={`text-sm font-medium ${showComposeScreen ? "text-white" : "text-slate-700"}`}>
+                    <label className={`text-sm font-medium ${showComposeScreen ? "text-text-hi" : "text-slate-700"}`}>
                       Priority
                     </label>
                     <input
                       type="number"
                       className={`mt-1 w-full rounded-xl px-3 py-2 text-sm shadow-sm ${
                         showComposeScreen
-                          ? "border border-white/10 bg-slate-950/18 text-white placeholder:text-slate-400/70 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                          ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
                           : "border border-slate-200 bg-white focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
                       }`}
                       value={priority}
@@ -9528,12 +9528,12 @@ const openTemplateModal = (template: Template) => {
                     />
                   </div>
                   <div className={`grid gap-2 text-xs md:grid-cols-2 ${
-                    showComposeScreen ? "text-slate-300/68" : "text-slate-500"
+                    showComposeScreen ? "text-text-md" : "text-text-lo"
                   }`}>
                     <div
                       className={`rounded-lg px-3 py-2 ${
                         showComposeScreen
-                          ? "border border-white/10 bg-slate-950/18"
+                          ? "border border-subtle bg-surface-1"
                           : "border border-slate-100 bg-slate-50"
                       }`}
                     >
@@ -9542,7 +9542,7 @@ const openTemplateModal = (template: Template) => {
                     <div
                       className={`rounded-lg px-3 py-2 ${
                         showComposeScreen
-                          ? "border border-white/10 bg-slate-950/18"
+                          ? "border border-subtle bg-surface-1"
                           : "border border-slate-100 bg-slate-50"
                       }`}
                     >
@@ -9550,9 +9550,9 @@ const openTemplateModal = (template: Template) => {
                     </div>
                   </div>
                   <button
-                    className={`rounded-xl px-4 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    className={`rounded-xl px-4 py-2 text-sm font-medium text-text-hi transition disabled:cursor-not-allowed disabled:opacity-50 ${
                       showComposeScreen
-                        ? "border border-slate-200/18 bg-slate-950/25 hover:border-white/30 hover:bg-slate-950/35"
+                        ? "border border-subtle bg-surface-1 hover:border-default-theme hover:bg-slate-950/35"
                         : "bg-slate-900 shadow-md hover:bg-slate-800"
                     }`}
                     onClick={submitJob}
@@ -9565,7 +9565,7 @@ const openTemplateModal = (template: Template) => {
                     <div
                       className={`rounded-lg px-3 py-2 text-xs ${
                         showComposeScreen
-                          ? "border border-amber-300/20 bg-amber-300/10 text-amber-100"
+                          ? "border border-amber-300/20 bg-accent-amber text-text-amber-token"
                           : "border border-amber-200 bg-amber-50 text-amber-800"
                       }`}
                     >
@@ -9578,25 +9578,25 @@ const openTemplateModal = (template: Template) => {
               {showChatScreen ? (
               <div className={studioSurfacePrimarySectionClassName}>
                 <div>
-                  <h2 className="text-[22px] font-semibold tracking-[-0.03em] text-white">Chat-to-Workflow Assistant</h2>
-                  <p className="mt-1 text-xs text-slate-300/78">
+                  <h2 className="text-[22px] font-semibold tracking-[-0.03em] text-text-hi">Chat-to-Workflow Assistant</h2>
+                  <p className="mt-1 text-xs text-text-md">
                     Chat turns plain-language requests into workflow-backed jobs when execution is needed.
                   </p>
                 </div>
-                <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
-                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-text-md">
+                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                     {chatSession ? `Session ${chatSession.id.slice(0, 8)}` : "No session yet"}
                   </span>
-                  <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-emerald-100">
+                  <span className="rounded-full border border-emerald-400/20 bg-accent-emerald px-2 py-1 text-text-emerald-token">
                     {chatSession?.active_job_id ? `Active job ${chatSession.active_job_id.slice(0, 8)}` : "Ready"}
                   </span>
                 </div>
                 <div
                   ref={chatTranscriptRef}
-                  className="mt-4 max-h-[26rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-[24px] border border-white/10 bg-slate-950/24 p-4"
+                  className="mt-4 max-h-[26rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-[24px] border border-subtle bg-surface-1 p-4"
                 >
                   {chatMessages.length === 0 ? (
-                    <div className="flex h-full min-h-[15rem] items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/[0.05] px-4 text-center text-sm text-slate-300/82">
+                    <div className="flex h-full min-h-[15rem] items-center justify-center rounded-xl border border-dashed border-subtle bg-surface-1 px-4 text-center text-sm text-text-md">
                       Start with a plain request like “Create a DOCX from this markdown” or
                       “Open a PR for the generated repository”.
                     </div>
@@ -9610,35 +9610,35 @@ const openTemplateModal = (template: Template) => {
                             className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
                               message.role === "user"
                                 ? "ml-auto bg-white text-slate-900"
-                                : "border border-white/10 bg-white/10 text-slate-100"
+                                : "border border-subtle bg-surface-1 text-text-hi"
                             } ${isPending ? "opacity-80" : ""}`}
                           >
                             <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
                               <div className="flex items-center gap-2">
-                                <span className={message.role === "user" ? "text-slate-500" : "text-slate-300"}>
+                                <span className={message.role === "user" ? "text-text-lo" : "text-text-md"}>
                                   {message.role}
                                 </span>
                                 {isPending ? (
-                                  <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
+                                  <span className="rounded-full border border-amber-400/30 bg-accent-amber px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
                                     Pending
                                   </span>
                                 ) : null}
                               </div>
-                              <span className={message.role === "user" ? "text-slate-400" : "text-slate-400"}>
+                              <span className={message.role === "user" ? "text-text-lo" : "text-text-lo"}>
                                 {formatTimestamp(message.created_at)}
                               </span>
                             </div>
                             <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
                             {message.action?.clarification_questions &&
                             message.action.clarification_questions.length > 0 ? (
-                              <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-[12px] text-amber-100">
+                              <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
                                 {message.action.clarification_questions.map((question, index) => (
                                   <div key={`${message.id}-question-${index}`}>{question}</div>
                                 ))}
                               </div>
                             ) : null}
                             {message.job_id ? (
-                              <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-[12px] text-emerald-100">
+                              <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-accent-emerald px-3 py-2 text-[12px] text-text-emerald-token">
                                 <span>Job {message.job_id}</span>
                                 <button
                                   className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
@@ -9678,11 +9678,11 @@ const openTemplateModal = (template: Template) => {
                     </>
                   )}
                 </div>
-                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs text-slate-300">
+                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-xs text-text-md">
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
-                      className="h-4 w-4 rounded border-white/20 bg-transparent"
+                      className="h-4 w-4 rounded border-subtle bg-transparent"
                       checked={chatUseComposeContext}
                       onChange={(event) => setChatUseComposeContext(event.target.checked)}
                     />
@@ -9691,23 +9691,23 @@ const openTemplateModal = (template: Template) => {
                   <span>{chatUseComposeContext ? "Context attached" : "Message only"}</span>
                 </div>
                 {chatError ? (
-                  <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-300/10 px-3 py-2 text-sm text-rose-100">
+                  <div className="mt-3 rounded-xl border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
                     {chatError}
                   </div>
                 ) : null}
                 {chatNotice ? (
-                  <div className="mt-3 rounded-xl border border-sky-300/20 bg-sky-300/10 px-3 py-2 text-sm text-sky-100">
+                  <div className="mt-3 rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2 text-sm text-text-sky-token">
                     {chatNotice}
                   </div>
                 ) : null}
                 {feedbackError && showChatScreen ? (
-                  <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
+                  <div className="mt-3 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-sm text-text-amber-token">
                     Feedback error: {feedbackError}
                   </div>
                 ) : null}
                 <div className="mt-4 space-y-3">
                   <textarea
-                    className="min-h-[8rem] w-full rounded-2xl border border-white/10 bg-slate-950/18 px-4 py-3 text-sm text-white placeholder:text-slate-400 focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                    className="min-h-[8rem] w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
                     value={chatInput}
                     onChange={(event) => setChatInput(event.target.value)}
                     onKeyDown={(event) => {
@@ -9719,13 +9719,13 @@ const openTemplateModal = (template: Template) => {
                     placeholder="Ask for work in natural language. Cmd/Ctrl+Enter sends."
                   />
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-[11px] text-slate-300/68">
+                    <div className="text-[11px] text-text-md">
                       {chatSession?.metadata?.pending_clarification
                         ? "Pending clarification is remembered in this session."
                         : "Chat stays thin: it creates jobs, it does not bypass workflow controls."}
                     </div>
                     <button
-                      className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-4 py-2 text-sm font-semibold text-white transition hover:border-white/30 hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-xl border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={submitChatTurn}
                       disabled={chatLoading || !chatInput.trim()}
                     >
@@ -9748,14 +9748,14 @@ const openTemplateModal = (template: Template) => {
         <section
           className={`animate-fade-up-delayed ${
             useStudioSurfaceTheme
-              ? "rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-5 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              ? "rounded-[30px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
               : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
           }`}
         >
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${useStudioSurfaceTheme ? "text-white" : ""}`}>Jobs</h2>
-            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-500"}`}>
+            <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${useStudioSurfaceTheme ? "text-text-hi" : ""}`}>Jobs</h2>
+            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
               Track submitted goals and manage their lifecycle.
             </p>
           </div>
@@ -9763,8 +9763,8 @@ const openTemplateModal = (template: Template) => {
             <div
               className={`rounded-full px-3 py-1 text-xs ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-white/[0.05] text-slate-200"
-                  : "bg-slate-100 text-slate-500"
+                  ? "border border-subtle bg-surface-1 text-text-md"
+                  : "bg-slate-100 text-text-lo"
               }`}
             >
               {showAllJobs
@@ -9775,7 +9775,7 @@ const openTemplateModal = (template: Template) => {
               <button
                 className={`rounded-full px-3 py-1 text-xs transition ${
                   useStudioSurfaceTheme
-                    ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                    ? "border border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
                     : "border border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900"
                 }`}
                 onClick={() => setShowAllJobs((prev) => !prev)}
@@ -9789,8 +9789,8 @@ const openTemplateModal = (template: Template) => {
           <div
             className={`mt-4 rounded-xl p-6 text-sm ${
               useStudioSurfaceTheme
-                ? "border border-dashed border-white/12 bg-slate-950/18 text-slate-300/74"
-                : "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
+                ? "border border-dashed border-subtle bg-surface-1 text-text-md"
+                : "border border-dashed border-slate-200 bg-slate-50 text-text-lo"
             }`}
           >
             No jobs yet. Submit a goal above to start planning.
@@ -9802,7 +9802,7 @@ const openTemplateModal = (template: Template) => {
                 key={job.id}
                 className={`animate-fade-up rounded-xl p-4 transition ${
                   useStudioSurfaceTheme
-                    ? "border border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-white/16 hover:bg-slate-950/26"
+                    ? "border border-subtle bg-surface-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-subtle hover:bg-surface-1"
                     : "border border-slate-100 bg-white shadow-sm hover:border-slate-200 hover:shadow-md"
                 }`}
                 style={{ animationDelay: `${index * 0.06}s` }}
@@ -9811,7 +9811,7 @@ const openTemplateModal = (template: Template) => {
                   <div className="min-w-0">
                     <div
                       className={`break-words text-sm font-semibold ${
-                        useStudioSurfaceTheme ? "text-white" : "text-slate-900"
+                        useStudioSurfaceTheme ? "text-text-hi" : "text-slate-900"
                       }`}
                     >
                       {expandedJobGoals.has(job.id)
@@ -9822,7 +9822,7 @@ const openTemplateModal = (template: Template) => {
                       <button
                         className={`mt-1 text-xs font-medium transition ${
                           useStudioSurfaceTheme
-                            ? "text-slate-300/74 hover:text-white"
+                            ? "text-text-md hover:text-text-hi"
                             : "text-slate-600 hover:text-slate-900"
                         }`}
                         onClick={() => toggleJobGoalExpanded(job.id)}
@@ -9830,18 +9830,18 @@ const openTemplateModal = (template: Template) => {
                         {expandedJobGoals.has(job.id) ? "Show less" : "Show more"}
                       </button>
                     ) : null}
-                    <div className={`mt-1 break-words text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                    <div className={`mt-1 break-words text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
                       {job.id}
                     </div>
-                    <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                    <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
                       Run: {formatTimestamp(job.updated_at || job.created_at)}
                     </div>
-                    <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                    <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
                       Planning: {(job.planning_mode || "static").toUpperCase()} • Revision{" "}
                       {job.current_revision_number || 0}
                     </div>
                     {job.adaptive_status && (job.planning_mode || "static") === "adaptive" ? (
-                      <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                      <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
                         Replans: {job.adaptive_status.replans_used ?? 0}/
                         {job.adaptive_status.max_replans ?? 0}
                         {job.adaptive_status.replan_block_reason
@@ -9858,7 +9858,7 @@ const openTemplateModal = (template: Template) => {
                         typeof job.metadata?.llm_model === "string" ? job.metadata.llm_model : "";
                       if (!provider && !model) return null;
                       return (
-                        <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/68" : "text-slate-500"}`}>
+                        <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
                           LLM: {provider || "unknown"}
                           {model ? ` / ${model}` : ""}
                         </div>
@@ -9868,8 +9868,8 @@ const openTemplateModal = (template: Template) => {
                   <span
                     className={`shrink-0 self-start rounded-full px-2 py-1 text-[11px] uppercase tracking-[0.2em] ${
                       useStudioSurfaceTheme
-                        ? "border border-white/10 bg-white/[0.05] text-slate-200"
-                        : "bg-slate-100 text-slate-500"
+                        ? "border border-subtle bg-surface-1 text-text-md"
+                        : "bg-slate-100 text-text-lo"
                     }`}
                   >
                     {job.status}
@@ -9936,16 +9936,16 @@ const openTemplateModal = (template: Template) => {
         <section
           className={`animate-fade-up-delayed-more ${
             useStudioSurfaceTheme
-              ? "rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-5 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              ? "rounded-[30px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
               : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
           }`}
         >
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${useStudioSurfaceTheme ? "text-white" : ""}`}>
+            <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${useStudioSurfaceTheme ? "text-text-hi" : ""}`}>
               Job Details
             </h2>
-            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-500"}`}>
+            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
               Explore plan summaries, task dependencies, and the live DAG.
             </p>
           </div>
@@ -9953,7 +9953,7 @@ const openTemplateModal = (template: Template) => {
             <button
               className={`rounded-full px-3 py-1 text-xs transition ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                  ? "border border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
                   : "border border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900"
               }`}
               onClick={closeDetails}
@@ -9966,14 +9966,14 @@ const openTemplateModal = (template: Template) => {
           <div
             className={`mt-4 rounded-xl p-6 text-sm ${
               useStudioSurfaceTheme
-                ? "border border-dashed border-white/12 bg-slate-950/18 text-slate-300/74"
-                : "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
+                ? "border border-dashed border-subtle bg-surface-1 text-text-md"
+                : "border border-dashed border-slate-200 bg-slate-50 text-text-lo"
             }`}
           >
             Select a job to view its plan, tasks, and DAG.
           </div>
         ) : detailsLoading ? (
-          <p className={`mt-3 text-sm ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-600"}`}>
+          <p className={`mt-3 text-sm ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
             Loading job details...
           </p>
         ) : detailsError ? (
@@ -9983,12 +9983,12 @@ const openTemplateModal = (template: Template) => {
             <div
               className={`rounded-xl p-4 text-sm ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-slate-950/18 text-slate-200"
+                  ? "border border-subtle bg-surface-1 text-text-md"
                   : "border border-slate-100 bg-slate-50 text-slate-700"
               }`}
             >
               <div className="font-medium">Job ID</div>
-              <div className="break-all text-xs text-slate-500">{selectedJobId}</div>
+              <div className="break-all text-xs text-text-lo">{selectedJobId}</div>
               <div className="mt-2 text-xs text-slate-600">
                 Status: {selectedJobStatus || selectedJob?.status || "unknown"}
               </div>
@@ -10148,7 +10148,7 @@ const openTemplateModal = (template: Template) => {
                                   </div>
                                   {objective ? <div className="text-slate-600">{objective}</div> : null}
                                   {suggested.length > 0 ? (
-                                    <div className="mt-1 text-[11px] text-slate-500">
+                                    <div className="mt-1 text-[11px] text-text-lo">
                                       suggested: {suggested.join(", ")}
                                     </div>
                                   ) : null}
@@ -10230,12 +10230,12 @@ const openTemplateModal = (template: Template) => {
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-sm font-semibold text-slate-800">Run Debugger</div>
-                  <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                  <div className="text-[11px] uppercase tracking-[0.2em] text-text-lo">
                     Timeline + Resolved Inputs
                   </div>
                 </div>
                 <button
-                  className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                  className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
                   onClick={() => setShowDebugger((prev) => !prev)}
                 >
                   {showDebugger ? "Hide" : "Show"}
@@ -10244,11 +10244,11 @@ const openTemplateModal = (template: Template) => {
               {showDebugger ? (
                 <div className="mt-3">
                   {jobDebuggerLoading ? (
-                    <div className="text-xs text-slate-500">Loading debugger data...</div>
+                    <div className="text-xs text-text-lo">Loading debugger data...</div>
                   ) : jobDebuggerError ? (
                     <div className="text-xs text-rose-600">{jobDebuggerError}</div>
                   ) : !jobDebugger || jobDebugger.tasks.length === 0 ? (
-                    <div className="text-xs text-slate-500">No debugger data for this job yet.</div>
+                    <div className="text-xs text-text-lo">No debugger data for this job yet.</div>
                   ) : (
                     <div className="space-y-3">
                       <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
@@ -10357,7 +10357,7 @@ const openTemplateModal = (template: Template) => {
                                     {classification.category}
                                   </span>
                                 </div>
-                                <div className="text-[11px] text-slate-500">
+                                <div className="text-[11px] text-text-lo">
                                   {entry.timeline.length} timeline events
                                 </div>
                               </div>
@@ -10407,7 +10407,7 @@ const openTemplateModal = (template: Template) => {
                                 </div>
                               ) : null}
                               <div>
-                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                   Timeline
                                 </div>
                                 {entry.timeline.length > 0 ? (
@@ -10416,11 +10416,11 @@ const openTemplateModal = (template: Template) => {
                                       <div key={`${entry.task.id}-${eventEntry.stream_id}`} className="rounded border border-slate-100 bg-slate-50 px-2 py-1">
                                         <div className="flex flex-wrap items-center justify-between gap-2">
                                           <span className="font-semibold">{eventEntry.type}</span>
-                                          <span className="text-slate-500">
+                                          <span className="text-text-lo">
                                             {formatTimestamp(eventEntry.occurred_at)}
                                           </span>
                                         </div>
-                                        <div className="mt-1 text-slate-500">
+                                        <div className="mt-1 text-text-lo">
                                           status={eventEntry.status || "—"} • attempts=
                                           {eventEntry.attempts ?? "—"}/{eventEntry.max_attempts ?? "—"} •
                                           worker={eventEntry.worker_consumer || "—"}
@@ -10432,12 +10432,12 @@ const openTemplateModal = (template: Template) => {
                                     ))}
                                   </div>
                                 ) : (
-                                  <div className="mt-1 text-xs text-slate-500">No timeline events.</div>
+                                  <div className="mt-1 text-xs text-text-lo">No timeline events.</div>
                                 )}
                               </div>
                               {traceIds.length > 0 ? (
                                 <div>
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                     Trace Links
                                   </div>
                                   <div className="mt-1 flex flex-wrap gap-2">
@@ -10488,7 +10488,7 @@ const openTemplateModal = (template: Template) => {
                               ) : null}
                               {runIds.length > 0 ? (
                                 <div>
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                     Run IDs
                                   </div>
                                   <div className="mt-1 flex flex-wrap gap-2">
@@ -10528,7 +10528,7 @@ const openTemplateModal = (template: Template) => {
                               ) : null}
                               <div className="grid gap-2 md:grid-cols-2">
                                 <div>
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                     Resolved Inputs
                                   </div>
                                   <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-700">
@@ -10536,7 +10536,7 @@ const openTemplateModal = (template: Template) => {
                                   </pre>
                                 </div>
                                 <div>
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                     Latest Result
                                   </div>
                                   <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-700">
@@ -10555,7 +10555,7 @@ const openTemplateModal = (template: Template) => {
             </div>
 
             {selectedTasks.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-text-lo">
                 No tasks yet.
               </div>
             ) : (
@@ -10633,12 +10633,12 @@ const openTemplateModal = (template: Template) => {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold text-slate-800">Task Inputs</div>
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-text-lo">
                       Instructions + Tools
                     </div>
                   </div>
                   <button
-                    className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                    className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
                     onClick={() => setShowTaskInputs((prev) => !prev)}
                   >
                     {showTaskInputs ? "Hide" : "Show"}
@@ -10665,14 +10665,14 @@ const openTemplateModal = (template: Template) => {
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <div className="text-sm font-semibold text-slate-900">{task.name}</div>
-                              <div className="mt-1 text-xs text-slate-500">{task.id}</div>
+                              <div className="mt-1 text-xs text-text-lo">{task.id}</div>
                             </div>
                             <div className="flex flex-col items-end gap-2">
-                              <span className="rounded-full bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                              <span className="rounded-full bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo">
                                 {task.status}
                               </span>
                               <button
-                                className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500"
+                                className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo"
                                 onClick={() =>
                                   setExpandedTaskInputs((prev) => {
                                     const next = new Set(prev);
@@ -10692,7 +10692,7 @@ const openTemplateModal = (template: Template) => {
                           {isExpanded ? (
                             <div className="mt-3 grid gap-3 text-xs text-slate-600">
                               <div>
-                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                   Instruction
                                 </div>
                                 <pre className="mt-2 whitespace-pre-wrap rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-600">
@@ -10701,7 +10701,7 @@ const openTemplateModal = (template: Template) => {
                               </div>
                               <div className="grid gap-3 md:grid-cols-2">
                                 <div>
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                     Expected Schema
                                   </div>
                                   <div className="mt-1 text-xs text-slate-600">
@@ -10709,7 +10709,7 @@ const openTemplateModal = (template: Template) => {
                                   </div>
                                 </div>
                                 <div>
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                     Tool Requests
                                   </div>
                                   <div className="mt-1 text-xs text-slate-600">
@@ -10720,7 +10720,7 @@ const openTemplateModal = (template: Template) => {
                                 </div>
                               </div>
                               <div>
-                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                   Tool Calls
                                 </div>
                                 {taskResults[task.id]?.tool_calls &&
@@ -10735,13 +10735,13 @@ const openTemplateModal = (template: Template) => {
                                           <div className="text-xs font-semibold text-slate-700">
                                             {call.tool_name}
                                           </div>
-                                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-text-lo">
                                             {call.status}
                                           </span>
                                         </div>
                                         <div className="mt-2 grid gap-3 md:grid-cols-2">
                                           <div>
-                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                               Input
                                             </div>
                                             <pre className="mt-1 whitespace-pre-wrap rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
@@ -10749,7 +10749,7 @@ const openTemplateModal = (template: Template) => {
                                             </pre>
                                           </div>
                                           <div>
-                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                               Output
                                             </div>
                                             <pre className="mt-1 whitespace-pre-wrap rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
@@ -10761,13 +10761,13 @@ const openTemplateModal = (template: Template) => {
                                     ))}
                                   </div>
                                 ) : (
-                                  <div className="mt-2 text-xs text-slate-500">
+                                  <div className="mt-2 text-xs text-text-lo">
                                     No tool calls recorded yet.
                                   </div>
                                 )}
                               </div>
                               <div>
-                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                   Outputs
                                 </div>
                                 <pre className="mt-2 whitespace-pre-wrap rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-600">
@@ -10776,7 +10776,7 @@ const openTemplateModal = (template: Template) => {
                               </div>
                               {artifactPaths.length > 0 ? (
                                 <div>
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                     Downloads
                                   </div>
                                   <div className="mt-2 flex flex-wrap gap-2">
@@ -10796,7 +10796,7 @@ const openTemplateModal = (template: Template) => {
                               ) : null}
                             </div>
                           ) : (
-                            <div className="mt-3 text-xs text-slate-500">Collapsed.</div>
+                            <div className="mt-3 text-xs text-text-lo">Collapsed.</div>
                           )}
                         </div>
                       );
@@ -10811,7 +10811,7 @@ const openTemplateModal = (template: Template) => {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold text-slate-800">Context Memory</div>
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-text-lo">
                       Job Entries
                     </div>
                   </div>
@@ -10822,7 +10822,7 @@ const openTemplateModal = (template: Template) => {
                       </span>
                     ) : null}
                     <button
-                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
                       onClick={() => setShowMemory((prev) => !prev)}
                     >
                       {showMemory ? "Hide" : "Show"}
@@ -10830,7 +10830,7 @@ const openTemplateModal = (template: Template) => {
                   </div>
                 </div>
                 {showMemory ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-lo">
                     <input
                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 md:w-56"
                       placeholder="Filter by key"
@@ -10848,7 +10848,7 @@ const openTemplateModal = (template: Template) => {
                       }
                     />
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-text-lo">
                         Limit
                       </span>
                       <select
@@ -10878,13 +10878,13 @@ const openTemplateModal = (template: Template) => {
                       </select>
                     </div>
                     <button
-                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
                       onClick={() => setMemoryFilters({ key: "", tool: "" })}
                     >
                       Clear
                     </button>
                     <button
-                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
                       onClick={() => selectedJobId && loadMemoryEntries(selectedJobId)}
                     >
                       Refresh
@@ -10892,14 +10892,14 @@ const openTemplateModal = (template: Template) => {
                   </div>
                 ) : null}
                 {memoryLoading ? (
-                  <div className="mt-3 text-xs text-slate-500">Loading memory entries...</div>
+                  <div className="mt-3 text-xs text-text-lo">Loading memory entries...</div>
                 ) : memoryError ? (
                   <div className="mt-3 text-xs text-rose-600">{memoryError}</div>
                 ) : showMemory ? (
                   <div className="mt-4 space-y-3">
                     <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                       <div className="text-sm font-semibold text-slate-900">Semantic Context</div>
-                      <div className="mt-1 text-xs text-slate-500">
+                      <div className="mt-1 text-xs text-text-lo">
                         Distilled facts for lookup and reasoning.
                       </div>
                       <div className="mt-3 grid gap-2 md:grid-cols-2">
@@ -10980,7 +10980,7 @@ const openTemplateModal = (template: Template) => {
                               <div className="mt-1 text-xs text-slate-700">
                                 {String(match.fact || "")}
                               </div>
-                              <div className="mt-1 text-[10px] text-slate-500">
+                              <div className="mt-1 text-[10px] text-text-lo">
                                 namespace: {String(match.namespace || "general")} | key:{" "}
                                 {String(match.key || "—")}
                               </div>
@@ -11003,17 +11003,17 @@ const openTemplateModal = (template: Template) => {
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <div className="text-sm font-semibold text-slate-900">{name}</div>
-                              <div className="mt-1 text-xs text-slate-500">
+                              <div className="mt-1 text-xs text-text-lo">
                                 {filteredEntries.length} of {entries.length} entries
                               </div>
                             </div>
                             <div className="flex flex-col items-end gap-2">
-                              <span className="rounded-full bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                              <span className="rounded-full bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo">
                                 limit {limit}
                               </span>
                               <div className="flex items-center gap-2">
                                 <button
-                                  className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500"
+                                  className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo"
                                   onClick={() =>
                                     setExpandedMemoryGroups((prev) => {
                                       const next = new Set(prev);
@@ -11029,7 +11029,7 @@ const openTemplateModal = (template: Template) => {
                                   {groupExpanded ? "Hide" : "Show"}
                                 </button>
                                 <button
-                                  className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 disabled:opacity-50"
+                                  className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo disabled:opacity-50"
                                   disabled={!canLoadMore}
                                   onClick={() => {
                                     if (!selectedJobId || !canLoadMore) {
@@ -11064,7 +11064,7 @@ const openTemplateModal = (template: Template) => {
                                           {entry.key || "Untitled entry"}
                                         </div>
                                         <button
-                                          className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500"
+                                          className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo"
                                           onClick={() =>
                                             setExpandedMemoryEntries((prev) => {
                                               const next = { ...prev };
@@ -11085,7 +11085,7 @@ const openTemplateModal = (template: Template) => {
                                       {entryExpanded ? (
                                         <div className="mt-2 grid gap-3 text-xs text-slate-600 md:grid-cols-2">
                                           <div>
-                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                               Metadata
                                             </div>
                                             <pre className="mt-1 whitespace-pre-wrap rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
@@ -11093,7 +11093,7 @@ const openTemplateModal = (template: Template) => {
                                             </pre>
                                           </div>
                                           <div>
-                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                               Payload
                                             </div>
                                             <pre className="mt-1 whitespace-pre-wrap rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
@@ -11101,7 +11101,7 @@ const openTemplateModal = (template: Template) => {
                                             </pre>
                                           </div>
                                           <div className="md:col-span-2">
-                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-lo">
                                               Updated
                                             </div>
                                             <div className="mt-1 text-xs text-slate-600">
@@ -11110,7 +11110,7 @@ const openTemplateModal = (template: Template) => {
                                           </div>
                                         </div>
                                       ) : (
-                                        <div className="mt-2 text-[11px] text-slate-500">
+                                        <div className="mt-2 text-[11px] text-text-lo">
                                           Collapsed.
                                         </div>
                                       )}
@@ -11119,19 +11119,19 @@ const openTemplateModal = (template: Template) => {
                                 })}
                               </div>
                             ) : (
-                              <div className="mt-3 text-xs text-slate-500">
+                              <div className="mt-3 text-xs text-text-lo">
                                 No memory entries match the filters.
                               </div>
                             )
                           ) : (
-                            <div className="mt-3 text-xs text-slate-500">Collapsed.</div>
+                            <div className="mt-3 text-xs text-text-lo">Collapsed.</div>
                           )}
                         </div>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="mt-3 text-xs text-slate-500">Hidden by default.</div>
+                  <div className="mt-3 text-xs text-text-lo">Hidden by default.</div>
                 )}
               </div>
             ) : null}
@@ -11141,22 +11141,22 @@ const openTemplateModal = (template: Template) => {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-slate-800">Dead Letter Queue</div>
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-text-lo">
                       tasks.dlq
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo">
                       {dlqEntries.length} entries
                     </span>
                     <button
-                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
                       onClick={() => setShowDlq((prev) => !prev)}
                     >
                       {showDlq ? "Hide" : "Show"}
                     </button>
                     <button
-                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500"
+                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
                       onClick={() => selectedJobId && loadDlqEntries(selectedJobId)}
                     >
                       Refresh
@@ -11164,7 +11164,7 @@ const openTemplateModal = (template: Template) => {
                   </div>
                 </div>
                 {dlqLoading ? (
-                  <div className="mt-3 text-xs text-slate-500">Loading DLQ entries...</div>
+                  <div className="mt-3 text-xs text-text-lo">Loading DLQ entries...</div>
                 ) : dlqError ? (
                   <div className="mt-3 text-xs text-rose-600">{dlqError}</div>
                 ) : showDlq ? (
@@ -11186,11 +11186,11 @@ const openTemplateModal = (template: Template) => {
                                 {entry.message_id}
                               </div>
                               <div className="flex items-center gap-2">
-                                <div className="text-[11px] text-slate-500">
+                                <div className="text-[11px] text-text-lo">
                                   {formatTimestamp(entry.failed_at || undefined)}
                                 </div>
                                 <button
-                                  className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 disabled:opacity-40"
+                                  className="rounded-full border border-slate-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo disabled:opacity-40"
                                   disabled={!canRetry}
                                   onClick={() => retryTaskFromDlq(entry)}
                                 >
@@ -11214,10 +11214,10 @@ const openTemplateModal = (template: Template) => {
                       })}
                     </div>
                   ) : (
-                    <div className="mt-3 text-xs text-slate-500">No DLQ entries for this job.</div>
+                    <div className="mt-3 text-xs text-text-lo">No DLQ entries for this job.</div>
                   )
                 ) : (
-                  <div className="mt-3 text-xs text-slate-500">Hidden by default.</div>
+                  <div className="mt-3 text-xs text-text-lo">Hidden by default.</div>
                 )}
               </div>
             ) : null}
@@ -11228,7 +11228,7 @@ const openTemplateModal = (template: Template) => {
       <section
         className={`animate-fade-up-delayed-more rounded-2xl p-6 ${
           useStudioSurfaceTheme
-            ? "border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+            ? "border border-subtle bg-gradient-panel text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
             : "border border-slate-100 bg-white shadow-sm"
         }`}
       >
@@ -11236,12 +11236,12 @@ const openTemplateModal = (template: Template) => {
           <div>
             <h2
               className={`text-[22px] font-semibold tracking-[-0.03em] ${
-                useStudioSurfaceTheme ? "text-white" : "text-slate-900"
+                useStudioSurfaceTheme ? "text-text-hi" : "text-slate-900"
               }`}
             >
               Recent Events
             </h2>
-            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-500"}`}>
+            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
               Live event stream snapshots.
             </p>
           </div>
@@ -11249,8 +11249,8 @@ const openTemplateModal = (template: Template) => {
             <div
               className={`rounded-full px-3 py-1 text-xs ${
                 useStudioSurfaceTheme
-                  ? "border border-white/10 bg-white/[0.05] text-slate-200"
-                  : "bg-slate-100 text-slate-500"
+                  ? "border border-subtle bg-surface-1 text-text-md"
+                  : "bg-slate-100 text-text-lo"
               }`}
             >
               {events.length} shown
@@ -11258,8 +11258,8 @@ const openTemplateModal = (template: Template) => {
             <button
               className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
                 useStudioSurfaceTheme
-                  ? "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
-                  : "border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800"
+                  ? "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
+                  : "border-slate-200 text-text-lo hover:border-slate-300 hover:text-slate-800"
               }`}
               onClick={() => setShowRecentEvents((prev) => !prev)}
             >
@@ -11276,14 +11276,14 @@ const openTemplateModal = (template: Template) => {
                   key={index}
                   className={`rounded-xl border px-3 py-2 ${
                     useStudioSurfaceTheme
-                      ? "border-white/10 bg-slate-950/18 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                      ? "border-subtle bg-surface-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
                       : "border-slate-100 bg-slate-50"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div
                       className={`font-medium ${
-                        useStudioSurfaceTheme ? "text-slate-100" : "text-slate-700"
+                        useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"
                       }`}
                     >
                       {event.type}
@@ -11291,8 +11291,8 @@ const openTemplateModal = (template: Template) => {
                     <button
                       className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.2em] transition ${
                         useStudioSurfaceTheme
-                          ? "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
-                          : "border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800"
+                          ? "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
+                          : "border-slate-200 text-text-lo hover:border-slate-300 hover:text-slate-800"
                       }`}
                       onClick={() =>
                         setExpandedRecentEvents((prev) => {
@@ -11312,7 +11312,7 @@ const openTemplateModal = (template: Template) => {
                   {isExpanded ? (
                     <pre
                       className={`mt-2 whitespace-pre-wrap ${
-                        useStudioSurfaceTheme ? "text-slate-300/78" : "text-slate-500"
+                        useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"
                       }`}
                     >
                       {JSON.stringify(event.payload, null, 2)}
@@ -11320,7 +11320,7 @@ const openTemplateModal = (template: Template) => {
                   ) : (
                     <div
                       className={`mt-2 text-[11px] ${
-                        useStudioSurfaceTheme ? "text-slate-300/72" : "text-slate-500"
+                        useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"
                       }`}
                     >
                       Collapsed.
@@ -11331,7 +11331,7 @@ const openTemplateModal = (template: Template) => {
             })}
           </ul>
         ) : (
-          <div className={`mt-4 text-xs ${useStudioSurfaceTheme ? "text-slate-300/72" : "text-slate-500"}`}>
+          <div className={`mt-4 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
             Hidden by default.
           </div>
         )}

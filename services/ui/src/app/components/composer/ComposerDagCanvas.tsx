@@ -127,7 +127,7 @@ type ComposerDagCanvasProps = {
 };
 
 const toolbarButtonClassName =
-  "inline-flex h-8 items-center rounded-lg border border-black/15 bg-[rgba(54,68,84,0.94)] px-2.5 text-[10px] font-semibold tracking-[0.04em] text-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-white/18 hover:bg-[rgba(61,77,95,0.98)] disabled:cursor-not-allowed disabled:opacity-40";
+  "inline-flex h-8 items-center rounded-lg border border-black/15 bg-[rgba(54,68,84,0.94)] px-2.5 text-[10px] font-semibold tracking-[0.04em] text-text-hi shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-subtle hover:bg-[rgba(61,77,95,0.98)] disabled:cursor-not-allowed disabled:opacity-40";
 const DAG_CANVAS_PAN_THRESHOLD = 6;
 
 type BlueprintPreviewNode = {
@@ -641,7 +641,7 @@ export default function ComposerDagCanvas({
             >
               - Zoom
             </button>
-            <div className="flex h-8 items-center rounded-lg border border-white/10 bg-black/10 px-2.5 text-[10px] font-semibold tracking-[0.06em] text-slate-200">
+            <div className="flex h-8 items-center rounded-lg border border-subtle bg-black/10 px-2.5 text-[10px] font-semibold tracking-[0.06em] text-text-md">
               {Math.round(dagCanvasZoom * 100)}%
             </div>
             <button
@@ -664,7 +664,7 @@ export default function ComposerDagCanvas({
               {focusGraphActive ? "Exit Focus" : "Focus Graph"}
             </button>
             <button
-              className={`${toolbarButtonClassName} border-white/16 bg-[rgba(38,48,61,0.98)]`}
+              className={`${toolbarButtonClassName} border-subtle bg-[rgba(38,48,61,0.98)]`}
               onClick={() => {
                 onRunWorkflow?.();
               }}

@@ -23,7 +23,7 @@ const renderBucketList = (
 ) => {
   if (!buckets.length) {
     return (
-      <div className={`text-xs ${isStudioTheme ? "text-slate-300/72" : "text-slate-500"}`}>
+      <div className={`text-xs ${isStudioTheme ? "text-text-md" : "text-text-lo"}`}>
         {emptyLabel}
       </div>
     );
@@ -34,12 +34,12 @@ const renderBucketList = (
         <div
           key={`feedback-bucket-${bucket.key}`}
           className={`flex items-center justify-between gap-3 text-sm ${
-            isStudioTheme ? "text-slate-100" : "text-slate-700"
+            isStudioTheme ? "text-text-hi" : "text-slate-700"
           }`}
         >
           <span className="truncate">{bucket.key}</span>
           <span
-            className={`shrink-0 text-xs ${isStudioTheme ? "text-slate-300/78" : "text-slate-500"}`}
+            className={`shrink-0 text-xs ${isStudioTheme ? "text-text-md" : "text-text-lo"}`}
           >
             {formatter ? formatter(bucket) : `${bucket.total}`}
           </span>
@@ -52,7 +52,7 @@ const renderBucketList = (
 const renderReasonList = (reasons: FeedbackReasonBucket[], isStudioTheme = false) => {
   if (!reasons.length) {
     return (
-      <div className={`text-xs ${isStudioTheme ? "text-slate-300/72" : "text-slate-500"}`}>
+      <div className={`text-xs ${isStudioTheme ? "text-text-md" : "text-text-lo"}`}>
         No negative or partial reasons yet.
       </div>
     );
@@ -63,12 +63,12 @@ const renderReasonList = (reasons: FeedbackReasonBucket[], isStudioTheme = false
         <div
           key={`feedback-reason-${reason.reason_code}`}
           className={`flex items-center justify-between gap-3 text-sm ${
-            isStudioTheme ? "text-slate-100" : "text-slate-700"
+            isStudioTheme ? "text-text-hi" : "text-slate-700"
           }`}
         >
           <span className="truncate">{reason.reason_code}</span>
           <span
-            className={`shrink-0 text-xs ${isStudioTheme ? "text-slate-300/78" : "text-slate-500"}`}
+            className={`shrink-0 text-xs ${isStudioTheme ? "text-text-md" : "text-text-lo"}`}
           >
             {reason.count}
           </span>
@@ -89,38 +89,38 @@ export default function FeedbackInsightsPanel({
   const total = summary?.total ?? 0;
   const terminalStatuses = summary?.correlates?.terminal_statuses ?? [];
   const metricCardClassName = isStudioTheme
-    ? "rounded-xl border border-white/10 bg-slate-950/24 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+    ? "rounded-xl border border-subtle bg-surface-1 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
     : "rounded-xl border border-slate-100 bg-slate-50 p-4";
   const sectionCardClassName = isStudioTheme
-    ? "rounded-xl border border-white/10 bg-slate-950/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+    ? "rounded-xl border border-subtle bg-surface-1 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
     : "rounded-xl border border-slate-100 p-4";
   const eyebrowClassName = isStudioTheme
-    ? "text-[11px] uppercase tracking-[0.2em] text-slate-300/78"
-    : "text-[11px] uppercase tracking-[0.2em] text-slate-400";
+    ? "text-[11px] uppercase tracking-[0.2em] text-text-md"
+    : "text-[11px] uppercase tracking-[0.2em] text-text-lo";
   const metricValueClassName = isStudioTheme
-    ? "mt-2 text-2xl font-semibold text-white"
+    ? "mt-2 text-2xl font-semibold text-text-hi"
     : "mt-2 text-2xl font-semibold text-slate-900";
-  const mutedClassName = isStudioTheme ? "text-slate-300/72" : "text-slate-500";
+  const mutedClassName = isStudioTheme ? "text-text-md" : "text-text-lo";
   const headingClassName = isStudioTheme
-    ? "text-sm font-semibold text-white"
+    ? "text-sm font-semibold text-text-hi"
     : "text-sm font-semibold text-slate-800";
-  const rowTextClassName = isStudioTheme ? "text-sm text-slate-100" : "text-sm text-slate-700";
-  const rowValueClassName = isStudioTheme ? "text-xs text-slate-300/78" : "text-xs text-slate-500";
+  const rowTextClassName = isStudioTheme ? "text-sm text-text-hi" : "text-sm text-slate-700";
+  const rowValueClassName = isStudioTheme ? "text-xs text-text-md" : "text-xs text-text-lo";
 
   return (
     <section
       className={`animate-fade-up rounded-2xl p-6 ${
         isStudioTheme
-          ? "border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] text-white shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
+          ? "border border-subtle bg-gradient-panel text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
           : "border border-slate-100 bg-white shadow-sm"
       }`}
     >
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className={`font-display text-xl ${isStudioTheme ? "text-white" : "text-slate-900"}`}>
+          <h2 className={`font-display text-xl ${isStudioTheme ? "text-text-hi" : "text-slate-900"}`}>
             Feedback Insights
           </h2>
-          <p className={`mt-1 text-xs ${isStudioTheme ? "text-slate-300/74" : "text-slate-500"}`}>
+          <p className={`mt-1 text-xs ${isStudioTheme ? "text-text-md" : "text-text-lo"}`}>
             Read-only quality signals from explicit user feedback and linked runtime context.
           </p>
         </div>
@@ -129,7 +129,7 @@ export default function FeedbackInsightsPanel({
             type="button"
             className={`rounded-full px-3 py-1 text-xs transition ${
               isStudioTheme
-                ? "border border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                ? "border border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
                 : "border border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900"
             }`}
             onClick={onRefresh}
@@ -143,8 +143,8 @@ export default function FeedbackInsightsPanel({
         <div
           className={`mt-4 rounded-xl p-6 text-sm ${
             isStudioTheme
-              ? "border border-dashed border-white/12 bg-slate-950/18 text-slate-300/74"
-              : "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
+              ? "border border-dashed border-subtle bg-surface-1 text-text-md"
+              : "border border-dashed border-slate-200 bg-slate-50 text-text-lo"
           }`}
         >
           Loading feedback analytics...
@@ -155,7 +155,7 @@ export default function FeedbackInsightsPanel({
         <div
           className={`mt-4 rounded-xl px-4 py-3 text-sm ${
             isStudioTheme
-              ? "border border-amber-300/20 bg-amber-300/10 text-amber-100"
+              ? "border border-amber-300/20 bg-accent-amber text-text-amber-token"
               : "border border-amber-200 bg-amber-50 text-amber-800"
           }`}
         >

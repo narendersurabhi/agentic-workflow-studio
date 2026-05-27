@@ -31,13 +31,13 @@ export default function ProjectPage() {
         <>
           <Link
             href="/workflows"
-            className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
           >
             Saved Workflows
           </Link>
           <Link
             href="/studio"
-            className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
           >
             Open Studio
           </Link>
@@ -47,28 +47,28 @@ export default function ProjectPage() {
       <section className="relative">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
               Project
             </div>
-            <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-white">
+            <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
               Workflow Management
             </h2>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
               Move between saved automations and Workflow Studio for designing business workflows.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
               compose
             </span>
-            <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
               chat
             </span>
-            <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
               workflows
             </span>
-            <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
               studio
             </span>
           </div>
@@ -79,22 +79,22 @@ export default function ProjectPage() {
             <Link
               key={card.href}
               href={card.href}
-              className="group rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(63,78,95,0.62),rgba(37,49,62,0.82))] p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-[linear-gradient(180deg,rgba(71,88,106,0.66),rgba(42,56,70,0.86))]"
+              className="group rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-gradient-panel"
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
                     {card.eyebrow}
                   </div>
-                  <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-white">
+                  <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
                     {card.title}
                   </h3>
                 </div>
               </div>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300/82">
+              <p className="mt-3 max-w-xl text-sm leading-6 text-text-md">
                 {card.description}
               </p>
-              <div className="mt-5 inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition group-hover:border-sky-300/30 group-hover:bg-white/[0.08]">
+              <div className="mt-5 inline-flex items-center rounded-full border border-subtle bg-surface-1 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-surface-1">
                 {card.cta}
               </div>
             </Link>

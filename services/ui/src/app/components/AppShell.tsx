@@ -77,62 +77,40 @@ export default function AppShell({
 
   return (
     <div
-      className={`app-shell -mx-6 -my-8 min-h-screen ${
-        isLightTheme
-          ? "app-shell-light bg-[#eaf1f7] text-slate-900"
-          : "app-shell-dark bg-[#4f6274] text-slate-50"
+      className={`app-shell -mx-6 -my-8 min-h-screen text-text-hi ${
+        isLightTheme ? "app-shell-light" : "app-shell-dark"
       }`}
       data-app-theme={mounted ? theme : "dark"}
     >
-      <div
-        className={`min-h-screen ${
-          isLightTheme
-            ? "bg-[linear-gradient(180deg,#e1e9f2_0px,#e1e9f2_78px,#f5f8fc_78px,#f5f8fc_100%)]"
-            : "bg-[linear-gradient(180deg,#435365_0px,#435365_78px,#55697c_78px,#55697c_100%)]"
-        }`}
-      >
+      <div className="min-h-screen bg-gradient-shell">
         <header
-          className={`px-6 py-3 ${
-            isLightTheme
-              ? "border-b border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(241,245,249,0.98))] shadow-[inset_0_-1px_0_rgba(148,163,184,0.16)]"
-              : "border-b border-white/10 bg-[linear-gradient(180deg,rgba(67,83,101,0.98),rgba(60,74,90,0.98))] shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]"
-          }`}
+          className="border-b bg-gradient-header px-6 py-3"
+          style={{
+            borderColor: "var(--border-header)",
+            boxShadow: "var(--shadow-header)",
+          }}
         >
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="min-w-0">
-              <div
-                className={`truncate text-[22px] font-semibold tracking-[-0.03em] ${
-                  isLightTheme ? "text-slate-900" : "text-white"
-                }`}
-              >
+              <div className="truncate text-[22px] font-semibold tracking-[-0.03em] text-text-hi">
                 {title}
               </div>
               {breadcrumbs.length > 0 ? (
-                <div
-                  className={`mt-1 flex flex-wrap items-center gap-2 text-sm ${
-                    isLightTheme ? "text-slate-500" : "text-slate-200/78"
-                  }`}
-                >
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-text-md">
                   {breadcrumbs.map((breadcrumb, index) => (
                     <span key={`${breadcrumb.label}-${index}`} className="contents">
                       {breadcrumb.href ? (
                         <Link
                           href={breadcrumb.href}
-                          className={`transition ${
-                            isLightTheme ? "hover:text-slate-900" : "hover:text-white"
-                          }`}
+                          className="transition hover:text-text-hi"
                         >
                           {breadcrumb.label}
                         </Link>
                       ) : (
-                        <span className={isLightTheme ? "text-slate-700" : "text-white/95"}>
-                          {breadcrumb.label}
-                        </span>
+                        <span className="text-text-hi">{breadcrumb.label}</span>
                       )}
                       {index < breadcrumbs.length - 1 ? (
-                        <span className={isLightTheme ? "text-slate-400" : "text-white/35"}>
-                          ›
-                        </span>
+                        <span className="text-text-lo">›</span>
                       ) : null}
                     </span>
                   ))}
@@ -144,11 +122,7 @@ export default function AppShell({
               <button
                 type="button"
                 onClick={toggleTheme}
-                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
-                  isLightTheme
-                    ? "border border-slate-200 bg-white/85 text-slate-700 hover:border-slate-300 hover:bg-white"
-                    : "border border-white/12 bg-white/[0.04] text-slate-100 hover:border-sky-300/35 hover:bg-white/[0.08]"
-                }`}
+                className="inline-flex items-center gap-2 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-surface-2"
                 aria-label={isLightTheme ? "Switch to dark mode" : "Switch to light mode"}
               >
                 <ThemeModeIcon theme={isLightTheme ? "light" : "dark"} className="h-4 w-4" />
@@ -161,11 +135,8 @@ export default function AppShell({
 
         <div className="grid min-h-[calc(100vh-78px)] grid-cols-[52px_minmax(0,1fr)]">
           <aside
-            className={`px-1.5 py-3 ${
-              isLightTheme
-                ? "border-r border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(241,245,249,0.98))]"
-                : "border-r border-white/10 bg-[linear-gradient(180deg,rgba(49,61,74,0.96),rgba(44,56,69,0.98))]"
-            }`}
+            className="border-r bg-gradient-sidebar px-1.5 py-3"
+            style={{ borderColor: "var(--border-header)" }}
           >
             <div className="flex h-full flex-col items-center">
               <div className="space-y-3">
@@ -175,15 +146,21 @@ export default function AppShell({
                     href={item.href}
                     title={item.label}
                     aria-label={item.label}
-                    className={`flex h-11 w-11 items-center justify-center rounded-xl border transition ${
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border transition"
+                    style={
                       item.id === activeScreen
-                        ? isLightTheme
-                          ? "border-sky-300/55 bg-sky-100 text-sky-700 shadow-[0_8px_18px_rgba(14,165,233,0.12)]"
-                          : "border-sky-300/35 bg-sky-400/18 text-sky-50 shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
-                        : isLightTheme
-                          ? "border-slate-200 bg-white/82 text-slate-600 hover:border-slate-300 hover:bg-white"
-                          : "border-white/10 bg-slate-950/18 text-slate-200 hover:border-white/18 hover:bg-slate-950/26"
-                    }`}
+                        ? {
+                            background: "var(--nav-active-bg)",
+                            borderColor: "var(--nav-active-border)",
+                            color: "var(--nav-active-text)",
+                            boxShadow: "0 8px 18px rgba(14,165,233,0.16)",
+                          }
+                        : {
+                            background: "var(--nav-inactive-bg)",
+                            borderColor: "var(--nav-inactive-border)",
+                            color: "var(--nav-inactive-text)",
+                          }
+                    }
                   >
                     <StudioWorkbenchIcon kind={item.icon} className="h-5 w-5" />
                   </Link>

@@ -512,14 +512,14 @@ function SurfacePanel({
 }) {
   return (
     <section
-      className={`rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(21,30,40,0.9),rgba(10,16,25,0.94))] p-4 shadow-[0_16px_34px_rgba(15,23,42,0.18)] ${className}`.trim()}
+      className={`rounded-[24px] border border-subtle bg-gradient-panel-deep p-4 shadow-[0_16px_34px_rgba(15,23,42,0.18)] ${className}`.trim()}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-100/70">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-sky-token">
             {title}
           </div>
-          {subtitle ? <p className="mt-1 text-xs leading-5 text-slate-300/78">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-1 text-xs leading-5 text-text-md">{subtitle}</p> : null}
         </div>
       </div>
       <div className="mt-4">{children}</div>
@@ -542,13 +542,13 @@ function JsonPreview({
     (isRecord(value) && Object.keys(value).length === 0);
   return (
     <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300/72">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-md">
         {title}
       </div>
       {isEmpty ? (
-        <div className="mt-2 text-xs text-slate-400">{emptyLabel}</div>
+        <div className="mt-2 text-xs text-text-lo">{emptyLabel}</div>
       ) : (
-        <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border border-white/8 bg-slate-950/55 p-3 text-[11px] leading-5 text-slate-100">
+        <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border border-white/8 bg-slate-950/55 p-3 text-[11px] leading-5 text-text-hi">
           {formatJson(value)}
         </pre>
       )}
@@ -1691,33 +1691,33 @@ export default function StudioWorkbenchSurface({
       : workbenchMode;
 
   return (
-    <section className={active ? "studio-contrast-surface block" : "hidden"} aria-hidden={!active}>
+    <section className={active ? "block" : "hidden"} aria-hidden={!active}>
       <div className="relative">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100/72">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
               Studio Surface
             </div>
-            <h2 className="mt-1 flex items-center gap-3 text-[30px] font-semibold tracking-[-0.03em] text-white">
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-300/22 bg-sky-400/14 text-sky-100">
+            <h2 className="mt-1 flex items-center gap-3 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-300/22 bg-accent-sky text-text-sky-token">
                 <StudioWorkbenchIcon kind="run" className="h-5 w-5" />
               </span>
               Agent + Capability Workbench
             </h2>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
               Launch ephemeral capability and agent runs through the canonical runtime, then inspect
               the resulting debugger state without leaving <span className="font-semibold">{activeSurface}</span>.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
               catalog {catalog.length}
             </span>
-            <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
               mode {workbenchMode}
             </span>
             {activeRunId ? (
-              <span className="rounded-full border border-sky-300/28 bg-sky-400/14 px-3 py-1 text-sky-50">
+              <span className="rounded-full border border-sky-300/28 bg-accent-sky px-3 py-1 text-text-hi">
                 run {activeRunId.slice(0, 8)}
               </span>
             ) : null}
@@ -1728,8 +1728,8 @@ export default function StudioWorkbenchSurface({
           <div
             className={`mt-4 rounded-[24px] border px-4 py-3 text-sm ${
               workbenchBanner.tone === "warning"
-                ? "border-amber-300/18 bg-amber-400/12 text-amber-50"
-                : "border-sky-300/15 bg-sky-400/10 text-sky-50"
+                ? "border-amber-300/18 bg-accent-amber text-text-amber-token"
+                : "border-sky-300/15 bg-accent-sky text-text-hi"
             }`}
           >
             {workbenchBanner.message}
@@ -1747,7 +1747,7 @@ export default function StudioWorkbenchSurface({
           ))}
         </datalist>
 
-        <div className="mt-4 overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(75,92,109,0.58),rgba(45,57,71,0.72))] p-4 shadow-[0_22px_56px_rgba(15,23,42,0.16)]">
+        <div className="studio-contrast-surface mt-4 overflow-hidden rounded-[30px] border border-subtle bg-gradient-panel-mid p-4 shadow-[0_22px_56px_rgba(15,23,42,0.16)]">
           <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
             <SurfacePanel
               title="Catalog"
@@ -1758,13 +1758,13 @@ export default function StudioWorkbenchSurface({
                   value={catalogQuery}
                   onChange={(event) => setCatalogQuery(event.target.value)}
                   placeholder="Search capabilities"
-                  className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                  className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                 />
                 <div className="grid gap-2">
                   <select
                     value={groupFilter}
                     onChange={(event) => setGroupFilter(event.target.value)}
-                    className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-xs text-slate-100 outline-none"
+                    className="rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-xs text-text-hi outline-none"
                   >
                     <option value="all">All groups</option>
                     {groupOptions.map((group) => (
@@ -1776,7 +1776,7 @@ export default function StudioWorkbenchSurface({
                   <select
                     value={riskFilter}
                     onChange={(event) => setRiskFilter(event.target.value)}
-                    className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-xs text-slate-100 outline-none"
+                    className="rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-xs text-text-hi outline-none"
                   >
                     <option value="all">All risk tiers</option>
                     {riskOptions.map((risk) => (
@@ -1788,7 +1788,7 @@ export default function StudioWorkbenchSurface({
                   <select
                     value={idempotencyFilter}
                     onChange={(event) => setIdempotencyFilter(event.target.value)}
-                    className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-xs text-slate-100 outline-none"
+                    className="rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-xs text-text-hi outline-none"
                   >
                     <option value="all">All idempotency</option>
                     {idempotencyOptions.map((mode) => (
@@ -1799,20 +1799,20 @@ export default function StudioWorkbenchSurface({
                   </select>
                 </div>
                 {catalogLoading ? (
-                  <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-3 text-xs text-slate-300/74">
+                  <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-3 text-xs text-text-md">
                     Loading capability catalog...
                   </div>
                 ) : null}
                 {catalogError ? (
-                  <div className="rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                  <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
                     {catalogError}
                   </div>
                 ) : null}
                 {catalogSearchLoading ? (
-                  <div className="text-[11px] text-slate-300/74">Searching capability catalog...</div>
+                  <div className="text-[11px] text-text-md">Searching capability catalog...</div>
                 ) : null}
                 {catalogSearchError ? (
-                  <div className="text-[11px] text-rose-100">{catalogSearchError}</div>
+                  <div className="text-[11px] text-text-rose-token">{catalogSearchError}</div>
                 ) : null}
                 <div className="max-h-[460px] space-y-2 overflow-auto pr-1">
                   {filteredCatalog.map((item) => {
@@ -1822,7 +1822,7 @@ export default function StudioWorkbenchSurface({
                         key={item.id}
                         className={`rounded-2xl border px-3 py-3 ${
                           item.id === selectedCapabilityId
-                            ? "border-sky-300/28 bg-sky-400/12"
+                            ? "border-sky-300/28 bg-accent-sky"
                             : "border-white/8 bg-black/18"
                         }`}
                       >
@@ -1832,24 +1832,24 @@ export default function StudioWorkbenchSurface({
                           onClick={() => setSelectedCapabilityId(item.id)}
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-semibold text-white">{item.id}</div>
-                            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-200">
+                            <div className="text-sm font-semibold text-text-hi">{item.id}</div>
+                            <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-text-md">
                               {item.group || "ungrouped"}
                             </span>
                           </div>
-                          <div className="mt-1 text-xs leading-5 text-slate-300/78">
+                          <div className="mt-1 text-xs leading-5 text-text-md">
                             {item.description}
                           </div>
                         </button>
-                        <div className="mt-3 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-slate-300/76">
-                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                        <div className="mt-3 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-text-md">
+                          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                             {item.risk_tier}
                           </span>
-                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                             {item.idempotency}
                           </span>
                           {searchHit ? (
-                            <span className="rounded-full border border-sky-300/22 bg-sky-400/12 px-2 py-1 text-sky-100">
+                            <span className="rounded-full border border-sky-300/22 bg-accent-sky px-2 py-1 text-text-sky-token">
                               {searchHit.source}
                             </span>
                           ) : null}
@@ -1857,14 +1857,14 @@ export default function StudioWorkbenchSurface({
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button
                             type="button"
-                            className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                            className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
                             onClick={() => handleCapabilityInsert(item)}
                           >
                             capability
                           </button>
                           <button
                             type="button"
-                            className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                            className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
                             onClick={() => handleAgentInsert(item)}
                           >
                             {isAgenticCapability(item) ? "agent" : "agent step"}
@@ -1874,7 +1874,7 @@ export default function StudioWorkbenchSurface({
                     );
                   })}
                   {!catalogLoading && filteredCatalog.length === 0 ? (
-                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-4 text-xs text-slate-300/74">
+                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-4 text-xs text-text-md">
                       No capabilities matched the current search and filters.
                     </div>
                   ) : null}
@@ -1893,8 +1893,8 @@ export default function StudioWorkbenchSurface({
                     type="button"
                     className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
                       workbenchMode === mode
-                        ? "border-sky-300/35 bg-sky-400/18 text-sky-50"
-                        : "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                        ? "border-sky-300/35 bg-accent-sky text-text-hi"
+                        : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
                     }`}
                     onClick={() => {
                       setWorkbenchMode(mode);
@@ -1909,72 +1909,72 @@ export default function StudioWorkbenchSurface({
               {workbenchMode === "capability" ? (
                 <div className="mt-4 space-y-4">
                   <div className="grid gap-3 lg:grid-cols-2">
-                    <label className="text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Capability Id
                       </span>
                       <input
                         list="studio-capability-id-options"
                         value={selectedCapabilityId}
                         onChange={(event) => setSelectedCapabilityId(event.target.value)}
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
-                    <label className="text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         User Id
                       </span>
                       <input
                         value={capabilityUserId}
                         onChange={(event) => setCapabilityUserId(event.target.value)}
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
-                    <label className="text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Title
                       </span>
                       <input
                         value={capabilityTitle}
                         onChange={(event) => setCapabilityTitle(event.target.value)}
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
-                    <label className="text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Goal
                       </span>
                       <input
                         value={capabilityGoal}
                         onChange={(event) => setCapabilityGoal(event.target.value)}
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
                   </div>
 
-                  <label className="block text-xs text-slate-200">
-                    <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                  <label className="block text-xs text-text-md">
+                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                       Context JSON
                     </span>
                     <textarea
                       rows={5}
                       value={capabilityContextJsonText}
                       onChange={(event) => setCapabilityContextJsonText(event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                     />
                   </label>
 
                   <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300/74">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-md">
                           Generated input form
                         </div>
-                        <div className="mt-1 text-xs text-slate-300/70">
+                        <div className="mt-1 text-xs text-text-md">
                           Required fields come from the capability input schema.
                         </div>
                       </div>
-                      <label className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-slate-300/76">
+                      <label className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-md">
                         <input
                           type="checkbox"
                           checked={capabilityRawOverrideEnabled}
@@ -1993,11 +1993,11 @@ export default function StudioWorkbenchSurface({
                           return (
                             <label
                               key={fieldName}
-                              className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-2 text-sm text-slate-100"
+                              className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-2 text-sm text-text-hi"
                             >
                               <span>
                                 {fieldName}
-                                {required ? <span className="ml-2 text-[10px] uppercase text-sky-100/70">required</span> : null}
+                                {required ? <span className="ml-2 text-[10px] uppercase text-text-sky-token">required</span> : null}
                               </span>
                               <input
                                 type="checkbox"
@@ -2014,8 +2014,8 @@ export default function StudioWorkbenchSurface({
                         }
                         const multiLine = fieldType === "object" || fieldType === "array";
                         return (
-                          <label key={fieldName} className="block text-xs text-slate-200">
-                            <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                          <label key={fieldName} className="block text-xs text-text-md">
+                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                               {fieldName}
                               {required ? " *" : ""}
                             </span>
@@ -2029,7 +2029,7 @@ export default function StudioWorkbenchSurface({
                                     [fieldName]: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             ) : (
                               <input
@@ -2040,14 +2040,14 @@ export default function StudioWorkbenchSurface({
                                     [fieldName]: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             )}
                           </label>
                         );
                       })}
                       {capabilitySchemaProperties.length === 0 ? (
-                        <div className="rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-4 text-xs text-slate-300/74">
+                        <div className="rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-4 text-xs text-text-md">
                           This capability does not expose structured schema fields. Use the raw input override
                           for advanced payloads.
                         </div>
@@ -2056,38 +2056,38 @@ export default function StudioWorkbenchSurface({
                   </div>
 
                   {capabilityRawOverrideEnabled ? (
-                    <label className="block text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="block text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Raw input override JSON
                       </span>
                       <textarea
                         rows={6}
                         value={capabilityRawOverrideText}
                         onChange={(event) => setCapabilityRawOverrideText(event.target.value)}
-                        className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
                   ) : null}
 
-                  <label className="block text-xs text-slate-200">
-                    <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                  <label className="block text-xs text-text-md">
+                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                       Advanced retry / policy override
                     </span>
                     <textarea
                       rows={4}
                       value={capabilityRetryPolicyText}
                       onChange={(event) => setCapabilityRetryPolicyText(event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                     />
                   </label>
                 </div>
               ) : (
                 <div className="mt-4 space-y-4">
-                  <div className="rounded-2xl border border-sky-300/16 bg-sky-400/10 p-3">
+                  <div className="rounded-2xl border border-sky-300/16 bg-accent-sky p-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-white">Agent Profile</div>
-                        <div className="mt-1 text-xs leading-5 text-slate-300/78">
+                        <div className="text-sm font-semibold text-text-hi">Agent Profile</div>
+                        <div className="mt-1 text-xs leading-5 text-text-md">
                           {selectedAgentDefinitionVersion
                             ? `Published v${selectedAgentDefinitionVersion.version_number} from ${new Date(
                                 selectedAgentDefinitionVersion.created_at
@@ -2099,7 +2099,7 @@ export default function StudioWorkbenchSurface({
                             : "Unsaved draft"}
                         </div>
                       </div>
-                      <span className="rounded-full border border-sky-300/22 bg-sky-400/12 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-sky-100">
+                      <span className="rounded-full border border-sky-300/22 bg-accent-sky px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-sky-token">
                         {selectedAgentDefinitionVersion
                           ? `v${selectedAgentDefinitionVersion.version_number}`
                           : agentDefinitionsLoading
@@ -2108,8 +2108,8 @@ export default function StudioWorkbenchSurface({
                       </span>
                     </div>
                     <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                      <label className="text-xs text-slate-200">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                      <label className="text-xs text-text-md">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                           Profile
                         </span>
                         <select
@@ -2131,7 +2131,7 @@ export default function StudioWorkbenchSurface({
                               applyAgentDefinitionDraft(definition);
                             }
                           }}
-                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                         >
                           <option value="">Unsaved draft</option>
                           {agentDefinitions.map((definition) => (
@@ -2141,8 +2141,8 @@ export default function StudioWorkbenchSurface({
                           ))}
                         </select>
                       </label>
-                      <label className="text-xs text-slate-200">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                      <label className="text-xs text-text-md">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                           Published version
                         </span>
                         <select
@@ -2163,7 +2163,7 @@ export default function StudioWorkbenchSurface({
                             }
                           }}
                           disabled={!selectedAgentDefinitionId || agentDefinitionVersionsLoading}
-                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <option value="">Draft / latest profile</option>
                           {agentDefinitionVersions.map((version) => (
@@ -2174,50 +2174,50 @@ export default function StudioWorkbenchSurface({
                           ))}
                         </select>
                       </label>
-                      <label className="text-xs text-slate-200">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                      <label className="text-xs text-text-md">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                           Profile name
                         </span>
                         <input
                           value={agentProfileName}
                           onChange={(event) => setAgentProfileName(event.target.value)}
                           placeholder="Agent profile"
-                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                         />
                       </label>
-                      <label className="text-xs text-slate-200 lg:col-span-2">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                      <label className="text-xs text-text-md lg:col-span-2">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                           Description
                         </span>
                         <input
                           value={agentProfileDescription}
                           onChange={(event) => setAgentProfileDescription(event.target.value)}
-                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                         />
                       </label>
-                      <label className="text-xs text-slate-200 lg:col-span-2">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                      <label className="text-xs text-text-md lg:col-span-2">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                           Publish note
                         </span>
                         <input
                           value={agentProfileVersionNote}
                           onChange={(event) => setAgentProfileVersionNote(event.target.value)}
                           disabled={!selectedAgentDefinitionId}
-                          className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
                         />
                       </label>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
                         onClick={handleNewAgentProfile}
                       >
                         New
                       </button>
                       <button
                         type="button"
-                        className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => void handleSaveAgentProfile()}
                         disabled={!selectedAgentDefinitionId || agentProfileSaving}
                       >
@@ -2225,7 +2225,7 @@ export default function StudioWorkbenchSurface({
                       </button>
                       <button
                         type="button"
-                        className="rounded-xl border border-sky-300/26 bg-sky-400/16 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-50 transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-xl border border-sky-300/26 bg-accent-sky px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => void handleSaveAgentProfileAs()}
                         disabled={agentProfileSaving}
                       >
@@ -2233,7 +2233,7 @@ export default function StudioWorkbenchSurface({
                       </button>
                       <button
                         type="button"
-                        className="rounded-xl border border-emerald-300/24 bg-emerald-400/14 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-50 transition hover:border-emerald-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-xl border border-emerald-300/24 bg-accent-emerald px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-emerald-300/36 disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => void handlePublishAgentProfile()}
                         disabled={
                           !selectedAgentDefinitionId ||
@@ -2245,7 +2245,7 @@ export default function StudioWorkbenchSurface({
                       </button>
                       <button
                         type="button"
-                        className="rounded-xl border border-rose-300/18 bg-rose-400/12 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-100 transition hover:border-rose-300/28 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28 disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => void handleDeleteAgentProfile()}
                         disabled={!selectedAgentDefinitionId || agentProfileDeleting}
                       >
@@ -2253,45 +2253,45 @@ export default function StudioWorkbenchSurface({
                       </button>
                     </div>
                     {agentDefinitionVersionsError ? (
-                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
                         {agentDefinitionVersionsError}
                       </div>
                     ) : null}
                     {agentDefinitionsError ? (
-                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
                         {agentDefinitionsError}
                       </div>
                     ) : null}
                     {agentProfileError ? (
-                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
                         {agentProfileError}
                       </div>
                     ) : null}
                   </div>
 
                   <div className="grid gap-3 lg:grid-cols-2">
-                    <label className="text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Title
                       </span>
                       <input
                         value={agentTitle}
                         onChange={(event) => setAgentTitle(event.target.value)}
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
-                    <label className="text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         User Id
                       </span>
                       <input
                         value={agentUserId}
                         onChange={(event) => setAgentUserId(event.target.value)}
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
-                    <label className="text-xs text-slate-200 lg:col-span-2">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="text-xs text-text-md lg:col-span-2">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Run goal
                       </span>
                       <input
@@ -2304,20 +2304,20 @@ export default function StudioWorkbenchSurface({
                             setAgentGoal(nextGoal);
                           }
                         }}
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
                   </div>
 
-                  <label className="block text-xs text-slate-200">
-                    <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                  <label className="block text-xs text-text-md">
+                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                       Context JSON
                     </span>
                     <textarea
                       rows={5}
                       value={agentContextJsonText}
                       onChange={(event) => setAgentContextJsonText(event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                     />
                   </label>
 
@@ -2328,8 +2328,8 @@ export default function StudioWorkbenchSurface({
                         type="button"
                         className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
                           agentEditorMode === mode
-                            ? "border-sky-300/35 bg-sky-400/18 text-sky-50"
-                            : "border-white/10 bg-white/[0.05] text-slate-100 hover:border-white/16 hover:bg-white/[0.08]"
+                            ? "border-sky-300/35 bg-accent-sky text-text-hi"
+                            : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
                         }`}
                         onClick={() => {
                           setAgentEditorMode(mode);
@@ -2344,23 +2344,23 @@ export default function StudioWorkbenchSurface({
                   {agentEditorMode === "structured" ? (
                     <div className="space-y-3">
                       {primaryAgentStep ? (
-                        <div className="rounded-2xl border border-sky-300/18 bg-sky-400/10 p-3">
+                        <div className="rounded-2xl border border-sky-300/18 bg-accent-sky p-3">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
-                              <div className="text-sm font-semibold text-white">Agent</div>
+                              <div className="text-sm font-semibold text-text-hi">Agent</div>
                               {primaryAgentCapability ? (
-                                <div className="mt-1 text-xs leading-5 text-slate-300/78">
+                                <div className="mt-1 text-xs leading-5 text-text-md">
                                   {primaryAgentCapability.description}
                                 </div>
                               ) : null}
                             </div>
-                            <span className="rounded-full border border-sky-300/22 bg-sky-400/12 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-sky-100">
+                            <span className="rounded-full border border-sky-300/22 bg-accent-sky px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-sky-token">
                               primary step
                             </span>
                           </div>
                           <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Agent capability
                               </span>
                               <input
@@ -2369,11 +2369,11 @@ export default function StudioWorkbenchSurface({
                                 onChange={(event) =>
                                   updatePrimaryAgentCapability(event.target.value)
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Step id
                               </span>
                               <input
@@ -2384,11 +2384,11 @@ export default function StudioWorkbenchSurface({
                                     stepId: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200 lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md lg:col-span-2">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Agent task
                               </span>
                               <textarea
@@ -2400,11 +2400,11 @@ export default function StudioWorkbenchSurface({
                                 onChange={(event) =>
                                   updatePrimaryAgentInput("goal", event.target.value)
                                 }
-                                className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Workspace path
                               </span>
                               <input
@@ -2415,11 +2415,11 @@ export default function StudioWorkbenchSurface({
                                 onChange={(event) =>
                                   updatePrimaryAgentInput("workspace_path", event.target.value)
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Max steps
                               </span>
                               <input
@@ -2430,11 +2430,11 @@ export default function StudioWorkbenchSurface({
                                 onChange={(event) =>
                                   updatePrimaryAgentInput("max_steps", event.target.value)
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200 lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md lg:col-span-2">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Constraints
                               </span>
                               <textarea
@@ -2446,11 +2446,11 @@ export default function StudioWorkbenchSurface({
                                 onChange={(event) =>
                                   updatePrimaryAgentInput("constraints", event.target.value)
                                 }
-                                className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200 lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md lg:col-span-2">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Instruction
                               </span>
                               <input
@@ -2461,7 +2461,7 @@ export default function StudioWorkbenchSurface({
                                     instruction: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
                           </div>
@@ -2477,10 +2477,10 @@ export default function StudioWorkbenchSurface({
                             className="rounded-2xl border border-white/8 bg-black/18 p-3"
                           >
                           <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-semibold text-white">Step {index + 2}</div>
+                            <div className="text-sm font-semibold text-text-hi">Step {index + 2}</div>
                             <button
                               type="button"
-                              className="rounded-xl border border-rose-300/18 bg-rose-400/12 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-100 transition hover:border-rose-300/28"
+                              className="rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28"
                               onClick={() =>
                                 setAgentSteps((current) =>
                                   current.length > 1
@@ -2493,8 +2493,8 @@ export default function StudioWorkbenchSurface({
                             </button>
                           </div>
                           <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Step id
                               </span>
                               <input
@@ -2505,11 +2505,11 @@ export default function StudioWorkbenchSurface({
                                     stepId: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Capability id
                               </span>
                               <input
@@ -2518,11 +2518,11 @@ export default function StudioWorkbenchSurface({
                                 onChange={(event) =>
                                   updateAgentStepCapability(step.localId, event.target.value)
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Name
                               </span>
                               <input
@@ -2533,11 +2533,11 @@ export default function StudioWorkbenchSurface({
                                     name: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Depends on
                               </span>
                               <input
@@ -2549,11 +2549,11 @@ export default function StudioWorkbenchSurface({
                                   }))
                                 }
                                 placeholder="comma separated step ids"
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200 lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md lg:col-span-2">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Description
                               </span>
                               <input
@@ -2564,11 +2564,11 @@ export default function StudioWorkbenchSurface({
                                     description: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <label className="text-xs text-slate-200 lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md lg:col-span-2">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Instruction
                               </span>
                               <input
@@ -2579,20 +2579,20 @@ export default function StudioWorkbenchSurface({
                                     instruction: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
-                            <div className="rounded-2xl border border-white/8 bg-slate-950/30 p-3 text-xs text-slate-200 lg:col-span-2">
+                            <div className="rounded-2xl border border-white/8 bg-slate-950/30 p-3 text-xs text-text-md lg:col-span-2">
                               <div className="flex items-center justify-between gap-3">
                                 <div>
-                                  <div className="font-semibold uppercase tracking-[0.16em] text-slate-300/74">
+                                  <div className="font-semibold uppercase tracking-[0.16em] text-text-md">
                                     Inputs
                                   </div>
-                                  <div className="mt-1 text-slate-300/70">
+                                  <div className="mt-1 text-text-md">
                                     Fill required fields from the selected capability schema.
                                   </div>
                                 </div>
-                                <label className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-slate-300/76">
+                                <label className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-md">
                                   <input
                                     type="checkbox"
                                     checked={step.rawInputOverrideEnabled}
@@ -2619,12 +2619,12 @@ export default function StudioWorkbenchSurface({
                                       return (
                                         <label
                                           key={fieldName}
-                                          className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-2 text-sm text-slate-100"
+                                          className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-2 text-sm text-text-hi"
                                         >
                                           <span>
                                             {fieldName}
                                             {required ? (
-                                              <span className="ml-2 text-[10px] uppercase text-sky-100/70">
+                                              <span className="ml-2 text-[10px] uppercase text-text-sky-token">
                                                 required
                                               </span>
                                             ) : null}
@@ -2649,11 +2649,11 @@ export default function StudioWorkbenchSurface({
                                     return (
                                       <label
                                         key={fieldName}
-                                        className={`block text-xs text-slate-200 ${
+                                        className={`block text-xs text-text-md ${
                                           multiLine ? "lg:col-span-2" : ""
                                         }`.trim()}
                                       >
-                                        <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                           {fieldName}
                                           {required ? " *" : ""}
                                         </span>
@@ -2670,7 +2670,7 @@ export default function StudioWorkbenchSurface({
                                                 },
                                               }))
                                             }
-                                            className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                                            className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                                           />
                                         ) : (
                                           <input
@@ -2684,7 +2684,7 @@ export default function StudioWorkbenchSurface({
                                                 },
                                               }))
                                             }
-                                            className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300/35"
+                                            className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                                           />
                                         )}
                                       </label>
@@ -2693,13 +2693,13 @@ export default function StudioWorkbenchSurface({
                                 </div>
                               ) : null}
                               {!step.rawInputOverrideEnabled && stepSchemaProperties.length === 0 ? (
-                                <div className="mt-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-4 text-xs text-slate-300/74">
+                                <div className="mt-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-4 text-xs text-text-md">
                                   Select a catalog capability with an input schema to show generated fields.
                                 </div>
                               ) : null}
                               {step.rawInputOverrideEnabled ? (
-                                <label className="mt-3 block text-xs text-slate-200">
-                                  <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                                <label className="mt-3 block text-xs text-text-md">
+                                  <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                     Raw input override JSON
                                   </span>
                                   <textarea
@@ -2711,13 +2711,13 @@ export default function StudioWorkbenchSurface({
                                         inputJsonText: event.target.value,
                                       }))
                                     }
-                                    className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                                    className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                                   />
                                 </label>
                               ) : null}
                             </div>
-                            <label className="text-xs text-slate-200">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                            <label className="text-xs text-text-md">
+                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                 Retry policy JSON
                               </span>
                               <textarea
@@ -2729,7 +2729,7 @@ export default function StudioWorkbenchSurface({
                                     retryPolicyText: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                               />
                             </label>
                           </div>
@@ -2738,22 +2738,22 @@ export default function StudioWorkbenchSurface({
                     })}
                       <button
                         type="button"
-                        className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
+                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
                         onClick={() => setAgentSteps((current) => [...current, createAgentStepDraft()])}
                       >
                         add step
                       </button>
                     </div>
                   ) : (
-                    <label className="block text-xs text-slate-200">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-slate-300/74">
+                    <label className="block text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Raw RunSpec JSON
                       </span>
                       <textarea
                         rows={18}
                         value={agentRawRunSpecText}
                         onChange={(event) => setAgentRawRunSpecText(event.target.value)}
-                        className="w-full rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-white outline-none transition focus:border-sky-300/35"
+                        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
                   )}
@@ -2763,7 +2763,7 @@ export default function StudioWorkbenchSurface({
               {(workbenchMode === "capability"
                 ? capabilityLaunchInputs.error || capabilityContextJson.error || capabilityRetryPolicy.error
                 : agentContextJson.error || agentRunSpecPreview.error) ? (
-                <div className="mt-4 rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                <div className="mt-4 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
                   {workbenchMode === "capability"
                     ? capabilityLaunchInputs.error || capabilityContextJson.error || capabilityRetryPolicy.error
                     : agentContextJson.error || agentRunSpecPreview.error}
@@ -2773,14 +2773,14 @@ export default function StudioWorkbenchSurface({
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  className="inline-flex items-center gap-2 rounded-xl border border-sky-300/26 bg-sky-400/16 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-50 transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-xl border border-sky-300/26 bg-accent-sky px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => void launchCurrentWorkbenchRun()}
                   disabled={launchLoading}
                 >
                   <StudioWorkbenchIcon kind="run" className="h-4 w-4" />
                   {launchLoading ? "Launching..." : "Launch Run"}
                 </button>
-                {launchError ? <div className="text-xs text-rose-100">{launchError}</div> : null}
+                {launchError ? <div className="text-xs text-text-rose-token">{launchError}</div> : null}
               </div>
             </SurfacePanel>
 
@@ -2792,24 +2792,24 @@ export default function StudioWorkbenchSurface({
                 {workbenchMode === "capability" ? (
                   <>
                     <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-                      <div className="text-sm font-semibold text-white">
+                      <div className="text-sm font-semibold text-text-hi">
                         {selectedCapability?.id || "No capability selected"}
                       </div>
-                      <div className="mt-1 text-xs leading-5 text-slate-300/76">
+                      <div className="mt-1 text-xs leading-5 text-text-md">
                         {selectedCapability?.description || "Pick a capability from the catalog to preview its schema."}
                       </div>
                       {selectedCapability ? (
-                        <div className="mt-3 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-slate-300/76">
-                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                        <div className="mt-3 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-text-md">
+                          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                             {selectedCapability.risk_tier}
                           </span>
-                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                             {selectedCapability.idempotency}
                           </span>
                           {(selectedCapability.adapters || []).map((adapter) => (
                             <span
                               key={`${adapter.server_id}:${adapter.tool_name}`}
-                              className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1"
+                              className="rounded-full border border-subtle bg-surface-1 px-2 py-1"
                             >
                               {adapter.tool_name}
                             </span>
@@ -2867,13 +2867,13 @@ export default function StudioWorkbenchSurface({
             </SurfacePanel>
           </div>
 
-          <div className="mt-4 rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(16,24,34,0.92),rgba(9,14,22,0.96))] shadow-[0_18px_36px_rgba(15,23,42,0.24)]">
+          <div className="mt-4 rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)]">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
               <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300/72">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                   Run Results
                 </div>
-                <div className="mt-1 text-xs text-slate-300/74">
+                <div className="mt-1 text-xs text-text-md">
                   Canonical run status, step progression, execution requests, attempts, artifacts, and debugger events.
                 </div>
               </div>
@@ -2881,7 +2881,7 @@ export default function StudioWorkbenchSurface({
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
-                    className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={applyForkResult}
                     disabled={!forkResult}
                   >
@@ -2889,7 +2889,7 @@ export default function StudioWorkbenchSurface({
                   </button>
                   <button
                     type="button"
-                    className="rounded-xl border border-sky-300/26 bg-sky-400/16 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-50 transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-xl border border-sky-300/26 bg-accent-sky px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={handlePromoteWorkflowDraft}
                     disabled={!workflowPromotionResult?.promotable || !onPromoteWorkflowDraft}
                   >
@@ -2897,29 +2897,29 @@ export default function StudioWorkbenchSurface({
                   </button>
                 </div>
                 {!onPromoteWorkflowDraft ? (
-                  <div className="max-w-[420px] text-right text-[11px] text-amber-100/90">
+                  <div className="max-w-[420px] text-right text-[11px] text-text-amber-token">
                     Workflow promotion handoff is unavailable in the current Studio shell.
                   </div>
                 ) : null}
                 {forkResult?.mode === "agent_raw" ? (
-                  <div className="max-w-[420px] text-right text-[11px] text-amber-100/90">
+                  <div className="max-w-[420px] text-right text-[11px] text-text-amber-token">
                     Fork will open the raw RunSpec editor: {forkResult.draft.reason}
                   </div>
                 ) : null}
                 {workflowPromotionResult && !workflowPromotionResult.promotable ? (
-                  <div className="max-w-[420px] text-right text-[11px] text-amber-100/90">
+                  <div className="max-w-[420px] text-right text-[11px] text-text-amber-token">
                     Promote unavailable: {workflowPromotionResult.reason}
                   </div>
                 ) : null}
                 <div className="flex flex-wrap items-center justify-end gap-2 text-[10px] uppercase tracking-[0.14em]">
-                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                  <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                     status {currentRunStatus || "idle"}
                   </span>
-                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
+                  <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                     mode {launchWorkbenchModeLabel}
                   </span>
                   {activeRunId ? (
-                    <span className="rounded-full border border-sky-300/28 bg-sky-400/14 px-3 py-1 text-sky-50">
+                    <span className="rounded-full border border-sky-300/28 bg-accent-sky px-3 py-1 text-text-hi">
                       run {activeRunId}
                     </span>
                   ) : null}
@@ -2930,38 +2930,38 @@ export default function StudioWorkbenchSurface({
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-3">
                   <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3">
-                    <div className="text-[11px] uppercase tracking-[0.14em] text-slate-300/72">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-text-md">
                       steps
                     </div>
-                    <div className="mt-2 text-2xl font-semibold text-white">
+                    <div className="mt-2 text-2xl font-semibold text-text-hi">
                       {debuggerData?.steps.length ?? 0}
                     </div>
                   </div>
                   <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3">
-                    <div className="text-[11px] uppercase tracking-[0.14em] text-slate-300/72">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-text-md">
                       execution requests
                     </div>
-                    <div className="mt-2 text-2xl font-semibold text-white">
+                    <div className="mt-2 text-2xl font-semibold text-text-hi">
                       {debuggerData?.execution_requests.length ?? 0}
                     </div>
                   </div>
                   <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3">
-                    <div className="text-[11px] uppercase tracking-[0.14em] text-slate-300/72">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-text-md">
                       attempts / invocations
                     </div>
-                    <div className="mt-2 text-2xl font-semibold text-white">
+                    <div className="mt-2 text-2xl font-semibold text-text-hi">
                       {(debuggerData?.attempts.length ?? 0) + (debuggerData?.invocations.length ?? 0)}
                     </div>
                   </div>
                 </div>
 
                 {debuggerLoading ? (
-                  <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3 text-xs text-slate-300/74">
+                  <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3 text-xs text-text-md">
                     Refreshing debugger state...
                   </div>
                 ) : null}
                 {debuggerError ? (
-                  <div className="rounded-2xl border border-rose-300/18 bg-rose-400/12 px-3 py-3 text-xs text-rose-100">
+                  <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
                     {debuggerError}
                   </div>
                 ) : null}
@@ -2974,7 +2974,7 @@ export default function StudioWorkbenchSurface({
                 ) : null}
 
                 <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300/72">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-md">
                     Steps
                   </div>
                   <div className="mt-3 space-y-2">
@@ -2987,26 +2987,26 @@ export default function StudioWorkbenchSurface({
                         >
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
-                              <div className="text-sm font-semibold text-white">
+                              <div className="text-sm font-semibold text-text-hi">
                                 {stepPayload.step.name}
                               </div>
-                              <div className="mt-1 text-xs text-slate-300/74">
+                              <div className="mt-1 text-xs text-text-md">
                                 {stepPayload.step.capability_id}
                               </div>
                             </div>
-                            <div className="flex flex-wrap items-center justify-end gap-2 text-[10px] uppercase tracking-[0.14em] text-slate-300/76">
-                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                            <div className="flex flex-wrap items-center justify-end gap-2 text-[10px] uppercase tracking-[0.14em] text-text-md">
+                              <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                                 {stepPayload.step.status}
                               </span>
-                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                              <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                                 requests {stepPayload.execution_requests.length}
                               </span>
-                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1">
+                              <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                                 attempts {stepPayload.attempts.length}
                               </span>
                               <button
                                 type="button"
-                                className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                                className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                                 onClick={() => handleReplayStep(stepPayload.step.id)}
                                 disabled={!replayResult?.replayable}
                               >
@@ -3015,12 +3015,12 @@ export default function StudioWorkbenchSurface({
                             </div>
                           </div>
                           {!replayResult?.replayable ? (
-                            <div className="mt-2 text-xs text-amber-100/90">
+                            <div className="mt-2 text-xs text-text-amber-token">
                               Replay unavailable: {replayResult?.reason || "The replay payload could not be reconstructed."}
                             </div>
                           ) : null}
                           {stepPayload.error?.message ? (
-                            <div className="mt-2 text-xs text-rose-100">
+                            <div className="mt-2 text-xs text-text-rose-token">
                               {String(stepPayload.error.message)}
                             </div>
                           ) : null}
@@ -3028,7 +3028,7 @@ export default function StudioWorkbenchSurface({
                       );
                     })}
                     {!debuggerData?.steps.length ? (
-                      <div className="text-xs text-slate-300/74">
+                      <div className="text-xs text-text-md">
                         Launch a workbench run to inspect step state here.
                       </div>
                     ) : null}

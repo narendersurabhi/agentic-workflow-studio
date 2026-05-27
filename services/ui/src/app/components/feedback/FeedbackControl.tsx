@@ -108,7 +108,7 @@ export default function FeedbackControl({
               type="button"
               className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${
                 isActive
-                  ? "border-slate-800 bg-slate-900 text-white"
+                  ? "border-slate-800 bg-slate-900 text-slate-50"
                   : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
               }`}
               disabled={submitting}
@@ -156,7 +156,7 @@ export default function FeedbackControl({
             </button>
             <button
               type="button"
-              className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+              className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-semibold text-slate-50 disabled:opacity-50"
               disabled={submitting || !draftSentiment}
               onClick={() => void submitExpandedFeedback()}
             >
@@ -165,7 +165,7 @@ export default function FeedbackControl({
           </div>
         </div>
       ) : existing?.comment ? (
-        <div className="mt-2 text-[11px] text-slate-500">{existing.comment}</div>
+        <div className="mt-2 text-[11px] text-text-lo">{existing.comment}</div>
       ) : null}
     </div>
   );
