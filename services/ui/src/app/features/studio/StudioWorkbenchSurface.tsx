@@ -970,7 +970,7 @@ export default function StudioWorkbenchSurface({
       if (!stepIds.has(edge[0])) {
         return {
           value: null,
-          error: `Dependency '${edge[0]}' does not match any step id in the structured agent builder.`,
+          error: `Dependency '${edge[0]}' does not match any step id in the structured agent editor.`,
         };
       }
     }
@@ -1884,7 +1884,7 @@ export default function StudioWorkbenchSurface({
 
             <SurfacePanel
               title="Workbench Editor"
-              subtitle="Structured builders are the default. Raw JSON editors stay available as advanced overrides."
+              subtitle="Structured editors are the default. Raw JSON editors stay available as advanced overrides."
             >
               <div className="flex flex-wrap items-center gap-2">
                 {(["capability", "agent"] as WorkbenchMode[]).map((mode) => (
@@ -2336,7 +2336,7 @@ export default function StudioWorkbenchSurface({
                           setWorkbenchBanner(null);
                         }}
                       >
-                        {mode === "structured" ? "Structured Builder" : "Raw RunSpec"}
+                        {mode === "structured" ? "Structured Editor" : "Raw RunSpec"}
                       </button>
                     ))}
                   </div>

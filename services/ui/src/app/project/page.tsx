@@ -13,11 +13,11 @@ const projectCards = [
   },
   {
     href: "/studio",
-    eyebrow: "Workflow Builder",
-    title: "Workflow Builder",
+    eyebrow: "Workflow Studio",
+    title: "Workflow Studio",
     description:
-      "Design the steps, decisions, tools, and AI actions your process needs.",
-    cta: "Open Builder",
+      "Design reusable workflow steps, decisions, tools, and AI actions.",
+    cta: "Open Studio",
   },
 ];
 
@@ -39,7 +39,7 @@ export default function ProjectPage() {
             href="/studio"
             className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
           >
-            Open Builder
+            Open Studio
           </Link>
         </>
       }
@@ -54,7 +54,7 @@ export default function ProjectPage() {
               Workflow Management
             </h2>
             <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
-              Move between saved automations and the builder for designing business workflows.
+              Move between saved automations and Workflow Studio for designing business workflows.
             </p>
           </div>
 

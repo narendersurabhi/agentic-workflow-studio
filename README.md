@@ -97,7 +97,7 @@ The platform has three user-facing execution paths that converge on shared runti
 
 ```mermaid
 flowchart LR
-  UI["UI<br/>Home • Chat • Compose • Studio • Memory"] -->|"chat turns"| API["API<br/>FastAPI control plane"]
+  UI["UI<br/>Home • Chat • Run from Prompt • Studio • Memory"] -->|"chat turns"| API["API<br/>FastAPI control plane"]
   UI -->|"goal-driven jobs"| API
   UI -->|"workflow save / publish / run"| API
 
@@ -165,7 +165,7 @@ Related design docs:
 - `rag-retriever-mcp`: retrieval service for RAG-backed workflows
 - `qdrant`: vector database used by retrieval services
 - `jaeger`: trace collection and navigation service
-- `ui`: Next.js frontend for Home, Chat, Compose, Studio, Memory, and feedback insights
+- `ui`: Next.js frontend for Home, Chat, Run from Prompt, Studio, Memory, and feedback insights
 
 ## Recent Platform Features
 

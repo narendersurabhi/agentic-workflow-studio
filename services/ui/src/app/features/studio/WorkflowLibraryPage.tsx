@@ -321,7 +321,7 @@ export default function WorkflowLibraryPage() {
             href="/studio"
             className="rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-100 transition hover:border-sky-300/35 hover:bg-white/[0.08]"
           >
-            Open Builder
+            Open Studio
           </Link>
           <Link
             href="/studio?mode=new"

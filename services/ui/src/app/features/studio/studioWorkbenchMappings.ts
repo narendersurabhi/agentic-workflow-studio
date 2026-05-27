@@ -611,7 +611,7 @@ export function mapRunToWorkbenchFork(debuggerData: WorkbenchDebuggerData): Work
   if (diagnostics.length > 0 || structuredSteps.length === 0) {
     const reason = firstDiagnosticReason(
       diagnostics,
-      "This run uses structures that the structured agent builder cannot represent."
+      "This run uses structures that the structured agent editor cannot represent."
     );
     return {
       mode: "agent_raw",
@@ -623,7 +623,7 @@ export function mapRunToWorkbenchFork(debuggerData: WorkbenchDebuggerData): Work
         contextJson: runContext(debuggerData.run),
         runSpec: cloneRecord(normalizedRunSpec.raw),
         reason,
-        notice: `Forked run ${debuggerData.run.id} into the raw RunSpec editor because the run shape is not representable in the structured builder.`,
+        notice: `Forked run ${debuggerData.run.id} into the raw RunSpec editor because the run shape is not representable in the structured editor.`,
       },
       diagnostics,
     };
@@ -638,7 +638,7 @@ export function mapRunToWorkbenchFork(debuggerData: WorkbenchDebuggerData): Work
       userId: runUserId(debuggerData.run),
       contextJson: runContext(debuggerData.run),
       steps: structuredSteps,
-      notice: `Forked run ${debuggerData.run.id} into the structured agent builder.`,
+      notice: `Forked run ${debuggerData.run.id} into the structured agent editor.`,
     },
     diagnostics: [],
   };
@@ -651,11 +651,11 @@ export function mapRunToWorkflowPromotion(
   if (workbenchModeForRun(debuggerData.run, normalizedRunSpec) !== "agent") {
     return {
       promotable: false,
-      reason: "Only agent runs can be promoted to Workflow Builder drafts.",
+      reason: "Only agent runs can be promoted to Workflow Studio drafts.",
       diagnostics: [
         {
           code: "unsupported_run_mode",
-          message: "Only agent runs can be promoted to Workflow Builder drafts.",
+          message: "Only agent runs can be promoted to Workflow Studio drafts.",
         },
       ],
     };
@@ -750,7 +750,7 @@ export function mapRunToWorkflowPromotion(
       promotable: false,
       reason: firstDiagnosticReason(
         diagnostics,
-        "This run cannot be promoted into a Workflow Builder draft."
+        "This run cannot be promoted into a Workflow Studio draft."
       ),
       diagnostics,
     };
