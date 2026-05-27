@@ -146,6 +146,7 @@ def llm_plan(
         provider,
         config=config,
         runtime=_planner_service_runtime(),
+        session_store=_planner_cache_session_store(),
     )
 
 
@@ -278,7 +279,7 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
 
 
 def _llm_plan_repair_prompt(
-    *, original_prompt: str, raw_output: str, tools: List[models.ToolSpec]
+    *, raw_output: str, tools: List[models.ToolSpec]
 ) -> str:
     request = planner_contracts.PlanRequest(
         job_id="repair",
@@ -321,7 +322,7 @@ def _llm_plan_repair_prompt(
             for capability_id, capability in _planner_capabilities().items()
         ],
     )
-    return planner_service.build_llm_repair_prompt(original_prompt, raw_output, request)
+    return planner_service.build_llm_repair_prompt(raw_output, request)
 
 
 def _document_spec_prompt(job: models.Job, allowed_block_types: List[str]) -> str:

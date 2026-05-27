@@ -10207,8 +10207,7 @@ const openTemplateModal = (template: Template) => {
                     <a
                       key={`job-download-${path}`}
                       href={downloadHrefForPath(path)}
-                      target="_blank"
-                      rel="noreferrer"
+                      download={path.split("/").pop() || path}
                       className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-[11px] text-cyan-700 hover:bg-cyan-100"
                     >
                       {path}
@@ -10803,8 +10802,7 @@ const openTemplateModal = (template: Template) => {
                                       <a
                                         key={`${task.id}-artifact-${path}`}
                                         href={downloadHrefForPath(path)}
-                                        target="_blank"
-                                        rel="noreferrer"
+                                        download={path.split("/").pop() || path}
                                         className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-[11px] text-cyan-700 hover:bg-cyan-100"
                                       >
                                         {path}

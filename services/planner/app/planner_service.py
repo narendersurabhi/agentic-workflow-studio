@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -612,10 +613,12 @@ def build_llm_prompt(request: planner_contracts.PlanRequest) -> str:
 
 
 def build_llm_repair_prompt(
-    original_prompt: str,
     raw_output: str,
     request: planner_contracts.PlanRequest,
 ) -> str:
+    # NOTE: static rules and catalog are already in the STATIC blocks passed to
+    # generate_cached — do not embed original_prompt here or they get duplicated
+    # inside the DYNAMIC block, defeating caching and doubling input tokens.
     canonical_capability_ids = sorted(
         {
             str(capability.capability_id).strip()
@@ -644,7 +647,6 @@ def build_llm_repair_prompt(
         f"Preferred capability IDs: {', '.join(canonical_capability_ids) or 'none'}\n"
         f"Planner support tools (metadata-only, never emit in tasks): "
         f"{', '.join(planner_tool_names) or 'none'}\n\n"
-        f"Original planner prompt (for context):\n{original_prompt}\n\n"
         f"Malformed planner output to repair:\n{raw_output}\n"
     )
 
@@ -1303,6 +1305,8 @@ def llm_plan(
     blocks = build_llm_prompt_blocks(request)
     static_blocks = [b for b in blocks if b.stability == llm_provider.Stability.STATIC]
     session = provider.open_cache_session(request.job_id or "", static_blocks)
+    catalog_json = capability_registry.load_capability_catalog_json()
+    session.metadata["catalog_hash"] = hashlib.sha256(catalog_json.encode()).hexdigest()
     if session_store is not None and request.job_id:
         session_store.save(request.job_id, session)
     base_meta = {
@@ -1330,9 +1334,7 @@ def llm_plan(
     candidate = runtime.parse_llm_plan(response.content)
     if not candidate:
         logger.warning("llm_plan_parse_retry", reason="initial_parse_failed")
-        # Re-use the session so the static prefix stays cached.
-        prompt = build_llm_prompt(request)
-        repair_prompt = build_llm_repair_prompt(prompt, response.content, request)
+        repair_prompt = build_llm_repair_prompt(response.content, request)
         repair_block = llm_provider.PromptBlock(
             text=repair_prompt,
             stability=llm_provider.Stability.DYNAMIC,

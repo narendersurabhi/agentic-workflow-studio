@@ -15353,17 +15353,7 @@ def _record_intent_confidence_outcome(job: JobRecord, status: models.JobStatus) 
 
 
 def _close_job_cache_session(job_id: str) -> None:
-    """Close and evict the provider-side cache session for a completed job."""
-    ref = _cache_session_store.load(job_id)
-    if ref is not None:
-        try:
-            resolve_provider(
-                ref.provider,
-                api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY", ""),
-                model=os.getenv("ANTHROPIC_MODEL") or os.getenv("OPENAI_MODEL", ""),
-            ).close_cache_session(ref)
-        except Exception:  # noqa: BLE001
-            pass  # best-effort; session expires via TTL regardless
+    """Evict the cache session entry for a completed job."""
     _cache_session_store.delete(job_id)
 
 

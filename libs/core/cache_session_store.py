@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, List
+from typing import Any, Callable, List, Optional
 
 from libs.core.llm_provider import (
     CacheSessionRef,
     LLMProvider,
+    LLMProviderError,
     LLMRequest,
     LLMResponse,
     PromptBlock,
@@ -97,12 +98,20 @@ class CachingLLMProvider(LLMProvider):
       - request.metadata has no job_id
       - no session is found in Redis for that job_id
 
-    This means all existing callers that don't set job_id in metadata are unaffected.
+    If catalog_hash_fn is provided, the current catalog hash is compared against
+    the hash stored in the session. A mismatch raises LLMProviderError — catalog
+    changes mid-run are not allowed because cached static blocks would be stale.
     """
 
-    def __init__(self, inner: LLMProvider, session_store: CacheSessionStore) -> None:
+    def __init__(
+        self,
+        inner: LLMProvider,
+        session_store: CacheSessionStore,
+        catalog_hash_fn: Optional[Callable[[], str]] = None,
+    ) -> None:
         self._inner = inner
         self._store = session_store
+        self._catalog_hash_fn = catalog_hash_fn
 
     def generate_request(self, request: LLMRequest) -> LLMResponse:
         job_id = (request.metadata or {}).get("job_id")
@@ -111,8 +120,22 @@ class CachingLLMProvider(LLMProvider):
         session = self._store.load(job_id)
         if session is None:
             return self._inner.generate_request(request)
+        self._assert_catalog_stable(session, job_id)
         blocks = _request_to_blocks(request)
         return self._inner.generate_cached(blocks, session, request)
+
+    def _assert_catalog_stable(self, session: CacheSessionRef, job_id: str) -> None:
+        if self._catalog_hash_fn is None:
+            return
+        stored_hash = session.metadata.get("catalog_hash")
+        if not stored_hash:
+            return
+        current_hash = self._catalog_hash_fn()
+        if current_hash != stored_hash:
+            raise LLMProviderError(
+                f"capability catalog changed mid-run for job {job_id}; "
+                "cached static blocks are stale — restart the job"
+            )
 
     def generate_cached(
         self,

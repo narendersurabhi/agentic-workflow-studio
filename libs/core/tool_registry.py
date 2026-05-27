@@ -1324,7 +1324,15 @@ def _llm_generate(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, A
     if job_id:
         meta["job_id"] = job_id
     response = provider.generate_request(LLMRequest(prompt=prompt, metadata=meta))
-    return {"text": response.content}
+    return {
+        "text": response.content,
+        "usage": {
+            "prompt_tokens": response.input_tokens,
+            "completion_tokens": response.output_tokens,
+            "cached_tokens": response.cached_input_tokens,
+            "cache_write_tokens": response.cache_creation_tokens,
+        },
+    }
 
 
 def _llm_generate_with_context(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:
@@ -1359,7 +1367,15 @@ def _llm_generate_with_context(payload: Dict[str, Any], provider: LLMProvider) -
             metadata=meta,
         )
     )
-    return {"text": response.content}
+    return {
+        "text": response.content,
+        "usage": {
+            "prompt_tokens": response.input_tokens,
+            "completion_tokens": response.output_tokens,
+            "cached_tokens": response.cached_input_tokens,
+            "cache_write_tokens": response.cache_creation_tokens,
+        },
+    }
 
 
 def _render_prompt_with_context(prompt: str, context_value: Any) -> str:
