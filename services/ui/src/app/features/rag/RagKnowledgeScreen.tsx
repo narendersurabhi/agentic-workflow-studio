@@ -271,6 +271,7 @@ export default function RagKnowledgeScreen() {
   };
 
   useEffect(() => {
+    if (!userId.trim()) return;
     void refreshDocuments();
   }, [collectionName, namespace, tenantId, userId, workspaceId]);
 
