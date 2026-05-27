@@ -2264,7 +2264,6 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         goal,
         contextJson,
         priority,
-        workspaceUserId,
         chatUseComposeContext,
       } satisfies WorkspaceDraftSnapshot)
     );
