@@ -1047,7 +1047,7 @@ const DEMO_WORKSPACE_GOAL =
 
 const DEMO_WORKSPACE_CONTEXT_JSON = JSON.stringify(
   {
-    workspace_user_id: DEFAULT_WORKSPACE_USER_ID,
+    workspace_user_id: "demo-user",
     client: "Acme Health",
     deliverable: "AI workflow implementation brief",
     audience: "product owners and implementation leads",
