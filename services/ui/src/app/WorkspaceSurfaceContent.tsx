@@ -3607,7 +3607,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         edges: normalizeComposerEdges(nextNodes, nextEdges)
       };
     });
-    setChainComposerNotice(`Added ${capabilityId} to visual chain builder.`);
+    setChainComposerNotice(`Added ${capabilityId} to the visual chain editor.`);
   };
 
   const addIntentSuggestedCapabilityToVisualChain = (capabilityId: string) => {
@@ -4504,7 +4504,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
 
   const applyVisualChainToGoalAndContext = () => {
     if (visualChainNodes.length === 0) {
-      setChainComposerNotice("Add at least one step in visual chain builder.");
+      setChainComposerNotice("Add at least one step in the visual chain editor.");
       return;
     }
     const nodeById = new Map(visualChainNodes.map((node) => [node.id, node]));
@@ -5747,7 +5747,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
 
       if (assessmentForSubmit?.needs_clarification && !areClarificationsAnswered(assessmentForSubmit)) {
         setSubmitError(
-          "Goal needs clarification before submit. Answer the questions shown under Compose Job."
+          "Goal needs clarification before submit. Answer the questions shown under Run from Prompt."
         );
         return;
       }
@@ -5810,7 +5810,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
             setIntentAssessment(profile);
           }
           setSubmitError(
-            "Goal needs clarification before submit. Answer the questions shown under Compose Job."
+            "Goal needs clarification before submit. Answer the questions shown under Run from Prompt."
           );
           return;
         }
@@ -6883,11 +6883,11 @@ const openTemplateModal = (template: Template) => {
   const welcomeSurfaceCards = [
     {
       href: "/compose",
-      eyebrow: "Request Builder",
-      title: "Workflow Request Builder",
+      eyebrow: "Run from Prompt",
+      title: "Run from Prompt",
       description:
-        "Capture the goal, context, files, and requirements before submitting work.",
-      cta: "Open Request Builder",
+        "Capture the goal, context, files, and requirements before starting a one-off run.",
+      cta: "Open Run from Prompt",
       badge: "inputs",
       accentClassName: "text-sky-100/72",
       marker: "C",
@@ -6905,11 +6905,11 @@ const openTemplateModal = (template: Template) => {
     },
     {
       href: "/studio",
-      eyebrow: "Workflow Builder",
-      title: "Workflow Builder",
+      eyebrow: "Workflow Studio",
+      title: "Workflow Studio",
       description:
-        "Design the steps, decisions, tools, and AI actions your process needs.",
-      cta: "Open Builder",
+        "Design reusable workflow steps, decisions, tools, and AI actions.",
+      cta: "Open Studio",
       badge: "graph",
       accentClassName: "text-amber-100/78",
       marker: "S",
@@ -6962,7 +6962,7 @@ const openTemplateModal = (template: Template) => {
               href="/studio"
               className="rounded-xl border border-slate-200/18 bg-slate-950/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/30 hover:bg-slate-950/35"
             >
-              Open Builder
+              Open Studio
             </Link>
           </>
         }
@@ -6977,20 +6977,20 @@ const openTemplateModal = (template: Template) => {
                 Start, Manage, and Monitor AI Workflows
               </h2>
               <p className="mt-1 max-w-3xl text-[13px] leading-5 text-slate-200/74">
-                Launch workflow design, chat-assisted requests, saved workflows, knowledge, and
+                Launch prompt-based runs, chat-assisted requests, saved workflows, knowledge, and
                 reusable context from one product workspace.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                request builder
+                run from prompt
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
                 workflow chat
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
-                builder
+                studio
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-slate-100">
                 context
@@ -7088,8 +7088,8 @@ const openTemplateModal = (template: Template) => {
   return (
     <AppShell
       activeScreen={showComposeScreen ? "compose" : "chat"}
-      title={showComposeScreen ? "Workflow Request Builder" : "Chat-to-Workflow Assistant"}
-      breadcrumbs={[{ label: showComposeScreen ? "Request Builder" : "Workflow Chat" }]}
+      title={showComposeScreen ? "Run from Prompt" : "Chat-to-Workflow Assistant"}
+      breadcrumbs={[{ label: showComposeScreen ? "Run from Prompt" : "Workflow Chat" }]}
     >
     <div className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
       {!useStudioSurfaceTheme ? (
@@ -8758,10 +8758,10 @@ const openTemplateModal = (template: Template) => {
       >
         <ScreenHeader
           eyebrow="AI Workflow Workspace"
-          title={showComposeScreen ? "Workflow Request Builder" : "Chat-to-Workflow Assistant"}
+          title={showComposeScreen ? "Run from Prompt" : "Chat-to-Workflow Assistant"}
           description={
             showComposeScreen
-              ? "Capture the goal, context, files, and requirements before submitting work."
+              ? "Capture the goal, context, files, and requirements before starting a one-off run."
               : "Describe what you need in plain language, clarify missing details, and route the request into an executable workflow."
           }
           activeScreen={showComposeScreen ? "compose" : "chat"}
@@ -8844,7 +8844,7 @@ const openTemplateModal = (template: Template) => {
                     useStudioSurfaceTheme ? "text-slate-300/74" : "text-slate-200"
                   }`}
                 >
-                  Chat, Compose, and direct memory reads will use this user id by default unless a
+                  Chat, Run from Prompt, and direct memory reads will use this user id by default unless a
                   request overrides it explicitly.
                 </div>
               </div>

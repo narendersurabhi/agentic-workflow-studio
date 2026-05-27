@@ -6,7 +6,7 @@ This guide is for people using the product through the UI. It explains when to u
 
 Agentic Workflow Studio gives you four main ways to get work done:
 
-- `Compose`: create a structured job from a goal and context.
+- `Run from Prompt`: create a structured one-off run from a goal and context.
 - `Chat`: stay conversational until a direct tool call or a workflow is actually needed.
 - `Workflow Studio`: author explicit DAG workflows, save them, publish versions, and run them.
 - `Memory`: manage user-scoped memory such as profile data, preferences, and reusable facts.
@@ -20,7 +20,7 @@ At runtime, work flows through the platform as:
 
 ## Core Concepts
 
-- `Job`: one unit of work submitted from Compose, Chat, or a workflow run.
+- `Job`: one unit of work submitted from Run from Prompt, Chat, or a workflow run.
 - `Capability`: a named execution unit such as `document.spec.generate` or `github.repo.list`.
 - `Tool`: the concrete runtime implementation behind a capability or direct call.
 - `Workflow definition`: a saved Studio draft.
@@ -41,16 +41,16 @@ Typical local access:
 
 The home screen is the entry point. It contains capsules for:
 
-- `Compose`
+- `Run from Prompt`
 - `Chat`
 - `Workflow Studio`
 - `Memory`
 
 Use it when you want to choose a working mode instead of being dropped directly into one.
 
-## Compose
+## Run from Prompt
 
-Use Compose when:
+Use Run from Prompt when:
 
 - you already know the goal
 - you want to provide structured context
@@ -61,16 +61,16 @@ Main actions:
 - `Analyze Intent`: checks how the goal will likely decompose.
 - `Submit Job`: creates a normal planner-led job.
 
-Recommended Compose flow:
+Recommended Run from Prompt flow:
 
-1. Open `Compose`.
+1. Open `Run from Prompt`.
 2. Enter a clear goal.
 3. Add or edit `Context JSON`.
 4. Run `Analyze Intent` if the goal is complex.
 5. Submit the job.
 6. Watch the job list and task results in the workspace.
 
-Use Compose instead of Studio when you care more about outcome than explicit DAG design.
+Use Run from Prompt instead of Workflow Studio when you care more about outcome than explicit DAG design.
 
 ## Chat
 
@@ -100,7 +100,7 @@ Practical notes:
 - When a chat-started workflow finishes, chat appends a final assistant message with the workflow result when it can resolve one cleanly. Declared workflow outputs win; otherwise chat falls back to a displayable last-step output such as generated text.
 - Non-control fields in `context_json` are passed through as workflow run context. Use `workflow_inputs` for workflow interface inputs and `workflow_context_json` for explicit context overrides.
 - If a request needs a multi-step workflow, chat creates a job instead of improvising a hidden workflow.
-- If you enable context attachment, Compose context is sent along with the chat turn.
+- If you enable context attachment, Run from Prompt context is sent along with the chat turn.
 
 ## Workflow Studio
 
@@ -259,7 +259,7 @@ Important rule:
 
 - user-scoped memory only works when the correct `user_id` is provided
 
-The UI helps with this by propagating `Memory User ID` from the workspace into Compose, Chat, and Studio.
+The UI helps with this by propagating `Memory User ID` from the workspace into Run from Prompt, Chat, and Studio.
 
 ## Recommended Playbooks
 
@@ -300,7 +300,7 @@ Fast path:
 
 Structured path:
 
-1. Use `Compose` or `Workflow Studio`
+1. Use `Run from Prompt` or `Workflow Studio`
 2. Add `github.repo.list` or the relevant GitHub capability
 3. Provide explicit repo inputs
 4. Run and inspect the results
@@ -385,7 +385,7 @@ Check:
 ## Best Practices
 
 - Use `Chat` for lightweight conversational work.
-- Use `Compose` for planner-led workflows from a goal.
+- Use `Run from Prompt` for planner-led workflows from a goal.
 - Use `Workflow Studio` for durable, versioned, manually authored workflows.
 - Keep workflow interfaces explicit instead of overloading raw `context_json`.
 - Store stable profile data in `user_profile`.
