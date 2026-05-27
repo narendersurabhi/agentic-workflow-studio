@@ -405,3 +405,40 @@ that interpolate values like `{json_schema}`. Extracting them to module-level co
 requires verifying no dynamic interpolation is hidden in the "static" block. A mismatch
 would silently break the cache boundary (different string each call) without causing a
 correctness failure.
+
+---
+
+## Review comments
+
+1. **Align the provider assumptions with current code before implementation.**
+   `libs/core/llm_provider.py` already has `LLMResponse`, `LLMRequest`, an OpenAI Responses
+   API provider, and a separate chat-completions provider. The implementation plan should
+   be updated before adding new abstractions so it does not duplicate the existing response
+   wrapper or target the wrong provider path.
+
+2. **Do not describe repair continuations as sending only two small turns.**
+   Stateless LLM APIs still require resending the prior conversation content unless using
+   provider-specific stored state. A repair call can benefit from a cached prefix, but the
+   original prompt blocks are still present in the request and billed at the provider's
+   cache-read rate. Reframe the expected savings accordingly.
+
+3. **Validate Anthropic model names, headers, and TTL behavior against current docs.**
+   The example model and beta-header guidance should be checked before rollout. The design
+   should distinguish default 5-minute cache behavior from any extended-cache TTL behavior
+   and its required request options.
+
+4. **Make Gemini caching constraints model-specific.**
+   The fixed `32 768` token minimum and TTL statements should be treated as provider/model
+   checks, not hard platform constraints. Add an implementation step to measure the target
+   Gemini model's minimum cacheable token count and TTL behavior.
+
+5. **Clarify that cache stability is serialized-content stability, not Python object identity.**
+   Module-level constants may reduce accidental drift, but provider cache matching depends
+   on byte-stable serialized request content. The chat prompt stabilization section should
+   focus on deterministic message ordering and serialization.
+
+6. **Define the catalog cache key precisely.**
+   The catalog JSON cache key should include the registry path, file mtime or content hash,
+   capability mode, enabled capability filters, and serialization options. Otherwise, the
+   in-process cache can serve a catalog string that no longer matches the active planner
+   capability set.

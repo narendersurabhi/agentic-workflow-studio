@@ -160,6 +160,8 @@ def planner_collectible_inputs_for_capability(
 _CAPABILITY_CACHE_KEY: tuple[str, float] | None = None
 _CAPABILITY_CACHE_VALUE: CapabilityRegistry | None = None
 
+_CATALOG_JSON_CACHE: dict[str, str] = {}
+
 
 def resolve_capability_mode() -> str:
     mode = os.getenv("CAPABILITY_MODE", "disabled").strip().lower()
@@ -266,6 +268,58 @@ def canonicalize_capability_id(
     if resolved_registry is None:
         return candidate
     return resolved_registry.canonicalize_id(candidate) or candidate
+
+
+def load_capability_catalog_json(path: Path | None = None) -> str:
+    """Return the full enabled capability catalog as a stable, sorted JSON string.
+
+    The result is cached by (registry path, mtime).  The string is byte-for-byte
+    identical between calls with the same registry file — a prerequisite for
+    OpenAI prefix caching and Anthropic block caching to hit.
+    """
+    resolved = (path or resolve_capability_registry_path()).expanduser()
+    try:
+        mtime = resolved.stat().st_mtime
+    except OSError:
+        mtime = -1.0
+    cache_key = f"{resolved}|{mtime}"
+    if cache_key in _CATALOG_JSON_CACHE:
+        return _CATALOG_JSON_CACHE[cache_key]
+
+    registry = load_capability_registry(path)
+    catalog = [
+        {
+            "capability_id": spec.capability_id,
+            "description": spec.description,
+            "risk_tier": spec.risk_tier,
+            "idempotency": spec.idempotency,
+            "group": spec.group,
+            "subgroup": spec.subgroup,
+            "input_schema_ref": spec.input_schema_ref,
+            "output_schema_ref": spec.output_schema_ref,
+            "aliases": sorted(spec.aliases),
+            "exports": [
+                {
+                    "description": e.description,
+                    "name": e.name,
+                    "path": e.path,
+                    "required": e.required,
+                }
+                for e in spec.exports
+            ],
+            "planner_hints": dict(sorted(spec.planner_hints.items())),
+            "adapters": [
+                {"server_id": a.server_id, "type": a.type}
+                for a in spec.adapters
+            ],
+        }
+        for spec in registry.capabilities.values()
+        if spec.enabled
+    ]
+    # sort_keys=True + sorted list entries → identical bytes across calls
+    result = json.dumps(catalog, ensure_ascii=False, sort_keys=True)
+    _CATALOG_JSON_CACHE[cache_key] = result
+    return result
 
 
 def load_capability_registry(path: Path | None = None) -> CapabilityRegistry:
