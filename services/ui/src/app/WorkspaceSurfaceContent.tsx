@@ -2130,7 +2130,6 @@ type WorkspaceDraftSnapshot = {
   goal?: string;
   contextJson?: string;
   priority?: number;
-  workspaceUserId?: string;
   chatUseComposeContext?: boolean;
 };
 
@@ -2244,9 +2243,6 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         }
         if (typeof draft.priority === "number" && Number.isFinite(draft.priority)) {
           setPriority(draft.priority);
-        }
-        if (typeof draft.workspaceUserId === "string" && draft.workspaceUserId.trim()) {
-          setWorkspaceUserId(draft.workspaceUserId.trim());
         }
         if (typeof draft.chatUseComposeContext === "boolean") {
           setChatUseComposeContext(draft.chatUseComposeContext);
