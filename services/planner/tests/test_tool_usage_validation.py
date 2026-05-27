@@ -1767,6 +1767,82 @@ def test_validate_plan_rejects_dependency_derived_render_path_for_raw_jobs() -> 
     assert reason == "render_path_derived_not_allowed:document.docx.render:task=RenderDocxDocument"
 
 
+def test_ensure_job_inputs_replaces_derived_pdf_render_path_with_context_path() -> None:
+    job = _job()
+    job.context_json = {"path": "agentic memory.pdf"}
+    plan = models.PlanCreate(
+        planner_version="1",
+        tasks_summary="render chain",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="DeriveOutputPath",
+                description="derive",
+                instruction="derive",
+                acceptance_criteria=["ok"],
+                expected_output_schema_ref="schemas/path",
+                intent=models.ToolIntent.io,
+                deps=[],
+                tool_requests=["derive_output_filename"],
+                tool_inputs={"derive_output_filename": {"topic": "agent memory"}},
+                critic_required=False,
+            ),
+            models.TaskCreate(
+                name="RenderPDFDocument",
+                description="render",
+                instruction="render",
+                acceptance_criteria=["ok"],
+                expected_output_schema_ref="schemas/pdf_output",
+                intent=models.ToolIntent.render,
+                deps=["DeriveOutputPath"],
+                tool_requests=["document.pdf.render"],
+                tool_inputs={
+                    "document.pdf.render": {
+                        "document_spec": {"blocks": []},
+                        "path": {
+                            "$from": "dependencies_by_name.DeriveOutputPath.derive_output_filename.path"
+                        },
+                    }
+                },
+                critic_required=False,
+            ),
+        ],
+    )
+
+    updated = _ensure_job_inputs(plan, job, tools=[])
+    render_task = next(item for item in updated.tasks if item.name == "RenderPDFDocument")
+    valid, reason = _validate_plan(
+        updated,
+        [
+            _tool(
+                "derive_output_filename",
+                {
+                    "type": "object",
+                    "properties": {"topic": {"type": "string"}},
+                    "required": ["topic"],
+                },
+                tool_intent=models.ToolIntent.io,
+            ),
+            _tool(
+                "document.pdf.render",
+                {
+                    "type": "object",
+                    "properties": {
+                        "document_spec": {"type": "object"},
+                        "path": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+                tool_intent=models.ToolIntent.render,
+            ),
+        ],
+        job,
+    )
+
+    assert render_task.tool_inputs["document.pdf.render"]["path"] == "agentic memory.pdf"
+    assert valid is True, reason
+
+
 def test_validate_plan_allows_dependency_derived_render_path_for_auto_mode_jobs() -> None:
     job = _job()
     job.metadata = {"render_path_mode": "auto"}

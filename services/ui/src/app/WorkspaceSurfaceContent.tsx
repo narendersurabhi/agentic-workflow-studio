@@ -9110,7 +9110,7 @@ const openTemplateModal = (template: Template) => {
                           >
                             <div className="text-[11px] font-semibold text-slate-700">{question}</div>
                             <input
-                              className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                              className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-950 shadow-sm placeholder:text-slate-500 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
                               value={intentClarificationAnswers[index] || ""}
                               onChange={(event) =>
                                 setIntentClarificationAnswers((prev) => {
@@ -9989,17 +9989,17 @@ const openTemplateModal = (template: Template) => {
             >
               <div className="font-medium">Job ID</div>
               <div className="break-all text-xs text-text-lo">{selectedJobId}</div>
-              <div className="mt-2 text-xs text-slate-600">
+              <div className={`mt-2 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                 Status: {selectedJobStatus || selectedJob?.status || "unknown"}
               </div>
-              <div className="mt-2 text-xs text-slate-600">
+              <div className={`mt-2 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                 Planning: {(jobDebugger?.planning_mode || selectedJob?.planning_mode || "static").toUpperCase()}
                 {" • "}
                 Revision {jobDebugger?.current_revision_number || selectedJob?.current_revision_number || 0}
               </div>
               {selectedAdaptiveStatus &&
               (jobDebugger?.planning_mode || selectedJob?.planning_mode || "static") === "adaptive" ? (
-                <div className="mt-2 text-xs text-slate-600">
+                <div className={`mt-2 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                   Replans: {selectedAdaptiveStatus.replans_used ?? 0}/
                   {selectedAdaptiveStatus.max_replans ?? 0}
                   {selectedAdaptiveStatus.replan_block_reason
@@ -10013,7 +10013,7 @@ const openTemplateModal = (template: Template) => {
                 (selectedJob?.metadata &&
                   typeof selectedJob.metadata.replan_reason === "string" &&
                   selectedJob.metadata.replan_reason)) ? (
-                <div className="mt-2 text-xs text-slate-600">
+                <div className={`mt-2 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                   Last replan reason:{" "}
                   {jobDebugger?.last_replan_reason ||
                     (typeof selectedJob?.metadata?.replan_reason === "string"
@@ -10023,7 +10023,7 @@ const openTemplateModal = (template: Template) => {
               ) : null}
               <div className="mt-3 font-medium">Plan</div>
               {selectedPlan ? (
-                <div className="text-xs text-slate-600">
+                <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                   {selectedPlan.tasks_summary || "Plan available."}
                 </div>
               ) : selectedJobPlanError ? (
@@ -10034,12 +10034,12 @@ const openTemplateModal = (template: Template) => {
                   Plan failed: {selectedJob.metadata.plan_error}
                 </div>
               ) : (
-                <div className="text-xs text-slate-600">Plan not created yet.</div>
+                <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>Plan not created yet.</div>
               )}
               {Array.isArray(jobDebugger?.revision_history) && jobDebugger.revision_history.length > 0 ? (
                 <div className="mt-3 space-y-1">
                   <div className="font-medium">Revision History</div>
-                  <div className="space-y-1 text-xs text-slate-600">
+                  <div className={`space-y-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                     {jobDebugger.revision_history.map((revision) => (
                       <div key={`revision-${revision.revision_number}`}>
                         r{revision.revision_number} • {revision.trigger_reason || "initial_plan"} •{" "}
@@ -10065,7 +10065,11 @@ const openTemplateModal = (template: Template) => {
               <div className="mt-3 flex items-center justify-between gap-2">
                 <div className="font-medium">Intent Graph</div>
                 <button
-                  className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                  className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                    useStudioSurfaceTheme
+                      ? "border border-subtle text-text-hi"
+                      : "border border-slate-300 text-slate-700"
+                  }`}
                   onClick={() =>
                     setJobDetailsIntentGraphCollapsed((previous) => !previous)
                   }
@@ -10074,7 +10078,7 @@ const openTemplateModal = (template: Template) => {
                 </button>
               </div>
               {jobDetailsIntentGraphCollapsed ? (
-                <div className="text-xs text-slate-600">
+                <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                   Collapsed. Click Expand to view this job's intent graph.
                 </div>
               ) : selectedJob &&
@@ -10084,7 +10088,13 @@ const openTemplateModal = (template: Template) => {
                 selectedJob.metadata.goal_intent_graph &&
                 typeof selectedJob.metadata.goal_intent_graph === "object" &&
                 !Array.isArray(selectedJob.metadata.goal_intent_graph) ? (
-                <div className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                <div
+                  className={`mt-2 space-y-2 rounded-lg px-3 py-2 text-xs ${
+                    useStudioSurfaceTheme
+                      ? "border border-subtle bg-surface-1 text-text-md"
+                      : "border border-slate-200 bg-white text-slate-600"
+                  }`}
+                >
                   {(() => {
                     const rawGraph = selectedJob.metadata?.goal_intent_graph as Record<string, unknown>;
                     const segments = Array.isArray(rawGraph.segments)
@@ -10103,20 +10113,20 @@ const openTemplateModal = (template: Template) => {
                     return (
                       <>
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] ${studioSurfaceChipClassName}`}>
                             segments: {segments.length}
                           </span>
-                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] ${studioSurfaceChipClassName}`}>
                             confidence:{" "}
                             {Number.isFinite(overallConfidence) ? overallConfidence.toFixed(2) : "n/a"}
                           </span>
                           {Number.isFinite(capabilityMatchRate) ? (
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${studioSurfaceChipClassName}`}>
                               cap match: {(capabilityMatchRate * 100).toFixed(0)}%
                             </span>
                           ) : null}
                           {Number.isFinite(capabilitySuggestionsSelected) ? (
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${studioSurfaceChipClassName}`}>
                               cap selected: {Math.max(0, Math.trunc(capabilitySuggestionsSelected))}
                             </span>
                           ) : null}
@@ -10142,13 +10152,18 @@ const openTemplateModal = (template: Template) => {
                                     .filter(Boolean)
                                 : [];
                               return (
-                                <li key={`job-intent-segment-${segId}`} className="rounded border border-slate-200 px-2 py-1">
-                                  <div className="font-semibold text-slate-700">
+                                <li
+                                  key={`job-intent-segment-${segId}`}
+                                  className={`rounded px-2 py-1 ${useStudioSurfaceTheme ? "border border-subtle" : "border border-slate-200"}`}
+                                >
+                                  <div className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>
                                     {segId}: {intent}
                                   </div>
-                                  {objective ? <div className="text-slate-600">{objective}</div> : null}
+                                  {objective ? (
+                                    <div className={useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}>{objective}</div>
+                                  ) : null}
                                   {suggested.length > 0 ? (
-                                    <div className="mt-1 text-[11px] text-text-lo">
+                                    <div className={`mt-1 text-[11px] ${useStudioSurfaceTheme ? "text-text-lo" : "text-slate-500"}`}>
                                       suggested: {suggested.join(", ")}
                                     </div>
                                   ) : null}
@@ -10162,7 +10177,7 @@ const openTemplateModal = (template: Template) => {
                   })()}
                 </div>
               ) : (
-                <div className="text-xs text-slate-600">
+                <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
                   No intent graph stored for this job.
                 </div>
               )}
@@ -10201,7 +10216,7 @@ const openTemplateModal = (template: Template) => {
                   ))}
                 </div>
               ) : (
-                <div className="text-xs text-slate-600">No downloadable artifacts yet.</div>
+                <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>No downloadable artifacts yet.</div>
               )}
               {selectedJobId &&
               ((selectedJobStatus || selectedJob?.status) === "succeeded" ||
@@ -10226,16 +10241,20 @@ const openTemplateModal = (template: Template) => {
               ) : null}
             </div>
 
-            <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+            <div className={`rounded-xl p-4 shadow-sm ${useStudioSurfaceTheme ? "border border-subtle bg-surface-1 text-text-md" : "border border-slate-100 bg-white text-slate-700"}`}>
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-slate-800">Run Debugger</div>
-                  <div className="text-[11px] uppercase tracking-[0.2em] text-text-lo">
+                  <div className={`text-sm font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-800"}`}>Run Debugger</div>
+                  <div className={`text-[11px] uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-lo" : "text-slate-500"}`}>
                     Timeline + Resolved Inputs
                   </div>
                 </div>
                 <button
-                  className="rounded-full border border-slate-200 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-text-lo"
+                  className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.2em] ${
+                    useStudioSurfaceTheme
+                      ? "border border-subtle text-text-md"
+                      : "border border-slate-200 text-slate-500"
+                  }`}
                   onClick={() => setShowDebugger((prev) => !prev)}
                 >
                   {showDebugger ? "Hide" : "Show"}
@@ -10244,28 +10263,28 @@ const openTemplateModal = (template: Template) => {
               {showDebugger ? (
                 <div className="mt-3">
                   {jobDebuggerLoading ? (
-                    <div className="text-xs text-text-lo">Loading debugger data...</div>
+                    <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-lo" : "text-slate-500"}`}>Loading debugger data...</div>
                   ) : jobDebuggerError ? (
                     <div className="text-xs text-rose-600">{jobDebuggerError}</div>
                   ) : !jobDebugger || jobDebugger.tasks.length === 0 ? (
-                    <div className="text-xs text-text-lo">No debugger data for this job yet.</div>
+                    <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-lo" : "text-slate-500"}`}>No debugger data for this job yet.</div>
                   ) : (
                     <div className="space-y-3">
-                      <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                        <span className="font-semibold text-slate-700">Generated:</span>{" "}
+                      <div className={`rounded-lg px-3 py-2 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                        <span className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Generated:</span>{" "}
                         {formatTimestamp(jobDebugger.generated_at)} •{" "}
-                        <span className="font-semibold text-slate-700">Events scanned:</span>{" "}
+                        <span className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Events scanned:</span>{" "}
                         {jobDebugger.timeline_events_scanned}
                       </div>
-                      <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                        <span className="font-semibold text-slate-700">Planning:</span>{" "}
+                      <div className={`rounded-lg px-3 py-2 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                        <span className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Planning:</span>{" "}
                         {(jobDebugger.planning_mode || "static").toUpperCase()} •{" "}
-                        <span className="font-semibold text-slate-700">Revision:</span>{" "}
+                        <span className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Revision:</span>{" "}
                         {jobDebugger.current_revision_number || 0}
                         {jobDebugger.last_replan_reason ? (
                           <>
                             {" • "}
-                            <span className="font-semibold text-slate-700">Last replan:</span>{" "}
+                            <span className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Last replan:</span>{" "}
                             {jobDebugger.last_replan_reason}
                           </>
                         ) : null}
@@ -10273,7 +10292,7 @@ const openTemplateModal = (template: Template) => {
                         (jobDebugger.planning_mode || "static") === "adaptive" ? (
                           <>
                             {" • "}
-                            <span className="font-semibold text-slate-700">Replans:</span>{" "}
+                            <span className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Replans:</span>{" "}
                             {jobDebugger.adaptive_status.replans_used ?? 0}/
                             {jobDebugger.adaptive_status.max_replans ?? 0}
                             {jobDebugger.adaptive_status.replan_block_reason
@@ -10285,7 +10304,7 @@ const openTemplateModal = (template: Template) => {
                         ) : null}
                       </div>
                       {debuggerActionNotice ? (
-                        <div className="text-xs text-slate-600">{debuggerActionNotice}</div>
+                        <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>{debuggerActionNotice}</div>
                       ) : null}
                       {jobDebugger.tasks.map((entry) => {
                         const classification = entry.error || {
