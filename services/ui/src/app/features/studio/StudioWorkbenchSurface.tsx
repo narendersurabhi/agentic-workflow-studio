@@ -1691,7 +1691,7 @@ export default function StudioWorkbenchSurface({
       : workbenchMode;
 
   return (
-    <section className={active ? "block" : "hidden"} aria-hidden={!active}>
+    <section className={active ? "studio-contrast-surface block" : "hidden"} aria-hidden={!active}>
       <div className="relative">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
