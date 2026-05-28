@@ -75,6 +75,7 @@ from .models import (
     StepAttemptRecord,
     TaskRecord,
     TaskResultRecord,
+    SkillRecord,
     UserRecord,
     WorkflowDefinitionRecord,
     WorkflowRunRecord,
@@ -103,9 +104,68 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _sync_builtin_skills() -> None:
+    built_ins_path = Path(__file__).parent.parent.parent.parent / "config" / "skills" / "built_ins.yaml"
+    if not built_ins_path.exists():
+        return
+    import yaml  # type: ignore[import]
+    with open(built_ins_path) as f:
+        entries = yaml.safe_load(f) or []
+    db = SessionLocal()
+    try:
+        for entry in entries:
+            name = entry.get("name", "").strip()
+            if not name:
+                continue
+            steps = []
+            for i, s in enumerate(entry.get("steps", [])):
+                steps.append({
+                    "id": s.get("id", f"step-{i}"),
+                    "order": s.get("order", i + 1),
+                    "type": s.get("type", "goal_text"),
+                    "capability_id": s.get("capability_id"),
+                    "goal_template": s.get("goal_template"),
+                    "inputs": s.get("inputs", {}),
+                    "condition": s.get("condition"),
+                })
+            definition = {
+                "instructions": entry.get("instructions"),
+                "steps": steps,
+            }
+            existing = db.query(SkillRecord).filter(
+                SkillRecord.built_in == True,  # noqa: E712
+                SkillRecord.name == name,
+            ).first()
+            now = datetime.now(UTC).replace(tzinfo=None)
+            if existing:
+                existing.definition = definition
+                existing.description = entry.get("description")
+                existing.version = (existing.version or 1) + 1
+                existing.updated_at = now
+            else:
+                db.add(SkillRecord(
+                    id=str(uuid.uuid4()),
+                    name=name,
+                    description=entry.get("description"),
+                    version=1,
+                    built_in=True,
+                    owner_id=None,
+                    definition=definition,
+                    created_at=now,
+                    updated_at=now,
+                ))
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("builtin_skills_sync_failed: %s", exc)
+        db.rollback()
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
     _init_db()
+    _sync_builtin_skills()
     yield
 
 
@@ -21867,3 +21927,133 @@ def workbench_agent_run(
         run_spec=final_run_spec.model_dump(mode="json"),
         execution_request=None,
     ).model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# Skills endpoints
+# ---------------------------------------------------------------------------
+
+def _skill_from_record(record: SkillRecord) -> models.Skill:
+    definition = record.definition or {}
+    steps_data = definition.get("steps", [])
+    steps = [models.SkillStep(**s) for s in steps_data]
+    return models.Skill(
+        id=record.id,
+        name=record.name,
+        description=record.description,
+        version=record.version,
+        built_in=record.built_in,
+        owner_id=record.owner_id,
+        instructions=definition.get("instructions"),
+        steps=steps,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+@app.get("/skills", response_model=List[models.Skill])
+def list_skills(
+    owner_id: str = Query(default="default"),
+    db: Session = Depends(get_db),
+) -> List[models.Skill]:
+    records = (
+        db.query(SkillRecord)
+        .filter(
+            (SkillRecord.owner_id == owner_id) | (SkillRecord.built_in == True)  # noqa: E712
+        )
+        .order_by(SkillRecord.built_in.desc(), SkillRecord.name)
+        .all()
+    )
+    return [_skill_from_record(r) for r in records]
+
+
+@app.get("/skills/{skill_id}", response_model=models.Skill)
+def get_skill(skill_id: str, db: Session = Depends(get_db)) -> models.Skill:
+    record = db.query(SkillRecord).filter(SkillRecord.id == skill_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="skill_not_found")
+    return _skill_from_record(record)
+
+
+@app.post("/skills", response_model=models.Skill)
+def create_skill(
+    payload: models.SkillCreate,
+    owner_id: str = Query(default="default"),
+    db: Session = Depends(get_db),
+) -> models.Skill:
+    now = datetime.now(UTC).replace(tzinfo=None)
+    record = SkillRecord(
+        id=str(uuid.uuid4()),
+        name=payload.name,
+        description=payload.description,
+        version=1,
+        built_in=False,
+        owner_id=owner_id,
+        definition={
+            "instructions": payload.instructions,
+            "steps": [s.model_dump() for s in payload.steps],
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="skill_name_already_exists")
+    return _skill_from_record(record)
+
+
+@app.put("/skills/{skill_id}", response_model=models.Skill)
+def update_skill(
+    skill_id: str,
+    payload: models.SkillUpdate,
+    owner_id: str = Query(default="default"),
+    db: Session = Depends(get_db),
+) -> models.Skill:
+    record = (
+        db.query(SkillRecord)
+        .filter(SkillRecord.id == skill_id, SkillRecord.built_in == False)  # noqa: E712
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="skill_not_found_or_builtin")
+    if payload.name is not None:
+        record.name = payload.name
+    if payload.description is not None:
+        record.description = payload.description
+    definition = record.definition or {}
+    if payload.instructions is not None:
+        definition["instructions"] = payload.instructions
+    if payload.steps is not None:
+        definition["steps"] = [s.model_dump() for s in payload.steps]
+    record.definition = definition
+    record.version = (record.version or 1) + 1
+    record.updated_at = datetime.now(UTC).replace(tzinfo=None)
+    try:
+        db.commit()
+        db.refresh(record)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="skill_name_already_exists")
+    return _skill_from_record(record)
+
+
+@app.delete("/skills/{skill_id}")
+def delete_skill(
+    skill_id: str,
+    owner_id: str = Query(default="default"),
+    db: Session = Depends(get_db),
+) -> dict:
+    record = (
+        db.query(SkillRecord)
+        .filter(SkillRecord.id == skill_id, SkillRecord.built_in == False)  # noqa: E712
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="skill_not_found_or_builtin")
+    db.delete(record)
+    db.commit()
+    return {"deleted": skill_id}

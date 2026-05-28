@@ -503,6 +503,20 @@ class EventOutboxRecord(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
 
+class SkillRecord(Base):
+    __tablename__ = "skills"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    built_in: Mapped[bool] = mapped_column(Boolean, default=False)
+    owner_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    definition: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class MemoryRecord(Base):
     __tablename__ = "memory"
 
