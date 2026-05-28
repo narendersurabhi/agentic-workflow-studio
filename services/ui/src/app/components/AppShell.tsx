@@ -6,6 +6,7 @@ import Link from "next/link";
 import StudioWorkbenchIcon from "../features/studio/StudioWorkbenchIcon";
 import { PRIMARY_APP_NAV_ITEMS, type AppScreenId } from "../lib/app-navigation";
 import { useAppTheme } from "../lib/theme";
+import { useAuth } from "../lib/auth";
 
 export type AppBreadcrumb = {
   label: string;
@@ -73,7 +74,17 @@ export default function AppShell({
   contentClassName = "px-4 py-4",
 }: AppShellProps) {
   const { mounted, theme, toggleTheme } = useAppTheme();
+  const { user, logout } = useAuth();
   const isLightTheme = mounted ? theme === "light" : false;
+
+  const userInitials = user
+    ? user.display_name
+        .split(" ")
+        .map((p) => p[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2)
+    : "";
 
   return (
     <div
@@ -129,6 +140,23 @@ export default function AppShell({
                 {isLightTheme ? "Dark Mode" : "Light Mode"}
               </button>
               {actions}
+              {user && (
+                <div className="flex items-center gap-2">
+                  <div
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-600/80 text-[11px] font-bold text-white"
+                    title={user.display_name}
+                  >
+                    {userInitials}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => logout()}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo transition hover:border-default-theme hover:bg-surface-2 hover:text-text-hi"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </header>

@@ -14,6 +14,18 @@ services:
     image: redis:7
     ports:
       - "16379:6379"
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "16333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
   api:
     build:
       context: .
@@ -41,6 +53,7 @@ services:
       JOB_RECOVERY_ENABLED: ${JOB_RECOVERY_ENABLED:-true}
       CAPABILITY_MODE: ${CAPABILITY_MODE:-enabled}
       CAPABILITY_REGISTRY_PATH: ${CAPABILITY_REGISTRY_PATH:-/app/config/capability_registry.yaml}
+      MCP_SERVERS_CONFIG_PATH: ${MCP_SERVERS_CONFIG_PATH:-/app/config/mcp_servers.yaml}
       TOOL_HTTP_FETCH_ENABLED: ${TOOL_HTTP_FETCH_ENABLED:-false}
       WORKER_MODE: ${WORKER_MODE:-llm}
     ports:
@@ -48,6 +61,9 @@ services:
     depends_on:
       - db
       - redis
+    volumes:
+      - ./artifacts:/shared/artifacts
+      - ./workspace:/shared/workspace
   planner:
     build:
       context: .
@@ -57,17 +73,20 @@ services:
       PLANNER_MODE: llm
       CAPABILITY_MODE: ${CAPABILITY_MODE:-enabled}
       CAPABILITY_REGISTRY_PATH: ${CAPABILITY_REGISTRY_PATH:-/app/config/capability_registry.yaml}
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      MCP_SERVERS_CONFIG_PATH: ${MCP_SERVERS_CONFIG_PATH:-/app/config/mcp_servers.yaml}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE}
-      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS}
-      OPENAI_TIMEOUT_S: ${OPENAI_TIMEOUT_S}
-      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE:-}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-}
+      OPENAI_TIMEOUT_S: ${OPENAI_TIMEOUT_S:-}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-}
     depends_on:
       - redis
   worker:
@@ -78,21 +97,24 @@ services:
       REDIS_URL: redis://redis:6379/0
       CAPABILITY_MODE: ${CAPABILITY_MODE:-enabled}
       CAPABILITY_REGISTRY_PATH: ${CAPABILITY_REGISTRY_PATH:-/app/config/capability_registry.yaml}
+      MCP_SERVERS_CONFIG_PATH: ${MCP_SERVERS_CONFIG_PATH:-/app/config/mcp_servers.yaml}
       TOOL_HTTP_FETCH_ENABLED: "false"
       TOOL_HTTP_FETCH_ALLOWLIST: ${TOOL_HTTP_FETCH_ALLOWLIST:-}
       TOOL_OUTPUT_SIZE_CAP: ${TOOL_OUTPUT_SIZE_CAP:-50000}
       WORKER_MODE: llm
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE}
-      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS}
-      OPENAI_TIMEOUT_S: ${OPENAI_TIMEOUT_S}
-      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE:-}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-}
+      OPENAI_TIMEOUT_S: ${OPENAI_TIMEOUT_S:-}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-}
       CODING_AGENT_TIMEOUT_S: ${CODING_AGENT_TIMEOUT_S:-30}
       CODER_HTTP_TIMEOUT_S: ${CODER_HTTP_TIMEOUT_S:-30}
       CODER_API_URL: ${CODER_API_URL:-http://coder:8000}
@@ -145,17 +167,19 @@ services:
       context: .
       dockerfile: services/coder/Dockerfile
     environment:
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE}
-      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS}
-      OPENAI_TIMEOUT_S: ${OPENAI_TIMEOUT_S}
-      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE:-}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-}
+      OPENAI_TIMEOUT_S: ${OPENAI_TIMEOUT_S:-}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-}
     ports:
       - "18010:8000"
   rag-retriever-mcp:
@@ -163,12 +187,12 @@ services:
       context: .
       dockerfile: services/rag_retriever/Dockerfile
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
       WORKSPACE_DIR: /shared/workspace
-      QDRANT_URL: ${QDRANT_URL:-}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-rag_default}
       QDRANT_VECTOR_NAME: ${QDRANT_VECTOR_NAME:-}
       QDRANT_TIMEOUT_S: ${QDRANT_TIMEOUT_S:-10}
       QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-1536}
@@ -192,6 +216,10 @@ services:
       - "18086:8086"
     volumes:
       - ./workspace:/shared/workspace:ro
+    restart: on-failure
+    depends_on:
+      qdrant:
+        condition: service_healthy
   ui:
     build:
       context: .
@@ -230,4 +258,5 @@ services:
 
 volumes:
   db-data:
+  qdrant-data:
   grafana-data:

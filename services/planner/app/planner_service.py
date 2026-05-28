@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from libs.core import (
     planner_contracts,
     tool_registry,
 )
+from libs.core.cache_session_store import CacheSessionStore
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,222 @@ def rule_based_plan(_: planner_contracts.PlanRequest) -> models.PlanCreate:
         ],
         tasks=[checklist_task, write_task, summarize_task],
     )
+
+
+def _build_static_instructions() -> str:
+    """Return the static planning rules and schema contract (never changes)."""
+    return (
+        "You are a planner. Return ONLY valid JSON for a PlanCreate object (no prose).\n"
+        "Required top-level fields: planner_version, tasks_summary, dag_edges, tasks.\n"
+        "Schema rules:\n"
+        '- dag_edges must be an array of 2-element string arrays, e.g. [["A","B"],["B","C"]].\n'
+        "- acceptance_criteria must be an array of strings, not a single string.\n"
+        "Each task must include: name, description, instruction, acceptance_criteria, "
+        "expected_output_schema_ref, intent, deps, capability_requests, tool_inputs, critic_required.\n"
+        "tool_requests is optional compatibility output and may be omitted or left empty.\n"
+        "Example:\n"
+        "{\n"
+        '  "planner_version": "1.0.0",\n'
+        '  "tasks_summary": "...",\n'
+        '  "dag_edges": [["TaskA","TaskB"],["TaskB","TaskC"]],\n'
+        '  "tasks": [\n'
+        "    {\n"
+        '      "name": "TaskA",\n'
+        '      "description": "...",\n'
+        '      "instruction": "...",\n'
+        '      "acceptance_criteria": ["..."],\n'
+        '      "expected_output_schema_ref": "schemas/example",\n'
+        '      "intent": "generate",\n'
+        '      "deps": [],\n'
+        '      "capability_requests": ["llm.text.generate"],\n'
+        '      "tool_inputs": {"llm.text.generate": {"prompt": "..."}},\n'
+        '      "critic_required": false\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "\n"
+        "Rules:\n"
+        "1) Use canonical capability IDs in task.capability_requests whenever a matching capability exists.\n"
+        "1a) Every task must set intent to one of: transform, generate, validate, render, io.\n"
+        "1b) Raw runtime tool names are executor details. Do not emit adapter tool names when a "
+        "capability ID exists.\n"
+        "1c) You may omit tool_requests entirely; runtime compatibility fields will be derived later.\n"
+        "2) deps must reference task names that appear in this plan.\n"
+        "3) If a tool requires structured JSON, add a prior task to generate that JSON and set "
+        "expected_output_schema_ref to that schema.\n"
+        "4) If a tool or capability requires specific inputs, put them in task.tool_inputs "
+        "(a dict keyed by the same request ID used in capability_requests). Do NOT embed JSON in instruction text.\n"
+        "5) Do NOT use placeholder strings like ${Task.output} in tool_inputs. "
+        "When a later task needs dependency output, either omit the field and rely on deps context "
+        "injection OR use explicit reference objects like "
+        '{"$from":"dependencies_by_name.TaskA.tool_name.field"} (or add "$default"). '
+        "You may still include other inputs like strict, allowed_block_types, or path.\n"
+        "6) Planner support tools are metadata-only helpers. Never emit planner support "
+        "tool names in tasks, capability_requests, or tool_requests.\n"
+        "7) Prefer the generic validation + rendering pipeline:\n"
+        "   - Generate a DocumentSpec JSON with document.spec.generate.\n"
+        "   - Validate with document.spec.validate.\n"
+        "   - Render with document.docx.render or document.pdf.render.\n"
+        "   - Do not add a separate output-path derivation task unless the path itself is needed downstream.\n"
+        "8) If unsure, use llm.text.generate.\n"
+        "9) Keep output compact. Do NOT copy or embed large raw text from Job JSON "
+        "(especially long context fields like job_description) into tasks, instructions, "
+        "acceptance criteria, or tool_inputs.\n"
+        "10) For tool_inputs include only minimal scalar params. Omit large/context fields "
+        "(e.g., job, memory, document_spec) "
+        "and rely on runtime dependency/context injection.\n"
+        "11) Keep each task instruction concise (one short paragraph) and keep acceptance "
+        "criteria short bullets.\n"
+    )
+
+
+def build_llm_prompt_blocks(
+    request: planner_contracts.PlanRequest,
+) -> list[llm_provider.PromptBlock]:
+    """Build the planner prompt as ordered PromptBlocks for provider caching.
+
+    Block layout (stable content first):
+      STATIC  — planning rules + schema (never changes)
+      STATIC  — planner tool catalog + capability catalog (changes only on registry reload)
+      DYNAMIC — per-call content: intent envelope, graph, hints, revision ctx, goal, payload
+    """
+    capabilities = planner_contracts.capability_map(request)
+    canonical_capability_ids = sorted(
+        {
+            str(cap.capability_id).strip()
+            for cap in request.capabilities
+            if str(cap.capability_id).strip()
+        }
+    )
+
+    # --- STATIC block 1: rules ---
+    static_rules = llm_provider.PromptBlock(
+        text=_build_static_instructions(),
+        stability=llm_provider.Stability.STATIC,
+    )
+
+    # --- STATIC block 2: catalogs ---
+    planner_tool_catalog = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.input_schema,
+            "usage_guidance": tool.usage_guidance,
+            "risk_level": tool.risk_level.value
+            if isinstance(tool.risk_level, Enum)
+            else tool.risk_level,
+            "tool_intent": tool.tool_intent.value
+            if isinstance(tool.tool_intent, Enum)
+            else tool.tool_intent,
+        }
+        for tool in request.planner_tools
+    ]
+    capability_catalog = [
+        {
+            "capability_id": cap.capability_id,
+            "description": cap.description,
+            "risk_tier": cap.risk_tier,
+            "idempotency": cap.idempotency,
+            "group": cap.group,
+            "subgroup": cap.subgroup,
+            "input_schema_ref": cap.input_schema_ref,
+            "output_schema_ref": cap.output_schema_ref,
+            "aliases": list(cap.aliases),
+            "exports": [
+                {
+                    "name": e.name,
+                    "path": e.path,
+                    "description": e.description,
+                    "required": e.required,
+                }
+                for e in cap.exports
+            ],
+            "planner_hints": dict(cap.planner_hints),
+            "adapters": [
+                {"type": a.type, "server_id": a.server_id}
+                for a in cap.adapters
+            ],
+        }
+        for cap in capabilities.values()
+        if cap.capability_id in canonical_capability_ids
+    ]
+    catalog_text = (
+        f"Planner support tools (metadata-only): "
+        f"{', '.join(tool.name for tool in request.planner_tools) or 'none'}\n"
+        f"Planner support tool catalog (JSON): "
+        f"{json.dumps(planner_tool_catalog, ensure_ascii=False, indent=2, default=_json_fallback)}\n"
+        f"Capability catalog (JSON): "
+        f"{json.dumps(capability_catalog, ensure_ascii=False, indent=2, default=_json_fallback)}\n"
+    )
+    static_catalogs = llm_provider.PromptBlock(
+        text=catalog_text,
+        stability=llm_provider.Stability.STATIC,
+    )
+
+    # --- DYNAMIC block: per-call context ---
+    depth_hint = ""
+    if request.max_dependency_depth:
+        depth_hint = f"Max dependency chain depth: {request.max_dependency_depth}.\n"
+
+    normalized_intent_block = ""
+    normalized_envelope = planner_contracts.normalized_intent_envelope(request)
+    if normalized_envelope is not None:
+        normalized_intent_json = json.dumps(
+            normalized_envelope.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            indent=2,
+            default=_json_fallback,
+        )
+        normalized_intent_block = (
+            "Normalized intent envelope (source of truth for planner intent guidance):\n"
+            f"{normalized_intent_json}\n"
+            "Prefer its segment order, candidate capabilities, and clarification state when composing tasks.\n"
+        )
+
+    intent_graph_block = ""
+    normalized_graph = planner_contracts.normalized_intent_graph(request)
+    if normalized_graph is not None:
+        intent_graph_json = json.dumps(
+            normalized_graph.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            indent=2,
+            default=_json_fallback,
+        )
+        intent_graph_block = (
+            "Goal intent decomposition graph (ordered hints for planning):\n"
+            f"{intent_graph_json}\n"
+            "Prefer preserving this segment order in tasks/dependencies.\n"
+        )
+
+    revision_context_block = _format_revision_context_block(
+        planner_contracts.revision_context(request)
+    )
+
+    semantic_capability_block = ""
+    if request.semantic_capability_hints:
+        semantic_capability_block = (
+            "Most relevant capabilities for this goal from local semantic search:\n"
+            f"{json.dumps(request.semantic_capability_hints, ensure_ascii=False, indent=2, default=_json_fallback)}\n"
+            "Prefer these capabilities when they fit the goal and required inputs.\n"
+        )
+
+    job_json = json.dumps(request.job_payload, ensure_ascii=False, indent=2, default=_json_fallback)
+    dynamic_text = (
+        f"{depth_hint}"
+        f"{normalized_intent_block}"
+        f"{intent_graph_block}"
+        f"{revision_context_block}"
+        f"{semantic_capability_block}"
+        f"Preferred capability IDs: {', '.join(canonical_capability_ids) or 'none'}\n"
+        f"Goal: {request.goal}\n"
+        f"Job (JSON): {job_json}\n"
+    )
+    dynamic_block = llm_provider.PromptBlock(
+        text=dynamic_text,
+        stability=llm_provider.Stability.DYNAMIC,
+    )
+
+    return [static_rules, static_catalogs, dynamic_block]
 
 
 def build_llm_prompt(request: planner_contracts.PlanRequest) -> str:
@@ -395,10 +613,12 @@ def build_llm_prompt(request: planner_contracts.PlanRequest) -> str:
 
 
 def build_llm_repair_prompt(
-    original_prompt: str,
     raw_output: str,
     request: planner_contracts.PlanRequest,
 ) -> str:
+    # NOTE: static rules and catalog are already in the STATIC blocks passed to
+    # generate_cached — do not embed original_prompt here or they get duplicated
+    # inside the DYNAMIC block, defeating caching and doubling input tokens.
     canonical_capability_ids = sorted(
         {
             str(capability.capability_id).strip()
@@ -427,7 +647,6 @@ def build_llm_repair_prompt(
         f"Preferred capability IDs: {', '.join(canonical_capability_ids) or 'none'}\n"
         f"Planner support tools (metadata-only, never emit in tasks): "
         f"{', '.join(planner_tool_names) or 'none'}\n\n"
-        f"Original planner prompt (for context):\n{original_prompt}\n\n"
         f"Malformed planner output to repair:\n{raw_output}\n"
     )
 
@@ -1080,36 +1299,53 @@ def llm_plan(
     *,
     config: PlannerServiceConfig,
     runtime: PlannerServiceRuntime,
+    session_store: CacheSessionStore | None = None,
 ) -> models.PlanCreate:
     logger = core_logging.get_logger("planner")
-    prompt = build_llm_prompt(request)
-    response = provider.generate_request(
+    blocks = build_llm_prompt_blocks(request)
+    static_blocks = [b for b in blocks if b.stability == llm_provider.Stability.STATIC]
+    session = provider.open_cache_session(request.job_id or "", static_blocks)
+    catalog_json = capability_registry.load_capability_catalog_json()
+    session.metadata["catalog_hash"] = hashlib.sha256(catalog_json.encode()).hexdigest()
+    if session_store is not None and request.job_id:
+        session_store.save(request.job_id, session)
+    base_meta = {
+        "component": "planner",
+        "job_id": request.job_id,
+        "goal_len": len(request.goal or ""),
+        "tool_count": len(request.planner_tools),
+    }
+    response = provider.generate_cached(
+        blocks,
+        session,
         llm_provider.LLMRequest(
-            prompt=prompt,
-            metadata={
-                "component": "planner",
-                "operation": "plan_generation",
-                "job_id": request.job_id,
-                "goal_len": len(request.goal or ""),
-                "tool_count": len(request.planner_tools),
-            },
-        )
+            prompt="",  # blocks take precedence in generate_cached
+            metadata={**base_meta, "operation": "plan_generation"},
+        ),
     )
+    if response.input_tokens or response.cached_input_tokens:
+        logger.info(
+            "llm_plan_tokens",
+            input_tokens=response.input_tokens,
+            cached_input_tokens=response.cached_input_tokens,
+            cache_creation_tokens=response.cache_creation_tokens,
+            output_tokens=response.output_tokens,
+        )
     candidate = runtime.parse_llm_plan(response.content)
     if not candidate:
         logger.warning("llm_plan_parse_retry", reason="initial_parse_failed")
-        repair_prompt = build_llm_repair_prompt(prompt, response.content, request)
-        repaired = provider.generate_request(
+        repair_prompt = build_llm_repair_prompt(response.content, request)
+        repair_block = llm_provider.PromptBlock(
+            text=repair_prompt,
+            stability=llm_provider.Stability.DYNAMIC,
+        )
+        repaired = provider.generate_cached(
+            [*static_blocks, repair_block],
+            session,
             llm_provider.LLMRequest(
-                prompt=repair_prompt,
-                metadata={
-                    "component": "planner",
-                    "operation": "plan_generation_repair",
-                    "job_id": request.job_id,
-                    "goal_len": len(request.goal or ""),
-                    "tool_count": len(request.planner_tools),
-                },
-            )
+                prompt="",
+                metadata={**base_meta, "operation": "plan_generation_repair"},
+            ),
         )
         candidate = runtime.parse_llm_plan(repaired.content)
     if not candidate:
@@ -1135,6 +1371,7 @@ def plan_job(
     provider: llm_provider.LLMProvider | None,
     config: PlannerServiceConfig,
     runtime: PlannerServiceRuntime,
+    session_store: CacheSessionStore | None = None,
 ) -> models.PlanCreate:
     request = build_plan_request(
         job,
@@ -1146,5 +1383,5 @@ def plan_job(
     if config.mode == "llm":
         if provider is None:
             raise ValueError("LLM planner mode requires a provider")
-        return llm_plan(request, provider, config=config, runtime=runtime)
+        return llm_plan(request, provider, config=config, runtime=runtime, session_store=session_store)
     return rule_based_plan(request)

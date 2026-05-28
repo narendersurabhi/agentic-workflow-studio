@@ -8,7 +8,7 @@ from libs.core.job_projection import (
     project_document_generation_inputs,
     project_markdown_document_generation_inputs,
 )
-from libs.core.llm_provider import LLMProvider, LLMProviderError
+from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolExecutionError
 
@@ -218,8 +218,11 @@ def llm_repair_document_spec(
         f"Original DocumentSpec: {original_json}\n"
         "Return ONLY the repaired JSON object."
     )
+    job_id = payload.get("job_id")
     try:
-        document_spec = provider.generate_json_object(prompt)
+        document_spec = provider.generate_request_json_object(
+            LLMRequest(prompt=prompt, metadata={"job_id": job_id} if job_id else None)
+        )
     except LLMProviderError as exc:
         raise ToolExecutionError(str(exc)) from exc
     return {"document_spec": sanitize_document_spec(document_spec)}
@@ -245,8 +248,11 @@ def llm_generate_document_spec(
             + ", ".join(missing)
         )
     prompt = prompts.document_spec_prompt(explicit_inputs, allowed)
+    job_id = payload.get("job_id")
     try:
-        document_spec = provider.generate_json_object(prompt)
+        document_spec = provider.generate_request_json_object(
+            LLMRequest(prompt=prompt, metadata={"job_id": job_id} if job_id else None)
+        )
     except LLMProviderError as exc:
         raise ToolExecutionError(str(exc)) from exc
     return {"document_spec": sanitize_document_spec(document_spec)}
@@ -276,8 +282,11 @@ def llm_generate_document_spec_from_markdown(
             + ", ".join(missing)
         )
     prompt = prompts.markdown_to_document_spec_prompt(explicit_inputs, allowed)
+    job_id = payload.get("job_id")
     try:
-        document_spec = provider.generate_json_object(prompt)
+        document_spec = provider.generate_request_json_object(
+            LLMRequest(prompt=prompt, metadata={"job_id": job_id} if job_id else None)
+        )
     except LLMProviderError as exc:
         raise ToolExecutionError(str(exc)) from exc
     return {"document_spec": sanitize_document_spec(document_spec)}
@@ -313,8 +322,11 @@ def llm_improve_document_spec(
     if not isinstance(validation_report, dict):
         raise ToolExecutionError("validation_report must be an object")
     prompt = prompts.document_spec_improve_prompt(document_spec, validation_report, allowed)
+    job_id = payload.get("job_id")
     try:
-        improved_spec = provider.generate_json_object(prompt)
+        improved_spec = provider.generate_request_json_object(
+            LLMRequest(prompt=prompt, metadata={"job_id": job_id} if job_id else None)
+        )
     except LLMProviderError as exc:
         raise ToolExecutionError(str(exc)) from exc
     return {"document_spec": sanitize_document_spec(improved_spec)}

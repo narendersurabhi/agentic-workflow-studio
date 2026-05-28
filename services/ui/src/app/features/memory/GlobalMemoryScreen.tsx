@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiFetch, useAuth } from "../../lib/auth";
 
 import AppShell from "../../components/AppShell";
 import ScreenHeader from "../../components/ScreenHeader";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
-const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
 
 type MemoryScope = "request" | "session" | "user" | "project" | "global";
 
@@ -32,7 +32,6 @@ type MemoryEntry = {
   expires_at?: string | null;
 };
 
-const DEFAULT_USER_ID = "default-user";
 
 const prettyJson = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
 
@@ -44,10 +43,11 @@ const formatTimestamp = (value?: string | null) => {
 };
 
 export default function GlobalMemoryScreen() {
+  const { user: authUser } = useAuth();
   const [specs, setSpecs] = useState<MemorySpec[]>([]);
   const [specsLoading, setSpecsLoading] = useState(true);
   const [specsError, setSpecsError] = useState<string | null>(null);
-  const [userId, setUserId] = useState(DEFAULT_USER_ID);
+  const [userId, setUserId] = useState("");
   const [selectedName, setSelectedName] = useState("user_profile");
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [entriesLoading, setEntriesLoading] = useState(false);
@@ -62,21 +62,10 @@ export default function GlobalMemoryScreen() {
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
+    if (authUser?.user_id) {
+      setUserId(authUser.user_id);
     }
-    const stored = window.localStorage.getItem(MEMORY_USER_ID_KEY);
-    if (stored && stored.trim()) {
-      setUserId(stored.trim());
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(MEMORY_USER_ID_KEY, userId);
-  }, [userId]);
+  }, [authUser?.user_id]);
 
   useEffect(() => {
     let ignore = false;
@@ -84,7 +73,7 @@ export default function GlobalMemoryScreen() {
       setSpecsLoading(true);
       setSpecsError(null);
       try {
-        const response = await fetch(`${apiUrl}/memory/specs`);
+        const response = await apiFetch(`${apiUrl}/memory/specs`);
         const body = (await response.json()) as MemorySpec[] | { detail?: string };
         if (!response.ok) {
           throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory specs (${response.status})`);
@@ -136,7 +125,7 @@ export default function GlobalMemoryScreen() {
         user_id: userId.trim(),
         limit: "200",
       });
-      const response = await fetch(`${apiUrl}/memory/read?${params.toString()}`);
+      const response = await apiFetch(`${apiUrl}/memory/read?${params.toString()}`);
       const body = (await response.json()) as MemoryEntry[] | { detail?: string };
       if (!response.ok) {
         throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory entries (${response.status})`);
@@ -200,7 +189,7 @@ export default function GlobalMemoryScreen() {
     }
     setSaving(true);
     try {
-      const response = await fetch(`${apiUrl}/memory/write`, {
+      const response = await apiFetch(`${apiUrl}/memory/write`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -250,7 +239,7 @@ export default function GlobalMemoryScreen() {
       if (key) {
         params.set("key", key);
       }
-      const response = await fetch(`${apiUrl}/memory/delete?${params.toString()}`, {
+      const response = await apiFetch(`${apiUrl}/memory/delete?${params.toString()}`, {
         method: "DELETE",
       });
       const body = (await response.json()) as MemoryEntry | { detail?: string };
@@ -329,15 +318,6 @@ export default function GlobalMemoryScreen() {
             Browser + Scope
           </div>
           <div className="mt-4 space-y-4">
-            <label className="block">
-              <div className="text-sm font-medium text-text-hi">User ID</div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi shadow-sm outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/20"
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
-                placeholder={DEFAULT_USER_ID}
-              />
-            </label>
             <label className="block">
               <div className="text-sm font-medium text-text-hi">Context Type</div>
               <select

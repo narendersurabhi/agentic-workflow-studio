@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { apiFetch, useAuth } from "../../lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
@@ -15,8 +16,6 @@ import type {
 } from "./types";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
-const DEFAULT_WORKSPACE_USER_ID = "narendersurabhi";
-
 const detailMessage = (body: unknown, fallback: string) => {
   if (body && typeof body === "object" && typeof (body as { detail?: unknown }).detail === "string") {
     return (body as { detail: string }).detail;
@@ -26,7 +25,8 @@ const detailMessage = (body: unknown, fallback: string) => {
 
 export default function WorkflowLibraryPage() {
   const router = useRouter();
-  const [workspaceUserId, setWorkspaceUserId] = useState(DEFAULT_WORKSPACE_USER_ID);
+  const { user: authUser } = useAuth();
+  const [workspaceUserId, setWorkspaceUserId] = useState("");
   const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([]);
   const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] = useState(true);
   const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<string | null>(null);
@@ -63,7 +63,7 @@ export default function WorkflowLibraryPage() {
       if (normalizedUserId) {
         params.set("user_id", normalizedUserId);
       }
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions${params.size > 0 ? `?${params.toString()}` : ""}`
       );
       const body = (await response.json()) as WorkflowDefinition[] | { detail?: unknown };
@@ -91,7 +91,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowVersionsLoading(true);
     setWorkflowVersionsError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/versions`
       );
       const body = (await response.json()) as WorkflowVersion[] | { detail?: unknown };
@@ -121,7 +121,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowTriggersLoading(true);
     setWorkflowTriggersError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/triggers`
       );
       const body = (await response.json()) as WorkflowTrigger[] | { detail?: unknown };
@@ -149,7 +149,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowRunsLoading(true);
     setWorkflowRunsError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/runs?limit=12`
       );
       const body = (await response.json()) as WorkflowRun[] | { detail?: unknown };
@@ -168,6 +168,12 @@ export default function WorkflowLibraryPage() {
       setWorkflowRunsLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (authUser?.user_id) {
+      setWorkspaceUserId(authUser.user_id);
+    }
+  }, [authUser?.user_id]);
 
   useEffect(() => {
     void refreshWorkflowDefinitions();
@@ -219,7 +225,7 @@ export default function WorkflowLibraryPage() {
     setWorkflowActionLoading("delete");
     setDeletingWorkflowDefinitionId(definition.id);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}`,
         { method: "DELETE" }
       );
@@ -244,7 +250,7 @@ export default function WorkflowLibraryPage() {
     }
     setWorkflowActionLoading("save");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(activeWorkflowDefinitionId)}/triggers`,
         {
           method: "POST",
@@ -275,7 +281,7 @@ export default function WorkflowLibraryPage() {
   const invokeWorkflowTrigger = async (trigger: WorkflowTrigger) => {
     setWorkflowActionLoading("run");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/triggers/${encodeURIComponent(trigger.id)}/invoke`,
         {
           method: "POST",
@@ -364,17 +370,6 @@ export default function WorkflowLibraryPage() {
               </div>
 
               <div className="mt-4 flex flex-wrap items-end justify-between gap-3 rounded-[24px] border border-subtle bg-gradient-panel-mid px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <label className="min-w-[260px] flex-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                    Workspace User ID
-                  </div>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
-                    value={workspaceUserId}
-                    onChange={(event) => setWorkspaceUserId(event.target.value)}
-                    placeholder="narendersurabhi"
-                  />
-                </label>
                 <div className="max-w-xl text-sm leading-6 text-text-md">
                   Select a saved workflow to inspect its versions, triggers, and run history here.
                   Open Draft and Open Version send you back to Studio with the selected record loaded.

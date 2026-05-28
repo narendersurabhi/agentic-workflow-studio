@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 import uuid
 from datetime import datetime
 
@@ -35,9 +37,14 @@ def evaluate_task(result: models.TaskResult) -> models.CriticResult:
     )
 
 
+logger = logging.getLogger("critic")
+
+
 def run() -> None:
     if not CRITIC_ENABLED:
-        return
+        logger.info("critic_disabled: sleeping indefinitely (set CRITIC_ENABLED=true to activate)")
+        while True:
+            time.sleep(3600)
     group = "critic"
     consumer = str(uuid.uuid4())
     try:
