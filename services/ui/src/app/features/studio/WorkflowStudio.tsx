@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { apiFetch } from "../../lib/auth";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -1832,7 +1833,7 @@ export default function WorkflowStudio() {
       setCapabilityLoading(true);
       setCapabilityError(null);
       try {
-        const response = await fetch(`${apiUrl}/capabilities?with_schemas=true`);
+        const response = await apiFetch(`${apiUrl}/capabilities?with_schemas=true`);
         if (!response.ok) {
           throw new Error(`Capability catalog request failed (${response.status}).`);
         }
@@ -1870,7 +1871,7 @@ export default function WorkflowStudio() {
       if (normalizedUserId) {
         params.set("user_id", normalizedUserId);
       }
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions${params.size > 0 ? `?${params.toString()}` : ""}`
       );
       const body = (await response.json()) as WorkflowDefinition[] | { detail?: unknown };
@@ -1906,7 +1907,7 @@ export default function WorkflowStudio() {
     setWorkflowVersionsLoading(true);
     setWorkflowVersionsError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/versions`
       );
       const body = (await response.json()) as WorkflowVersion[] | { detail?: unknown };
@@ -1939,7 +1940,7 @@ export default function WorkflowStudio() {
     setWorkflowTriggersLoading(true);
     setWorkflowTriggersError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/triggers`
       );
       const body = (await response.json()) as WorkflowTrigger[] | { detail?: unknown };
@@ -1972,7 +1973,7 @@ export default function WorkflowStudio() {
     setWorkflowRunsLoading(true);
     setWorkflowRunsError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/runs?limit=12`
       );
       const body = (await response.json()) as WorkflowRun[] | { detail?: unknown };
@@ -4213,7 +4214,7 @@ export default function WorkflowStudio() {
     }
     if (!definition) {
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${apiUrl}/workflows/definitions/${encodeURIComponent(version.definition_id)}`
         );
         const body = (await response.json()) as WorkflowDefinition | { detail?: unknown };
@@ -4273,7 +4274,7 @@ export default function WorkflowStudio() {
           let definition =
             workflowDefinitions.find((item) => item.id === definitionId) || null;
           if (!definition) {
-            const definitionResponse = await fetch(
+            const definitionResponse = await apiFetch(
               `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}`
             );
             const definitionBody = (await definitionResponse.json()) as
@@ -4290,7 +4291,7 @@ export default function WorkflowStudio() {
             definition = definitionBody as WorkflowDefinition;
           }
 
-          const versionsResponse = await fetch(
+          const versionsResponse = await apiFetch(
             `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}/versions`
           );
           const versionsBody = (await versionsResponse.json()) as
@@ -4323,7 +4324,7 @@ export default function WorkflowStudio() {
         }
         let definition = workflowDefinitions.find((item) => item.id === definitionId) || null;
         if (!definition) {
-          const response = await fetch(
+          const response = await apiFetch(
             `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}`
           );
           const body = (await response.json()) as WorkflowDefinition | { detail?: unknown };
@@ -4464,7 +4465,7 @@ export default function WorkflowStudio() {
     }
     setWorkflowActionLoading("save");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         savedWorkflowDefinition
           ? `${apiUrl}/workflows/definitions/${encodeURIComponent(savedWorkflowDefinition.id)}`
           : `${apiUrl}/workflows/definitions`,
@@ -4513,7 +4514,7 @@ export default function WorkflowStudio() {
     }
     setWorkflowActionLoading("publish");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}/publish`,
         {
           method: "POST",
@@ -4551,7 +4552,7 @@ export default function WorkflowStudio() {
     }
     setWorkflowActionLoading("run");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/workflows/versions/${encodeURIComponent(version.id)}/run`,
         {
           method: "POST",
@@ -4895,7 +4896,7 @@ export default function WorkflowStudio() {
       setComposerCompileLoading(true);
       setChainPreflightLoading(true);
       try {
-        const compileResponse = await fetch(`${apiUrl}/composer/compile`, {
+        const compileResponse = await apiFetch(`${apiUrl}/composer/compile`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(compileRequestPayload),
@@ -4921,7 +4922,7 @@ export default function WorkflowStudio() {
         }
 
         if (compiledPlan) {
-          const response = await fetch(`${apiUrl}/plans/preflight`, {
+          const response = await apiFetch(`${apiUrl}/plans/preflight`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

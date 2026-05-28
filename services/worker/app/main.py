@@ -27,6 +27,7 @@ from libs.core import (
     payload_resolver,
     tracing as core_tracing,
 )
+from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
 from libs.core.memory_client import MemoryClient
 from services.worker.app.memory_semantics import (
     apply_memory_defaults,
@@ -152,9 +153,10 @@ _SEMANTIC_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 _METRICS_SERVER_STARTED = False
 
 
+_CACHE_SESSION_STORE: CacheSessionStore | None = None
 LLM_PROVIDER_INSTANCE = None
 if LLM_ENABLED:
-    LLM_PROVIDER_INSTANCE = llm_provider.resolve_provider(
+    _base_provider = llm_provider.resolve_provider(
         LLM_PROVIDER,
         api_key=OPENAI_API_KEY,
         model=OPENAI_MODEL,
@@ -163,6 +165,15 @@ if LLM_ENABLED:
         max_output_tokens=_parse_optional_int(OPENAI_MAX_OUTPUT_TOKENS),
         timeout_s=_parse_optional_float(OPENAI_TIMEOUT_S),
         max_retries=_parse_optional_int(OPENAI_MAX_RETRIES),
+    )
+    _CACHE_SESSION_STORE = CacheSessionStore(redis_client)
+
+    def _current_catalog_hash() -> str:
+        catalog_json = capability_registry.load_capability_catalog_json()
+        return hashlib.sha256(catalog_json.encode()).hexdigest()
+
+    LLM_PROVIDER_INSTANCE = CachingLLMProvider(
+        _base_provider, _CACHE_SESSION_STORE, catalog_hash_fn=_current_catalog_hash
     )
 
 
@@ -312,6 +323,8 @@ def _aggregate_token_metrics(tool_calls: list[models.ToolCall]) -> dict[str, Any
     prompt_tokens = 0
     completion_tokens = 0
     total_tokens = 0
+    cached_tokens = 0
+    cache_write_tokens = 0
     cost_usd_est = 0.0
     for call in tool_calls:
         output = call.output_or_error if isinstance(call.output_or_error, dict) else {}
@@ -320,11 +333,15 @@ def _aggregate_token_metrics(tool_calls: list[models.ToolCall]) -> dict[str, Any
         prompt_tokens += _int_metric(usage_dict.get("prompt_tokens"))
         completion_tokens += _int_metric(usage_dict.get("completion_tokens"))
         total_tokens += _int_metric(usage_dict.get("total_tokens"))
+        cached_tokens += _int_metric(usage_dict.get("cached_tokens"))
+        cache_write_tokens += _int_metric(usage_dict.get("cache_write_tokens"))
         cost_usd_est += _float_metric(usage_dict.get("cost_usd"))
     return {
         "tokens_in": prompt_tokens,
         "tokens_out": completion_tokens,
         "tokens_total": total_tokens,
+        "tokens_cached": cached_tokens,
+        "tokens_cache_write": cache_write_tokens,
         "cost_usd_est": round(cost_usd_est, 6),
     }
 

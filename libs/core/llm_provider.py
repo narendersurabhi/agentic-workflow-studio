@@ -1,17 +1,49 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import time
 
 
+class Stability(Enum):
+    """How stable a prompt block's content is across LLM calls."""
+    STATIC = "static"    # never changes (rules, schema, full capability catalog)
+    RUN = "run"          # stable within one job run (accumulated task summaries)
+    DYNAMIC = "dynamic"  # changes every call (goal, payload, current task)
+
+
+@dataclass
+class PromptBlock:
+    text: str
+    stability: Stability = Stability.DYNAMIC
+
+
+@dataclass
+class CacheSessionRef:
+    """Serializable reference to a provider-side cache session.
+
+    For Anthropic/OpenAI: inline caching — handle is None, pinned_hash detects drift.
+    For Gemini: handle holds the cachedContent resource name; must be closed at job end.
+    """
+    provider: str
+    handle: Optional[str] = None        # Gemini: cachedContent name; others: None
+    pinned_hash: Optional[str] = None   # sha256 of static blocks at session open
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class LLMResponse:
     content: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0       # tokens read from provider cache
+    cache_creation_tokens: int = 0     # tokens written to provider cache (Anthropic)
 
 
 @dataclass(frozen=True)
@@ -21,6 +53,8 @@ class LLMRequest:
     temperature: Optional[float] = None
     max_output_tokens: Optional[int] = None
     metadata: Optional[Dict[str, Any]] = None
+    # Structured blocks; if set, overrides prompt for providers that support them.
+    prompt_blocks: Optional[List[PromptBlock]] = None
 
 
 class LLMProviderError(Exception):
@@ -40,6 +74,48 @@ class LLMProvider:
     def generate_request_json_object(self, request: LLMRequest) -> Dict[str, Any]:
         response = self.generate_request(request)
         return parse_json_object(response.content)
+
+    def open_cache_session(
+        self,
+        job_id: str,
+        static_blocks: List[PromptBlock],
+    ) -> CacheSessionRef:
+        """Start a cache session for a job run.
+
+        Computes a pinned_hash over STATIC blocks so callers can detect content
+        drift between session open and later generate_cached calls.
+        """
+        combined = "".join(b.text for b in static_blocks if b.stability == Stability.STATIC)
+        pinned_hash = hashlib.sha256(combined.encode()).hexdigest() if combined else None
+        return CacheSessionRef(provider=self.__class__.__name__, pinned_hash=pinned_hash)
+
+    def close_cache_session(self, ref: CacheSessionRef) -> None:
+        """Release any provider-side resources for this session.
+
+        No-op for Anthropic/OpenAI (inline caching).
+        Gemini overrides to delete the cachedContent resource.
+        """
+
+    def generate_cached(
+        self,
+        blocks: List[PromptBlock],
+        session: CacheSessionRef,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        """Generate using structured prompt blocks.
+
+        Default: concatenate all blocks and call generate_request.
+        Provider subclasses override to use their native caching mechanism.
+        """
+        combined_text = "\n".join(b.text for b in blocks if b.text)
+        merged = LLMRequest(
+            prompt=combined_text,
+            system_prompt=request.system_prompt,
+            temperature=request.temperature,
+            max_output_tokens=request.max_output_tokens,
+            metadata=request.metadata,
+        )
+        return self.generate_request(merged)
 
 
 class MockLLMProvider(LLMProvider):
@@ -88,7 +164,13 @@ class OpenAIProvider(LLMProvider):
                 text = _extract_output_text(response_data)
                 if not text:
                     raise LLMProviderError("OpenAI API returned empty output")
-                return LLMResponse(content=text)
+                input_tokens, output_tokens, cached_tokens = _extract_usage_from_response(response_data)
+                return LLMResponse(
+                    content=text,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cached_input_tokens=cached_tokens,
+                )
             except HTTPError as exc:
                 detail = exc.read().decode("utf-8") if exc.fp else str(exc)
                 if (
@@ -187,7 +269,13 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                 text = _extract_chat_completion_text(response_data)
                 if not text:
                     raise LLMProviderError(f"{self.provider_label} API returned empty output")
-                return LLMResponse(content=text)
+                input_tokens, output_tokens, cached_tokens = _extract_usage_from_chat_completion(response_data)
+                return LLMResponse(
+                    content=text,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cached_input_tokens=cached_tokens,
+                )
             except HTTPError as exc:
                 detail = exc.read().decode("utf-8") if exc.fp else str(exc)
                 if _is_retryable_http_error(exc.code) and attempt < attempts - 1:
@@ -202,6 +290,30 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                     continue
                 raise LLMProviderError(f"{self.provider_label} API connection error: {exc}") from exc
         raise LLMProviderError(f"{self.provider_label} API request failed after retries")
+
+    def generate_cached(
+        self,
+        blocks: List[PromptBlock],
+        session: CacheSessionRef,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        """Send blocks in stability order to maximise the stable byte prefix.
+
+        OpenAI's automatic prefix cache requires a byte-for-byte identical prefix.
+        Emitting STATIC blocks first, then RUN, then DYNAMIC ensures the longest
+        possible stable prefix across calls that share the same registry version.
+        """
+        _order = {Stability.STATIC: 0, Stability.RUN: 1, Stability.DYNAMIC: 2}
+        ordered = sorted(blocks, key=lambda b: _order[b.stability])
+        combined_text = "\n".join(b.text for b in ordered if b.text)
+        merged = LLMRequest(
+            prompt=combined_text,
+            system_prompt=request.system_prompt,
+            temperature=request.temperature,
+            max_output_tokens=request.max_output_tokens,
+            metadata=request.metadata,
+        )
+        return self.generate_request(merged)
 
     def _build_payload(self, request: LLMRequest) -> Dict[str, Any]:
         messages: list[dict[str, str]] = []
@@ -265,6 +377,20 @@ def resolve_provider(
             timeout_s=timeout_s or 30.0,
             max_retries=max_retries or 0,
         )
+    if name == "anthropic":
+        from libs.core.llm_provider_anthropic import AnthropicProvider  # lazy import
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY") or api_key
+        anthropic_model = os.getenv("ANTHROPIC_MODEL") or model
+        if not anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic")
+        if not anthropic_model:
+            raise ValueError("ANTHROPIC_MODEL is required when LLM_PROVIDER=anthropic")
+        return AnthropicProvider(
+            api_key=anthropic_api_key,
+            model=anthropic_model,
+            max_output_tokens=int(max_output_tokens or 8192),
+            temperature=temperature,
+        )
     if name == "gemini":
         gemini_api_key = os.getenv("GEMINI_API_KEY") or api_key
         gemini_model = os.getenv("GEMINI_MODEL") or model
@@ -317,6 +443,18 @@ def _extract_output_text(response: Dict[str, Any]) -> str:
     return "".join(parts).strip()
 
 
+def _extract_usage_from_response(response: Dict[str, Any]) -> tuple[int, int, int]:
+    """Return (input_tokens, output_tokens, cached_tokens) from an OpenAI Responses API response."""
+    usage = response.get("usage", {})
+    if not isinstance(usage, dict):
+        return 0, 0, 0
+    input_tokens = int(usage.get("input_tokens", 0))
+    output_tokens = int(usage.get("output_tokens", 0))
+    details = usage.get("input_tokens_details", {})
+    cached_tokens = int(details.get("cached_tokens", 0)) if isinstance(details, dict) else 0
+    return input_tokens, output_tokens, cached_tokens
+
+
 def _extract_chat_completion_text(response: Dict[str, Any]) -> str:
     parts: list[str] = []
     for choice in response.get("choices", []):
@@ -333,6 +471,18 @@ def _extract_chat_completion_text(response: Dict[str, Any]) -> str:
                 if isinstance(item, dict) and isinstance(item.get("text"), str):
                     parts.append(item["text"])
     return "".join(parts).strip()
+
+
+def _extract_usage_from_chat_completion(response: Dict[str, Any]) -> tuple[int, int, int]:
+    """Return (input_tokens, output_tokens, cached_tokens) from a chat/completions response."""
+    usage = response.get("usage", {})
+    if not isinstance(usage, dict):
+        return 0, 0, 0
+    input_tokens = int(usage.get("prompt_tokens", 0))
+    output_tokens = int(usage.get("completion_tokens", 0))
+    details = usage.get("prompt_tokens_details", {})
+    cached_tokens = int(details.get("cached_tokens", 0)) if isinstance(details, dict) else 0
+    return input_tokens, output_tokens, cached_tokens
 
 
 def _model_supports_temperature(model: str) -> bool:

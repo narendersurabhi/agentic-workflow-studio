@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 import re
 from typing import Any, Sequence
 
 from sqlalchemy.orm import Session
 
 from libs.core import capability_registry, workflow_contracts
+from libs.core.llm_provider import PromptBlock, Stability
 
 from . import memory_profile_service
 
@@ -21,22 +23,36 @@ _WORKFLOW_CONTEXT_KEYS = (
     "workflow_ref",
 )
 
-_INTERACTION_SUMMARY_STAGE_LIMITS: dict[str, int] = {
-    "envelope": 8,
-    "intent": 6,
-    "chat_route": 3,
-    "chat_submit": 6,
-    "planner": 4,
-    "execution": 6,
-    "workflow_runtime": 8,
-    "preflight": 8,
+# Token budgets per context region (approximate: 1 token ≈ 4 chars).
+# These replace the old item-count limits — content trims at the token boundary
+# rather than at a fixed item count, so large summaries don't silently crowd out
+# smaller but more numerous ones.
+_TOKEN_BUDGETS: dict[str, int] = {
+    "interaction_summaries": 4_000,
+    "capability_candidates": 2_000,
+    "user_profile":          1_500,
+    "context_json":          8_000,
 }
 
+# Capability candidate item caps are kept as a backstop in case token estimates
+# drift; the token budget above is the primary constraint.
 _CAPABILITY_CANDIDATE_STAGE_LIMITS: dict[str, int] = {
-    "intent": 8,
-    "chat_route": 8,
+    "chat": 8,
     "planner": 10,
 }
+
+# Keys that the system writes into context internally.  User-supplied context_json
+# must not contain these or it would shadow derived fields.
+_SYSTEM_RESERVED_KEYS: frozenset[str] = frozenset({
+    "capability_candidates",
+    "missing_inputs",
+    "user_profile",
+    "interaction_summaries",
+    "clarification_resolved_slots",
+    "intent_slot_values",
+    "intent_slot_provenance",
+    "workflow_scope",
+})
 
 _INTENT_SLOT_ALIASES: dict[str, tuple[str, ...]] = {
     "instruction": ("instruction", "goal_details", "goal"),
@@ -92,6 +108,53 @@ _COMMON_STOPWORDS: set[str] = {
     "want",
     "make",
 }
+
+
+# ---------------------------------------------------------------------------
+# Token helpers
+# ---------------------------------------------------------------------------
+
+def _estimate_tokens(value: Any) -> int:
+    """Rough token estimate: 1 token ≈ 4 characters of JSON."""
+    try:
+        return max(1, len(json.dumps(value, default=str)) // 4)
+    except Exception:  # noqa: BLE001
+        return 1
+
+
+def _trim_to_token_budget(items: list[Any], budget: int) -> list[Any]:
+    """Return a prefix of *items* whose total estimated tokens fit within *budget*."""
+    total = 0
+    result: list[Any] = []
+    for item in items:
+        cost = _estimate_tokens(item)
+        if total + cost > budget:
+            break
+        result.append(item)
+        total += cost
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Ingestion guard
+# ---------------------------------------------------------------------------
+
+def sanitize_user_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Strip keys that would shadow internal system fields.
+
+    Called at every point where user-supplied context_json enters the pipeline
+    so that callers cannot accidentally or maliciously override derived fields
+    like capability_candidates or missing_inputs.
+    """
+    if not isinstance(context, Mapping):
+        return {}
+    shadowed = _SYSTEM_RESERVED_KEYS & context.keys()
+    if shadowed:
+        import logging
+        logging.getLogger(__name__).warning(
+            "user_context_shadowed_system_keys: %s", sorted(shadowed)
+        )
+    return {k: v for k, v in context.items() if k not in _SYSTEM_RESERVED_KEYS}
 
 
 def collect_context_sources(
@@ -290,52 +353,78 @@ def build_preflight_context_envelope(
     )
 
 
-def chat_route_context_view(
+def chat_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+    *,
+    include_intent_slots: bool = False,
 ) -> dict[str, Any]:
+    """Unified view for all chat-path stages (routing, intent, submit, preflight).
+
+    Includes user profile, capability candidates (token-budgeted), missing inputs,
+    and clarification slot ledger.  Pass include_intent_slots=True from the intent
+    router to also inject resolved slot values directly into the context.
+    """
     parsed = workflow_contracts.parse_context_envelope(envelope)
     if parsed is None:
         return {}
-    context = budget_context_for_stage(parsed, stage="chat_route")
+    base_context = budget_context_for_stage(parsed, stage="chat")
+    context = _merge_clarification_slot_ledger(base_context, parsed.session_scope)
     if parsed.profile:
-        context["user_profile"] = dict(parsed.profile)
+        budgeted_profile = _trim_to_token_budget(
+            [parsed.profile], _TOKEN_BUDGETS["user_profile"]
+        )
+        if budgeted_profile:
+            context["user_profile"] = dict(budgeted_profile[0])
     if parsed.capability_candidates:
-        limit = _CAPABILITY_CANDIDATE_STAGE_LIMITS.get("chat_route", 0)
+        limit = _CAPABILITY_CANDIDATE_STAGE_LIMITS.get("chat", 0)
         ranked = list(parsed.capability_candidates)
+        budgeted = _trim_to_token_budget(ranked, _TOKEN_BUDGETS["capability_candidates"])
         if limit > 0:
-            ranked = ranked[:limit]
-        if ranked:
-            context["capability_candidates"] = ranked
+            budgeted = budgeted[:limit]
+        if budgeted:
+            context["capability_candidates"] = budgeted
+    if parsed.missing_inputs:
+        context["missing_inputs"] = list(parsed.missing_inputs)
+    if include_intent_slots:
+        intent_slot_values, intent_slot_provenance = _intent_slot_values(parsed, base_context)
+        if intent_slot_values:
+            context["intent_slot_values"] = intent_slot_values
+            context["intent_slot_provenance"] = intent_slot_provenance
+            for key, value in intent_slot_values.items():
+                context.setdefault(key, value)
+    return context
+
+
+def planner_context_view(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """View for the planning stage — omits user profile, includes candidates and missing inputs."""
+    parsed = workflow_contracts.parse_context_envelope(envelope)
+    if parsed is None:
+        return {}
+    context = budget_context_for_stage(parsed, stage="planner")
+    context.pop("user_profile", None)
+    if parsed.capability_candidates:
+        limit = _CAPABILITY_CANDIDATE_STAGE_LIMITS.get("planner", 0)
+        ranked = list(parsed.capability_candidates)
+        budgeted = _trim_to_token_budget(ranked, _TOKEN_BUDGETS["capability_candidates"])
+        if limit > 0:
+            budgeted = budgeted[:limit]
+        if budgeted:
+            context["capability_candidates"] = budgeted
     if parsed.missing_inputs:
         context["missing_inputs"] = list(parsed.missing_inputs)
     return context
 
 
-def intent_context_view(
+def execution_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    parsed = workflow_contracts.parse_context_envelope(envelope)
-    if parsed is None:
-        return {}
-    base_context = budget_context_for_stage(parsed, stage="intent")
-    context = _merge_clarification_slot_ledger(base_context, parsed.session_scope)
-    if parsed.profile:
-        context["user_profile"] = dict(parsed.profile)
-    if parsed.capability_candidates:
-        limit = _CAPABILITY_CANDIDATE_STAGE_LIMITS.get("intent", 0)
-        ranked = list(parsed.capability_candidates)
-        if limit > 0:
-            ranked = ranked[:limit]
-        if ranked:
-            context["capability_candidates"] = ranked
-    if parsed.missing_inputs:
-        context["missing_inputs"] = list(parsed.missing_inputs)
-    intent_slot_values, intent_slot_provenance = _intent_slot_values(parsed, base_context)
-    if intent_slot_values:
-        context["intent_slot_values"] = intent_slot_values
-        context["intent_slot_provenance"] = intent_slot_provenance
-        for key, value in intent_slot_values.items():
-            context.setdefault(key, value)
+    """Lean view for task execution — strips profile, candidates, and missing inputs."""
+    context = budget_context_for_stage(envelope, stage="execution")
+    context.pop("user_profile", None)
+    context.pop("capability_candidates", None)
+    context.pop("missing_inputs", None)
     return context
 
 
@@ -345,50 +434,32 @@ def workflow_runtime_context_view(
     return budget_context_for_stage(envelope, stage="workflow_runtime")
 
 
-def planner_context_view(
-    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    parsed = workflow_contracts.parse_context_envelope(envelope)
-    if parsed is None:
-        return {}
-    context = budget_context_for_stage(parsed, stage="planner")
-    context.pop("user_profile", None)
-    if parsed.capability_candidates:
-        limit = _CAPABILITY_CANDIDATE_STAGE_LIMITS.get("planner", 0)
-        ranked = list(parsed.capability_candidates)
-        if limit > 0:
-            ranked = ranked[:limit]
-        if ranked:
-            context["capability_candidates"] = ranked
-    if parsed.missing_inputs:
-        context["missing_inputs"] = list(parsed.missing_inputs)
-    return context
-
-
-def execution_context_view(
-    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    context = budget_context_for_stage(envelope, stage="execution")
-    context.pop("user_profile", None)
-    context.pop("capability_candidates", None)
-    context.pop("missing_inputs", None)
-    return context
-
-
 def preflight_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     return budget_context_for_stage(envelope, stage="preflight")
 
 
+# ---------------------------------------------------------------------------
+# Deprecated aliases — callers should migrate to chat_context_view
+# ---------------------------------------------------------------------------
+
+def chat_route_context_view(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return chat_context_view(envelope)
+
+
+def intent_context_view(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return chat_context_view(envelope, include_intent_slots=True)
+
+
 def chat_submit_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    parsed = workflow_contracts.parse_context_envelope(envelope)
-    if parsed is None:
-        return {}
-    context = budget_context_for_stage(parsed, stage="chat_submit")
-    return _merge_clarification_slot_ledger(context, parsed.session_scope)
+    return chat_context_view(envelope)
 
 
 def rank_context_items(
@@ -415,7 +486,7 @@ def drop_noisy_context_items(
     *,
     goal: str,
     context: Mapping[str, Any] | None,
-    stage: str,
+    stage: str,  # kept for API compatibility; budgeting is now token-based
 ) -> tuple[dict[str, Any], list[str]]:
     payload = dict(context) if isinstance(context, Mapping) else {}
     dropped: list[str] = []
@@ -424,12 +495,11 @@ def drop_noisy_context_items(
         ranked = _rank_interaction_summaries(goal=goal, interaction_summaries=interaction_summaries)
         if len(ranked) < len(interaction_summaries):
             dropped.append("interaction_summaries:noise")
-        limit = _INTERACTION_SUMMARY_STAGE_LIMITS.get(stage, _INTERACTION_SUMMARY_STAGE_LIMITS["envelope"])
-        if len(ranked) > limit:
-            ranked = ranked[:limit]
+        budgeted = _trim_to_token_budget(ranked, _TOKEN_BUDGETS["interaction_summaries"])
+        if len(budgeted) < len(ranked):
             dropped.append("interaction_summaries:budget")
-        if ranked:
-            payload["interaction_summaries"] = ranked
+        if budgeted:
+            payload["interaction_summaries"] = budgeted
         else:
             payload.pop("interaction_summaries", None)
     return payload, list(dict.fromkeys(dropped))
@@ -465,13 +535,16 @@ def budget_context_for_stage(
         context=parsed.context_json,
         stage=stage,
     )
+    # Strip internal metadata keys from non-routing stages.
     if stage != "chat_route":
         for key in (
             "interaction_summaries_ref",
             "interaction_summaries_meta",
         ):
             context.pop(key, None)
-    if stage in {"chat_submit", "planner", "execution"}:
+    # profile is injected by the view functions themselves from parsed.profile;
+    # remove any stale copy baked into context_json.
+    if stage in {"chat", "chat_submit", "planner", "execution"}:
         context.pop("user_profile", None)
     if stage == "execution":
         context.pop("capability_candidates", None)
@@ -534,6 +607,64 @@ def update_chat_context_envelope(
             "dropped_inputs": dropped_inputs,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Prompt block assembly for caching-aware LLM calls
+# ---------------------------------------------------------------------------
+
+def envelope_to_prompt_blocks(
+    envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
+    *,
+    static_system: str,
+    dynamic_goal: str,
+    dynamic_turn_context: Mapping[str, Any] | None = None,
+) -> list[PromptBlock]:
+    """Convert a ContextEnvelope into PromptBlocks for generate_cached().
+
+    Stability assignment:
+      STATIC  — system instructions (rules, capability catalog, schema).
+                Content is identical across all turns in a session.
+      RUN     — user profile and interaction summaries.
+                Stable within a session but grows turn-to-turn; Anthropic
+                caches the last marker so the RUN block is re-cached only
+                when its content changes.
+      DYNAMIC — current goal, user-supplied context_json, missing inputs.
+                Changes every turn; never cached.
+
+    Pass the result to provider.generate_cached(blocks, session, request).
+    """
+    parsed = workflow_contracts.parse_context_envelope(envelope)
+
+    run_parts: list[str] = []
+    if parsed is not None and parsed.profile:
+        profile_trimmed = _trim_to_token_budget([parsed.profile], _TOKEN_BUDGETS["user_profile"])
+        if profile_trimmed:
+            run_parts.append(f"<user_profile>{json.dumps(profile_trimmed[0])}</user_profile>")
+    if parsed is not None and parsed.interaction_summaries:
+        summaries_trimmed = _trim_to_token_budget(
+            parsed.interaction_summaries, _TOKEN_BUDGETS["interaction_summaries"]
+        )
+        if summaries_trimmed:
+            run_parts.append(f"<history>{json.dumps(summaries_trimmed)}</history>")
+    if parsed is not None and parsed.capability_candidates:
+        candidates_trimmed = _trim_to_token_budget(
+            list(parsed.capability_candidates), _TOKEN_BUDGETS["capability_candidates"]
+        )
+        if candidates_trimmed:
+            run_parts.append(f"<candidates>{json.dumps(candidates_trimmed)}</candidates>")
+
+    turn_parts: list[str] = [f"Goal: {dynamic_goal}"]
+    if dynamic_turn_context:
+        turn_parts.append(f"Context: {json.dumps(dict(dynamic_turn_context))}")
+    if parsed is not None and parsed.missing_inputs:
+        turn_parts.append(f"Missing inputs: {json.dumps(parsed.missing_inputs)}")
+
+    blocks: list[PromptBlock] = [PromptBlock(text=static_system, stability=Stability.STATIC)]
+    if run_parts:
+        blocks.append(PromptBlock(text="\n".join(run_parts), stability=Stability.RUN))
+    blocks.append(PromptBlock(text="\n".join(turn_parts), stability=Stability.DYNAMIC))
+    return blocks
 
 
 def _session_scope_from_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:

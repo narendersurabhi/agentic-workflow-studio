@@ -20,6 +20,7 @@ import {
   WorkflowNodeSvgIcon,
   resolveWorkflowNodeVisual,
 } from "./components/workflow/WorkflowNodeIcon";
+import { useAuth, apiFetch } from "./lib/auth";
 import {
   CHAT_FEEDBACK_REASONS,
   INTENT_FEEDBACK_REASONS,
@@ -49,7 +50,6 @@ const TEMPLATE_ORDER_KEY = "ape.templates.order.v1";
 const TEMPLATE_DEFAULTS_KEY = "ape.template.defaults.v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "ape.workspace.draft.v1";
 const MEMORY_USER_ID_KEY = "ape.memory.user_id.v1";
-const DEFAULT_WORKSPACE_USER_ID = "narendersurabhi";
 const MEMORY_LIMIT_STORAGE_KEY = "ape.memory.limit.v1";
 const SIDEBAR_MIN_WIDTH = 260;
 const DAG_CANVAS_NODE_WIDTH = 220;
@@ -1047,7 +1047,7 @@ const DEMO_WORKSPACE_GOAL =
 
 const DEMO_WORKSPACE_CONTEXT_JSON = JSON.stringify(
   {
-    workspace_user_id: DEFAULT_WORKSPACE_USER_ID,
+    workspace_user_id: "demo-user",
     client: "Acme Health",
     deliverable: "AI workflow implementation brief",
     audience: "product owners and implementation leads",
@@ -2130,7 +2130,6 @@ type WorkspaceDraftSnapshot = {
   goal?: string;
   contextJson?: string;
   priority?: number;
-  workspaceUserId?: string;
   chatUseComposeContext?: boolean;
 };
 
@@ -2139,9 +2138,10 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const showWelcomeScreen = initialScreen === "home";
   const showComposeScreen = initialScreen === "compose";
   const showChatScreen = initialScreen === "chat";
+  const { user: authUser } = useAuth();
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState("{}");
-  const [workspaceUserId, setWorkspaceUserId] = useState(DEFAULT_WORKSPACE_USER_ID);
+  const [workspaceUserId, setWorkspaceUserId] = useState(authUser?.user_id ?? "");
   const [workspaceDraftHydrated, setWorkspaceDraftHydrated] = useState(false);
   const [showRawContextPreview, setShowRawContextPreview] = useState(false);
   const [contextBuilderFieldEditor, setContextBuilderFieldEditor] = useState<ContextBuilderFieldEditor>({
@@ -2244,19 +2244,12 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         if (typeof draft.priority === "number" && Number.isFinite(draft.priority)) {
           setPriority(draft.priority);
         }
-        if (typeof draft.workspaceUserId === "string" && draft.workspaceUserId.trim()) {
-          setWorkspaceUserId(draft.workspaceUserId.trim());
-        }
         if (typeof draft.chatUseComposeContext === "boolean") {
           setChatUseComposeContext(draft.chatUseComposeContext);
         }
       } catch (_error) {
         // Ignore invalid persisted draft state and fall back to defaults.
       }
-    }
-    const stored = window.localStorage.getItem(MEMORY_USER_ID_KEY);
-    if (stored && stored.trim()) {
-      setWorkspaceUserId(stored.trim());
     }
     setWorkspaceDraftHydrated(true);
   }, []);
@@ -2271,12 +2264,18 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         goal,
         contextJson,
         priority,
-        workspaceUserId,
         chatUseComposeContext,
       } satisfies WorkspaceDraftSnapshot)
     );
     window.localStorage.setItem(MEMORY_USER_ID_KEY, workspaceUserId);
   }, [chatUseComposeContext, contextJson, goal, priority, workspaceDraftHydrated, workspaceUserId]);
+
+  // Keep workspaceUserId in sync with the authenticated user
+  useEffect(() => {
+    if (authUser?.user_id) {
+      setWorkspaceUserId(authUser.user_id);
+    }
+  }, [authUser?.user_id]);
 
   const withWorkspaceUserContext = (value: Record<string, unknown>) => {
     const normalizedUserId = workspaceUserId.trim();
@@ -2663,7 +2662,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   }, [chatMessages.length, chatLoading]);
 
   const loadJobs = async () => {
-    const response = await fetch(`${apiUrl}/jobs`);
+    const response = await apiFetch(`${apiUrl}/jobs`);
     const data = await response.json();
     if (response.headers.get("x-demo-data") === "true") {
       setDemoDataDetected(true);
@@ -2673,7 +2672,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
 
   const loadCapabilities = async () => {
     try {
-      const response = await fetch(`${apiUrl}/capabilities?with_schemas=true`);
+      const response = await apiFetch(`${apiUrl}/capabilities?with_schemas=true`);
       if (!response.ok) {
         const text = await response.text();
         setCapabilityError(
@@ -2711,7 +2710,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
     query: string,
     options?: { intent?: string; limit?: number }
   ) => {
-    const response = await fetch(`${apiUrl}/capabilities/search`, {
+    const response = await apiFetch(`${apiUrl}/capabilities/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3344,7 +3343,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
       const interactionSummaries = Array.isArray(contextObj.interaction_summaries)
         ? contextObj.interaction_summaries
         : undefined;
-      const response = await fetch(`${apiUrl}/intent/decompose`, {
+      const response = await apiFetch(`${apiUrl}/intent/decompose`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3409,7 +3408,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
     setLlmCapabilityRecommendationLoading(true);
     setLlmCapabilityRecommendationWarning(null);
     try {
-      const response = await fetch(`${apiUrl}/composer/recommend_capabilities`, {
+      const response = await apiFetch(`${apiUrl}/composer/recommend_capabilities`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4721,7 +4720,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
           goal: normalizedGoal || undefined,
           goal_intent_graph: providedIntentGraph
         };
-        const compileResponse = await fetch(`${apiUrl}/composer/compile`, {
+        const compileResponse = await apiFetch(`${apiUrl}/composer/compile`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(compilePayload)
@@ -4749,7 +4748,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         }
 
         if (compiledPlan) {
-          const response = await fetch(`${apiUrl}/plans/preflight`, {
+          const response = await apiFetch(`${apiUrl}/plans/preflight`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -5728,7 +5727,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
       const clarifyTimeoutId = window.setTimeout(() => {
         clarifyController.abort();
       }, clarifyTimeoutMs);
-      const clarifyResponse = await fetch(`${apiUrl}/intent/clarify`, {
+      const clarifyResponse = await apiFetch(`${apiUrl}/intent/clarify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ goal: goal.trim() }),
@@ -5774,7 +5773,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         };
       }
 
-      const response = await fetch(`${apiUrl}/jobs?require_clarification=true`, {
+      const response = await apiFetch(`${apiUrl}/jobs?require_clarification=true`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -6132,7 +6131,7 @@ const openTemplateModal = (template: Template) => {
 
   const fetchJson = async (url: string) => {
     try {
-      const response = await fetch(url);
+      const response = await apiFetch(url);
       const status = response.status;
       if (!response.ok) {
         return { ok: false, status, data: null, error: null as string | null };
@@ -6213,7 +6212,7 @@ const openTemplateModal = (template: Template) => {
     setFeedbackSubmitting((previous) => ({ ...previous, [key]: true }));
     setFeedbackError(null);
     try {
-      const response = await fetch(`${apiUrl}/feedback`, {
+      const response = await apiFetch(`${apiUrl}/feedback`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -6247,7 +6246,7 @@ const openTemplateModal = (template: Template) => {
   };
 
   const createChatSession = async () => {
-    const response = await fetch(`${apiUrl}/chat/sessions`, {
+    const response = await apiFetch(`${apiUrl}/chat/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -6274,7 +6273,7 @@ const openTemplateModal = (template: Template) => {
   };
 
   const loadChatSession = async (sessionId: string) => {
-    const response = await fetch(`${apiUrl}/chat/sessions/${encodeURIComponent(sessionId)}`);
+    const response = await apiFetch(`${apiUrl}/chat/sessions/${encodeURIComponent(sessionId)}`);
     if (!response.ok) {
       return;
     }
@@ -6336,7 +6335,7 @@ const openTemplateModal = (template: Template) => {
         session = await createChatSession();
         setChatSession(appendChatMessage(session, { ...optimisticMessage, session_id: session.id }));
       }
-      const response = await fetch(`${apiUrl}/chat/sessions/${encodeURIComponent(session.id)}/messages`, {
+      const response = await apiFetch(`${apiUrl}/chat/sessions/${encodeURIComponent(session.id)}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -6516,7 +6515,7 @@ const openTemplateModal = (template: Template) => {
       include_payload: true,
     };
     try {
-      const response = await fetch(`${apiUrl}/memory/semantic/search`, {
+      const response = await apiFetch(`${apiUrl}/memory/semantic/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(searchBody),
@@ -6574,7 +6573,7 @@ const openTemplateModal = (template: Template) => {
       source: "ui_manual",
     };
     try {
-      const response = await fetch(`${apiUrl}/memory/semantic/write`, {
+      const response = await apiFetch(`${apiUrl}/memory/semantic/write`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -6702,14 +6701,14 @@ const openTemplateModal = (template: Template) => {
   };
 
   const stopJob = async (jobId: string) => {
-    const response = await fetch(`${apiUrl}/jobs/${jobId}/cancel`, { method: "POST" });
+    const response = await apiFetch(`${apiUrl}/jobs/${jobId}/cancel`, { method: "POST" });
     if (response.ok) {
       loadJobs();
     }
   };
 
   const continueExecution = async (jobId: string) => {
-    const response = await fetch(`${apiUrl}/jobs/${jobId}/continue`, { method: "POST" });
+    const response = await apiFetch(`${apiUrl}/jobs/${jobId}/continue`, { method: "POST" });
     if (response.ok) {
       loadJobs();
     }
@@ -6728,14 +6727,14 @@ const openTemplateModal = (template: Template) => {
   };
 
   const retryJob = async (jobId: string) => {
-    const response = await fetch(`${apiUrl}/jobs/${jobId}/retry`, { method: "POST" });
+    const response = await apiFetch(`${apiUrl}/jobs/${jobId}/retry`, { method: "POST" });
     if (response.ok) {
       loadJobs();
     }
   };
 
   const retryFailedTasks = async (jobId: string) => {
-    const response = await fetch(`${apiUrl}/jobs/${jobId}/retry_failed`, { method: "POST" });
+    const response = await apiFetch(`${apiUrl}/jobs/${jobId}/retry_failed`, { method: "POST" });
     if (response.ok) {
       loadJobs();
     }
@@ -6749,7 +6748,7 @@ const openTemplateModal = (template: Template) => {
     setDlqError(null);
     let response: Response;
     try {
-      response = await fetch(
+      response = await apiFetch(
         `${apiUrl}/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(entry.task_id)}/retry`,
         {
           method: "POST",
@@ -6790,7 +6789,7 @@ const openTemplateModal = (template: Template) => {
     setDebuggerActionNotice(null);
     let response: Response;
     try {
-      response = await fetch(
+      response = await apiFetch(
         `${apiUrl}/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}/retry`,
         { method: "POST", headers: { "Content-Type": "application/json" } }
       );
@@ -6849,7 +6848,7 @@ const openTemplateModal = (template: Template) => {
   };
 
   const replanJob = async (jobId: string) => {
-    const response = await fetch(`${apiUrl}/jobs/${jobId}/replan`, { method: "POST" });
+    const response = await apiFetch(`${apiUrl}/jobs/${jobId}/replan`, { method: "POST" });
     if (!response.ok) {
       let detail = "";
       try {
@@ -6874,7 +6873,7 @@ const openTemplateModal = (template: Template) => {
     if (!confirmed) {
       return;
     }
-    const response = await fetch(`${apiUrl}/jobs/${jobId}/clear`, { method: "POST" });
+    const response = await apiFetch(`${apiUrl}/jobs/${jobId}/clear`, { method: "POST" });
     if (response.ok) {
       loadJobs();
     }
@@ -8812,43 +8811,6 @@ const openTemplateModal = (template: Template) => {
             </>
           }
         >
-            <div
-              className={`mt-4 px-4 py-3 ${
-                useStudioSurfaceTheme
-                  ? "rounded-[24px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-                  : "rounded-2xl border border-subtle bg-surface-1 text-text-hi"
-              }`}
-            >
-              <div className="flex flex-wrap items-end gap-3">
-                <label className="min-w-[220px] flex-1">
-                  <div
-                    className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                      useStudioSurfaceTheme ? "text-text-sky-token" : "text-text-sky-token"
-                    }`}
-                  >
-                    Context User ID
-                  </div>
-                  <input
-                    className={`mt-2 w-full rounded-2xl px-3 py-2 text-sm outline-none transition ${
-                      useStudioSurfaceTheme
-                        ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:bg-surface-1"
-                        : "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-hi focus:border-default-theme focus:bg-surface-2"
-                    }`}
-                    value={workspaceUserId}
-                    onChange={(event) => setWorkspaceUserId(event.target.value)}
-                    placeholder="narendersurabhi"
-                  />
-                </label>
-                <div
-                  className={`max-w-xl text-xs leading-5 ${
-                    useStudioSurfaceTheme ? "text-text-md" : "text-text-md"
-                  }`}
-                >
-                  Chat, Run from Prompt, and direct memory reads will use this user id by default unless a
-                  request overrides it explicitly.
-                </div>
-              </div>
-            </div>
             <div className={`mt-4 grid gap-4 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
               {showComposeScreen ? (
               <div className={composeModePrimarySectionClassName}>
@@ -10207,8 +10169,7 @@ const openTemplateModal = (template: Template) => {
                     <a
                       key={`job-download-${path}`}
                       href={downloadHrefForPath(path)}
-                      target="_blank"
-                      rel="noreferrer"
+                      download={path.split("/").pop() || path}
                       className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-[11px] text-cyan-700 hover:bg-cyan-100"
                     >
                       {path}
@@ -10803,8 +10764,7 @@ const openTemplateModal = (template: Template) => {
                                       <a
                                         key={`${task.id}-artifact-${path}`}
                                         href={downloadHrefForPath(path)}
-                                        target="_blank"
-                                        rel="noreferrer"
+                                        download={path.split("/").pop() || path}
                                         className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-[11px] text-cyan-700 hover:bg-cyan-100"
                                       >
                                         {path}

@@ -7,6 +7,7 @@
  * stay free of raw fetch logic and retry handling.
  */
 
+import { apiFetch } from "../../lib/auth";
 import type {
   AdaptiveReplanStatus,
   AgentDefinition,
@@ -142,7 +143,7 @@ export type CapabilitySearchResponse = {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${apiUrl}${path}`, {
+  const res = await apiFetch(`${apiUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -164,7 +165,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function putJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${apiUrl}${path}`, {
+  const res = await apiFetch(`${apiUrl}${path}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -186,7 +187,7 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${apiUrl}${path}`, { method: "GET" });
+  const res = await apiFetch(`${apiUrl}${path}`, { method: "GET" });
   if (!res.ok) {
     let detail: string;
     try {
@@ -204,7 +205,7 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function deleteJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${apiUrl}${path}`, { method: "DELETE" });
+  const res = await apiFetch(`${apiUrl}${path}`, { method: "DELETE" });
   if (!res.ok) {
     let detail: string;
     try {

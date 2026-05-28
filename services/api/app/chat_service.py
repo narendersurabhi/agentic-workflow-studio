@@ -2086,6 +2086,9 @@ def handle_turn(
 
     now = runtime.utcnow()
     session_metadata = dict(record.metadata_json or {})
+    # Expose the session ID so downstream LLM calls can pass it as job_id
+    # in metadata, enabling CachingLLMProvider to route through generate_cached().
+    session_metadata["_chat_session_id"] = record.id
     loaded_updated_at = record.updated_at
     loaded_state_version = _session_state_version(session_metadata)
     cleared_session_keys: set[str] = set()
@@ -2842,7 +2845,7 @@ def _prepare_turn_context(
     session_metadata: Mapping[str, Any],
     content: str,
 ) -> dict[str, Any]:
-    turn_context = _coerce_context_json(value)
+    turn_context = context_service.sanitize_user_context(_coerce_context_json(value))
     pending_input = session_metadata.get("pending_workflow_input")
     if not isinstance(pending_input, Mapping):
         return turn_context
