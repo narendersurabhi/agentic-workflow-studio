@@ -4793,6 +4793,9 @@ def _route_chat_turn_legacy(
             session_metadata=session_metadata,
         )
     try:
+        stripped_context = {
+            k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
+        }
         route_request = _build_chat_route_request(
             content=content,
             candidate_goal=candidate_goal,
@@ -4800,23 +4803,19 @@ def _route_chat_turn_legacy(
             merged_context=merged_context,
             messages=messages,
         )
-        prompt = _build_chat_router_prompt(
-            route_request=route_request,
-        )
         chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
+        prompt_blocks = _build_context_prompt_blocks(
+            system_prompt=_CHAT_ROUTER_SYSTEM_PROMPT,
+            prompt_text=_build_chat_router_prompt(
+                route_request=route_request,
+                stripped_context=stripped_context,
+            ),
+            merged_context=merged_context,
+        )
         parsed = _chat_router_provider.generate_request_json_object(
             LLMRequest(
-                prompt=prompt,
-                system_prompt=(
-                    "You route chat turns for an agent platform. "
-                    "Return JSON only. "
-                    "Use route='respond' for normal conversation or explanation when no tools/workflow are needed. "
-                    "Use route='tool_call' only for a single safe read-only capability from the allowed catalog as a synchronous one-step run. "
-                    "Use route='run_workflow' when the user wants to invoke a published Studio workflow and either the current context already references it or a retrieved workflow candidate clearly matches. "
-                    "Use route='submit_job' only when the user wants the system to perform work, create artifacts, inspect systems, or run automation. "
-                    "Use route='ask_clarification' only when workflow execution is needed but essential details are missing. "
-                    "Never choose tool_call for writes, multi-step work, or anything outside the allowed direct catalog."
-                ),
+                prompt="",
+                prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
@@ -4869,6 +4868,9 @@ def _route_chat_turn_with_router(
             pending_clarification=pending_clarification,
         )
     try:
+        stripped_context = {
+            k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
+        }
         route_request = _build_chat_route_request(
             content=content,
             candidate_goal=candidate_goal,
@@ -4876,23 +4878,19 @@ def _route_chat_turn_with_router(
             merged_context=merged_context,
             messages=messages,
         )
-        prompt = _build_chat_router_prompt(
-            route_request=route_request,
-        )
         chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
+        prompt_blocks = _build_context_prompt_blocks(
+            system_prompt=_CHAT_ROUTER_SYSTEM_PROMPT,
+            prompt_text=_build_chat_router_prompt(
+                route_request=route_request,
+                stripped_context=stripped_context,
+            ),
+            merged_context=merged_context,
+        )
         parsed = _chat_router_provider.generate_request_json_object(
             LLMRequest(
-                prompt=prompt,
-                system_prompt=(
-                    "You route chat turns for an agent platform. "
-                    "Return JSON only. "
-                    "Use route='respond' for normal conversation or explanation when no tools/workflow are needed. "
-                    "Use route='tool_call' only for a single safe read-only capability from the allowed catalog as a synchronous one-step run. "
-                    "Use route='run_workflow' when the user wants to invoke a published Studio workflow and either the current context already references it or a retrieved workflow candidate clearly matches. "
-                    "Use route='submit_job' only when the user wants the system to perform work, create artifacts, inspect systems, or run automation. "
-                    "Use route='ask_clarification' only when workflow execution is needed but essential details are missing. "
-                    "Never choose tool_call for writes, multi-step work, or anything outside the allowed direct catalog."
-                ),
+                prompt="",
+                prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
@@ -5831,18 +5829,73 @@ def _build_chat_route_request(
     )
 
 
+# Keys that are stable within a session and should be extracted into the RUN
+# prompt block rather than embedded in the per-turn DYNAMIC payload.
+_PROMPT_STABLE_CONTEXT_KEYS: frozenset[str] = frozenset({
+    "user_profile",
+    "interaction_summaries",
+    "capability_candidates",
+})
+
+_CHAT_ROUTER_SYSTEM_PROMPT: str = (
+    "You route chat turns for an agent platform. "
+    "Return JSON only. "
+    "User profile, conversation history, and capability candidates are provided above in "
+    "<user_profile>, <history>, and <candidates> XML sections when available. "
+    "Use route='respond' for normal conversation or explanation when no tools/workflow are needed. "
+    "Use route='tool_call' only for a single safe read-only capability from the allowed catalog as a synchronous one-step run. "
+    "Use route='run_workflow' when the user wants to invoke a published Studio workflow and either the current context already references it or a retrieved workflow candidate clearly matches. "
+    "Use route='submit_job' only when the user wants the system to perform work, create artifacts, inspect systems, or run automation. "
+    "Use route='ask_clarification' only when workflow execution is needed but essential details are missing. "
+    "Never choose tool_call for writes, multi-step work, or anything outside the allowed direct catalog."
+)
+
+
+def _build_context_prompt_blocks(
+    *,
+    system_prompt: str,
+    prompt_text: str,
+    merged_context: Mapping[str, Any] | None,
+) -> list[PromptBlock]:
+    """Return [STATIC, RUN?, DYNAMIC] PromptBlocks.
+
+    Stable fields from *merged_context* are placed in a RUN block as XML
+    so the caching layer can treat them as session-stable. The caller is
+    responsible for passing *prompt_text* with those same keys already
+    stripped from any embedded context_json, so the model does not see
+    duplicated data.
+    """
+    mc = dict(merged_context or {})
+    run_parts: list[str] = []
+    if profile := mc.get("user_profile"):
+        run_parts.append(f"<user_profile>{json.dumps(profile, ensure_ascii=True)}</user_profile>")
+    if summaries := mc.get("interaction_summaries"):
+        run_parts.append(f"<history>{json.dumps(summaries, ensure_ascii=True)}</history>")
+    if candidates := mc.get("capability_candidates"):
+        run_parts.append(f"<candidates>{json.dumps(candidates, ensure_ascii=True)}</candidates>")
+    blocks: list[PromptBlock] = [PromptBlock(text=system_prompt, stability=Stability.STATIC)]
+    if run_parts:
+        blocks.append(PromptBlock(text="\n".join(run_parts), stability=Stability.RUN))
+    blocks.append(PromptBlock(text=prompt_text, stability=Stability.DYNAMIC))
+    return blocks
+
+
 def _build_chat_router_prompt(
     *,
     route_request: chat_contracts.ChatRouteRequest,
+    stripped_context: Mapping[str, Any] | None = None,
 ) -> str:
     direct_capabilities = [
         candidate.model_dump(mode="json", exclude_none=True)
         for candidate in route_request.routing_evidence.retrieved_candidates
         if candidate.candidate_type == chat_contracts.ChatRouteCandidateType.direct_agent
     ]
+    route_request_dump = route_request.model_dump(mode="json", exclude_none=True)
+    if stripped_context is not None and "context_json" in route_request_dump:
+        route_request_dump["context_json"] = dict(stripped_context)
     payload = {
         "current_user_message": route_request.message,
-        "route_request": route_request.model_dump(mode="json", exclude_none=True),
+        "route_request": route_request_dump,
         "direct_capabilities": direct_capabilities,
         "response_schema": {
             "route": "respond | tool_call | ask_clarification | submit_job | run_workflow",
@@ -5864,6 +5917,8 @@ def _build_chat_router_prompt(
     }
     return (
         "Decide whether this turn should stay conversational or become a workflow request.\n"
+        "User profile, conversation history, and capability candidates are provided above in "
+        "<user_profile>, <history>, and <candidates> XML sections when available.\n"
         "Rules:\n"
         "- respond: answer normally, no workflow/job needed.\n"
         "- tool_call: execute exactly one safe read-only direct candidate from route_request.routing_evidence.retrieved_candidates.\n"
@@ -6348,21 +6403,32 @@ def _generate_chat_response(
     if _chat_response_provider is None:
         return fallback_response
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
+    system_prompt = (
+        "You are the conversational assistant for an agent platform. "
+        "Answer directly and stay in chat. "
+        "Do not claim to have executed tools, created jobs, or run workflows unless the system already did so. "
+        "Be concise, technically accurate, and grounded in the provided context. "
+        "User profile, conversation history, and capability candidates are provided above in "
+        "<user_profile>, <history>, and <candidates> XML sections when available."
+    )
+    stripped_context = {
+        k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
+    }
+    prompt_blocks = _build_context_prompt_blocks(
+        system_prompt=system_prompt,
+        prompt_text=_build_chat_response_prompt(
+            content=content,
+            candidate_goal=candidate_goal,
+            merged_context=stripped_context,
+            messages=messages,
+        ),
+        merged_context=merged_context,
+    )
     try:
         response = _chat_response_provider.generate_request(
             LLMRequest(
-                prompt=_build_chat_response_prompt(
-                    content=content,
-                    candidate_goal=candidate_goal,
-                    merged_context=merged_context,
-                    messages=messages,
-                ),
-                system_prompt=(
-                    "You are the conversational assistant for an agent platform. "
-                    "Answer directly and stay in chat. "
-                    "Do not claim to have executed tools, created jobs, or run workflows unless the system already did so. "
-                    "Be concise, technically accurate, and grounded in the provided context."
-                ),
+                prompt="",
+                prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_response",
                     **({"job_id": chat_session_id} if chat_session_id else {}),
@@ -6394,35 +6460,46 @@ def _generate_chat_boundary_decision(
         session_metadata=session_metadata,
         merged_context=merged_context,
     )
+    system_prompt = (
+        "You are the front-door boundary decision model for an agent platform. "
+        "Choose exactly one bounded decision and return JSON only. "
+        "User profile, conversation history, and capability candidates are provided above in "
+        "<user_profile>, <history>, and <candidates> XML sections when available. "
+        "Use boundary_evidence as grounding. "
+        "Strong executable capability-family evidence or an execution-oriented intent should push you toward execution_request unless the user is clearly asking for discussion only. "
+        "A conversational hint alone is not enough to override strong executable evidence. "
+        "If boundary_evidence.execution_signal_strength is 'strong' and conversation_mode_hint is not 'conversational', do not choose chat_reply unless the user explicitly asks for discussion, explanation, brainstorming, tutoring, or interview practice only. "
+        "When pending_clarification is false: "
+        "use decision='chat_reply' for normal conversation, explanation, discussion, advice, tutoring, coaching, quizzes, interview practice, roleplay, brainstorming, or any other back-and-forth chat experience. "
+        "Use decision='execution_request' only when the user wants tools, system actions, file changes, workflow execution, job submission, artifact creation, repository or environment inspection, or automation. "
+        "When pending_clarification is true: "
+        "If boundary_evidence.likely_clarification_answer is true, prefer decision='continue_pending'. "
+        "use decision='continue_pending' if the user is answering the existing workflow clarification or wants to continue that request; "
+        "use decision='exit_pending_to_chat' if the user wants to stop the workflow path and just get a normal chat answer; "
+        "use decision='meta_clarification' if it is ambiguous whether they want to continue the pending workflow or return to normal chat. "
+        "For chat_reply, exit_pending_to_chat, and meta_clarification, include assistant_response. "
+        "Do not choose execution_request just because the user wants a structured conversation or repeated turns."
+    )
+    stripped_context = {
+        k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
+    }
+    prompt_blocks = _build_context_prompt_blocks(
+        system_prompt=system_prompt,
+        prompt_text=_build_chat_boundary_decision_prompt(
+            content=content,
+            candidate_goal=candidate_goal,
+            session_metadata=session_metadata,
+            merged_context=stripped_context,
+            messages=messages,
+            boundary_evidence=boundary_evidence,
+        ),
+        merged_context=merged_context,
+    )
     try:
         parsed = _chat_response_provider.generate_request_json_object(
             LLMRequest(
-                prompt=_build_chat_boundary_decision_prompt(
-                    content=content,
-                    candidate_goal=candidate_goal,
-                    session_metadata=session_metadata,
-                    merged_context=merged_context,
-                    messages=messages,
-                    boundary_evidence=boundary_evidence,
-                ),
-                system_prompt=(
-                    "You are the front-door boundary decision model for an agent platform. "
-                    "Choose exactly one bounded decision and return JSON only. "
-                    "Use boundary_evidence as grounding. "
-                    "Strong executable capability-family evidence or an execution-oriented intent should push you toward execution_request unless the user is clearly asking for discussion only. "
-                    "A conversational hint alone is not enough to override strong executable evidence. "
-                    "If boundary_evidence.execution_signal_strength is 'strong' and conversation_mode_hint is not 'conversational', do not choose chat_reply unless the user explicitly asks for discussion, explanation, brainstorming, tutoring, or interview practice only. "
-                    "When pending_clarification is false: "
-                    "use decision='chat_reply' for normal conversation, explanation, discussion, advice, tutoring, coaching, quizzes, interview practice, roleplay, brainstorming, or any other back-and-forth chat experience. "
-                    "Use decision='execution_request' only when the user wants tools, system actions, file changes, workflow execution, job submission, artifact creation, repository or environment inspection, or automation. "
-                    "When pending_clarification is true: "
-                    "If boundary_evidence.likely_clarification_answer is true, prefer decision='continue_pending'. "
-                    "use decision='continue_pending' if the user is answering the existing workflow clarification or wants to continue that request; "
-                    "use decision='exit_pending_to_chat' if the user wants to stop the workflow path and just get a normal chat answer; "
-                    "use decision='meta_clarification' if it is ambiguous whether they want to continue the pending workflow or return to normal chat. "
-                    "For chat_reply, exit_pending_to_chat, and meta_clarification, include assistant_response. "
-                    "Do not choose execution_request just because the user wants a structured conversation or repeated turns."
-                ),
+                prompt="",
+                prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_boundary_decision",
                     **({"job_id": chat_session_id} if chat_session_id else {}),
