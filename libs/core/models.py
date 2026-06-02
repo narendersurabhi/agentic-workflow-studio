@@ -1160,3 +1160,54 @@ class TaskUpdate(BaseModel):
     assigned_to: Optional[str] = None
     attempts: Optional[int] = None
     rework_count: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+
+class SkillCondition(BaseModel):
+    operator: str  # exists | not_exists | contains
+    value: Optional[str] = None
+
+
+class SkillStep(BaseModel):
+    id: str
+    order: int
+    type: str  # capability | goal_text
+    capability_id: Optional[str] = None
+    goal_template: Optional[str] = None
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    condition: Optional[SkillCondition] = None
+
+
+class SkillDefinition(BaseModel):
+    instructions: Optional[str] = None
+    steps: List[SkillStep] = Field(default_factory=list)
+
+
+class Skill(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    version: int = 1
+    built_in: bool = False
+    owner_id: Optional[str] = None
+    instructions: Optional[str] = None
+    steps: List[SkillStep] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+    steps: List[SkillStep] = Field(default_factory=list)
+
+
+class SkillUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+    steps: Optional[List[SkillStep]] = None

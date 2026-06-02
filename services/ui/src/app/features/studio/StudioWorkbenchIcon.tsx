@@ -8,7 +8,8 @@ export type StudioWorkbenchIconKind =
   | "graph"
   | "library"
   | "inspect"
-  | "run";
+  | "run"
+  | "zap";
 
 export default function StudioWorkbenchIcon({
   kind,
@@ -85,6 +86,12 @@ export default function StudioWorkbenchIcon({
         <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
           <path d="m9 7 8 5-8 5z" {...sharedProps} />
           <path d="M4.5 19.5h15" {...sharedProps} />
+        </svg>
+      );
+    case "zap":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <path d="M13 3 4.5 13.5H12L11 21l8.5-10.5H12L13 3Z" {...sharedProps} />
         </svg>
       );
   }

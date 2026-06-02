@@ -1,0 +1,30 @@
+- name: "Coder: Generate Workspace Code"
+  description: "Use the coding agent to autonomously plan and implement code in the workspace."
+  instructions: |
+    Use coding_agent_autonomous to create an IMPLEMENTATION_PLAN.md and then implement each step until complete.
+    Keep the implementation compact. If constraints are provided, follow them.
+    All file paths must be workspace-relative (repo-relative), e.g., docker-compose.yml or .github/workflows/ci.yml.
+    Do NOT prefix paths with repos/, repositories/, or the repo name.
+    Do not create GitHub repositories or push to Git.
+  steps:
+    - id: "step-coder-1"
+      order: 1
+      type: "capability"
+      capability_id: "coding_agent_autonomous"
+      inputs:
+        goal: "$ARGUMENTS"
+        workspace_path: "repos/workspace"
+
+- name: "GitHub: Generate Code & Open PR"
+  description: "Generate code into the workspace and open a PR. Repository must already exist."
+  instructions: |
+    First verify the repository exists using github.repo.list. If the repository is missing, stop and do not proceed.
+    Then use codegen.autonomous to implement the goal in the workspace.
+    All file paths must be workspace-relative. Use the existing workspace path consistently.
+    Then open the pull request using codegen.publish_pr.
+    Do not create new repositories.
+  steps:
+    - id: "step-ghpr-1"
+      order: 1
+      type: "goal_text"
+      goal_template: "$ARGUMENTS"

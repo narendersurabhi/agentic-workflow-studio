@@ -6,9 +6,10 @@ export type AppScreenId =
   | "workflows"
   | "studio"
   | "memory"
-  | "rag";
+  | "rag"
+  | "skills";
 
-export type AppNavIcon = "home" | "menu" | "palette" | "chat" | "library" | "graph" | "inspect";
+export type AppNavIcon = "home" | "menu" | "palette" | "chat" | "library" | "graph" | "inspect" | "zap";
 
 export type AppNavItem = {
   id: AppScreenId;
@@ -26,4 +27,5 @@ export const PRIMARY_APP_NAV_ITEMS: AppNavItem[] = [
   { id: "studio", label: "Workflow Studio", href: "/studio", icon: "graph" },
   { id: "memory", label: "Context", href: "/memory", icon: "inspect" },
   { id: "rag", label: "Knowledge", href: "/rag", icon: "library" },
+  { id: "skills", label: "Skills", href: "/skills", icon: "zap" },
 ];
