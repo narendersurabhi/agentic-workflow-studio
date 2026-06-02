@@ -16,6 +16,8 @@ import FeedbackControl from "./components/feedback/FeedbackControl";
 import FeedbackInsightsPanel from "./components/feedback/FeedbackInsightsPanel";
 import StudioWorkbenchIcon from "./features/studio/StudioWorkbenchIcon";
 import type { AdaptiveReplanStatus } from "./features/studio/types";
+import SkillCommandPalette from "./features/skills/SkillCommandPalette";
+import type { CapabilityItem as SkillCapabilityItem, Skill } from "./features/skills/types";
 import {
   WorkflowNodeSvgIcon,
   resolveWorkflowNodeVisual,
@@ -2185,6 +2187,12 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [intentGraphCollapsed, setIntentGraphCollapsed] = useState(true);
   const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalog | null>(null);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [showSkillPalette, setShowSkillPalette] = useState(false);
+  const [showSaveSkillForm, setShowSaveSkillForm] = useState(false);
+  const [saveSkillName, setSaveSkillName] = useState("");
+  const [saveSkillDesc, setSaveSkillDesc] = useState("");
+  const [saveSkillError, setSaveSkillError] = useState<string | null>(null);
   const [templateDefaults, setTemplateDefaults] = useState<Record<string, string>>(
     TEMPLATE_INPUT_DEFAULTS
   );
@@ -2668,6 +2676,49 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
       setDemoDataDetected(true);
     }
     setJobs(data);
+  };
+
+  const loadSkills = async () => {
+    try {
+      const response = await apiFetch(`${apiUrl}/skills?owner_id=default`);
+      if (response.ok) {
+        const data = await response.json();
+        setSkills(data);
+      }
+    } catch {
+      // non-fatal
+    }
+  };
+
+  const saveCurrentAsSkill = async () => {
+    if (!saveSkillName.trim()) {
+      setSaveSkillError("Name is required.");
+      return;
+    }
+    try {
+      const response = await apiFetch(`${apiUrl}/skills?owner_id=default`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: saveSkillName.trim(),
+          description: saveSkillDesc.trim() || null,
+          instructions: null,
+          steps: [{ id: `step-${Date.now()}`, order: 1, type: "goal_text", goal_template: goal, inputs: {}, condition: null }],
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        setSaveSkillError(text || `HTTP ${response.status}`);
+        return;
+      }
+      setShowSaveSkillForm(false);
+      setSaveSkillName("");
+      setSaveSkillDesc("");
+      setSaveSkillError(null);
+      void loadSkills();
+    } catch (e) {
+      setSaveSkillError(e instanceof Error ? e.message : "Save failed");
+    }
   };
 
   const loadCapabilities = async () => {
@@ -5395,6 +5446,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   useEffect(() => {
     loadJobs();
     loadCapabilities();
+    void loadSkills();
     const source = new EventSource(`${apiUrl}/events/stream`);
     source.onmessage = (event) => {
       try {
@@ -7096,50 +7148,6 @@ const openTemplateModal = (template: Template) => {
       ) : null}
       {!useStudioSurfaceTheme ? (
         <div className="pointer-events-none absolute top-48 -left-16 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl animate-float-soft" />
-      ) : null}
-      <button
-        className={`fixed left-4 ${sidebarToggleTopClassName} z-40 px-3 py-2 text-xs font-semibold lg:hidden ${
-          useStudioSurfaceTheme
-            ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-            : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
-        }`}
-        onClick={() => setSidebarOpen(true)}
-      >
-        Templates
-      </button>
-      {!sidebarOpen ? (
-        <button
-          className={`fixed left-4 ${sidebarToggleTopClassName} z-40 hidden px-3 py-2 text-xs font-semibold lg:inline-flex ${
-            useStudioSurfaceTheme
-              ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-              : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
-          }`}
-          onClick={() => setSidebarOpen(true)}
-        >
-          Show templates
-        </button>
-      ) : null}
-      <button
-        className={`fixed right-4 ${sidebarToggleTopClassName} z-40 px-3 py-2 text-xs font-semibold lg:hidden ${
-          useStudioSurfaceTheme
-            ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-            : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
-        }`}
-        onClick={() => setCapabilitySidebarOpen(true)}
-      >
-        Capabilities
-      </button>
-      {!capabilitySidebarOpen ? (
-        <button
-          className={`fixed right-4 ${sidebarToggleTopClassName} z-40 hidden px-3 py-2 text-xs font-semibold lg:inline-flex ${
-            useStudioSurfaceTheme
-              ? "rounded-xl border border-subtle bg-surface-1 text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
-              : "rounded-full border border-slate-200 bg-white text-slate-700 shadow-md"
-          }`}
-          onClick={() => setCapabilitySidebarOpen(true)}
-        >
-          Show capabilities
-        </button>
       ) : null}
       <aside
         className={`fixed bottom-0 left-0 top-[78px] z-50 transform transition-transform duration-300 ${
@@ -9668,23 +9676,59 @@ const openTemplateModal = (template: Template) => {
                   </div>
                 ) : null}
                 <div className="mt-4 space-y-3">
-                  <textarea
-                    className="min-h-[8rem] w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                        event.preventDefault();
-                        void submitChatTurn();
-                      }
-                    }}
-                    placeholder="Ask for work in natural language. Cmd/Ctrl+Enter sends."
-                  />
+                  <div className="relative">
+                    {showSkillPalette ? (
+                      <SkillCommandPalette
+                        skills={skills}
+                        capabilities={(capabilityCatalog?.items ?? []) as SkillCapabilityItem[]}
+                        onSelectSkill={(expanded) => {
+                          setChatInput(expanded);
+                          setShowSkillPalette(false);
+                        }}
+                        onSelectCapability={(id) => {
+                          setChatInput((prev) => (prev ? `${prev} ${id}` : id));
+                          setShowSkillPalette(false);
+                        }}
+                        onClose={() => setShowSkillPalette(false)}
+                      />
+                    ) : null}
+                    <textarea
+                      className="min-h-[8rem] w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                      value={chatInput}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setChatInput(value);
+                        if (value === "/") setShowSkillPalette(true);
+                        else if (!value.startsWith("/")) setShowSkillPalette(false);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                          event.preventDefault();
+                          void submitChatTurn();
+                        }
+                        if (event.key === "Escape") setShowSkillPalette(false);
+                      }}
+                      placeholder="Ask for work in natural language. Type / for Skills. Cmd/Ctrl+Enter sends."
+                    />
+                  </div>
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-[11px] text-text-md">
-                      {chatSession?.metadata?.pending_clarification
-                        ? "Pending clarification is remembered in this session."
-                        : "Chat stays thin: it creates jobs, it does not bypass workflow controls."}
+                    <div className="flex items-center gap-2">
+                      <div className="text-[11px] text-text-md">
+                        {chatSession?.metadata?.pending_clarification
+                          ? "Pending clarification is remembered in this session."
+                          : "Chat stays thin: it creates jobs, it does not bypass workflow controls."}
+                      </div>
+                      <button
+                        className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[11px] font-semibold text-text-md transition hover:bg-surface-2"
+                        onClick={() => {
+                          setSaveSkillName("");
+                          setSaveSkillDesc("");
+                          setSaveSkillError(null);
+                          setShowSaveSkillForm((p) => !p);
+                        }}
+                      >
+                        Save as Skill
+                      </button>
                     </div>
                     <button
                       className="rounded-xl border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
@@ -9694,6 +9738,35 @@ const openTemplateModal = (template: Template) => {
                       Send
                     </button>
                   </div>
+                  {showSaveSkillForm ? (
+                    <div className="rounded-xl border border-subtle bg-surface-1 p-4 space-y-3">
+                      <div className="text-xs font-semibold text-text-md">Save as Skill</div>
+                      {saveSkillError ? <div className="text-xs text-rose-500">{saveSkillError}</div> : null}
+                      <input
+                        className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
+                        placeholder="Skill name"
+                        value={saveSkillName}
+                        onChange={(e) => setSaveSkillName(e.target.value)}
+                      />
+                      <input
+                        className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
+                        placeholder="Description (optional)"
+                        value={saveSkillDesc}
+                        onChange={(e) => setSaveSkillDesc(e.target.value)}
+                      />
+                      <p className="text-[11px] text-text-lo">The current goal text becomes a goal_text step. Edit steps and instructions in the Skills manager.</p>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-text-md transition hover:bg-surface-2"
+                          onClick={() => setShowSaveSkillForm(false)}
+                        >Cancel</button>
+                        <button
+                          className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-600"
+                          onClick={() => void saveCurrentAsSkill()}
+                        >Save</button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
               ) : null}
