@@ -7288,10 +7288,10 @@ const openTemplateModal = (template: Template) => {
 
   const useStudioSurfaceTheme = showChatScreen || showComposeScreen;
   const studioSurfacePrimarySectionClassName = useStudioSurfaceTheme
-    ? "rounded-[30px] border border-subtle bg-gradient-panel p-6 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
-    : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm";
+    ? "rounded-[24px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]"
+    : "rounded-2xl border border-slate-100 bg-white p-5 shadow-sm";
   const studioSurfaceSecondarySectionClassName = useStudioSurfaceTheme
-    ? "rounded-[24px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+    ? "rounded-[20px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_10px_24px_rgba(15,23,42,0.14)]"
     : "rounded-2xl border border-subtle bg-surface-1 text-text-hi";
   const composeModePrimarySectionClassName = showComposeScreen
     ? `${studioSurfacePrimarySectionClassName} [&_.compose-copy]:text-text-md [&_.compose-copy-strong]:text-text-hi [&_.compose-copy-muted]:text-text-md [&_.compose-soft-surface]:border-subtle [&_.compose-soft-surface]:bg-surface-1 [&_.compose-soft-surface]:text-text-md [&_.compose-chip]:border-subtle [&_.compose-chip]:bg-surface-1 [&_.compose-chip]:text-text-hi`
@@ -9011,7 +9011,7 @@ const openTemplateModal = (template: Template) => {
             </>
           }
         >
-            <div className={`mt-4 grid gap-4 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
+            <div className={`mt-3 grid gap-3 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
               {showComposeScreen ? (
               <div className={composeModePrimarySectionClassName}>
                 {submitError ? (
@@ -9980,8 +9980,8 @@ const openTemplateModal = (template: Template) => {
         <section
           className={`animate-fade-up-delayed ${
             useStudioSurfaceTheme
-              ? "rounded-[30px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
-              : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
+              ? "rounded-[24px] border border-subtle bg-gradient-panel p-4 text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "rounded-2xl border border-slate-100 bg-white p-5 shadow-sm"
           }`}
         >
         <div className="flex items-center justify-between gap-4">
@@ -10168,8 +10168,8 @@ const openTemplateModal = (template: Template) => {
         <section
           className={`animate-fade-up-delayed-more ${
             useStudioSurfaceTheme
-              ? "rounded-[30px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
-              : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
+              ? "rounded-[24px] border border-subtle bg-gradient-panel p-4 text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "rounded-2xl border border-slate-100 bg-white p-5 shadow-sm"
           }`}
         >
         <div className="flex items-center justify-between gap-4">
