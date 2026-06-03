@@ -6812,15 +6812,7 @@ export default function WorkflowStudio() {
                     </div>
                   </div>
 
-                  <div
-                    className="absolute"
-                    style={{
-                      left: workspacePanelRects.graph.x,
-                      top: workspacePanelRects.graph.y,
-                      width: workspacePanelRects.graph.width,
-                      height: workspacePanelRects.graph.height,
-                    }}
-                  >
+                  <div className="absolute inset-0">
                     <ComposerDagCanvas
                       visualChainNodes={visualChainNodes}
                       dagEdgeDraftSourceNodeId={dagEdgeDraftSourceNodeId}
