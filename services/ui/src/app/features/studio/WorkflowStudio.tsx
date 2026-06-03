@@ -5200,193 +5200,86 @@ export default function WorkflowStudio() {
   };
 
   const workflowSetupPanel = (
-    <section className="px-3 py-3 text-text-hi">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-sky-token">
-            Workflow Setup
-          </div>
-          <h2 className="mt-1 text-base font-semibold tracking-[-0.02em] text-text-hi">
-            Goal, context, and validation
-          </h2>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-              goal.trim()
-                ? "border-emerald-300/25 bg-accent-emerald text-emerald-200"
-                : "border-subtle bg-surface-1 text-text-md"
-            }`}
-          >
+    <section className="overflow-auto px-2.5 py-2.5 text-text-hi">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.12em]">
+          <span className={`rounded-full border px-2 py-0.5 ${goal.trim() ? "border-emerald-300/25 bg-accent-emerald text-emerald-200" : "border-subtle bg-surface-1 text-text-md"}`}>
             {goal.trim() ? "goal set" : "goal empty"}
           </span>
-          <span
-            className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-              contextState.invalid
-                ? "border-rose-300/25 bg-accent-rose text-rose-200"
-                : "border-sky-300/25 bg-accent-sky text-text-sky-token"
-            }`}
-          >
+          <span className={`rounded-full border px-2 py-0.5 ${contextState.invalid ? "border-rose-300/25 bg-accent-rose text-rose-200" : "border-sky-300/25 bg-accent-sky text-text-sky-token"}`}>
             {contextState.invalid ? "json invalid" : "json ready"}
           </span>
-          <button
-            type="button"
-            className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-surface-1"
-            onClick={() => setWorkflowSetupExpanded((prev) => !prev)}
-          >
-            {workflowSetupExpanded ? "Hide Setup" : "Expand Setup"}
-          </button>
         </div>
+        <button
+          type="button"
+          className="shrink-0 rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-hi transition hover:border-sky-300/35"
+          onClick={() => setWorkflowSetupExpanded((prev) => !prev)}
+        >
+          {workflowSetupExpanded ? "Collapse" : "Expand"}
+        </button>
       </div>
 
-      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Goal
+      <div className="mt-2 grid grid-cols-2 gap-1.5">
+        {[
+          { label: "Goal", value: goal.trim() || "Not set" },
+          { label: "Draft", value: composerDraft.summary.trim() || "Workflow Studio draft" },
+          { label: "User", value: workspaceUserId.trim() || "Not set" },
+          { label: "Context", value: contextState.invalid ? "Invalid" : `${contextPathSuggestions.length} paths` },
+          { label: "Mode", value: workflowRuntimeSettings.executionMode === "adaptive" ? `Adaptive (max ${workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2})` : "Static" },
+        ].map(({ label, value }) => (
+          <div key={label} className="rounded-xl border border-white/8 bg-surface-1 px-2.5 py-2">
+            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-text-lo">{label}</div>
+            <div className="mt-0.5 truncate text-xs text-text-hi">{value}</div>
           </div>
-          <div className="mt-1 line-clamp-2 text-sm text-text-hi">
-            {goal.trim() || "Set the workflow objective."}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Draft
-          </div>
-          <div className="mt-1 line-clamp-2 text-sm text-text-hi">
-            {composerDraft.summary.trim() || "Workflow Studio draft"}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Context User
-          </div>
-          <div className="mt-1 truncate text-sm text-text-hi">
-            {workspaceUserId.trim() || "Not set"}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Context Paths
-          </div>
-          <div className="mt-1 text-sm text-text-hi">
-            {contextState.invalid ? "Unavailable" : `${contextPathSuggestions.length} detected`}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Execution Mode
-          </div>
-          <div className="mt-1 text-sm text-text-hi">
-            {workflowRuntimeSettings.executionMode === "adaptive" ? "Adaptive" : "Static"}
-          </div>
-          <div className="mt-1 text-[11px] text-text-md">
-            Max replans {workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
-          </div>
-        </div>
+        ))}
       </div>
 
       {workflowSetupExpanded ? (
-        <div className="mt-3 space-y-3 border-t border-white/8 pt-3">
-          <div className="grid gap-3 lg:grid-cols-4">
+        <div className="mt-2 space-y-2 border-t border-white/8 pt-2">
+          <div className="grid gap-2 lg:grid-cols-2">
+            {[
+              { label: "Goal", value: goal, onChange: (v: string) => setGoal(v), placeholder: "Workflow objective" },
+              { label: "Draft Summary", value: composerDraft.summary, onChange: (v: string) => setComposerDraft((prev) => ({ ...prev, summary: v })), placeholder: "Workflow Studio draft" },
+              { label: "Context User ID", value: workspaceUserId, onChange: (v: string) => setWorkspaceUserId(v), placeholder: "user-id" },
+            ].map(({ label, value, onChange, placeholder }) => (
+              <label key={label} className="block">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">{label}</div>
+                <input
+                  className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40"
+                  value={value}
+                  onChange={(e) => onChange(e.target.value)}
+                  placeholder={placeholder}
+                />
+              </label>
+            ))}
             <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Goal
-              </div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
-                value={goal}
-                onChange={(event) => setGoal(event.target.value)}
-                placeholder="Generate a document pipeline with validation and render output"
-              />
-            </label>
-            <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Draft Summary
-              </div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
-                value={composerDraft.summary}
-                onChange={(event) =>
-                  setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
-                }
-                placeholder="Workflow Studio draft"
-              />
-            </label>
-            <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Context User ID
-              </div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
-                value={workspaceUserId}
-                onChange={(event) => setWorkspaceUserId(event.target.value)}
-                placeholder="narendersurabhi"
-              />
-              <div className="mt-2 text-xs leading-5 text-text-md">
-                User-scoped memory bindings inherit this id automatically unless a node overrides it
-                explicitly.
-              </div>
-            </label>
-            <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Execution Mode
-              </div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Execution Mode</div>
               <select
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
+                className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40"
                 value={workflowRuntimeSettings.executionMode || "static"}
-                onChange={(event) =>
-                  setWorkflowRuntimeSettings((prev) => ({
-                    executionMode: event.target.value === "adaptive" ? "adaptive" : "static",
-                    adaptivePolicy: {
-                      maxReplans: prev.adaptivePolicy?.maxReplans ?? 2,
-                    },
-                  }))
-                }
+                onChange={(event) => setWorkflowRuntimeSettings((prev) => ({ executionMode: event.target.value === "adaptive" ? "adaptive" : "static", adaptivePolicy: { maxReplans: prev.adaptivePolicy?.maxReplans ?? 2 } }))}
               >
                 <option value="static">Static</option>
                 <option value="adaptive">Adaptive</option>
               </select>
-              <div className="mt-2 text-xs leading-5 text-text-md">
-                Adaptive mode only affects published workflow runs. Draft compile and preflight stay deterministic.
-              </div>
             </label>
           </div>
-
-          <label className="block max-w-xs">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-              Max Adaptive Replans
-            </div>
+          <label className="block max-w-[160px]">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Max Replans</div>
             <input
-              type="number"
-              min={0}
-              max={10}
-              className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
+              type="number" min={0} max={10}
+              className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40"
               value={workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
-              onChange={(event) =>
-                setWorkflowRuntimeSettings((prev) => ({
-                  executionMode: prev.executionMode || "static",
-                  adaptivePolicy: {
-                    maxReplans: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
-                  },
-                }))
-              }
+              onChange={(event) => setWorkflowRuntimeSettings((prev) => ({ executionMode: prev.executionMode || "static", adaptivePolicy: { maxReplans: Math.max(0, Math.min(10, Number(event.target.value) || 0)) } }))}
             />
-            <div className="mt-2 text-xs leading-5 text-text-md">
-              Used only when execution mode is adaptive.
-            </div>
           </label>
-
           <label className="block">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Context JSON
-              </div>
-              <div className="text-xs text-text-md">
-                {contextState.invalid ? "Invalid JSON" : "Object ready"}
-              </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Context JSON</div>
+              <div className="text-[10px] text-text-md">{contextState.invalid ? "Invalid" : "Ready"}</div>
             </div>
             <textarea
-              className="mt-1 min-h-[180px] w-full rounded-[18px] border border-white/8 bg-[#233142] px-3 py-3 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-[#1c2939]"
+              className="mt-1 min-h-[140px] w-full rounded-[14px] border border-white/8 bg-[#233142] px-2.5 py-2 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-[#1c2939]"
               value={contextJson}
               onChange={(event) => setContextJson(event.target.value)}
             />
@@ -5454,16 +5347,11 @@ export default function WorkflowStudio() {
   );
 
   const workflowLibraryLauncherPanel = (
-    <section className="flex h-full flex-col px-3 py-3 text-text-hi">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-text-sky-token">
-            Saved Workflows
-          </div>
-          <h3 className="mt-1 text-2xl text-text-hi">Workflow Launcher</h3>
-        </div>
+    <section className="flex h-full flex-col px-2.5 py-2.5 text-text-hi">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-text-md">Recent drafts</div>
         <button
-          className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-hi transition hover:border-sky-300/40 hover:bg-surface-1"
+          className="rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
           onClick={() => {
             void refreshWorkflowDefinitions();
             if (activeWorkflowDefinitionId) {
@@ -5477,79 +5365,44 @@ export default function WorkflowStudio() {
         </button>
       </div>
 
-      <p className="mt-3 text-sm leading-6 text-text-md">
-        Keep Studio focused on editing. Use the full Workflows page for version history, triggers,
-        run history, and draft management.
-      </p>
-
-      <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          drafts {workflowDefinitions.length}
-        </span>
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          versions {workflowVersions.length}
-        </span>
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          runs {workflowRuns.length}
-        </span>
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          {activeWorkflowVersionId ? "version linked" : "draft only"}
-        </span>
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-subtle bg-surface-1 px-3 py-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-          Current Workflow
-        </div>
-        {savedWorkflowDefinition ? (
-          <>
-            <div className="mt-2 truncate text-sm font-semibold text-text-hi">
-              {savedWorkflowDefinition.title}
-            </div>
-            <div className="mt-1 text-xs leading-5 text-text-md">
-              {savedWorkflowDefinition.goal || "No goal recorded for this workflow."}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-text-lo">
-              <span className="rounded-full bg-surface-1 px-2.5 py-1">
-                updated {formatTimestamp(savedWorkflowDefinition.updated_at)}
-              </span>
-              <span className="rounded-full bg-surface-1 px-2.5 py-1">
-                {activeWorkflowVersionId ? `version ${activeWorkflowVersionId.slice(0, 8)}` : "draft"}
-              </span>
-            </div>
-          </>
-        ) : (
-          <div className="mt-2 text-sm leading-6 text-text-md">
-            Save a draft or open one from Workflows to make this Studio session shareable.
+      {savedWorkflowDefinition ? (
+        <div className="mt-2 rounded-xl border border-subtle bg-surface-1 px-2.5 py-2">
+          <div className="truncate text-xs font-semibold text-text-hi">{savedWorkflowDefinition.title}</div>
+          <div className="mt-0.5 flex flex-wrap gap-1.5 text-[9px] uppercase tracking-[0.12em] text-text-lo">
+            <span>{formatTimestamp(savedWorkflowDefinition.updated_at)}</span>
+            <span>{activeWorkflowVersionId ? `v${activeWorkflowVersionId.slice(0, 8)}` : "draft"}</span>
+            <span>{workflowVersions.length} versions · {workflowRuns.length} runs</span>
           </div>
-        )}
-      </div>
-
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-          Recent Drafts
         </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.12em]">
+          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-text-md">{workflowDefinitions.length} drafts</span>
+          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-text-md">{workflowVersions.length} versions</span>
+          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-text-md">{workflowRuns.length} runs</span>
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center justify-end">
         <Link
           href="/workflows"
-          className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+          className="rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-hi transition hover:border-sky-300/35"
         >
-          Open Workflows
+          Open Workflows →
         </Link>
       </div>
 
-      <div className="mt-3 flex-1 space-y-2 overflow-auto pr-1">
+      <div className="mt-2 flex-1 space-y-1.5 overflow-auto">
         {workflowDefinitionsLoading ? (
-          <div className="rounded-2xl border border-subtle bg-surface-1 px-3 py-3 text-sm text-text-md">
-            Loading saved workflows...
+          <div className="rounded-xl border border-subtle bg-surface-1 px-2.5 py-2 text-xs text-text-md">
+            Loading…
           </div>
         ) : workflowDefinitionsError ? (
-          <div className="rounded-2xl border border-rose-300/24 bg-accent-rose px-3 py-3 text-sm text-text-rose-token">
+          <div className="rounded-xl border border-rose-300/24 bg-accent-rose px-2.5 py-2 text-xs text-text-rose-token">
             {workflowDefinitionsError}
           </div>
         ) : workflowDefinitions.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-subtle bg-surface-1 px-3 py-4 text-sm text-text-md">
-            No saved workflows yet. Save this draft, then use Workflows for deeper history and
-            management.
+          <div className="rounded-xl border border-dashed border-subtle bg-surface-1 px-2.5 py-3 text-xs text-text-md">
+            No saved workflows yet.
           </div>
         ) : (
           workflowDefinitions.slice(0, 4).map((definition) => {
