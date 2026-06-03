@@ -6576,15 +6576,15 @@ export default function WorkflowStudio() {
         aria-hidden={activeStudioSurface !== "workflow"}
       >
               <div className="relative">
-                <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
                       Workflow Studio
                     </div>
-                    <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
+                    <h2 className="mt-1 text-xl font-semibold tracking-tight text-text-hi">
                       Process Flow Designer
                     </h2>
-                    <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
+                    <p className="mt-0.5 text-xs text-text-md">
                       Map business logic into clear steps, decisions, tools, and AI actions before
                       running the automation.
                     </p>
@@ -6635,7 +6635,7 @@ export default function WorkflowStudio() {
                 <div
                   ref={studioWorkspaceStageRef}
                   id="studio-graph-section"
-                  className={`studio-contrast-surface relative mt-4 h-[calc(100vh-184px)] min-h-[980px] overflow-hidden rounded-[30px] bg-gradient-panel-mid shadow-[0_22px_56px_rgba(15,23,42,0.16)] ${
+                  className={`studio-contrast-surface relative mt-3 h-[calc(100vh-172px)] min-h-[980px] overflow-hidden rounded-[24px] bg-gradient-panel-mid shadow-[0_12px_32px_rgba(15,23,42,0.14)] ${
                     studioWorkspaceMode === "focus_graph"
                       ? "ring-2 ring-sky-300/25"
                       : "ring-1 ring-white/10"
