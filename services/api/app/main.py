@@ -21160,6 +21160,10 @@ def _run_workflow_version_internal(
         updated_at=now,
     )
     db.add(run_record)
+    # Persist the workflow_runs row before any shadow RunRecord insert/update
+    # references it via runs.workflow_run_id, otherwise the FK can be violated
+    # depending on flush ordering at commit.
+    db.flush()
     job_record = db.query(JobRecord).filter(JobRecord.id == job.id).first()
     if job_record is not None:
         job_metadata = dict(job_record.metadata_json or {})
