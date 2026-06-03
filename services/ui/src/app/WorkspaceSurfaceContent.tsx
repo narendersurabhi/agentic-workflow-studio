@@ -920,6 +920,87 @@ type DebuggerTaskEntry = {
   };
 };
 
+type RunStateSnapshot = {
+  run_id: string;
+  job_id: string;
+  kind?: string | null;
+  status: string;
+  title?: string;
+  goal?: string;
+  step_counts?: Record<string, number>;
+  attempt_counts?: Record<string, number>;
+  latest_step_name?: string | null;
+  latest_step_status?: string | null;
+  latest_error?: string | null;
+  latest_event_at?: string | null;
+};
+
+type BlackboardEntry = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  key?: string | null;
+  kind: string;
+  payload: Record<string, unknown>;
+  source_agent_id?: string | null;
+  step_id?: string | null;
+  task_id?: string | null;
+  visibility?: string;
+  confidence?: number | null;
+  updated_at?: string;
+};
+
+type AgentHandoff = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  from_agent_id?: string | null;
+  to_agent_id?: string | null;
+  step_id?: string | null;
+  task_id?: string | null;
+  objective?: string;
+  summary?: string;
+  artifact_ids?: string[];
+  created_at?: string;
+};
+
+type RunArtifact = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  step_id?: string | null;
+  task_id?: string | null;
+  artifact_type?: string;
+  path: string;
+  storage_key?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  created_at?: string;
+};
+
+type AgentDescriptor = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  agent_id: string;
+  role?: string;
+  status?: string;
+  assigned_task_id?: string | null;
+  capabilities?: string[];
+  last_heartbeat?: string | null;
+  updated_at?: string;
+};
+
+type AgentLock = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  resource: string;
+  holder_agent_id: string;
+  acquired_at?: string;
+  expires_at?: string | null;
+};
+
 type JobDebuggerPayload = {
   job_id: string;
   job_status: string;
@@ -933,6 +1014,12 @@ type JobDebuggerPayload = {
   generated_at: string;
   timeline_events_scanned: number;
   tasks: DebuggerTaskEntry[];
+  run_state?: RunStateSnapshot | null;
+  blackboard?: BlackboardEntry[];
+  handoffs?: AgentHandoff[];
+  artifacts?: RunArtifact[];
+  agents?: AgentDescriptor[];
+  locks?: AgentLock[];
 };
 
 type CapabilityAdapter = {
@@ -2008,7 +2095,17 @@ const statusColors: Record<string, { fill: string; stroke: string }> = {
   completed: { fill: "#dcfce7", stroke: "#22c55e" },
   accepted: { fill: "#bbf7d0", stroke: "#16a34a" },
   failed: { fill: "#fecaca", stroke: "#ef4444" },
-  canceled: { fill: "#f1f5f9", stroke: "#94a3b8" }
+  canceled: { fill: "#f1f5f9", stroke: "#94a3b8" },
+  skipped: { fill: "#f5f3ff", stroke: "#a78bfa" },
+};
+
+const taskStatusBadgeClass = (status: string) => {
+  if (status === "failed") return "bg-rose-100 text-rose-700";
+  if (status === "completed" || status === "accepted") return "bg-emerald-100 text-emerald-700";
+  if (status === "running") return "bg-amber-100 text-amber-700";
+  if (status === "skipped") return "bg-violet-100 text-violet-700";
+  if (status === "canceled") return "bg-slate-100 text-slate-500";
+  return "bg-slate-100 text-slate-600";
 };
 
 const truncate = (value: string, length: number) =>
@@ -5293,8 +5390,13 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
       collectArtifactPaths(result?.outputs, found);
       (result?.tool_calls || []).forEach((call) => collectArtifactPaths(call.output_or_error, found));
     });
+    (jobDebugger?.artifacts || []).forEach((artifact) => {
+      if (artifact.path) {
+        found.add(normalizeArtifactPath(artifact.path));
+      }
+    });
     return Array.from(found).sort();
-  }, [selectedTasks, taskResults]);
+  }, [jobDebugger?.artifacts, selectedTasks, taskResults]);
 
   const parsedContextForCapabilities = useMemo(() => {
     try {
@@ -6983,70 +7085,47 @@ const openTemplateModal = (template: Template) => {
         }
       >
         <section className="relative">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
-                AI Workflow Workspace
-              </div>
-              <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
-                Start, Manage, and Monitor AI Workflows
-              </h2>
-              <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
-                Launch prompt-based runs, chat-assisted requests, saved workflows, knowledge, and
-                reusable context from one product workspace.
-              </p>
+          <div className="mb-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+              AI Workflow Workspace
             </div>
-
-            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                run from prompt
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                workflow chat
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                studio
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                context
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                knowledge
-              </span>
-            </div>
+            <h2 className="mt-1 text-xl font-semibold tracking-tight text-text-hi">
+              Start, Manage, and Monitor AI Workflows
+            </h2>
+            <p className="mt-0.5 text-xs text-text-md">
+              Launch prompt-based runs, chat-assisted requests, saved workflows, knowledge, and reusable context.
+            </p>
           </div>
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {welcomeSurfaceCards.map((card) => (
               <Link
                 key={card.href}
                 href={card.href}
-                className="group rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-gradient-panel"
+                className="group rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28"
               >
-                <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div
-                      className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${card.accentClassName}`}
-                    >
+                    <div className={`text-[10px] font-semibold uppercase tracking-[0.22em] ${card.accentClassName}`}>
                       {card.eyebrow}
                     </div>
-                    <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
+                    <h3 className="mt-1 text-base font-semibold tracking-tight text-text-hi">
                       {card.title}
                     </h3>
                   </div>
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-subtle bg-surface-1 text-sm font-semibold uppercase tracking-[0.18em] text-text-hi">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-xs font-semibold uppercase tracking-[0.16em] text-text-hi">
                     {card.marker}
                   </div>
                 </div>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-text-md">
+                <p className="mt-2 text-xs leading-5 text-text-md">
                   {card.description}
                 </p>
-                <div className="mt-5 flex items-center justify-between gap-3">
-                  <span className="inline-flex items-center rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-hi">
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi">
                     {card.badge}
                   </span>
-                  <span className="inline-flex items-center rounded-full border border-subtle bg-surface-1 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-surface-1">
-                    {card.cta}
+                  <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition group-hover:border-sky-300/30">
+                    {card.cta} →
                   </span>
                 </div>
               </Link>
@@ -7057,12 +7136,264 @@ const openTemplateModal = (template: Template) => {
     );
   }
 
+  // ── Full-height Chat layout (Chat screen only) ────────────────────────────
+  if (showChatScreen) {
+    const activeJob = chatSession?.active_job_id
+      ? jobs.find((j) => j.id === chatSession.active_job_id)
+      : null;
+    const activeJobStatus = activeJob?.status ?? (chatSession?.active_job_id ? "running" : null);
+    const isJobTerminal = activeJobStatus
+      ? ["succeeded", "failed", "canceled", "completed", "accepted"].includes(activeJobStatus)
+      : false;
+    const jobStatusColor = !activeJobStatus
+      ? ""
+      : activeJobStatus === "succeeded" || activeJobStatus === "completed" || activeJobStatus === "accepted"
+      ? "border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
+      : activeJobStatus === "failed" || activeJobStatus === "canceled"
+      ? "border-rose-300/20 bg-accent-rose text-text-rose-token"
+      : "border-sky-300/22 bg-accent-sky text-text-sky-token";
+
+    return (
+      <AppShell activeScreen="chat" title="Chat">
+        <div className="flex h-[calc(100dvh-60px)] flex-col gap-0 overflow-hidden">
+          {/* ── Top bar ── */}
+          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-subtle px-4 py-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-text-sky-token">
+                AI Workflow Workspace
+              </div>
+              <h1 className="mt-0.5 text-lg font-semibold tracking-tight text-text-hi">Chat</h1>
+            </div>
+            <button
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={resetChatSession}
+              disabled={chatLoading}
+            >
+              New Chat
+            </button>
+          </div>
+
+          {/* ── Transcript ── */}
+          <div
+            ref={chatTranscriptRef}
+            className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+          >
+            {chatMessages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <div className="text-3xl">💬</div>
+                <p className="text-sm text-text-md">
+                  Describe what you need in plain language. Type{" "}
+                  <kbd className="rounded border border-subtle bg-surface-1 px-1.5 py-0.5 text-[11px]">/</kbd>{" "}
+                  for Skills.
+                </p>
+              </div>
+            ) : (
+              chatMessages.map((message) => {
+                const isPending = Boolean(message.metadata?.pending);
+                return (
+                  <div
+                    key={message.id}
+                    className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                      message.role === "user"
+                        ? "ml-auto bg-white text-slate-900"
+                        : "border border-subtle bg-surface-1 text-text-hi"
+                    } ${isPending ? "opacity-70" : ""}`}
+                  >
+                    <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
+                      <div className="flex items-center gap-2">
+                        <span className={message.role === "user" ? "text-slate-400" : "text-text-md"}>
+                          {message.role}
+                        </span>
+                        {isPending ? (
+                          <span className="rounded-full border border-amber-400/30 bg-accent-amber px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
+                            Pending
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="text-text-lo">{formatTimestamp(message.created_at)}</span>
+                    </div>
+                    <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
+                    {message.action?.clarification_questions &&
+                    message.action.clarification_questions.length > 0 ? (
+                      <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
+                        {message.action.clarification_questions.map((q, i) => (
+                          <div key={`${message.id}-q-${i}`}>{q}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {message.job_id ? (
+                      <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-accent-emerald px-3 py-2 text-[12px] text-text-emerald-token">
+                        <span>Job {message.job_id}</span>
+                        <a
+                          href={`/observability?job=${encodeURIComponent(message.job_id)}`}
+                          className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
+                        >
+                          View in Observability
+                        </a>
+                      </div>
+                    ) : null}
+                    {message.role === "assistant" && !isPending ? (
+                      <ChatMessageFeedback
+                        reasonOptions={CHAT_FEEDBACK_REASONS}
+                        existing={feedbackByTarget[feedbackTargetKey("chat_message", message.id)] || null}
+                        submitting={Boolean(feedbackSubmitting[feedbackTargetKey("chat_message", message.id)])}
+                        onSubmit={(payload) => submitFeedback("chat_message", message.id, payload)}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+            {chatLoading ? (
+              <div className="flex items-center gap-2 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-md max-w-[82%]">
+                <span className="inline-flex gap-1">
+                  <span className="animate-bounce delay-0">●</span>
+                  <span className="animate-bounce delay-100">●</span>
+                  <span className="animate-bounce delay-200">●</span>
+                </span>
+                <span>Thinking…</span>
+              </div>
+            ) : null}
+          </div>
+
+          {/* ── Active job card ── */}
+          {chatSession?.active_job_id ? (
+            <div className={`mx-4 mb-2 shrink-0 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5 text-sm ${jobStatusColor}`}>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
+                  {isJobTerminal ? "Last job" : "Running job"}
+                </span>
+                <span className="truncate font-mono text-xs">{chatSession.active_job_id}</span>
+                <span className="text-[11px] capitalize opacity-80">{activeJobStatus}</span>
+              </div>
+              <a
+                href={`/observability?job=${encodeURIComponent(chatSession.active_job_id)}`}
+                className="shrink-0 rounded-xl border border-current/30 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] opacity-90 transition hover:opacity-100"
+              >
+                View details
+              </a>
+            </div>
+          ) : null}
+
+          {/* ── Input bar ── */}
+          <div className="shrink-0 border-t border-subtle bg-gradient-panel px-4 py-3 space-y-2">
+            {chatError ? (
+              <div className="rounded-xl border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
+                {chatError}
+              </div>
+            ) : null}
+            {chatNotice ? (
+              <div className="rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2 text-sm text-text-sky-token">
+                {chatNotice}
+              </div>
+            ) : null}
+            {feedbackError ? (
+              <div className="rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-sm text-text-amber-token">
+                Feedback error: {feedbackError}
+              </div>
+            ) : null}
+            <div className="relative">
+              {showSkillPalette ? (
+                <SkillCommandPalette
+                  skills={skills}
+                  capabilities={(capabilityCatalog?.items ?? []) as SkillCapabilityItem[]}
+                  onSelectSkill={(expanded) => {
+                    setChatInput(expanded);
+                    setShowSkillPalette(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 0);
+                  }}
+                  onSelectCapability={(id) => {
+                    setChatInput((prev) => (prev ? `${prev} ${id}` : id));
+                    setShowSkillPalette(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 0);
+                  }}
+                  onClose={() => {
+                    setShowSkillPalette(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 0);
+                  }}
+                />
+              ) : null}
+              <textarea
+                ref={chatInputRef}
+                rows={3}
+                className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20 resize-none"
+                value={chatInput}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setChatInput(value);
+                  if ((event.nativeEvent as InputEvent).data === "/") setShowSkillPalette(true);
+                  else if (showSkillPalette && value === "") setShowSkillPalette(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    void submitChatTurn();
+                  }
+                  if (event.key === "Escape") setShowSkillPalette(false);
+                }}
+                placeholder="Ask for work in natural language. Type / for Skills. Cmd/Ctrl+Enter sends."
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <button
+                className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[11px] font-semibold text-text-md transition hover:bg-surface-2"
+                onClick={() => {
+                  setSaveSkillName("");
+                  setSaveSkillDesc("");
+                  setSaveSkillError(null);
+                  setShowSaveSkillForm((p) => !p);
+                }}
+              >
+                Save as Skill
+              </button>
+              <button
+                className="rounded-xl border border-sky-300/26 bg-accent-sky px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/40 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => void submitChatTurn()}
+                disabled={chatLoading || !chatInput.trim()}
+              >
+                {chatLoading ? "Sending…" : "Send"}
+              </button>
+            </div>
+            {showSaveSkillForm ? (
+              <div className="rounded-xl border border-subtle bg-surface-1 p-4 space-y-3">
+                <div className="text-xs font-semibold text-text-md">Save as Skill</div>
+                {saveSkillError ? <div className="text-xs text-rose-500">{saveSkillError}</div> : null}
+                <input
+                  className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
+                  placeholder="Skill name"
+                  value={saveSkillName}
+                  onChange={(e) => setSaveSkillName(e.target.value)}
+                />
+                <input
+                  className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
+                  placeholder="Description (optional)"
+                  value={saveSkillDesc}
+                  onChange={(e) => setSaveSkillDesc(e.target.value)}
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    className="rounded-lg border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-md transition hover:bg-surface-2"
+                    onClick={() => setShowSaveSkillForm(false)}
+                  >Cancel</button>
+                  <button
+                    className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-600"
+                    onClick={() => void saveCurrentAsSkill()}
+                  >Save</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+
   const useStudioSurfaceTheme = showChatScreen || showComposeScreen;
   const studioSurfacePrimarySectionClassName = useStudioSurfaceTheme
-    ? "rounded-[30px] border border-subtle bg-gradient-panel p-6 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
-    : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm";
+    ? "rounded-[24px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]"
+    : "rounded-2xl border border-slate-100 bg-white p-5 shadow-sm";
   const studioSurfaceSecondarySectionClassName = useStudioSurfaceTheme
-    ? "rounded-[24px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_18px_36px_rgba(15,23,42,0.18)]"
+    ? "rounded-[20px] border border-subtle bg-gradient-panel-deep text-text-hi shadow-[0_10px_24px_rgba(15,23,42,0.14)]"
     : "rounded-2xl border border-subtle bg-surface-1 text-text-hi";
   const composeModePrimarySectionClassName = showComposeScreen
     ? `${studioSurfacePrimarySectionClassName} [&_.compose-copy]:text-text-md [&_.compose-copy-strong]:text-text-hi [&_.compose-copy-muted]:text-text-md [&_.compose-soft-surface]:border-subtle [&_.compose-soft-surface]:bg-surface-1 [&_.compose-soft-surface]:text-text-md [&_.compose-chip]:border-subtle [&_.compose-chip]:bg-surface-1 [&_.compose-chip]:text-text-hi`
@@ -8782,7 +9113,7 @@ const openTemplateModal = (template: Template) => {
             </>
           }
         >
-            <div className={`mt-4 grid gap-4 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
+            <div className={`mt-3 grid gap-3 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
               {showComposeScreen ? (
               <div className={composeModePrimarySectionClassName}>
                 {submitError ? (
@@ -9751,8 +10082,8 @@ const openTemplateModal = (template: Template) => {
         <section
           className={`animate-fade-up-delayed ${
             useStudioSurfaceTheme
-              ? "rounded-[30px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
-              : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
+              ? "rounded-[24px] border border-subtle bg-gradient-panel p-4 text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "rounded-2xl border border-slate-100 bg-white p-5 shadow-sm"
           }`}
         >
         <div className="flex items-center justify-between gap-4">
@@ -9939,8 +10270,8 @@ const openTemplateModal = (template: Template) => {
         <section
           className={`animate-fade-up-delayed-more ${
             useStudioSurfaceTheme
-              ? "rounded-[30px] border border-subtle bg-gradient-panel p-5 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
-              : "rounded-2xl border border-slate-100 bg-white p-6 shadow-sm"
+              ? "rounded-[24px] border border-subtle bg-gradient-panel p-4 text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "rounded-2xl border border-slate-100 bg-white p-5 shadow-sm"
           }`}
         >
         <div className="flex items-center justify-between gap-4">
@@ -10303,6 +10634,177 @@ const openTemplateModal = (template: Template) => {
                           </>
                         ) : null}
                       </div>
+                      {jobDebugger.run_state ? (
+                        <div className={`grid gap-2 rounded-lg px-3 py-2 text-[11px] md:grid-cols-3 ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                          <div>
+                            <div className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Run State</div>
+                            <div className="mt-1 font-mono text-[10px]">{jobDebugger.run_state.run_id}</div>
+                            <div className="mt-1">
+                              {jobDebugger.run_state.kind || "run"} • {jobDebugger.run_state.status}
+                            </div>
+                          </div>
+                          <div>
+                            <div className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Steps</div>
+                            <div className="mt-1">
+                              {Object.entries(jobDebugger.run_state.step_counts || {}).length > 0
+                                ? Object.entries(jobDebugger.run_state.step_counts || {})
+                                    .map(([status, count]) => `${status}: ${count}`)
+                                    .join(" • ")
+                                : "No step state yet."}
+                            </div>
+                          </div>
+                          <div>
+                            <div className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Latest</div>
+                            <div className="mt-1">
+                              {jobDebugger.run_state.latest_step_name || "No step"}{" "}
+                              {jobDebugger.run_state.latest_step_status
+                                ? `(${jobDebugger.run_state.latest_step_status})`
+                                : ""}
+                            </div>
+                            {jobDebugger.run_state.latest_error ? (
+                              <div className="mt-1 text-rose-600">{jobDebugger.run_state.latest_error}</div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                      {((jobDebugger.blackboard || []).length > 0 ||
+                        (jobDebugger.handoffs || []).length > 0 ||
+                        (jobDebugger.artifacts || []).length > 0 ||
+                        (jobDebugger.agents || []).length > 0 ||
+                        (jobDebugger.locks || []).length > 0) ? (
+                        <>
+                        <div className="grid gap-3 lg:grid-cols-3">
+                          <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                            <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Blackboard</div>
+                            {(jobDebugger.blackboard || []).length > 0 ? (
+                              <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                {(jobDebugger.blackboard || []).slice(0, 6).map((entry) => (
+                                  <div key={`blackboard-${entry.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="font-semibold text-slate-700">{entry.kind}</span>
+                                      <span className="font-mono text-[10px] text-slate-500">{entry.key || entry.id}</span>
+                                    </div>
+                                    <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-[10px] text-slate-600">
+                                      {JSON.stringify(entry.payload || {}, null, 2)}
+                                    </pre>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-text-lo">No blackboard entries yet.</div>
+                            )}
+                          </div>
+                          <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                            <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Handoffs</div>
+                            {(jobDebugger.handoffs || []).length > 0 ? (
+                              <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                {(jobDebugger.handoffs || []).slice(0, 6).map((handoff) => (
+                                  <div key={`handoff-${handoff.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                    <div className="font-semibold text-slate-700">
+                                      {handoff.from_agent_id || "agent"} → {handoff.to_agent_id || "next"}
+                                    </div>
+                                    <div className="mt-1 text-slate-600">
+                                      {handoff.summary || handoff.objective || "No summary."}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-text-lo">No handoffs yet.</div>
+                            )}
+                          </div>
+                          <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                            <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Artifact Index</div>
+                            {(jobDebugger.artifacts || []).length > 0 ? (
+                              <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                {(jobDebugger.artifacts || []).slice(0, 8).map((artifact) => (
+                                  <a
+                                    key={`artifact-index-${artifact.id}`}
+                                    href={downloadHrefForPath(artifact.path)}
+                                    download={artifact.path.split("/").pop() || artifact.path}
+                                    className="block rounded-md border border-cyan-200 bg-white px-2 py-2 text-cyan-700 hover:bg-cyan-50"
+                                  >
+                                    <div className="font-semibold">{artifact.path}</div>
+                                    <div className="mt-1 text-[10px] text-slate-500">
+                                      {artifact.artifact_type || "file"}
+                                      {artifact.size_bytes ? ` • ${artifact.size_bytes} bytes` : ""}
+                                    </div>
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-text-lo">No indexed artifacts yet.</div>
+                            )}
+                          </div>
+                        </div>
+                        {((jobDebugger.agents || []).length > 0 || (jobDebugger.locks || []).length > 0) ? (
+                          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                            <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                              <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Agents</div>
+                              {(jobDebugger.agents || []).length > 0 ? (
+                                <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                  {(jobDebugger.agents || []).map((agent) => {
+                                    const statusClass =
+                                      agent.status === "done"
+                                        ? "bg-emerald-100 text-emerald-700"
+                                        : agent.status === "failed"
+                                          ? "bg-rose-100 text-rose-700"
+                                          : agent.status === "running"
+                                            ? "bg-amber-100 text-amber-700"
+                                            : "bg-slate-100 text-slate-600";
+                                    return (
+                                      <div key={`agent-${agent.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="font-semibold text-slate-700">{agent.agent_id}</span>
+                                          <span className={`rounded-full px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] ${statusClass}`}>
+                                            {agent.status || "idle"}
+                                          </span>
+                                        </div>
+                                        <div className="mt-1 text-[10px] text-slate-500">
+                                          {agent.role || "agent"}
+                                          {agent.assigned_task_id ? ` • ${agent.assigned_task_id}` : ""}
+                                        </div>
+                                        {agent.capabilities && agent.capabilities.length > 0 ? (
+                                          <div className="mt-1 text-[10px] text-slate-400">
+                                            {agent.capabilities.slice(0, 4).join(", ")}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-text-lo">No registered agents.</div>
+                              )}
+                            </div>
+                            <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                              <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Active Locks</div>
+                              {(jobDebugger.locks || []).length > 0 ? (
+                                <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                  {(jobDebugger.locks || []).map((lock) => (
+                                    <div key={`lock-${lock.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-mono font-semibold text-slate-700">{lock.resource}</span>
+                                        <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] text-indigo-700">
+                                          {lock.holder_agent_id}
+                                        </span>
+                                      </div>
+                                      {lock.expires_at ? (
+                                        <div className="mt-1 text-[10px] text-slate-500">
+                                          expires {formatTimestamp(lock.expires_at)}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-text-lo">No active locks.</div>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                        </>
+                      ) : null}
                       {debuggerActionNotice ? (
                         <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>{debuggerActionNotice}</div>
                       ) : null}
@@ -10369,7 +10871,7 @@ const openTemplateModal = (template: Template) => {
                                   <span className="text-xs font-semibold text-slate-800">
                                     {entry.task.name}
                                   </span>
-                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-slate-600">
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] ${taskStatusBadgeClass(taskStatus)}`}>
                                     {taskStatus}
                                   </span>
                                   <span className={`rounded-full px-2 py-0.5 text-[10px] ${categoryClass}`}>
@@ -10687,7 +11189,7 @@ const openTemplateModal = (template: Template) => {
                               <div className="mt-1 text-xs text-text-lo">{task.id}</div>
                             </div>
                             <div className="flex flex-col items-end gap-2">
-                              <span className="rounded-full bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo">
+                              <span className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.2em] ${taskStatusBadgeClass(task.status)}`}>
                                 {task.status}
                               </span>
                               <button

@@ -94,6 +94,7 @@ from . import (
     memory_promotion_service,
     memory_store,
     replan_controller,
+    run_context_service,
 )
 
 core_logging.configure_logging("api")
@@ -1905,7 +1906,86 @@ def _build_plan_revision_context(
             "replans_used": adaptive_status.replans_used,
             "replans_remaining": adaptive_status.replans_remaining,
         },
+        run_memory_snapshot=_run_memory_snapshot_for_revision(db, active_plan),
     )
+
+
+# Caps to keep the replanning prompt within a reasonable token budget.
+_REVISION_SNAPSHOT_FACT_LIMIT = 50
+_REVISION_SNAPSHOT_HANDOFF_LIMIT = 20
+_REVISION_SNAPSHOT_ARTIFACT_LIMIT = 30
+
+
+def _run_memory_snapshot_for_revision(
+    db: Session,
+    active_plan: PlanRecord | None,
+) -> dict[str, Any]:
+    """Assemble accumulated shared run memory for the replanner.
+
+    Returns blackboard facts, per-task output snapshots, agent handoffs, and
+    produced artifacts captured during the run so far. Best-effort: any failure
+    yields an empty snapshot so replanning never blocks on collaboration data.
+    """
+    if active_plan is None:
+        return {}
+    try:
+        job = db.query(JobRecord).filter(JobRecord.id == active_plan.job_id).first()
+        run_id = _durable_run_id(job, active_plan.job_id)
+        bundle = run_context_service.get_run_context_bundle(
+            db,
+            run_id,
+            limit=max(
+                _REVISION_SNAPSHOT_FACT_LIMIT,
+                _REVISION_SNAPSHOT_HANDOFF_LIMIT,
+                _REVISION_SNAPSHOT_ARTIFACT_LIMIT,
+            ),
+        )
+    except Exception:  # noqa: BLE001 — collaboration data is optional context
+        return {}
+
+    facts: list[dict[str, Any]] = []
+    task_snapshots: dict[str, Any] = {}
+    for entry in bundle.blackboard:
+        if entry.kind == "task_snapshot":
+            task_snapshots[entry.key or entry.id] = entry.payload
+            continue
+        facts.append(
+            {
+                "key": entry.key,
+                "kind": entry.kind,
+                "payload": entry.payload,
+                "source_agent_id": entry.source_agent_id,
+                "confidence": entry.confidence,
+            }
+        )
+
+    snapshot: dict[str, Any] = {}
+    if facts:
+        snapshot["facts"] = facts[:_REVISION_SNAPSHOT_FACT_LIMIT]
+    if task_snapshots:
+        snapshot["task_snapshots"] = task_snapshots
+    if bundle.handoffs:
+        snapshot["handoffs"] = [
+            {
+                "from_agent_id": handoff.from_agent_id,
+                "to_agent_id": handoff.to_agent_id,
+                "objective": handoff.objective,
+                "summary": handoff.summary,
+                "assumptions": handoff.assumptions,
+                "risks": handoff.risks,
+            }
+            for handoff in bundle.handoffs[-_REVISION_SNAPSHOT_HANDOFF_LIMIT:]
+        ]
+    if bundle.artifacts:
+        snapshot["artifacts"] = [
+            {
+                "path": artifact.path,
+                "artifact_type": artifact.artifact_type,
+                "task_id": artifact.task_id,
+            }
+            for artifact in bundle.artifacts[-_REVISION_SNAPSHOT_ARTIFACT_LIMIT:]
+        ]
+    return snapshot
 
 
 def _active_plan_record_for_job(
@@ -10743,7 +10823,7 @@ def _composer_default_task_name(capability_id: str, index: int) -> str:
 
 
 _COMPOSER_CONTROL_KINDS = {"if", "if_else", "switch", "parallel"}
-_COMPOSER_EXPRESSION_ROOTS = ("context.", "workflow.input.", "workflow.variable.")
+_COMPOSER_EXPRESSION_ROOTS = ("context.", "workflow.input.", "workflow.variable.", "step.")
 
 
 def _composer_control_kind(raw_node: Mapping[str, Any]) -> str:
@@ -10804,8 +10884,10 @@ def _validate_composer_control_node(
                 "node_id": node_id,
                 "field": "expression",
                 "message": (
-                    "Conditional control-flow supports only context.*, workflow.input.*, "
-                    "and workflow.variable.* expressions, with declared workflow keys."
+                    "Conditional control-flow supports context.*, workflow.input.*, "
+                    "workflow.variable.*, and step.{task_name}.* references. "
+                    "Operators: ==, !=, >, <, >=, <=, contains, startswith, endswith. "
+                    "Combine clauses with 'and' / 'or'."
                 ),
             }
         )
@@ -10895,6 +10977,7 @@ def _composer_expression_operand(
         ("context.", "context"),
         ("workflow.input.", "workflow_input"),
         ("workflow.variable.", "workflow_variable"),
+        ("step.", "step_output"),
     ):
         if not normalized.startswith(prefix):
             continue
@@ -10925,6 +11008,41 @@ def _composer_expression_operand_supported(
     return True
 
 
+_COMPOSER_BINARY_OPERATORS = (">=", "<=", "!=", "==", ">", "<", " contains ", " startswith ", " endswith ")
+
+
+def _composer_split_logical(expression: str, keyword: str) -> list[str]:
+    """Split on a logical keyword (' and ' / ' or ') outside of quoted strings."""
+    parts: list[str] = []
+    buf = ""
+    quote: str | None = None
+    i = 0
+    length = len(expression)
+    keyword_len = len(keyword)
+    while i < length:
+        ch = expression[i]
+        if quote is not None:
+            buf += ch
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf += ch
+            i += 1
+            continue
+        if expression[i : i + keyword_len].lower() == keyword:
+            parts.append(buf)
+            buf = ""
+            i += keyword_len
+            continue
+        buf += ch
+        i += 1
+    parts.append(buf)
+    return [part.strip() for part in parts if part.strip()]
+
+
 def _composer_if_expression_supported(
     expression: str,
     *,
@@ -10934,8 +11052,47 @@ def _composer_if_expression_supported(
     normalized = expression.strip()
     if not normalized:
         return False
-    if "==" in normalized or "!=" in normalized:
-        left, right = normalized.split("==" if "==" in normalized else "!=", 1)
+    # Compound expressions: every clause across ' or '/' and ' must be supported.
+    or_parts = _composer_split_logical(normalized, " or ")
+    if len(or_parts) > 1:
+        return all(
+            _composer_if_expression_supported(
+                part,
+                workflow_input_keys=workflow_input_keys,
+                workflow_variable_keys=workflow_variable_keys,
+            )
+            for part in or_parts
+        )
+    and_parts = _composer_split_logical(normalized, " and ")
+    if len(and_parts) > 1:
+        return all(
+            _composer_if_expression_supported(
+                part,
+                workflow_input_keys=workflow_input_keys,
+                workflow_variable_keys=workflow_variable_keys,
+            )
+            for part in and_parts
+        )
+    return _composer_atom_supported(
+        normalized,
+        workflow_input_keys=workflow_input_keys,
+        workflow_variable_keys=workflow_variable_keys,
+    )
+
+
+def _composer_atom_supported(
+    expression: str,
+    *,
+    workflow_input_keys: set[str] | None = None,
+    workflow_variable_keys: set[str] | None = None,
+) -> bool:
+    normalized = expression.strip()
+    if not normalized:
+        return False
+    for op in _COMPOSER_BINARY_OPERATORS:
+        if op not in normalized:
+            continue
+        left, right = normalized.split(op, 1)
         left = left.strip()
         right = right.strip()
         if not _composer_expression_operand_supported(
@@ -11844,8 +12001,32 @@ def _build_plan_from_composer_draft(
             resolved.update(_resolve_non_control_deps(source_id, next_seen))
         return resolved
 
+    def _topological_node_order() -> list[str]:
+        indegree = {nid: len(deps_by_node_id.get(nid, set())) for nid in node_by_id}
+        queue = sorted(nid for nid, deg in indegree.items() if deg == 0)
+        order: list[str] = []
+        while queue:
+            nid = queue.pop(0)
+            order.append(nid)
+            for child in sorted(children_by_node_id.get(nid, set())):
+                indegree[child] -= 1
+                if indegree[child] == 0:
+                    queue.append(child)
+            queue.sort()
+        # Append any nodes left out by cycles so they still get processed.
+        for nid in node_by_id:
+            if nid not in order:
+                order.append(nid)
+        return order
+
+    topo_order = _topological_node_order()
+
     for node in canonical_nodes:
         node["execution_gate"] = None
+
+    # ── if: a node inherits the gate only if EVERY path into it is gated. ──
+    # Nodes where a branch rejoins an ungated path (merge points) are left
+    # ungated so they run unconditionally.
     for node in canonical_nodes:
         if not node.get("is_control") or node.get("control_kind") != "if":
             continue
@@ -11856,20 +12037,25 @@ def _build_plan_from_composer_draft(
             workflow_variable_keys=workflow_variable_keys,
         ):
             continue
-        queue = list(children_by_node_id.get(node["node_id"], set()))
-        visited: set[str] = set()
-        while queue:
-            candidate_id = queue.pop(0)
-            if candidate_id in visited:
+        control_id = node["node_id"]
+        # gate_holders carry the gate downstream; the control node itself seeds it.
+        gate_holders: set[str] = {control_id}
+        for candidate_id in topo_order:
+            if candidate_id == control_id:
                 continue
-            visited.add(candidate_id)
-            candidate = node_by_id.get(candidate_id)
-            if candidate is None:
+            incoming = deps_by_node_id.get(candidate_id, set())
+            if not incoming:
                 continue
-            if not candidate.get("is_control"):
-                candidate["execution_gate"] = {"expression": expression}
-            queue.extend(children_by_node_id.get(candidate_id, set()))
+            # Dominance: gated only if every incoming edge originates from a holder.
+            if all(src in gate_holders for src in incoming):
+                gate_holders.add(candidate_id)
+                candidate = node_by_id.get(candidate_id)
+                if candidate is not None and not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression}
+            # else: merge point — not gated, propagation stops here.
 
+    # ── if_else: two holder sets (true/false). Where branches rejoin (a node ──
+    # whose incoming edges are not all from a single branch) is a merge point.
     for node in canonical_nodes:
         if not node.get("is_control") or node.get("control_kind") != "if_else":
             continue
@@ -11883,11 +12069,12 @@ def _build_plan_from_composer_draft(
         config = node.get("control_config", {})
         true_label = str(config.get("trueLabel") or "true").strip().lower()
         false_label = str(config.get("falseLabel") or "false").strip().lower()
-        outgoing = sorted(children_by_node_id.get(node["node_id"], set()))
+        control_id = node["node_id"]
+        outgoing = sorted(children_by_node_id.get(control_id, set()))
         true_roots: set[str] = set()
         false_roots: set[str] = set()
         for target_id in outgoing:
-            branch_label = edge_branch_labels.get((node["node_id"], target_id), "").strip().lower()
+            branch_label = edge_branch_labels.get((control_id, target_id), "").strip().lower()
             if branch_label == true_label:
                 true_roots.add(target_id)
             elif branch_label == false_label:
@@ -11896,7 +12083,7 @@ def _build_plan_from_composer_draft(
             diagnostics_errors.append(
                 {
                     "code": "draft.control_if_else_true_branch_missing",
-                    "node_id": node["node_id"],
+                    "node_id": control_id,
                     "field": "edges",
                     "message": "If / Else control node requires an outgoing edge labeled for the true branch.",
                 }
@@ -11905,33 +12092,38 @@ def _build_plan_from_composer_draft(
             diagnostics_errors.append(
                 {
                     "code": "draft.control_if_else_false_branch_missing",
-                    "node_id": node["node_id"],
+                    "node_id": control_id,
                     "field": "edges",
                     "message": "If / Else control node requires an outgoing edge labeled for the false branch.",
                 }
             )
 
-        def _descendants(roots: set[str]) -> set[str]:
-            seen: set[str] = set()
-            queue = list(roots)
-            while queue:
-                candidate_id = queue.pop(0)
-                if candidate_id in seen:
-                    continue
-                seen.add(candidate_id)
-                queue.extend(sorted(children_by_node_id.get(candidate_id, set())))
-            return seen
-
-        true_descendants = _descendants(true_roots)
-        false_descendants = _descendants(false_roots)
-        for candidate_id in sorted(true_descendants - false_descendants):
+        true_holders: set[str] = set(true_roots)
+        false_holders: set[str] = set(false_roots)
+        for candidate_id in topo_order:
             candidate = node_by_id.get(candidate_id)
-            if candidate is not None and not candidate.get("is_control"):
-                candidate["execution_gate"] = {"expression": expression}
-        for candidate_id in sorted(false_descendants - true_descendants):
-            candidate = node_by_id.get(candidate_id)
-            if candidate is not None and not candidate.get("is_control"):
-                candidate["execution_gate"] = {"expression": expression, "negate": True}
+            if candidate is None:
+                continue
+            if candidate_id in true_roots:
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression}
+                continue
+            if candidate_id in false_roots:
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression, "negate": True}
+                continue
+            incoming = deps_by_node_id.get(candidate_id, set())
+            if not incoming:
+                continue
+            if all(src in true_holders for src in incoming):
+                true_holders.add(candidate_id)
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression}
+            elif all(src in false_holders for src in incoming):
+                false_holders.add(candidate_id)
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression, "negate": True}
+            # else: merge point (mixed/external incoming) — left ungated.
 
     tasks_payload: list[dict[str, Any]] = []
     for node in canonical_nodes:
@@ -14087,10 +14279,11 @@ def _task_payload_from_record(
     replay_context: Mapping[str, Any] | None = None,
     sync_execution_request: bool = True,
 ) -> dict[str, Any]:
+    enriched_context = _task_context_with_run_context(record, context)
     payload = dispatch_service.task_payload_from_record(
         record,
         correlation_id,
-        context=context,
+        context=enriched_context,
         goal_text=goal_text,
         intent_profile=intent_profile,
         config=_dispatch_runtime().config,
@@ -14108,6 +14301,63 @@ def _task_payload_from_record(
     if correlation_id and sync_execution_request:
         _sync_execution_request_snapshot(payload)
     return payload
+
+
+def _task_context_with_run_context(
+    record: TaskRecord,
+    context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    enriched = dict(context or {})
+    if "run_state" in enriched and "blackboard" in enriched:
+        return enriched
+    try:
+        with SessionLocal() as db:
+            job = db.query(JobRecord).filter(JobRecord.id == record.job_id).first()
+            run_id = _durable_run_id(job, record.job_id)
+            bundle = run_context_service.get_run_context_bundle(db, run_id, limit=100)
+            enriched.setdefault("run_state", bundle.state.model_dump(mode="json"))
+            enriched.setdefault(
+                "blackboard",
+                [entry.model_dump(mode="json") for entry in bundle.blackboard],
+            )
+            enriched.setdefault(
+                "handoffs",
+                [handoff.model_dump(mode="json") for handoff in bundle.handoffs],
+            )
+            enriched.setdefault(
+                "artifacts",
+                [artifact.model_dump(mode="json") for artifact in bundle.artifacts],
+            )
+            enriched.setdefault(
+                "agents",
+                [agent.model_dump(mode="json") for agent in bundle.agents],
+            )
+            enriched.setdefault(
+                "locks",
+                [lock.model_dump(mode="json") for lock in bundle.locks],
+            )
+            # Multi-agent: stamp the agent that owns this task's capability so the
+            # executor / debugger can attribute the work to a team member.
+            roster = _job_agent_roster(job)
+            if roster and "assigned_agent" not in enriched:
+                assigned = run_context_service.resolve_agent_for_capabilities(
+                    roster,
+                    list(record.tool_requests or []),
+                )
+                if assigned is not None:
+                    enriched["assigned_agent"] = {
+                        "agent_id": assigned.get("agent_id"),
+                        "role": assigned.get("role"),
+                    }
+    except Exception:
+        return enriched
+    return enriched
+
+
+def _job_agent_roster(job: JobRecord | None) -> list[dict[str, Any]]:
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    roster = metadata.get("agents")
+    return [agent for agent in roster if isinstance(agent, dict)] if isinstance(roster, list) else []
 
 
 def _task_payload_with_error(
@@ -15346,6 +15596,7 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
                 if task is not None
                 else str(normalized_result.get("job_id") or "").strip() or None
             )
+            job = db.query(JobRecord).filter(JobRecord.id == job_id).first() if job_id else None
             plan_id = task.plan_id if task is not None else None
             latest_error = _extract_error_from_task_result(normalized_result)
             status = str(normalized_result.get("status") or "").strip()
@@ -15369,6 +15620,34 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
                 record.result_json = normalized_result
                 record.latest_error = latest_error
                 record.updated_at = now
+            if task is not None and job_id:
+                # Index collaboration against the canonical shadow run. The
+                # result's run_id is the worker's execution run id, which is not
+                # a RunRecord, so trusting it would make run lookups miss.
+                run_id = _durable_run_id(job, job_id)
+                if not (
+                    db.query(RunRecord.id).filter(RunRecord.id == run_id).first()
+                ):
+                    fallback = str(normalized_result.get("run_id") or "").strip()
+                    if fallback:
+                        run_id = fallback
+                producing_agent_id = None
+                roster = _job_agent_roster(job)
+                if roster:
+                    owner = run_context_service.resolve_agent_for_capabilities(
+                        roster,
+                        list(task.tool_requests or []),
+                    )
+                    if owner is not None:
+                        producing_agent_id = owner.get("agent_id")
+                run_context_service.index_task_result_collaboration(
+                    db,
+                    run_id=run_id,
+                    step_id=task.id,
+                    task_id=task.id,
+                    result=normalized_result,
+                    producing_agent_id=producing_agent_id,
+                )
             db.commit()
     except Exception:
         return
@@ -16349,10 +16628,31 @@ def _sync_shadow_run_steps(
         for step in run_spec.steps
         if step.name in task_by_name
     }
-    existing = {
-        record.id: record
-        for record in db.query(RunStepRecord).filter(RunStepRecord.run_id == run_record.id).all()
+    # RunStepRecord.id == task.id is a global primary key, but a single workflow
+    # job can produce two shadow runs (the canonical run keyed to the job id and
+    # the workflow-run shadow keyed to the workflow_run id). Look up existing
+    # run-steps globally by task id — not just for this run — so the two syncs
+    # don't collide on the shared pkey. The canonical run is the owner: it
+    # takes/keeps the step rows; a non-canonical sync never inserts a duplicate
+    # nor steals steps from the canonical run.
+    synced_task_ids = {
+        task_by_name[step.name].id
+        for step in run_spec.steps
+        if step.name in task_by_name
     }
+    existing = (
+        {
+            record.id: record
+            for record in db.query(RunStepRecord)
+            .filter(RunStepRecord.id.in_(synced_task_ids))
+            .all()
+        }
+        if synced_task_ids
+        else {}
+    )
+    job_record = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    canonical_run_id = _durable_run_id(job_record, run_record.job_id)
+    is_canonical_run = run_record.id == canonical_run_id
     seen: set[str] = set()
     for step in run_spec.steps:
         task = task_by_name.get(step.name)
@@ -16360,6 +16660,11 @@ def _sync_shadow_run_steps(
             continue
         seen.add(task.id)
         record = existing.get(task.id)
+        if record is not None and record.run_id != run_record.id and not is_canonical_run:
+            # A non-canonical (workflow-run) sync: defer ownership to the run
+            # that already holds this step (the canonical run). Skip to avoid a
+            # duplicate-pkey insert; the job debugger resolves via the canonical run.
+            continue
         if record is None:
             record = RunStepRecord(
                 id=task.id,
@@ -17982,6 +18287,22 @@ def _create_job_internal(
         metadata["current_revision_number"] = 0
     if not _delay_shadow_run_creation(metadata):
         metadata["canonical_run_id"] = job_id
+    # Multi-agent team: normalise the roster, constrain the planner to the team's
+    # combined capabilities, and remember the roster for assignment + registry.
+    agent_roster: list[dict[str, Any]] = []
+    if getattr(job, "agents", None):
+        agent_roster = run_context_service.normalize_agent_roster(
+            [spec.model_dump() for spec in job.agents]
+        )
+        if agent_roster:
+            metadata["agents"] = agent_roster
+            team_capabilities: list[str] = []
+            for agent in agent_roster:
+                for capability_id in agent.get("capabilities", []):
+                    if capability_id != "*" and capability_id not in team_capabilities:
+                        team_capabilities.append(capability_id)
+            if team_capabilities and not metadata.get("allowed_capability_ids"):
+                metadata["allowed_capability_ids"] = team_capabilities
     record = JobRecord(
         id=job_id,
         goal=job.goal,
@@ -17996,6 +18317,21 @@ def _create_job_internal(
     if not _delay_shadow_run_creation(metadata):
         _upsert_shadow_run(db, job_record=record)
     db.commit()
+    if agent_roster and not _delay_shadow_run_creation(metadata):
+        for agent in agent_roster:
+            try:
+                run_context_service.register_agent(
+                    db,
+                    job_id,
+                    models.AgentRegistration(
+                        agent_id=agent["agent_id"],
+                        role=agent.get("role", ""),
+                        capabilities=list(agent.get("capabilities", [])),
+                        metadata=dict(agent.get("metadata", {})),
+                    ),
+                )
+            except (KeyError, ValueError):
+                continue
     jobs_created_total.inc()
     if interaction_summaries_raw:
         _persist_interaction_summaries_memory(
@@ -18404,6 +18740,16 @@ def get_job_debugger(
             }
         )
 
+    run_context = None
+    try:
+        run_context = run_context_service.get_run_context_bundle(
+            db,
+            _durable_run_id(job, job_id),
+            limit=min(max(limit, 1), 500),
+        )
+    except Exception:
+        run_context = None
+
     return {
         "job_id": job_id,
         "job_status": job.status,
@@ -18430,6 +18776,22 @@ def get_job_debugger(
         "normalization_clarification": normalization_fields["normalization_clarification"],
         "normalization_candidate_capabilities": normalization_fields["normalization_candidate_capabilities"],
         "tasks": tasks_payload,
+        "run_state": run_context.state.model_dump(mode="json") if run_context else None,
+        "blackboard": [
+            entry.model_dump(mode="json") for entry in run_context.blackboard
+        ] if run_context else [],
+        "handoffs": [
+            handoff.model_dump(mode="json") for handoff in run_context.handoffs
+        ] if run_context else [],
+        "artifacts": [
+            artifact.model_dump(mode="json") for artifact in run_context.artifacts
+        ] if run_context else [],
+        "agents": [
+            agent.model_dump(mode="json") for agent in run_context.agents
+        ] if run_context else [],
+        "locks": [
+            lock.model_dump(mode="json") for lock in run_context.locks
+        ] if run_context else [],
     }
 
 
@@ -18592,6 +18954,11 @@ def _run_debugger_payload(
         checkpoints_by_step.setdefault(checkpoint.step_id, []).append(
             _step_checkpoint_from_record(checkpoint).model_dump(mode="json")
         )
+    run_context = run_context_service.get_run_context_bundle(
+        db,
+        run_record.id,
+        limit=min(max(limit, 1), 500),
+    )
     latest_failure = _latest_task_failures_for_jobs(db, [job.id]).get(job.id)
     revision_context = planner_contracts.parse_revision_context_from_metadata(
         job.metadata_json if isinstance(job.metadata_json, dict) else {}
@@ -18692,6 +19059,12 @@ def _run_debugger_payload(
             _step_checkpoint_from_record(checkpoint).model_dump(mode="json")
             for checkpoint in checkpoints
         ],
+        "run_state": run_context.state.model_dump(mode="json"),
+        "blackboard": [entry.model_dump(mode="json") for entry in run_context.blackboard],
+        "handoffs": [handoff.model_dump(mode="json") for handoff in run_context.handoffs],
+        "artifacts": [artifact.model_dump(mode="json") for artifact in run_context.artifacts],
+        "agents": [agent.model_dump(mode="json") for agent in run_context.agents],
+        "locks": [lock.model_dump(mode="json") for lock in run_context.locks],
     }
 
 
@@ -18769,6 +19142,191 @@ def get_run_debugger(
     if run_record is None:
         raise HTTPException(status_code=404, detail="run_not_found")
     return _run_debugger_payload(run_record, db=db, limit=limit)
+
+
+@app.get("/runs/{run_id}/state", response_model=models.RunStateSnapshot)
+def get_run_state(run_id: str, db: Session = Depends(get_db)) -> models.RunStateSnapshot:
+    try:
+        return run_context_service.get_run_state(db, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/context", response_model=models.RunContextBundle)
+def get_run_context(
+    run_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> models.RunContextBundle:
+    try:
+        return run_context_service.get_run_context_bundle(db, run_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/blackboard", response_model=List[models.BlackboardEntry])
+def list_run_blackboard(
+    run_id: str,
+    kind: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    agent_id: str | None = Query(None, description="Requesting agent; filters private entries."),
+    db: Session = Depends(get_db),
+) -> List[models.BlackboardEntry]:
+    try:
+        return run_context_service.list_blackboard_entries(
+            db,
+            run_id,
+            kind=kind,
+            limit=limit,
+            agent_id=agent_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/blackboard", response_model=models.BlackboardEntry)
+def create_run_blackboard_entry(
+    run_id: str,
+    entry: models.BlackboardEntryCreate,
+    db: Session = Depends(get_db),
+) -> models.BlackboardEntry:
+    try:
+        return run_context_service.create_blackboard_entry(db, run_id, entry)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/handoffs", response_model=List[models.AgentHandoff])
+def list_run_handoffs(
+    run_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> List[models.AgentHandoff]:
+    try:
+        return run_context_service.list_handoffs(db, run_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/handoffs", response_model=models.AgentHandoff)
+def create_run_handoff(
+    run_id: str,
+    handoff: models.AgentHandoffCreate,
+    db: Session = Depends(get_db),
+) -> models.AgentHandoff:
+    try:
+        return run_context_service.create_handoff(db, run_id, handoff)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/artifacts", response_model=List[models.Artifact])
+def list_run_artifacts(
+    run_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> List[models.Artifact]:
+    try:
+        return run_context_service.list_artifacts(db, run_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/artifacts", response_model=models.Artifact)
+def create_run_artifact(
+    run_id: str,
+    artifact: models.ArtifactCreate,
+    db: Session = Depends(get_db),
+) -> models.Artifact:
+    try:
+        return run_context_service.create_artifact(db, run_id, artifact)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/agents", response_model=List[models.AgentDescriptor])
+def list_run_agents(run_id: str, db: Session = Depends(get_db)) -> List[models.AgentDescriptor]:
+    try:
+        return run_context_service.list_agents(db, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/agents", response_model=models.AgentDescriptor)
+def register_run_agent(
+    run_id: str,
+    registration: models.AgentRegistration,
+    db: Session = Depends(get_db),
+) -> models.AgentDescriptor:
+    try:
+        return run_context_service.register_agent(db, run_id, registration)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/runs/{run_id}/agents/{agent_id}", response_model=models.AgentDescriptor)
+def update_run_agent(
+    run_id: str,
+    agent_id: str,
+    update: models.AgentStatusUpdate,
+    db: Session = Depends(get_db),
+) -> models.AgentDescriptor:
+    try:
+        return run_context_service.update_agent_status(db, run_id, agent_id, update)
+    except KeyError as exc:
+        detail = str(exc)
+        raise HTTPException(status_code=404, detail=detail) from exc
+
+
+@app.get("/runs/{run_id}/locks", response_model=List[models.AgentLock])
+def list_run_locks(
+    run_id: str,
+    include_expired: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> List[models.AgentLock]:
+    try:
+        return run_context_service.list_locks(db, run_id, include_expired=include_expired)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/locks", response_model=models.AgentLock)
+def acquire_run_lock(
+    run_id: str,
+    request: models.AgentLockRequest,
+    db: Session = Depends(get_db),
+) -> models.AgentLock:
+    try:
+        lock = run_context_service.acquire_lock(db, run_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if lock is None:
+        raise HTTPException(status_code=409, detail="resource_locked")
+    return lock
+
+
+@app.delete("/runs/{run_id}/locks/{resource}", response_model=dict)
+def release_run_lock(
+    run_id: str,
+    resource: str,
+    agent_id: str = Query(..., description="Agent that holds the lock."),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        released = run_context_service.release_lock(db, run_id, resource, agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not released:
+        raise HTTPException(status_code=409, detail="lock_not_held_by_agent")
+    return {"released": True, "resource": resource}
 
 
 @app.post("/runs/{run_id}/cancel", response_model=models.Run)
@@ -19052,6 +19610,14 @@ def download_artifact(path: str = Query(..., description="Path relative to /shar
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/artifacts/{artifact_id}", response_model=models.Artifact)
+def get_artifact(artifact_id: str, db: Session = Depends(get_db)) -> models.Artifact:
+    artifact = run_context_service.get_artifact(db, artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="artifact_not_found")
+    return artifact
 
 
 @app.get("/workspace/download")
@@ -20627,6 +21193,10 @@ def _run_workflow_version_internal(
         updated_at=now,
     )
     db.add(run_record)
+    # Persist the workflow_runs row before any shadow RunRecord insert/update
+    # references it via runs.workflow_run_id, otherwise the FK can be violated
+    # depending on flush ordering at commit.
+    db.flush()
     job_record = db.query(JobRecord).filter(JobRecord.id == job.id).first()
     if job_record is not None:
         job_metadata = dict(job_record.metadata_json or {})

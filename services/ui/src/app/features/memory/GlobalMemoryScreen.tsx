@@ -312,8 +312,8 @@ export default function GlobalMemoryScreen() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <section className="rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
+      <div className="grid gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-lo">
             Browser + Scope
           </div>
@@ -391,13 +391,13 @@ export default function GlobalMemoryScreen() {
           </div>
         </section>
 
-        <section className="rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
+        <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-sky-token">
                 Editor
               </div>
-              <h2 className="mt-1 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
+              <h2 className="mt-1 text-base font-semibold tracking-tight text-text-hi">
                 {selectedEntry ? "Update Context Entry" : "Create Context Entry"}
               </h2>
             </div>
@@ -410,7 +410,7 @@ export default function GlobalMemoryScreen() {
             </button>
           </div>
 
-          <div className="mt-5 grid gap-4">
+          <div className="mt-3 grid gap-3">
             <label className="block">
               <div className="text-sm font-medium text-text-hi">Key</div>
               <input

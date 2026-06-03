@@ -36,32 +36,32 @@ export default function ScreenHeader({
         isStudioTheme
           ? "screen-header-studio bg-gradient-header"
           : "screen-header-default bg-gradient-hero"
-      } ${compact ? "rounded-[30px] px-6 py-5" : "rounded-[36px] px-8 py-8"}`}
+      } ${compact ? "rounded-[24px] px-5 py-4" : "rounded-[36px] px-8 py-8"}`}
     >
       <div
         className={`pointer-events-none absolute rounded-full blur-3xl opacity-30 ${
           isStudioTheme ? "bg-accent-sky" : "bg-accent-amber"
-        } ${compact ? "-left-10 top-4 h-28 w-28" : "-left-14 top-8 h-44 w-44"}`}
+        } ${compact ? "-left-8 top-3 h-20 w-20" : "-left-14 top-8 h-44 w-44"}`}
       />
       <div
         className={`pointer-events-none absolute rounded-full blur-3xl opacity-25 bg-accent-sky ${
-          compact ? "-right-10 bottom-0 h-36 w-36" : "-right-12 bottom-0 h-56 w-56"
+          compact ? "-right-8 bottom-0 h-24 w-24" : "-right-12 bottom-0 h-56 w-56"
         }`}
       />
-      <div className={`relative ${compact ? "space-y-4" : "space-y-6"}`}>
-        <div className="flex flex-wrap items-start justify-between gap-6">
+      <div className={`relative ${compact ? "space-y-3" : "space-y-6"}`}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-text-sky-token">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
               {eyebrow}
             </div>
             <h1
-              className={`mt-2 text-text-hi ${
+              className={`mt-1 text-text-hi ${
                 isStudioTheme
                   ? compact
-                    ? "text-[30px] font-semibold tracking-[-0.03em] md:text-[34px]"
+                    ? "text-xl font-semibold tracking-tight"
                     : "text-[34px] font-semibold tracking-[-0.03em] md:text-[42px]"
                   : compact
-                    ? "font-display text-3xl tracking-tight md:text-4xl"
+                    ? "font-display text-2xl tracking-tight"
                     : "font-display text-4xl tracking-tight md:text-5xl"
               }`}
             >
@@ -69,7 +69,7 @@ export default function ScreenHeader({
             </h1>
             <p
               className={`text-text-md ${
-                compact ? "mt-2 text-sm leading-6" : "mt-3 text-sm leading-6 md:text-base"
+                compact ? "mt-0.5 text-xs" : "mt-3 text-sm leading-6 md:text-base"
               }`}
             >
               {description}

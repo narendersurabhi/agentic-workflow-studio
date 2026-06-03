@@ -1651,6 +1651,9 @@ export default function WorkflowStudio() {
   const [chainPreflightResult, setChainPreflightResult] = useState<ChainPreflightResult | null>(null);
   const [composerCompileResult, setComposerCompileResult] = useState<ComposerCompileResponse | null>(null);
   const [savedWorkflowDefinition, setSavedWorkflowDefinition] = useState<WorkflowDefinition | null>(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveDialogTitle, setSaveDialogTitle] = useState("");
+  const [saveDialogGoal, setSaveDialogGoal] = useState("");
   const [publishedWorkflowVersion, setPublishedWorkflowVersion] = useState<WorkflowVersion | null>(null);
   const [loadedWorkflowVersionId, setLoadedWorkflowVersionId] = useState<string | null>(null);
   const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([]);
@@ -1704,6 +1707,9 @@ export default function WorkflowStudio() {
   >(() => createInitialFloatingStudioPanelLayouts(1440, 1040));
   const [activeStudioPanelMenuId, setActiveStudioPanelMenuId] =
     useState<FloatingStudioPanelId | null>(null);
+  const [drawerPanelId, setDrawerPanelId] = useState<FloatingStudioPanelId | null>(null);
+  const [drawerWidth, setDrawerWidth] = useState(320);
+  const drawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const dagCanvasDragOffsetRef = useRef<CanvasPoint>({ x: 0, y: 0 });
   const dagCanvasViewportRef = useRef<HTMLDivElement | null>(null);
@@ -2141,6 +2147,32 @@ export default function WorkflowStudio() {
       setSelectedDagNodeId(null);
     }
   }, [selectedDagNodeId, visualChainNodes]);
+
+  // Drawer resize mouse handlers
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      if (!drawerResizeRef.current) return;
+      const delta = drawerResizeRef.current.startX - event.clientX;
+      setDrawerWidth(Math.max(260, Math.min(600, drawerResizeRef.current.startWidth + delta)));
+    };
+    const onMouseUp = () => { drawerResizeRef.current = null; };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  // Auto-open inspector drawer when a node is selected
+  useEffect(() => {
+    if (selectedDagNodeId) {
+      setDrawerPanelId("inspector");
+    } else if (drawerPanelId === "inspector") {
+      setDrawerPanelId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDagNodeId]);
 
   useEffect(() => {
     if (!dagEdgeDraftSourceNodeId) {
@@ -2580,6 +2612,33 @@ export default function WorkflowStudio() {
   const resetDagCanvasZoom = () => {
     setDagCanvasZoomLevel(1);
     setStudioNotice("Canvas zoom reset to 100%.");
+  };
+
+  const fitNodesToView = () => {
+    if (dagCanvasNodes.length === 0) return;
+    const PADDING = 80;
+    const minX = Math.min(...dagCanvasNodes.map((n) => n.position.x));
+    const minY = Math.min(...dagCanvasNodes.map((n) => n.position.y));
+    const maxX = Math.max(...dagCanvasNodes.map((n) => n.position.x + DAG_CANVAS_NODE_WIDTH));
+    const maxY = Math.max(...dagCanvasNodes.map((n) => n.position.y + DAG_CANVAS_NODE_HEIGHT));
+    const graphWidth = Math.max(maxX - minX, 1);
+    const graphHeight = Math.max(maxY - minY, 1);
+    const stageW = studioWorkspaceStageSize.width || 1440;
+    const stageH = studioWorkspaceStageSize.height || 1040;
+    const nextZoom = clampDagCanvasZoom(
+      Math.min((stageW - PADDING * 2) / graphWidth, (stageH - PADDING * 2) / graphHeight, 1)
+    );
+    setDagCanvasZoom(nextZoom);
+    requestAnimationFrame(() => {
+      const viewport = dagCanvasViewportRef.current;
+      if (!viewport) return;
+      viewport.scrollTo({
+        left: Math.max(0, minX * nextZoom - PADDING),
+        top: Math.max(0, minY * nextZoom - PADDING),
+        behavior: "smooth",
+      });
+    });
+    setStudioNotice("Fitted all nodes to view.");
   };
 
   const setVisualBindingFromSource = (
@@ -3154,7 +3213,37 @@ export default function WorkflowStudio() {
     }));
   };
 
-  const addCapabilityNodeToStudio = (capabilityId: string) => {
+  const handleDropCapability = (
+    type: "capability" | "control" | "agent",
+    id: string,
+    x: number,
+    y: number
+  ) => {
+    const pos = { x, y };
+    if (type === "capability") {
+      addCapabilityNodeToStudio(id, pos);
+    } else if (type === "control") {
+      addControlNodeToStudio(id as StudioControlKind, pos);
+    } else if (type === "agent") {
+      const definition = agentDefinitions.find((d) => d.id === id);
+      if (definition) addAgentNodeToStudio(id, definition, pos);
+    }
+  };
+
+  const addTemplateToStudio = (template: "single" | "sequential" | "agent") => {
+    const templates: Record<string, string[]> = {
+      single: ["codegen.autonomous"],
+      sequential: ["llm.generate", "codegen.autonomous", "codegen.publish_pr"],
+      agent: ["agent.run"],
+    };
+    const caps = templates[template] ?? [];
+    // Add sequentially; each call will auto-chain off the previous node
+    caps.forEach((capId) => addCapabilityNodeToStudio(capId));
+    setStudioNotice(`Template "${template}" added.`);
+    setTimeout(() => { autoLayoutDagCanvas(); }, 50);
+  };
+
+  const addCapabilityNodeToStudio = (capabilityId: string, dropPosition?: { x: number; y: number }) => {
     const capability = capabilityById.get(capabilityId);
     const context = contextState.context;
     const nodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3206,14 +3295,14 @@ export default function WorkflowStudio() {
     });
 
     setComposerNodePositions((prev) => {
+      if (dropPosition) {
+        return { ...prev, [nodeId]: dropPosition };
+      }
       const anchorPosition = selectedDagNodeId ? prev[selectedDagNodeId] : null;
       return {
         ...prev,
         [nodeId]: anchorPosition
-          ? {
-              x: anchorPosition.x + DAG_CANVAS_NODE_WIDTH + 64,
-              y: anchorPosition.y,
-            }
+          ? { x: anchorPosition.x + DAG_CANVAS_NODE_WIDTH + 64, y: anchorPosition.y }
           : defaultDagNodePosition(Object.keys(prev).length),
       };
     });
@@ -3221,7 +3310,7 @@ export default function WorkflowStudio() {
     setStudioNotice(`Added ${capabilityId} to the workflow.`);
   };
 
-  const addControlNodeToStudio = (kind: StudioControlKind) => {
+  const addControlNodeToStudio = (kind: StudioControlKind, dropPosition?: { x: number; y: number }) => {
     const nodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const controlId = `studio.control.${kind}`;
     setComposerDraft((prev) => {
@@ -3251,6 +3340,7 @@ export default function WorkflowStudio() {
       };
     });
     setComposerNodePositions((prev) => {
+      if (dropPosition) return { ...prev, [nodeId]: dropPosition };
       const anchorPosition = selectedDagNodeId ? prev[selectedDagNodeId] : null;
       return {
         ...prev,
@@ -3263,7 +3353,7 @@ export default function WorkflowStudio() {
     setStudioNotice(`Added ${kind.replace("_", " ")} control node.`);
   };
 
-  const addAgentNodeToStudio = (definitionId: string, definition: AgentDefinition) => {
+  const addAgentNodeToStudio = (definitionId: string, definition: AgentDefinition, dropPosition?: { x: number; y: number }) => {
     const nodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setComposerDraft((prev) => {
       const anchorNode =
@@ -3299,6 +3389,7 @@ export default function WorkflowStudio() {
       };
     });
     setComposerNodePositions((prev) => {
+      if (dropPosition) return { ...prev, [nodeId]: dropPosition };
       const anchorPosition = selectedDagNodeId ? prev[selectedDagNodeId] : null;
       return {
         ...prev,
@@ -3414,6 +3505,31 @@ export default function WorkflowStudio() {
           : node
       )
     );
+  };
+
+  const duplicateSelectedNode = () => {
+    if (!selectedDagNodeId) return;
+    const sourceNode = visualChainNodes.find((n) => n.id === selectedDagNodeId);
+    if (!sourceNode) return;
+    const sourcePos = composerNodePositions[selectedDagNodeId];
+    const newId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const newNode = {
+      ...sourceNode,
+      id: newId,
+      taskName: uniqueTaskName(`${sourceNode.taskName} copy`, visualChainNodes),
+      inputBindings: {},
+    };
+    setComposerDraft((prev) => ({
+      ...prev,
+      nodes: [...prev.nodes, newNode],
+      edges: normalizeComposerEdges([...prev.nodes, newNode], prev.edges),
+    }));
+    setComposerNodePositions((prev) => ({
+      ...prev,
+      [newId]: { x: (sourcePos?.x ?? 200) + 80, y: (sourcePos?.y ?? 200) + 48 },
+    }));
+    setSelectedDagNodeId(newId);
+    setStudioNotice("Step duplicated.");
   };
 
   const removeVisualChainNode = (nodeId: string) => {
@@ -4579,13 +4695,15 @@ export default function WorkflowStudio() {
     setPendingWorkbenchWorkflowDraft(null);
   }, [pendingWorkbenchWorkflowDraft]);
 
-  const saveWorkflowDefinition = async () => {
+  const executeSaveWorkflowDefinition = async (overrideTitle?: string, overrideGoal?: string) => {
     if (contextState.invalid) {
       setStudioNotice("Workflow drafts can only be saved when Context JSON is valid.");
       return null;
     }
     setWorkflowActionLoading("save");
     try {
+      const title = overrideTitle || composerDraft.summary || goal.trim() || "Workflow Studio draft";
+      const resolvedGoal = overrideGoal ?? goal.trim();
       const response = await apiFetch(
         savedWorkflowDefinition
           ? `${apiUrl}/workflows/definitions/${encodeURIComponent(savedWorkflowDefinition.id)}`
@@ -4594,8 +4712,8 @@ export default function WorkflowStudio() {
           method: savedWorkflowDefinition ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            title: composerDraft.summary || goal.trim() || "Workflow Studio draft",
-            goal: goal.trim(),
+            title,
+            goal: resolvedGoal,
             context_json: withWorkspaceUserContext(contextState.context),
             draft: persistedWorkflowDraft,
             user_id: workspaceUserId.trim() || undefined,
@@ -4618,7 +4736,7 @@ export default function WorkflowStudio() {
       void refreshWorkflowDefinitions();
       void refreshWorkflowTriggers(definition.id);
       void refreshWorkflowRuns(definition.id);
-      setStudioNotice(`Saved draft ${definition.title}.`);
+      setStudioNotice(`Saved draft "${definition.title}".`);
       return definition;
     } catch (error) {
       setStudioNotice(error instanceof Error ? error.message : "Failed to save workflow draft.");
@@ -4626,6 +4744,18 @@ export default function WorkflowStudio() {
     } finally {
       setWorkflowActionLoading(null);
     }
+  };
+
+  const saveWorkflowDefinition = async () => {
+    // Existing workflow — save immediately (title already set)
+    if (savedWorkflowDefinition) {
+      return executeSaveWorkflowDefinition();
+    }
+    // New workflow — open dialog to collect name and description
+    setSaveDialogTitle(composerDraft.summary.trim() || goal.trim() || "");
+    setSaveDialogGoal(goal.trim());
+    setSaveDialogOpen(true);
+    return null;
   };
 
   const publishWorkflowVersion = async () => {
@@ -5106,193 +5236,86 @@ export default function WorkflowStudio() {
   };
 
   const workflowSetupPanel = (
-    <section className="px-3 py-3 text-text-hi">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-sky-token">
-            Workflow Setup
-          </div>
-          <h2 className="mt-1 text-base font-semibold tracking-[-0.02em] text-text-hi">
-            Goal, context, and validation
-          </h2>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-              goal.trim()
-                ? "border-emerald-300/25 bg-accent-emerald text-emerald-200"
-                : "border-subtle bg-surface-1 text-text-md"
-            }`}
-          >
+    <section className="overflow-auto px-2.5 py-2.5 text-text-hi">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.12em]">
+          <span className={`rounded-full border px-2 py-0.5 ${goal.trim() ? "border-emerald-300/25 bg-accent-emerald text-emerald-200" : "border-subtle bg-surface-1 text-text-md"}`}>
             {goal.trim() ? "goal set" : "goal empty"}
           </span>
-          <span
-            className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-              contextState.invalid
-                ? "border-rose-300/25 bg-accent-rose text-rose-200"
-                : "border-sky-300/25 bg-accent-sky text-text-sky-token"
-            }`}
-          >
+          <span className={`rounded-full border px-2 py-0.5 ${contextState.invalid ? "border-rose-300/25 bg-accent-rose text-rose-200" : "border-sky-300/25 bg-accent-sky text-text-sky-token"}`}>
             {contextState.invalid ? "json invalid" : "json ready"}
           </span>
-          <button
-            type="button"
-            className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-surface-1"
-            onClick={() => setWorkflowSetupExpanded((prev) => !prev)}
-          >
-            {workflowSetupExpanded ? "Hide Setup" : "Expand Setup"}
-          </button>
         </div>
+        <button
+          type="button"
+          className="shrink-0 rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-hi transition hover:border-sky-300/35"
+          onClick={() => setWorkflowSetupExpanded((prev) => !prev)}
+        >
+          {workflowSetupExpanded ? "Collapse" : "Expand"}
+        </button>
       </div>
 
-      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Goal
+      <div className="mt-2 grid grid-cols-2 gap-1.5">
+        {[
+          { label: "Goal", value: goal.trim() || "Not set" },
+          { label: "Draft", value: composerDraft.summary.trim() || "Workflow Studio draft" },
+          { label: "User", value: workspaceUserId.trim() || "Not set" },
+          { label: "Context", value: contextState.invalid ? "Invalid" : `${contextPathSuggestions.length} paths` },
+          { label: "Mode", value: workflowRuntimeSettings.executionMode === "adaptive" ? `Adaptive (max ${workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2})` : "Static" },
+        ].map(({ label, value }) => (
+          <div key={label} className="rounded-xl border border-white/8 bg-surface-1 px-2.5 py-2">
+            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-text-lo">{label}</div>
+            <div className="mt-0.5 truncate text-xs text-text-hi">{value}</div>
           </div>
-          <div className="mt-1 line-clamp-2 text-sm text-text-hi">
-            {goal.trim() || "Set the workflow objective."}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Draft
-          </div>
-          <div className="mt-1 line-clamp-2 text-sm text-text-hi">
-            {composerDraft.summary.trim() || "Workflow Studio draft"}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Context User
-          </div>
-          <div className="mt-1 truncate text-sm text-text-hi">
-            {workspaceUserId.trim() || "Not set"}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Context Paths
-          </div>
-          <div className="mt-1 text-sm text-text-hi">
-            {contextState.invalid ? "Unavailable" : `${contextPathSuggestions.length} detected`}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-surface-1 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Execution Mode
-          </div>
-          <div className="mt-1 text-sm text-text-hi">
-            {workflowRuntimeSettings.executionMode === "adaptive" ? "Adaptive" : "Static"}
-          </div>
-          <div className="mt-1 text-[11px] text-text-md">
-            Max replans {workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
-          </div>
-        </div>
+        ))}
       </div>
 
       {workflowSetupExpanded ? (
-        <div className="mt-3 space-y-3 border-t border-white/8 pt-3">
-          <div className="grid gap-3 lg:grid-cols-4">
+        <div className="mt-2 space-y-2 border-t border-white/8 pt-2">
+          <div className="grid gap-2 lg:grid-cols-2">
+            {[
+              { label: "Goal", value: goal, onChange: (v: string) => setGoal(v), placeholder: "Workflow objective" },
+              { label: "Draft Summary", value: composerDraft.summary, onChange: (v: string) => setComposerDraft((prev) => ({ ...prev, summary: v })), placeholder: "Workflow Studio draft" },
+              { label: "Context User ID", value: workspaceUserId, onChange: (v: string) => setWorkspaceUserId(v), placeholder: "user-id" },
+            ].map(({ label, value, onChange, placeholder }) => (
+              <label key={label} className="block">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">{label}</div>
+                <input
+                  className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40"
+                  value={value}
+                  onChange={(e) => onChange(e.target.value)}
+                  placeholder={placeholder}
+                />
+              </label>
+            ))}
             <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Goal
-              </div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
-                value={goal}
-                onChange={(event) => setGoal(event.target.value)}
-                placeholder="Generate a document pipeline with validation and render output"
-              />
-            </label>
-            <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Draft Summary
-              </div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
-                value={composerDraft.summary}
-                onChange={(event) =>
-                  setComposerDraft((prev) => ({ ...prev, summary: event.target.value }))
-                }
-                placeholder="Workflow Studio draft"
-              />
-            </label>
-            <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Context User ID
-              </div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/40 focus:bg-surface-1"
-                value={workspaceUserId}
-                onChange={(event) => setWorkspaceUserId(event.target.value)}
-                placeholder="narendersurabhi"
-              />
-              <div className="mt-2 text-xs leading-5 text-text-md">
-                User-scoped memory bindings inherit this id automatically unless a node overrides it
-                explicitly.
-              </div>
-            </label>
-            <label className="block">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Execution Mode
-              </div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Execution Mode</div>
               <select
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
+                className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40"
                 value={workflowRuntimeSettings.executionMode || "static"}
-                onChange={(event) =>
-                  setWorkflowRuntimeSettings((prev) => ({
-                    executionMode: event.target.value === "adaptive" ? "adaptive" : "static",
-                    adaptivePolicy: {
-                      maxReplans: prev.adaptivePolicy?.maxReplans ?? 2,
-                    },
-                  }))
-                }
+                onChange={(event) => setWorkflowRuntimeSettings((prev) => ({ executionMode: event.target.value === "adaptive" ? "adaptive" : "static", adaptivePolicy: { maxReplans: prev.adaptivePolicy?.maxReplans ?? 2 } }))}
               >
                 <option value="static">Static</option>
                 <option value="adaptive">Adaptive</option>
               </select>
-              <div className="mt-2 text-xs leading-5 text-text-md">
-                Adaptive mode only affects published workflow runs. Draft compile and preflight stay deterministic.
-              </div>
             </label>
           </div>
-
-          <label className="block max-w-xs">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-              Max Adaptive Replans
-            </div>
+          <label className="block max-w-[160px]">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Max Replans</div>
             <input
-              type="number"
-              min={0}
-              max={10}
-              className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
+              type="number" min={0} max={10}
+              className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40"
               value={workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
-              onChange={(event) =>
-                setWorkflowRuntimeSettings((prev) => ({
-                  executionMode: prev.executionMode || "static",
-                  adaptivePolicy: {
-                    maxReplans: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
-                  },
-                }))
-              }
+              onChange={(event) => setWorkflowRuntimeSettings((prev) => ({ executionMode: prev.executionMode || "static", adaptivePolicy: { maxReplans: Math.max(0, Math.min(10, Number(event.target.value) || 0)) } }))}
             />
-            <div className="mt-2 text-xs leading-5 text-text-md">
-              Used only when execution mode is adaptive.
-            </div>
           </label>
-
           <label className="block">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-                Context JSON
-              </div>
-              <div className="text-xs text-text-md">
-                {contextState.invalid ? "Invalid JSON" : "Object ready"}
-              </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Context JSON</div>
+              <div className="text-[10px] text-text-md">{contextState.invalid ? "Invalid" : "Ready"}</div>
             </div>
             <textarea
-              className="mt-1 min-h-[180px] w-full rounded-[18px] border border-white/8 bg-[#233142] px-3 py-3 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-[#1c2939]"
+              className="mt-1 min-h-[140px] w-full rounded-[14px] border border-white/8 bg-[#233142] px-2.5 py-2 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-[#1c2939]"
               value={contextJson}
               onChange={(event) => setContextJson(event.target.value)}
             />
@@ -5360,16 +5383,11 @@ export default function WorkflowStudio() {
   );
 
   const workflowLibraryLauncherPanel = (
-    <section className="flex h-full flex-col px-3 py-3 text-text-hi">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-text-sky-token">
-            Saved Workflows
-          </div>
-          <h3 className="mt-1 text-2xl text-text-hi">Workflow Launcher</h3>
-        </div>
+    <section className="flex h-full flex-col px-2.5 py-2.5 text-text-hi">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-text-md">Recent drafts</div>
         <button
-          className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-hi transition hover:border-sky-300/40 hover:bg-surface-1"
+          className="rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
           onClick={() => {
             void refreshWorkflowDefinitions();
             if (activeWorkflowDefinitionId) {
@@ -5383,79 +5401,44 @@ export default function WorkflowStudio() {
         </button>
       </div>
 
-      <p className="mt-3 text-sm leading-6 text-text-md">
-        Keep Studio focused on editing. Use the full Workflows page for version history, triggers,
-        run history, and draft management.
-      </p>
-
-      <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          drafts {workflowDefinitions.length}
-        </span>
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          versions {workflowVersions.length}
-        </span>
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          runs {workflowRuns.length}
-        </span>
-        <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-hi">
-          {activeWorkflowVersionId ? "version linked" : "draft only"}
-        </span>
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-subtle bg-surface-1 px-3 py-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-md">
-          Current Workflow
-        </div>
-        {savedWorkflowDefinition ? (
-          <>
-            <div className="mt-2 truncate text-sm font-semibold text-text-hi">
-              {savedWorkflowDefinition.title}
-            </div>
-            <div className="mt-1 text-xs leading-5 text-text-md">
-              {savedWorkflowDefinition.goal || "No goal recorded for this workflow."}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em] text-text-lo">
-              <span className="rounded-full bg-surface-1 px-2.5 py-1">
-                updated {formatTimestamp(savedWorkflowDefinition.updated_at)}
-              </span>
-              <span className="rounded-full bg-surface-1 px-2.5 py-1">
-                {activeWorkflowVersionId ? `version ${activeWorkflowVersionId.slice(0, 8)}` : "draft"}
-              </span>
-            </div>
-          </>
-        ) : (
-          <div className="mt-2 text-sm leading-6 text-text-md">
-            Save a draft or open one from Workflows to make this Studio session shareable.
+      {savedWorkflowDefinition ? (
+        <div className="mt-2 rounded-xl border border-subtle bg-surface-1 px-2.5 py-2">
+          <div className="truncate text-xs font-semibold text-text-hi">{savedWorkflowDefinition.title}</div>
+          <div className="mt-0.5 flex flex-wrap gap-1.5 text-[9px] uppercase tracking-[0.12em] text-text-lo">
+            <span>{formatTimestamp(savedWorkflowDefinition.updated_at)}</span>
+            <span>{activeWorkflowVersionId ? `v${activeWorkflowVersionId.slice(0, 8)}` : "draft"}</span>
+            <span>{workflowVersions.length} versions · {workflowRuns.length} runs</span>
           </div>
-        )}
-      </div>
-
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
-          Recent Drafts
         </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.12em]">
+          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-text-md">{workflowDefinitions.length} drafts</span>
+          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-text-md">{workflowVersions.length} versions</span>
+          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-text-md">{workflowRuns.length} runs</span>
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center justify-end">
         <Link
           href="/workflows"
-          className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+          className="rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-hi transition hover:border-sky-300/35"
         >
-          Open Workflows
+          Open Workflows →
         </Link>
       </div>
 
-      <div className="mt-3 flex-1 space-y-2 overflow-auto pr-1">
+      <div className="mt-2 flex-1 space-y-1.5 overflow-auto">
         {workflowDefinitionsLoading ? (
-          <div className="rounded-2xl border border-subtle bg-surface-1 px-3 py-3 text-sm text-text-md">
-            Loading saved workflows...
+          <div className="rounded-xl border border-subtle bg-surface-1 px-2.5 py-2 text-xs text-text-md">
+            Loading…
           </div>
         ) : workflowDefinitionsError ? (
-          <div className="rounded-2xl border border-rose-300/24 bg-accent-rose px-3 py-3 text-sm text-text-rose-token">
+          <div className="rounded-xl border border-rose-300/24 bg-accent-rose px-2.5 py-2 text-xs text-text-rose-token">
             {workflowDefinitionsError}
           </div>
         ) : workflowDefinitions.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-subtle bg-surface-1 px-3 py-4 text-sm text-text-md">
-            No saved workflows yet. Save this draft, then use Workflows for deeper history and
-            management.
+          <div className="rounded-xl border border-dashed border-subtle bg-surface-1 px-2.5 py-3 text-xs text-text-md">
+            No saved workflows yet.
           </div>
         ) : (
           workflowDefinitions.slice(0, 4).map((definition) => {
@@ -5712,20 +5695,9 @@ export default function WorkflowStudio() {
 
   const revealStudioPanel = (
     panelId: FloatingStudioPanelId,
-    dockZone?: Exclude<StudioDockZone, "overlay" | "none">
+    _dockZone?: Exclude<StudioDockZone, "overlay" | "none">
   ) => {
-    if (dockZone) {
-      setFloatingStudioPanelDocked(panelId, dockZone);
-    } else {
-      setFloatingStudioPanelMinimized(panelId, false);
-    }
-    if (dockZone === "bottom" || floatingStudioPanels[panelId].dockZone === "bottom") {
-      setStudioBottomTray((prev) => ({
-        ...prev,
-        activePanelId: panelId,
-        collapsed: false,
-      }));
-    }
+    setDrawerPanelId((prev) => (prev === panelId ? null : panelId));
   };
 
   const setFloatingStudioPanelMinimized = (
@@ -5916,7 +5888,34 @@ export default function WorkflowStudio() {
         return;
       }
       const normalizedKey = event.key.toLowerCase();
-      if (normalizedKey === "f") {
+      if (normalizedKey === "delete" || event.key === "Backspace") {
+        if (selectedDagNodeId) {
+          event.preventDefault();
+          removeVisualChainNode(selectedDagNodeId);
+        }
+        return;
+      }
+      if (normalizedKey === "d" && !event.shiftKey) {
+        event.preventDefault();
+        duplicateSelectedNode();
+        return;
+      }
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        zoomInDagCanvas();
+        return;
+      }
+      if (event.key === "-") {
+        event.preventDefault();
+        zoomOutDagCanvas();
+        return;
+      }
+      if (normalizedKey === "f" && !event.shiftKey) {
+        event.preventDefault();
+        fitNodesToView();
+        return;
+      }
+      if (normalizedKey === "f" && event.shiftKey) {
         event.preventDefault();
         toggleFocusGraphMode();
         return;
@@ -5974,6 +5973,11 @@ export default function WorkflowStudio() {
     studioWorkspaceMode,
     studioWorkspaceStageSize.height,
     studioWorkspaceStageSize.width,
+    removeVisualChainNode,
+    duplicateSelectedNode,
+    fitNodesToView,
+    zoomInDagCanvas,
+    zoomOutDagCanvas,
   ]);
 
   const beginFloatingStudioPanelDrag = (
@@ -6039,27 +6043,27 @@ export default function WorkflowStudio() {
       <div
         id={options.panelDomId}
         key={`docked-studio-panel-${panelId}`}
-        className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl"
+        className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/12 bg-gradient-panel-deep shadow-[0_8px_20px_rgba(15,23,42,0.2)] backdrop-blur-xl"
       >
-        <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.46)] px-3 py-2">
+        <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.6)] px-3 py-2">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 aria-label={isMinimized ? `Open ${title}` : `Minimize ${title}`}
                 title={isMinimized ? "Open panel" : "Minimize panel"}
-                className="h-3 w-3 rounded-full bg-[#f6cf58] shadow-[inset_0_1px_0_rgba(255,255,255,0.34),0_0_0_1px_rgba(125,77,0,0.2)] transition hover:brightness-105"
+                className="h-2.5 w-2.5 rounded-full bg-[#f6cf58] shadow-[inset_0_1px_0_rgba(255,255,255,0.34),0_0_0_1px_rgba(125,77,0,0.2)] transition hover:brightness-105"
                 onClick={() => toggleFloatingStudioPanelMinimized(panelId)}
               />
               <button
                 type="button"
                 aria-label={`Restore ${title}`}
                 title="Reset panel"
-                className="h-3 w-3 rounded-full bg-[#50d16e] shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_0_0_1px_rgba(6,95,70,0.2)] transition hover:brightness-105"
+                className="h-2.5 w-2.5 rounded-full bg-[#50d16e] shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_0_0_1px_rgba(6,95,70,0.2)] transition hover:brightness-105"
                 onClick={() => restoreFloatingStudioPanel(panelId)}
               />
             </div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-hi">
               {title}
             </div>
           </div>
@@ -6107,7 +6111,7 @@ export default function WorkflowStudio() {
           floatingStudioPanelRefs.current[panelId] = node;
         }}
         key={`floating-studio-panel-${panelId}`}
-        className="studio-contrast-surface pointer-events-auto absolute flex flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-mid shadow-[0_28px_64px_rgba(15,23,42,0.34)] backdrop-blur-xl"
+        className="studio-contrast-surface pointer-events-auto absolute flex flex-col overflow-hidden rounded-[20px] border border-white/12 bg-gradient-panel-mid shadow-[0_12px_32px_rgba(15,23,42,0.28)] backdrop-blur-xl"
         style={{
           left: layout.x,
           top: layout.y,
@@ -6118,7 +6122,7 @@ export default function WorkflowStudio() {
         onMouseDown={() => bringFloatingStudioPanelToFront(panelId)}
       >
         <div
-          className="flex cursor-grab items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.38)] px-3 py-2 active:cursor-grabbing"
+          className="flex cursor-grab items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.55)] px-3 py-2 active:cursor-grabbing"
           onMouseDown={(event) => beginFloatingStudioPanelDrag(panelId, event)}
         >
           <div className="flex items-center gap-3">
@@ -6144,14 +6148,14 @@ export default function WorkflowStudio() {
                 onClick={() => restoreFloatingStudioPanel(panelId)}
               />
             </div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-hi">
               {title}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-white/[0.1]"
+              className="rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:bg-white/[0.12]"
               onMouseDown={(event) => {
                 event.stopPropagation();
               }}
@@ -6576,15 +6580,15 @@ export default function WorkflowStudio() {
         aria-hidden={activeStudioSurface !== "workflow"}
       >
               <div className="relative">
-                <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
                       Workflow Studio
                     </div>
-                    <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
+                    <h2 className="mt-1 text-xl font-semibold tracking-tight text-text-hi">
                       Process Flow Designer
                     </h2>
-                    <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
+                    <p className="mt-0.5 text-xs text-text-md">
                       Map business logic into clear steps, decisions, tools, and AI actions before
                       running the automation.
                     </p>
@@ -6635,27 +6639,87 @@ export default function WorkflowStudio() {
                 <div
                   ref={studioWorkspaceStageRef}
                   id="studio-graph-section"
-                  className={`studio-contrast-surface relative mt-4 h-[calc(100vh-184px)] min-h-[980px] overflow-hidden rounded-[30px] bg-gradient-panel-mid shadow-[0_22px_56px_rgba(15,23,42,0.16)] ${
+                  className={`studio-contrast-surface relative mt-3 h-[calc(100vh-172px)] min-h-[980px] overflow-hidden rounded-[24px] shadow-[0_12px_32px_rgba(15,23,42,0.14)] ${
                     studioWorkspaceMode === "focus_graph"
                       ? "ring-2 ring-sky-300/25"
                       : "ring-1 ring-white/10"
                   }`}
+                  style={{
+                    background:
+                      studioWorkspaceMode === "focus_graph"
+                        ? "radial-gradient(ellipse at 60% 20%, rgba(56,189,248,0.06) 0%, transparent 60%), radial-gradient(ellipse at 20% 80%, rgba(99,102,241,0.05) 0%, transparent 55%), var(--gradient-panel-mid, #0d1524)"
+                        : "radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, radial-gradient(ellipse at 70% 10%, rgba(56,189,248,0.05) 0%, transparent 50%), var(--gradient-panel-mid, #0d1524)",
+                  }}
                 >
-                  <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-hi">
-                    {studioWorkspaceMode === "focus_graph"
-                      ? "Focus Graph active. Press F to restore your workspace."
-                      : "Minimized panels collapse into the stage shelf so the graph stays clear"}
+                  {/* Empty state — shown when canvas has no nodes */}
+                  {visualChainNodes.length === 0 ? (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                      <div className="pointer-events-auto flex flex-col items-center gap-6 rounded-[28px] border border-white/10 bg-[rgba(9,16,27,0.72)] px-10 py-8 text-center backdrop-blur-xl shadow-[0_24px_60px_rgba(9,16,27,0.5)]">
+                        <div>
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+                            Process Flow Designer
+                          </div>
+                          <h3 className="mt-2 text-xl font-semibold tracking-tight text-text-hi">
+                            Design your workflow
+                          </h3>
+                          <p className="mt-1 max-w-xs text-xs text-text-md">
+                            Add your first step from the catalog, or start from a template below.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-2 rounded-xl border border-sky-300/35 bg-accent-sky px-5 py-2.5 text-sm font-semibold text-text-hi transition hover:border-sky-300/55"
+                          onClick={() => addCapabilityNodeToStudio("codegen.autonomous")}
+                        >
+                          + Add first step
+                        </button>
+                        <div className="w-full border-t border-white/8 pt-4">
+                          <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-lo">
+                            Start from a template
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { id: "single" as const, label: "Single Step", desc: "One capability" },
+                              { id: "sequential" as const, label: "Sequential", desc: "A → B → C chain" },
+                              { id: "agent" as const, label: "Agent Loop", desc: "Agentic run" },
+                            ].map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                className="rounded-[16px] border border-white/10 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/30 hover:bg-white/8"
+                                onClick={() => addTemplateToStudio(t.id)}
+                              >
+                                <div className="text-xs font-semibold text-text-hi">{t.label}</div>
+                                <div className="mt-0.5 text-[11px] text-text-lo">{t.desc}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-text-lo">
+                          Keyboard: <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">Del</kbd> remove &nbsp;
+                          <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">D</kbd> duplicate &nbsp;
+                          <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">F</kbd> fit &nbsp;
+                          <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">+/-</kbd> zoom
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Stage status pill */}
+                  <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2">
+                    <div className={`flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] backdrop-blur-sm ${
+                      studioWorkspaceMode === "focus_graph"
+                        ? "border-sky-300/35 bg-accent-sky/80 text-text-sky-token"
+                        : "border-white/10 bg-black/30 text-text-lo"
+                    }`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${studioWorkspaceMode === "focus_graph" ? "bg-sky-400" : "bg-white/20"}`} />
+                      {studioWorkspaceMode === "focus_graph"
+                        ? "Focus mode — press F to restore"
+                        : "Process Flow Designer"}
+                    </div>
                   </div>
 
-                  <div
-                    className="absolute"
-                    style={{
-                      left: workspacePanelRects.graph.x,
-                      top: workspacePanelRects.graph.y,
-                      width: workspacePanelRects.graph.width,
-                      height: workspacePanelRects.graph.height,
-                    }}
-                  >
+                  <div className="absolute inset-0">
                     <ComposerDagCanvas
                       visualChainNodes={visualChainNodes}
                       dagEdgeDraftSourceNodeId={dagEdgeDraftSourceNodeId}
@@ -6693,6 +6757,8 @@ export default function WorkflowStudio() {
                       dagCanvasZoom={dagCanvasZoom}
                       showToolbar
                       showBlueprintPreview
+                      onFitToScreen={fitNodesToView}
+                      onDropCapability={handleDropCapability}
                       onZoomIn={zoomInDagCanvas}
                       onZoomOut={zoomOutDagCanvas}
                       zoomInDisabled={dagCanvasZoom >= DAG_CANVAS_ZOOM_MAX}
@@ -6705,194 +6771,100 @@ export default function WorkflowStudio() {
                     />
                   </div>
 
-                  {leftDockRect && dockedLeftPanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute flex flex-col gap-3 overflow-y-auto pr-1"
-                      style={{
-                        left: leftDockRect.x,
-                        top: leftDockRect.y,
-                        width: leftDockRect.width + 6,
-                        height: leftDockRect.height,
-                      }}
-                    >
-                      <div
-                        className="absolute inset-y-0 right-0 z-20 w-2 cursor-ew-resize transition hover:bg-surface-1"
-                        onMouseDown={(event) =>
-                          beginFloatingStudioPanelResize(dockedLeftPanelIds[0], "e", event)
-                        }
-                        title="Resize left dock"
-                      />
-                      {dockedLeftPanelIds.map((panelId) => (
-                        <div
-                          key={`docked-left-panel-${panelId}`}
-                          style={{
-                            height: getFloatingStudioPanelActiveHeight(floatingStudioPanels[panelId]),
-                            minHeight: FLOATING_STUDIO_PANEL_HEADER_HEIGHT,
-                          }}
+                  {/* ── Panel icon strip (left side of stage) ── */}
+                  <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-col gap-1.5">
+                    {(["palette", "compile", "setup", "interface", "library"] as FloatingStudioPanelId[]).map((panelId) => {
+                      const isActive = drawerPanelId === panelId;
+                      const badge = getWorkspacePanelBadge(panelId);
+                      const iconKind: Record<string, "palette" | "inspect" | "zap" | "library" | "activity" | "menu"> = {
+                        palette: "palette",
+                        compile: "activity",
+                        setup: "menu",
+                        interface: "zap",
+                        library: "library",
+                      };
+                      return (
+                        <button
+                          key={panelId}
+                          type="button"
+                          title={getWorkspacePanelTitle(panelId)}
+                          aria-label={getWorkspacePanelTitle(panelId)}
+                          className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition ${
+                            isActive
+                              ? "border-sky-300/40 bg-accent-sky text-text-sky-token shadow-[0_0_0_2px_rgba(56,189,248,0.18)]"
+                              : "border-white/12 bg-[rgba(9,16,27,0.65)] text-text-md hover:border-white/20 hover:bg-[rgba(9,16,27,0.85)] hover:text-text-hi"
+                          } backdrop-blur-sm`}
+                          onClick={() => setDrawerPanelId((prev) => (prev === panelId ? null : panelId))}
                         >
-                          {renderWorkspacePanel(panelId)}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {rightDockRect && dockedRightPanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute flex flex-col gap-3 overflow-y-auto pr-1"
-                      style={{
-                        left: rightDockRect.x,
-                        top: rightDockRect.y,
-                        width: rightDockRect.width + 6,
-                        height: rightDockRect.height,
-                      }}
-                    >
-                      <div
-                        className="absolute inset-y-0 left-0 z-20 w-2 cursor-ew-resize transition hover:bg-surface-1"
-                        onMouseDown={(event) =>
-                          beginFloatingStudioPanelResize(dockedRightPanelIds[0], "w", event)
-                        }
-                        title="Resize right dock"
-                      />
-                      {dockedRightPanelIds.map((panelId) => (
-                        <div
-                          key={`docked-right-panel-${panelId}`}
-                          style={{
-                            height: getFloatingStudioPanelActiveHeight(floatingStudioPanels[panelId]),
-                            minHeight: FLOATING_STUDIO_PANEL_HEADER_HEIGHT,
-                          }}
-                        >
-                          {renderWorkspacePanel(panelId)}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {bottomDockRect && dockedBottomPanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute"
-                      style={{
-                        left: bottomDockRect.x,
-                        top: bottomDockRect.y,
-                        width: bottomDockRect.width,
-                        height: bottomDockRect.height,
-                      }}
-                    >
-                      <div className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl">
-                        <div
-                          className="h-2 cursor-ns-resize transition hover:bg-surface-1"
-                          onMouseDown={beginStudioBottomTrayResize}
-                          title="Resize bottom tray"
-                        />
-                        <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.46)] px-3 py-2">
-                          <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
-                            {dockedBottomPanelIds.map((panelId) => {
-                              const badge = getWorkspacePanelBadge(panelId);
-                              const isActive = activeBottomTrayPanelId === panelId;
-                              return (
-                                <button
-                                  key={`studio-bottom-tray-tab-${panelId}`}
-                                  type="button"
-                                  className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
-                                    isActive
-                                      ? "border-sky-300/35 bg-accent-sky text-text-hi"
-                                      : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                                  }`}
-                                  onClick={() =>
-                                    setStudioBottomTray((prev) => ({
-                                      ...prev,
-                                      activePanelId: panelId,
-                                      collapsed: false,
-                                    }))
-                                  }
-                                >
-                                  <span>{getWorkspacePanelTitle(panelId)}</span>
-                                  {badge ? (
-                                    <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.18em] text-text-md">
-                                      {badge}
-                                    </span>
-                                  ) : null}
-                                </button>
-                              );
-                            })}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-white/[0.1]"
-                              onClick={toggleStudioBottomTrayCollapsed}
-                            >
-                              {studioBottomTray.collapsed ? "Expand" : "Collapse"}
-                            </button>
-                          </div>
-                        </div>
-                        {!studioBottomTray.collapsed && activeBottomTrayDefinition ? (
-                          <div
-                            id={activeBottomTrayDefinition.panelDomId}
-                            className={`min-h-0 flex-1 overflow-auto ${
-                              activeBottomTrayDefinition.bodyClassName || ""
-                            }`.trim()}
-                          >
-                            {activeBottomTrayDefinition.content}
-                          </div>
-                        ) : (
-                          <div className="flex h-full items-center justify-between px-4 py-3 text-xs uppercase tracking-[0.18em] text-text-md">
-                            <span>
-                              {activeBottomTrayPanelId
-                                ? `${getWorkspacePanelTitle(activeBottomTrayPanelId)} ready`
-                                : "Bottom tray ready"}
+                          <StudioWorkbenchIcon kind={iconKind[panelId] ?? "menu"} className="h-4 w-4" />
+                          {badge ? (
+                            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/20 bg-sky-500 text-[8px] font-bold text-white">
+                              {badge}
                             </span>
-                            <span>Shift+3</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                  {minimizedShelfRect && minimizedWorkspacePanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute"
-                      style={{
-                        left: minimizedShelfRect.x,
-                        top: minimizedShelfRect.y,
-                        width: minimizedShelfRect.width,
-                        height: minimizedShelfRect.height,
-                      }}
-                    >
-                      <div className="flex h-full items-center gap-3 overflow-x-auto rounded-[22px] border border-subtle bg-[rgba(9,16,27,0.52)] px-3 shadow-[0_18px_40px_rgba(15,23,42,0.2)] backdrop-blur-xl">
-                        <div className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-hi">
-                          Minimized
-                        </div>
-                        <div className="flex min-w-0 items-center gap-2">
-                          {minimizedWorkspacePanelIds.map((panelId) => {
-                            const title = getWorkspacePanelTitle(panelId);
-                            const badge = getWorkspacePanelBadge(panelId);
-                            return (
-                              <button
-                                key={`minimized-panel-${panelId}`}
-                                type="button"
-                                className="flex shrink-0 items-center gap-2 rounded-full border border-subtle bg-surface-1 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/30 hover:bg-surface-2"
-                                aria-label={`Restore ${title}`}
-                                title={`Restore ${title}`}
-                                onClick={() => setFloatingStudioPanelMinimized(panelId, false)}
-                              >
-                                <span>{title}</span>
-                                {badge ? (
-                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.18em] text-text-md">
-                                    {badge}
+                  {/* ── Right-side overlay drawer ── */}
+                  {(() => {
+                    const definition = drawerPanelId ? getWorkspacePanelDefinition(drawerPanelId) : null;
+                    const isOpen = Boolean(drawerPanelId && definition);
+                    return (
+                      <div
+                        className={`pointer-events-auto absolute right-0 top-0 z-30 flex h-full flex-col overflow-hidden rounded-r-[24px] border-l border-white/10 bg-[rgba(9,14,23,0.88)] shadow-[-12px_0_40px_rgba(9,14,23,0.4)] backdrop-blur-xl transition-transform duration-200 ${
+                          isOpen ? "translate-x-0" : "translate-x-full"
+                        }`}
+                        style={{ width: drawerWidth }}
+                      >
+                        {/* Left resize handle */}
+                        <div
+                          className="absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize transition hover:bg-sky-300/30 active:bg-sky-300/50"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            drawerResizeRef.current = { startX: event.clientX, startWidth: drawerWidth };
+                          }}
+                          title="Drag to resize"
+                        />
+                        {definition ? (
+                          <>
+                            {/* Drawer header */}
+                            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.6)] px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-hi">
+                                  {definition.title}
+                                </div>
+                                {definition.badge ? (
+                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.14em] text-text-md">
+                                    {definition.badge}
                                   </span>
                                 ) : null}
-                                <span className="text-[9px] tracking-[0.18em] text-text-sky-token">
-                                  Restore
-                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-text-lo transition hover:bg-white/10 hover:text-text-hi"
+                                onClick={() => {
+                                  setDrawerPanelId(null);
+                                  if (drawerPanelId === "inspector") setSelectedDagNodeId(null);
+                                }}
+                                aria-label="Close panel"
+                              >
+                                ✕
                               </button>
-                            );
-                          })}
-                        </div>
+                            </div>
+                            {/* Drawer content */}
+                            <div
+                              id={definition.panelDomId}
+                              className={`min-h-0 flex-1 overflow-auto ${definition.bodyClassName || ""}`.trim()}
+                            >
+                              {definition.content}
+                            </div>
+                          </>
+                        ) : null}
                       </div>
-                    </div>
-                  ) : null}
-
-                  {floatingWorkspacePanelIds.map((panelId) => renderWorkspacePanel(panelId))}
+                    );
+                  })()}
                 </div>
               </div>
       </section>
@@ -6910,6 +6882,85 @@ export default function WorkflowStudio() {
           <option key={`studio-capability-id-option-${item.id}`} value={item.id} />
         ))}
       </datalist>
+
+      {/* ── Save workflow dialog ── */}
+      {saveDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <button
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setSaveDialogOpen(false)}
+            aria-label="Cancel"
+          />
+          <div className="relative z-10 w-full max-w-md rounded-[24px] border border-white/12 bg-[rgba(9,14,23,0.95)] p-6 shadow-[0_32px_80px_rgba(9,14,23,0.7)] backdrop-blur-xl">
+            <div className="mb-5">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+                Workflow Studio
+              </div>
+              <h2 className="mt-1 text-lg font-semibold tracking-tight text-text-hi">
+                Save workflow
+              </h2>
+              <p className="mt-0.5 text-xs text-text-md">
+                Give this workflow a name before saving. You can rename it later from the Workflows page.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                  Name <span className="text-rose-400">*</span>
+                </div>
+                <input
+                  autoFocus
+                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10"
+                  placeholder="e.g. Document generation pipeline"
+                  value={saveDialogTitle}
+                  onChange={(e) => setSaveDialogTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && saveDialogTitle.trim()) {
+                      setSaveDialogOpen(false);
+                      void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+                    }
+                    if (e.key === "Escape") setSaveDialogOpen(false);
+                  }}
+                />
+              </label>
+              <label className="block">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                  Goal <span className="text-text-lo">(optional)</span>
+                </div>
+                <textarea
+                  rows={2}
+                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10 resize-none"
+                  placeholder="What does this workflow accomplish?"
+                  value={saveDialogGoal}
+                  onChange={(e) => setSaveDialogGoal(e.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-md transition hover:text-text-hi"
+                onClick={() => setSaveDialogOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-xl border border-sky-300/35 bg-accent-sky px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/55 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!saveDialogTitle.trim()}
+                onClick={() => {
+                  setSaveDialogOpen(false);
+                  void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+                }}
+              >
+                Save workflow
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }

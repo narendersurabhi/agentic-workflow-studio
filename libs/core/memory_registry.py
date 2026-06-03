@@ -49,6 +49,45 @@ DEFAULT_MEMORY_SPECS: List[MemorySpec] = [
         write_roles=["worker", "api"],
     ),
     MemorySpec(
+        name="run_blackboard",
+        description="Shared, structured notes and facts visible to agents in one run.",
+        scope=MemoryScope.session,
+        schema_def={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "payload": {"type": "object"},
+                "source_agent_id": {"type": "string"},
+                "step_id": {"type": "string"},
+                "task_id": {"type": "string"},
+                "visibility": {"type": "string"},
+                "confidence": {"type": "number"},
+            },
+            "required": ["payload"],
+        },
+        ttl_seconds=7 * 24 * 60 * 60,
+        read_roles=["planner", "worker", "api"],
+        write_roles=["planner", "worker", "api"],
+    ),
+    MemorySpec(
+        name="run_task_snapshots",
+        description="Condensed task result summaries for planner, debugger, and agent handoffs.",
+        scope=MemoryScope.session,
+        schema_def={"type": "object"},
+        ttl_seconds=7 * 24 * 60 * 60,
+        read_roles=["planner", "worker", "api"],
+        write_roles=["worker", "api"],
+    ),
+    MemorySpec(
+        name="run_agent_registry",
+        description="Per-run agent status and coordination metadata.",
+        scope=MemoryScope.session,
+        schema_def={"type": "object"},
+        ttl_seconds=7 * 24 * 60 * 60,
+        read_roles=["planner", "worker", "api"],
+        write_roles=["planner", "worker", "api"],
+    ),
+    MemorySpec(
         name="interaction_summaries",
         description=(
             "Per-job interaction summaries captured from user sessions. "

@@ -51,10 +51,10 @@ type PaletteSection =
     };
 
 const inputClassName =
-  "w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-md focus:border-sky-300/35 focus:bg-surface-1";
+  "w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/35 focus:bg-surface-1";
 
 const panelClassName =
-  "rounded-[16px] border border-subtle bg-gradient-panel p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
+  "rounded-[12px] border border-subtle bg-gradient-panel p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 
 const formatPaletteLabel = (value: string) => {
   const acronyms = new Set(["ai", "api", "csv", "html", "json", "llm", "pdf", "sql", "ui", "url", "xml"]);
@@ -197,31 +197,17 @@ export default function StudioCapabilityPalette({
   };
 
   return (
-    <aside className="flex h-full min-h-0 flex-col px-3 py-3 text-text-hi">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[12px] font-semibold uppercase tracking-[0.16em] text-text-md">
-            Palette Scope
-          </div>
-          <div className="mt-1 text-[15px] font-semibold text-text-hi">
-            {selectedGroup === "all" ? "All sections" : formatPaletteLabel(selectedGroup)}
-          </div>
-        </div>
-        <div className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
-          {visibleNodeCount} nodes
-        </div>
-      </div>
-
-      <div className="mt-3 grid gap-2.5">
+    <aside className="flex h-full min-h-0 flex-col px-2.5 py-2.5 text-text-hi">
+      <div className="grid gap-1.5">
         <input
           className={inputClassName}
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder="Search nodes"
         />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <select
-            className={`${inputClassName} min-w-0 flex-1 pr-8`}
+            className={`${inputClassName} min-w-0 flex-1`}
             value={selectedGroup}
             onChange={(event) => onGroupChange(event.target.value)}
           >
@@ -235,11 +221,8 @@ export default function StudioCapabilityPalette({
           {hasFilters ? (
             <button
               type="button"
-              className="shrink-0 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-surface-1"
-              onClick={() => {
-                onQueryChange("");
-                onGroupChange("all");
-              }}
+              className="shrink-0 rounded-lg border border-subtle bg-surface-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-md transition hover:text-text-hi"
+              onClick={() => { onQueryChange(""); onGroupChange("all"); }}
             >
               Clear
             </button>
@@ -248,18 +231,18 @@ export default function StudioCapabilityPalette({
       </div>
 
       {loading ? (
-        <div className="mt-3 rounded-[14px] border border-sky-300/15 bg-accent-sky px-3 py-2 text-sm text-text-sky-token">
-          Loading capability catalog...
+        <div className="mt-2 rounded-[10px] border border-sky-300/15 bg-accent-sky px-2.5 py-1.5 text-xs text-text-sky-token">
+          Loading...
         </div>
       ) : null}
       {error ? (
-        <div className="mt-3 rounded-[14px] border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
+        <div className="mt-2 rounded-[10px] border border-rose-300/20 bg-accent-rose px-2.5 py-1.5 text-xs text-text-rose-token">
           {error}
         </div>
       ) : null}
 
-      <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
-        <div className="space-y-3 pb-1">
+      <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-0.5">
+        <div className="space-y-1.5 pb-1">
           {sections.map((section) => {
             const isCollapsed = collapsedSections.has(section.id);
             const isControlSection = section.kind === "control";
@@ -282,7 +265,7 @@ export default function StudioCapabilityPalette({
                 >
                   <div>
                     <div
-                      className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                      className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${
                         isControlSection
                           ? "text-text-amber-token"
                           : isAgentSection
@@ -294,17 +277,17 @@ export default function StudioCapabilityPalette({
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                    <span className="rounded-full border border-subtle bg-surface-1 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-text-md">
                       {section.items.length}
                     </span>
-                    <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-subtle bg-surface-1 text-[12px] text-text-md">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-md border border-subtle bg-surface-1 text-[10px] text-text-md">
                       {isCollapsed ? "+" : "−"}
                     </span>
                   </div>
                 </button>
 
                 {isCollapsed ? null : (
-                  <div className="mt-3 space-y-2.5">
+                  <div className="mt-2 space-y-1.5">
                     {section.kind === "agent"
                       ? section.items.map((item) => {
                           const visual = resolveWorkflowNodeVisual({ nodeKind: "agent" });
@@ -312,23 +295,28 @@ export default function StudioCapabilityPalette({
                             <button
                               key={`studio-agent-${item.id}`}
                               type="button"
-                              className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1"
+                              draggable
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData("text/plain", JSON.stringify({ type: "agent", id: item.id }));
+                                e.dataTransfer.effectAllowed = "copy";
+                              }}
+                              className="group flex w-full cursor-grab items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1 active:cursor-grabbing"
                               style={{
                                 borderColor: hexToRgba(visual.stroke, 0.28),
                                 background: `linear-gradient(180deg, ${hexToRgba(visual.fill, 0.18)} 0%, rgba(26,35,46,0.58) 100%)`,
                               }}
                               onClick={() => onAddAgent?.(item.id, item)}
                             >
-                              <WorkflowNodePlateIcon visual={visual} size={36} />
+                              <WorkflowNodePlateIcon visual={visual} size={28} />
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-[13px] font-semibold text-text-hi">
+                                <div className="truncate text-xs font-semibold text-text-hi">
                                   {item.name}
                                 </div>
-                                <div className="mt-0.5 truncate text-[11px] text-text-md">
+                                <div className="truncate text-[10px] text-text-lo">
                                   {item.description || item.id}
                                 </div>
                               </div>
-                              <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-violet-300/30 group-hover:bg-violet-900/20">
+                              <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-violet-300/30 group-hover:bg-violet-900/20">
                                 +
                               </span>
                             </button>
@@ -345,7 +333,12 @@ export default function StudioCapabilityPalette({
                               <button
                                 key={`studio-control-${item.kind}`}
                                 type="button"
-                                className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1"
+                                draggable
+                                onDragStart={(e) => {
+                                  e.dataTransfer.setData("text/plain", JSON.stringify({ type: "control", id: item.kind }));
+                                  e.dataTransfer.effectAllowed = "copy";
+                                }}
+                                className="group flex w-full cursor-grab items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1 active:cursor-grabbing"
                                 style={{
                                   borderColor: hexToRgba(visual.stroke, 0.28),
                                   background: `linear-gradient(180deg, ${hexToRgba(
@@ -355,16 +348,16 @@ export default function StudioCapabilityPalette({
                                 }}
                                 onClick={() => onAddControl(item.kind)}
                               >
-                                <WorkflowNodePlateIcon visual={visual} size={36} />
+                                <WorkflowNodePlateIcon visual={visual} size={28} />
                                 <div className="min-w-0 flex-1">
-                                  <div className="truncate text-[13px] font-semibold text-text-hi">
+                                  <div className="truncate text-xs font-semibold text-text-hi">
                                     {item.title}
                                   </div>
-                                  <div className="mt-0.5 truncate text-[11px] text-text-md">
+                                  <div className="truncate text-[10px] text-text-lo">
                                     {item.description}
                                   </div>
                                 </div>
-                                <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
+                                <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
                                   +
                                 </span>
                               </button>
@@ -380,7 +373,13 @@ export default function StudioCapabilityPalette({
                               <button
                                 key={`studio-capability-${item.id}`}
                                 type="button"
-                                className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1 disabled:cursor-not-allowed"
+                                draggable={item.enabled}
+                                onDragStart={(e) => {
+                                  if (!item.enabled) { e.preventDefault(); return; }
+                                  e.dataTransfer.setData("text/plain", JSON.stringify({ type: "capability", id: item.id }));
+                                  e.dataTransfer.effectAllowed = "copy";
+                                }}
+                                className="group flex w-full cursor-grab items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1 disabled:cursor-not-allowed active:cursor-grabbing"
                                 style={{
                                   borderColor: hexToRgba(visual.stroke, item.enabled ? 0.26 : 0.14),
                                   background: item.enabled
@@ -394,12 +393,12 @@ export default function StudioCapabilityPalette({
                                 onClick={() => onAddCapability(item.id)}
                                 disabled={!item.enabled}
                               >
-                                <WorkflowNodePlateIcon visual={visual} size={36} />
+                                <WorkflowNodePlateIcon visual={visual} size={28} />
                                 <div className="min-w-0 flex-1">
-                                  <div className="truncate text-[13px] font-semibold text-text-hi">
+                                  <div className="truncate text-xs font-semibold text-text-hi">
                                     {taskNameFromCapability(item.id)}
                                   </div>
-                                  <div className="mt-0.5 truncate text-[11px] text-text-md">
+                                  <div className="truncate text-[10px] text-text-lo">
                                     {item.id}
                                   </div>
                                 </div>
@@ -409,7 +408,7 @@ export default function StudioCapabilityPalette({
                                       {requiredInputs.length} req
                                     </span>
                                   ) : null}
-                                  <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
+                                  <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
                                     +
                                   </span>
                                 </div>

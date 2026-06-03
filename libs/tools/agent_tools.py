@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,6 +15,20 @@ LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_MAX_STEPS = 12
 _MAX_RECURSION_DEPTH = 4
+_AGENT_RUN_CAPABILITY_ID = "agent.run"
+
+
+def _accumulate_spawned_agents(
+    spawned: list[dict[str, Any]],
+    cap_id: str,
+    result: Any,
+) -> None:
+    """Bubble up the agent descriptors reported by a recursive agent.run call."""
+    if cap_id != _AGENT_RUN_CAPABILITY_ID or not isinstance(result, dict):
+        return
+    child_agents = result.get("agents")
+    if isinstance(child_agents, list):
+        spawned.extend(agent for agent in child_agents if isinstance(agent, dict))
 _DEFAULT_INSTRUCTIONS = (
     "You are a helpful agent. Think step by step and use your available tools "
     "to achieve the goal. When you have achieved the goal, respond with your final answer."
@@ -96,6 +112,7 @@ def _agent_run_react_text(
     steps_taken = 0
     final_text = ""
     tool_calls_made: list[dict[str, Any]] = []
+    spawned_agents: list[dict[str, Any]] = []
 
     while steps_taken <= max_steps:
         full_prompt = "\n\n".join(conversation)
@@ -153,6 +170,7 @@ def _agent_run_react_text(
                     "capability_id": cap_id,
                     "result_summary": observation[:300],
                 })
+                _accumulate_spawned_agents(spawned_agents, cap_id, result)
             except Exception as exc:  # noqa: BLE001
                 observation = json.dumps({"error": str(exc)})
                 tool_calls_made.append({
@@ -173,6 +191,7 @@ def _agent_run_react_text(
         "result": final_text or "Agent completed without generating a final response.",
         "steps_taken": steps_taken,
         "tool_calls": tool_calls_made,
+        "spawned_agents": spawned_agents,
     }
 
 
@@ -197,6 +216,7 @@ def _agent_run_anthropic(
     steps_taken = 0
     final_text = ""
     tool_calls_made: list[dict[str, Any]] = []
+    spawned_agents: list[dict[str, Any]] = []
 
     while steps_taken <= max_steps:
         kwargs: dict[str, Any] = {
@@ -262,6 +282,7 @@ def _agent_run_anthropic(
                         "capability_id": cap_id,
                         "result_summary": result_text[:300],
                     })
+                    _accumulate_spawned_agents(spawned_agents, cap_id, result)
                 except Exception as exc:  # noqa: BLE001
                     result_text = json.dumps({"error": str(exc)})
                     tool_calls_made.append({
@@ -284,22 +305,44 @@ def _agent_run_anthropic(
         "result": final_text or "Agent completed without generating a final response.",
         "steps_taken": steps_taken,
         "tool_calls": tool_calls_made,
+        "spawned_agents": spawned_agents,
     }
 
 
 # ─── Schema resolution ────────────────────────────────────────────────────────
+
+def _schema_search_dirs() -> list[Path]:
+    """Candidate locations for capability input-schema JSON files.
+
+    Robust across services: the worker runs from /app/services/worker (CWD has
+    no schemas/), while /app/schemas exists. Resolving relative to this module
+    (libs/tools/agent_tools.py → <root>/schemas) works in both the container
+    (/app/schemas) and local dev (repo-root schemas/), regardless of CWD.
+    """
+    dirs: list[Path] = []
+    env_dir = os.getenv("SCHEMAS_DIR")
+    if env_dir:
+        dirs.append(Path(env_dir))
+    dirs.append(Path(__file__).resolve().parents[2] / "schemas")
+    dirs.append(Path("schemas"))
+    dirs.append(Path("/app/schemas"))
+    return dirs
+
 
 def _resolve_input_schema(spec: Any) -> dict[str, Any]:
     """Load the declared JSON schema for a capability, falling back to an empty object schema."""
     ref = getattr(spec, "input_schema_ref", None)
     if not ref:
         return {"type": "object", "properties": {}}
-    schema_path = Path("schemas") / f"{ref}.json"
-    try:
-        return json.loads(schema_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("agent_run: could not load input schema for %s", spec.capability_id)
-        return {"type": "object", "properties": {}}
+    for base in _schema_search_dirs():
+        schema_path = base / f"{ref}.json"
+        try:
+            if schema_path.is_file():
+                return json.loads(schema_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+    LOGGER.warning("agent_run: could not load input schema for %s", spec.capability_id)
+    return {"type": "object", "properties": {}}
 
 
 # ─── Public entry point ───────────────────────────────────────────────────────
@@ -321,6 +364,12 @@ def agent_run(
       instructions           - system prompt (optional)
       max_steps              - iteration cap (default 12)
       allowed_capability_ids - capability IDs the agent may call
+      agent_id / role        - optional identity for the run agent registry
+
+    The result includes an ``agents`` list: this invocation's descriptor first,
+    followed by every recursively spawned sub-agent (flattened). The API
+    materialises these into the durable run agent registry on completion, so a
+    dynamically spawned agent.run tree becomes visible and attributed.
     """
     if _recursion_depth > _MAX_RECURSION_DEPTH:
         raise ToolExecutionError(
@@ -330,6 +379,11 @@ def agent_run(
     goal = payload.get("goal")
     if not isinstance(goal, str) or not goal.strip():
         raise ToolExecutionError("Missing goal")
+
+    agent_id = str(payload.get("agent_id") or "").strip() or (
+        f"agent-run-d{_recursion_depth}-{uuid.uuid4().hex[:8]}"
+    )
+    role = str(payload.get("role") or "").strip() or "agent"
 
     instructions: str = payload.get("instructions") or _DEFAULT_INSTRUCTIONS
     if not isinstance(instructions, str) or not instructions.strip():
@@ -375,7 +429,18 @@ def agent_run(
 
     # Prefer native tool_use when the Anthropic SDK client is available
     if hasattr(provider, "client"):
-        return _agent_run_anthropic(
+        loop_result = _agent_run_anthropic(
+            goal=goal,
+            instructions=instructions,
+            max_steps=max_steps,
+            tools=tools,
+            cap_id_by_tool_name=cap_id_by_tool_name,
+            provider=provider,
+            invoke_capability=invoke_capability,
+        )
+    else:
+        # Universal text-based ReAct fallback
+        loop_result = _agent_run_react_text(
             goal=goal,
             instructions=instructions,
             max_steps=max_steps,
@@ -385,13 +450,15 @@ def agent_run(
             invoke_capability=invoke_capability,
         )
 
-    # Universal text-based ReAct fallback
-    return _agent_run_react_text(
-        goal=goal,
-        instructions=instructions,
-        max_steps=max_steps,
-        tools=tools,
-        cap_id_by_tool_name=cap_id_by_tool_name,
-        provider=provider,
-        invoke_capability=invoke_capability,
-    )
+    # This invocation's descriptor, followed by any spawned sub-agents (flattened).
+    self_descriptor = {
+        "agent_id": agent_id,
+        "role": role,
+        "depth": _recursion_depth,
+        "status": "done",
+        "steps_taken": loop_result.get("steps_taken", 0),
+        "goal": goal.strip()[:280],
+    }
+    spawned = loop_result.pop("spawned_agents", []) or []
+    loop_result["agents"] = [self_descriptor, *spawned]
+    return loop_result

@@ -489,6 +489,90 @@ class RunEventRecord(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
+class AgentHandoffRecord(Base):
+    __tablename__ = "agent_handoffs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    from_agent_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    to_agent_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    step_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    objective: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    inputs_json: Mapped[Dict[str, Any]] = mapped_column("inputs", JSON, default=dict)
+    outputs_json: Mapped[Dict[str, Any]] = mapped_column("outputs", JSON, default=dict)
+    assumptions_json: Mapped[List[str]] = mapped_column("assumptions", JSON, default=list)
+    risks_json: Mapped[List[str]] = mapped_column("risks", JSON, default=list)
+    artifact_ids_json: Mapped[List[str]] = mapped_column("artifact_ids", JSON, default=list)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class ArtifactRecord(Base):
+    __tablename__ = "artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "step_id",
+            "path",
+            name="uq_artifacts_run_step_path",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    step_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    producing_agent_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    artifact_type: Mapped[str] = mapped_column(String, default="file", index=True)
+    path: Mapped[str] = mapped_column(String, index=True)
+    storage_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    mime_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class AgentRegistryRecord(Base):
+    __tablename__ = "agent_registry"
+    __table_args__ = (
+        UniqueConstraint("run_id", "agent_id", name="uq_agent_registry_run_agent"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    agent_id: Mapped[str] = mapped_column(String, index=True)
+    role: Mapped[str] = mapped_column(String, default="", index=True)
+    status: Mapped[str] = mapped_column(String, default="idle", index=True)
+    assigned_task_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    capabilities_json: Mapped[List[str]] = mapped_column("capabilities", JSON, default=list)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class AgentLockRecord(Base):
+    __tablename__ = "agent_locks"
+    __table_args__ = (
+        UniqueConstraint("run_id", "resource", name="uq_agent_locks_run_resource"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    resource: Mapped[str] = mapped_column(String, index=True)
+    holder_agent_id: Mapped[str] = mapped_column(String, index=True)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
 class EventOutboxRecord(Base):
     __tablename__ = "event_outbox"
 
