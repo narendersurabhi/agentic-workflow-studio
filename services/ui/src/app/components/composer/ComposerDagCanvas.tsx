@@ -124,6 +124,7 @@ type ComposerDagCanvasProps = {
   onRunWorkflow?: () => void;
   runWorkflowPending?: boolean;
   runWorkflowDisabled?: boolean;
+  onFitToScreen?: () => void;
 };
 
 const toolbarButtonClassName =
@@ -475,6 +476,7 @@ export default function ComposerDagCanvas({
   onRunWorkflow,
   runWorkflowPending = false,
   runWorkflowDisabled = false,
+  onFitToScreen,
 }: ComposerDagCanvasProps) {
   const showEmptyBlueprint = showBlueprintPreview && visualChainNodes.length === 0;
   const [dagCanvasPanState, setDagCanvasPanState] = useState<DagCanvasPanState | null>(null);
@@ -644,6 +646,15 @@ export default function ComposerDagCanvas({
             <div className="flex h-8 items-center rounded-lg border border-subtle bg-black/10 px-2.5 text-[10px] font-semibold tracking-[0.06em] text-text-md">
               {Math.round(dagCanvasZoom * 100)}%
             </div>
+            <button
+              className={toolbarButtonClassName}
+              onClick={onFitToScreen}
+              disabled={visualChainNodes.length === 0}
+              type="button"
+              title="Fit all nodes to view (F)"
+            >
+              Fit
+            </button>
             <button
               className={toolbarButtonClassName}
               onClick={autoLayoutDagCanvas}

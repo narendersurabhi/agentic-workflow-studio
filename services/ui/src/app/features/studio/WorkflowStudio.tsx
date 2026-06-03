@@ -2582,6 +2582,33 @@ export default function WorkflowStudio() {
     setStudioNotice("Canvas zoom reset to 100%.");
   };
 
+  const fitNodesToView = () => {
+    if (dagCanvasNodes.length === 0) return;
+    const PADDING = 80;
+    const minX = Math.min(...dagCanvasNodes.map((n) => n.position.x));
+    const minY = Math.min(...dagCanvasNodes.map((n) => n.position.y));
+    const maxX = Math.max(...dagCanvasNodes.map((n) => n.position.x + DAG_CANVAS_NODE_WIDTH));
+    const maxY = Math.max(...dagCanvasNodes.map((n) => n.position.y + DAG_CANVAS_NODE_HEIGHT));
+    const graphWidth = Math.max(maxX - minX, 1);
+    const graphHeight = Math.max(maxY - minY, 1);
+    const stageW = studioWorkspaceStageSize.width || 1440;
+    const stageH = studioWorkspaceStageSize.height || 1040;
+    const nextZoom = clampDagCanvasZoom(
+      Math.min((stageW - PADDING * 2) / graphWidth, (stageH - PADDING * 2) / graphHeight, 1)
+    );
+    setDagCanvasZoom(nextZoom);
+    requestAnimationFrame(() => {
+      const viewport = dagCanvasViewportRef.current;
+      if (!viewport) return;
+      viewport.scrollTo({
+        left: Math.max(0, minX * nextZoom - PADDING),
+        top: Math.max(0, minY * nextZoom - PADDING),
+        behavior: "smooth",
+      });
+    });
+    setStudioNotice("Fitted all nodes to view.");
+  };
+
   const setVisualBindingFromSource = (
     nodeId: string,
     field: string,
@@ -3154,6 +3181,19 @@ export default function WorkflowStudio() {
     }));
   };
 
+  const addTemplateToStudio = (template: "single" | "sequential" | "agent") => {
+    const templates: Record<string, string[]> = {
+      single: ["codegen.autonomous"],
+      sequential: ["llm.generate", "codegen.autonomous", "codegen.publish_pr"],
+      agent: ["agent.run"],
+    };
+    const caps = templates[template] ?? [];
+    // Add sequentially; each call will auto-chain off the previous node
+    caps.forEach((capId) => addCapabilityNodeToStudio(capId));
+    setStudioNotice(`Template "${template}" added.`);
+    setTimeout(() => { autoLayoutDagCanvas(); }, 50);
+  };
+
   const addCapabilityNodeToStudio = (capabilityId: string) => {
     const capability = capabilityById.get(capabilityId);
     const context = contextState.context;
@@ -3414,6 +3454,31 @@ export default function WorkflowStudio() {
           : node
       )
     );
+  };
+
+  const duplicateSelectedNode = () => {
+    if (!selectedDagNodeId) return;
+    const sourceNode = visualChainNodes.find((n) => n.id === selectedDagNodeId);
+    if (!sourceNode) return;
+    const sourcePos = composerNodePositions[selectedDagNodeId];
+    const newId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const newNode = {
+      ...sourceNode,
+      id: newId,
+      taskName: uniqueTaskName(`${sourceNode.taskName} copy`, visualChainNodes),
+      inputBindings: {},
+    };
+    setComposerDraft((prev) => ({
+      ...prev,
+      nodes: [...prev.nodes, newNode],
+      edges: normalizeComposerEdges([...prev.nodes, newNode], prev.edges),
+    }));
+    setComposerNodePositions((prev) => ({
+      ...prev,
+      [newId]: { x: (sourcePos?.x ?? 200) + 80, y: (sourcePos?.y ?? 200) + 48 },
+    }));
+    setSelectedDagNodeId(newId);
+    setStudioNotice("Step duplicated.");
   };
 
   const removeVisualChainNode = (nodeId: string) => {
@@ -5916,7 +5981,34 @@ export default function WorkflowStudio() {
         return;
       }
       const normalizedKey = event.key.toLowerCase();
-      if (normalizedKey === "f") {
+      if (normalizedKey === "delete" || event.key === "Backspace") {
+        if (selectedDagNodeId) {
+          event.preventDefault();
+          removeVisualChainNode(selectedDagNodeId);
+        }
+        return;
+      }
+      if (normalizedKey === "d" && !event.shiftKey) {
+        event.preventDefault();
+        duplicateSelectedNode();
+        return;
+      }
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        zoomInDagCanvas();
+        return;
+      }
+      if (event.key === "-") {
+        event.preventDefault();
+        zoomOutDagCanvas();
+        return;
+      }
+      if (normalizedKey === "f" && !event.shiftKey) {
+        event.preventDefault();
+        fitNodesToView();
+        return;
+      }
+      if (normalizedKey === "f" && event.shiftKey) {
         event.preventDefault();
         toggleFocusGraphMode();
         return;
@@ -5974,6 +6066,11 @@ export default function WorkflowStudio() {
     studioWorkspaceMode,
     studioWorkspaceStageSize.height,
     studioWorkspaceStageSize.width,
+    removeVisualChainNode,
+    duplicateSelectedNode,
+    fitNodesToView,
+    zoomInDagCanvas,
+    zoomOutDagCanvas,
   ]);
 
   const beginFloatingStudioPanelDrag = (
@@ -6647,6 +6744,60 @@ export default function WorkflowStudio() {
                         : "radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, radial-gradient(ellipse at 70% 10%, rgba(56,189,248,0.05) 0%, transparent 50%), var(--gradient-panel-mid, #0d1524)",
                   }}
                 >
+                  {/* Empty state — shown when canvas has no nodes */}
+                  {visualChainNodes.length === 0 ? (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                      <div className="pointer-events-auto flex flex-col items-center gap-6 rounded-[28px] border border-white/10 bg-[rgba(9,16,27,0.72)] px-10 py-8 text-center backdrop-blur-xl shadow-[0_24px_60px_rgba(9,16,27,0.5)]">
+                        <div>
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+                            Process Flow Designer
+                          </div>
+                          <h3 className="mt-2 text-xl font-semibold tracking-tight text-text-hi">
+                            Design your workflow
+                          </h3>
+                          <p className="mt-1 max-w-xs text-xs text-text-md">
+                            Add your first step from the catalog, or start from a template below.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-2 rounded-xl border border-sky-300/35 bg-accent-sky px-5 py-2.5 text-sm font-semibold text-text-hi transition hover:border-sky-300/55"
+                          onClick={() => addCapabilityNodeToStudio("codegen.autonomous")}
+                        >
+                          + Add first step
+                        </button>
+                        <div className="w-full border-t border-white/8 pt-4">
+                          <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-lo">
+                            Start from a template
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { id: "single" as const, label: "Single Step", desc: "One capability" },
+                              { id: "sequential" as const, label: "Sequential", desc: "A → B → C chain" },
+                              { id: "agent" as const, label: "Agent Loop", desc: "Agentic run" },
+                            ].map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                className="rounded-[16px] border border-white/10 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/30 hover:bg-white/8"
+                                onClick={() => addTemplateToStudio(t.id)}
+                              >
+                                <div className="text-xs font-semibold text-text-hi">{t.label}</div>
+                                <div className="mt-0.5 text-[11px] text-text-lo">{t.desc}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-text-lo">
+                          Keyboard: <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">Del</kbd> remove &nbsp;
+                          <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">D</kbd> duplicate &nbsp;
+                          <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">F</kbd> fit &nbsp;
+                          <kbd className="rounded border border-white/12 bg-white/8 px-1.5 py-0.5">+/-</kbd> zoom
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {/* Stage status pill */}
                   <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2">
                     <div className={`flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] backdrop-blur-sm ${
@@ -6707,6 +6858,7 @@ export default function WorkflowStudio() {
                       dagCanvasZoom={dagCanvasZoom}
                       showToolbar
                       showBlueprintPreview
+                      onFitToScreen={fitNodesToView}
                       onZoomIn={zoomInDagCanvas}
                       onZoomOut={zoomOutDagCanvas}
                       zoomInDisabled={dagCanvasZoom >= DAG_CANVAS_ZOOM_MAX}
