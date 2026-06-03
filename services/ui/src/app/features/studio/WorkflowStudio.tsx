@@ -1704,6 +1704,7 @@ export default function WorkflowStudio() {
   >(() => createInitialFloatingStudioPanelLayouts(1440, 1040));
   const [activeStudioPanelMenuId, setActiveStudioPanelMenuId] =
     useState<FloatingStudioPanelId | null>(null);
+  const [drawerPanelId, setDrawerPanelId] = useState<FloatingStudioPanelId | null>(null);
 
   const dagCanvasDragOffsetRef = useRef<CanvasPoint>({ x: 0, y: 0 });
   const dagCanvasViewportRef = useRef<HTMLDivElement | null>(null);
@@ -2141,6 +2142,16 @@ export default function WorkflowStudio() {
       setSelectedDagNodeId(null);
     }
   }, [selectedDagNodeId, visualChainNodes]);
+
+  // Auto-open inspector drawer when a node is selected
+  useEffect(() => {
+    if (selectedDagNodeId) {
+      setDrawerPanelId("inspector");
+    } else if (drawerPanelId === "inspector") {
+      setDrawerPanelId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDagNodeId]);
 
   useEffect(() => {
     if (!dagEdgeDraftSourceNodeId) {
@@ -5777,20 +5788,9 @@ export default function WorkflowStudio() {
 
   const revealStudioPanel = (
     panelId: FloatingStudioPanelId,
-    dockZone?: Exclude<StudioDockZone, "overlay" | "none">
+    _dockZone?: Exclude<StudioDockZone, "overlay" | "none">
   ) => {
-    if (dockZone) {
-      setFloatingStudioPanelDocked(panelId, dockZone);
-    } else {
-      setFloatingStudioPanelMinimized(panelId, false);
-    }
-    if (dockZone === "bottom" || floatingStudioPanels[panelId].dockZone === "bottom") {
-      setStudioBottomTray((prev) => ({
-        ...prev,
-        activePanelId: panelId,
-        collapsed: false,
-      }));
-    }
+    setDrawerPanelId((prev) => (prev === panelId ? null : panelId));
   };
 
   const setFloatingStudioPanelMinimized = (
@@ -6871,194 +6871,90 @@ export default function WorkflowStudio() {
                     />
                   </div>
 
-                  {leftDockRect && dockedLeftPanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute flex flex-col gap-3 overflow-y-auto pr-1"
-                      style={{
-                        left: leftDockRect.x,
-                        top: leftDockRect.y,
-                        width: leftDockRect.width + 6,
-                        height: leftDockRect.height,
-                      }}
-                    >
-                      <div
-                        className="absolute inset-y-0 right-0 z-20 w-2 cursor-ew-resize transition hover:bg-surface-1"
-                        onMouseDown={(event) =>
-                          beginFloatingStudioPanelResize(dockedLeftPanelIds[0], "e", event)
-                        }
-                        title="Resize left dock"
-                      />
-                      {dockedLeftPanelIds.map((panelId) => (
-                        <div
-                          key={`docked-left-panel-${panelId}`}
-                          style={{
-                            height: getFloatingStudioPanelActiveHeight(floatingStudioPanels[panelId]),
-                            minHeight: FLOATING_STUDIO_PANEL_HEADER_HEIGHT,
-                          }}
+                  {/* ── Panel icon strip (left side of stage) ── */}
+                  <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-col gap-1.5">
+                    {(["palette", "compile", "setup", "interface", "library"] as FloatingStudioPanelId[]).map((panelId) => {
+                      const isActive = drawerPanelId === panelId;
+                      const badge = getWorkspacePanelBadge(panelId);
+                      const iconKind: Record<string, "palette" | "inspect" | "zap" | "library" | "activity" | "menu"> = {
+                        palette: "palette",
+                        compile: "activity",
+                        setup: "menu",
+                        interface: "zap",
+                        library: "library",
+                      };
+                      return (
+                        <button
+                          key={panelId}
+                          type="button"
+                          title={getWorkspacePanelTitle(panelId)}
+                          aria-label={getWorkspacePanelTitle(panelId)}
+                          className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition ${
+                            isActive
+                              ? "border-sky-300/40 bg-accent-sky text-text-sky-token shadow-[0_0_0_2px_rgba(56,189,248,0.18)]"
+                              : "border-white/12 bg-[rgba(9,16,27,0.65)] text-text-md hover:border-white/20 hover:bg-[rgba(9,16,27,0.85)] hover:text-text-hi"
+                          } backdrop-blur-sm`}
+                          onClick={() => setDrawerPanelId((prev) => (prev === panelId ? null : panelId))}
                         >
-                          {renderWorkspacePanel(panelId)}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {rightDockRect && dockedRightPanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute flex flex-col gap-3 overflow-y-auto pr-1"
-                      style={{
-                        left: rightDockRect.x,
-                        top: rightDockRect.y,
-                        width: rightDockRect.width + 6,
-                        height: rightDockRect.height,
-                      }}
-                    >
-                      <div
-                        className="absolute inset-y-0 left-0 z-20 w-2 cursor-ew-resize transition hover:bg-surface-1"
-                        onMouseDown={(event) =>
-                          beginFloatingStudioPanelResize(dockedRightPanelIds[0], "w", event)
-                        }
-                        title="Resize right dock"
-                      />
-                      {dockedRightPanelIds.map((panelId) => (
-                        <div
-                          key={`docked-right-panel-${panelId}`}
-                          style={{
-                            height: getFloatingStudioPanelActiveHeight(floatingStudioPanels[panelId]),
-                            minHeight: FLOATING_STUDIO_PANEL_HEADER_HEIGHT,
-                          }}
-                        >
-                          {renderWorkspacePanel(panelId)}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {bottomDockRect && dockedBottomPanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute"
-                      style={{
-                        left: bottomDockRect.x,
-                        top: bottomDockRect.y,
-                        width: bottomDockRect.width,
-                        height: bottomDockRect.height,
-                      }}
-                    >
-                      <div className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/12 bg-gradient-panel-deep shadow-[0_8px_20px_rgba(15,23,42,0.2)] backdrop-blur-xl">
-                        <div
-                          className="h-2 cursor-ns-resize transition hover:bg-surface-1"
-                          onMouseDown={beginStudioBottomTrayResize}
-                          title="Resize bottom tray"
-                        />
-                        <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.46)] px-3 py-2">
-                          <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
-                            {dockedBottomPanelIds.map((panelId) => {
-                              const badge = getWorkspacePanelBadge(panelId);
-                              const isActive = activeBottomTrayPanelId === panelId;
-                              return (
-                                <button
-                                  key={`studio-bottom-tray-tab-${panelId}`}
-                                  type="button"
-                                  className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
-                                    isActive
-                                      ? "border-sky-300/35 bg-accent-sky text-text-hi"
-                                      : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                                  }`}
-                                  onClick={() =>
-                                    setStudioBottomTray((prev) => ({
-                                      ...prev,
-                                      activePanelId: panelId,
-                                      collapsed: false,
-                                    }))
-                                  }
-                                >
-                                  <span>{getWorkspacePanelTitle(panelId)}</span>
-                                  {badge ? (
-                                    <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.18em] text-text-md">
-                                      {badge}
-                                    </span>
-                                  ) : null}
-                                </button>
-                              );
-                            })}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-white/[0.1]"
-                              onClick={toggleStudioBottomTrayCollapsed}
-                            >
-                              {studioBottomTray.collapsed ? "Expand" : "Collapse"}
-                            </button>
-                          </div>
-                        </div>
-                        {!studioBottomTray.collapsed && activeBottomTrayDefinition ? (
-                          <div
-                            id={activeBottomTrayDefinition.panelDomId}
-                            className={`min-h-0 flex-1 overflow-auto ${
-                              activeBottomTrayDefinition.bodyClassName || ""
-                            }`.trim()}
-                          >
-                            {activeBottomTrayDefinition.content}
-                          </div>
-                        ) : (
-                          <div className="flex h-full items-center justify-between px-4 py-3 text-xs uppercase tracking-[0.18em] text-text-md">
-                            <span>
-                              {activeBottomTrayPanelId
-                                ? `${getWorkspacePanelTitle(activeBottomTrayPanelId)} ready`
-                                : "Bottom tray ready"}
+                          <StudioWorkbenchIcon kind={iconKind[panelId] ?? "menu"} className="h-4 w-4" />
+                          {badge ? (
+                            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/20 bg-sky-500 text-[8px] font-bold text-white">
+                              {badge}
                             </span>
-                            <span>Shift+3</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                  {minimizedShelfRect && minimizedWorkspacePanelIds.length > 0 ? (
-                    <div
-                      className="pointer-events-auto absolute"
-                      style={{
-                        left: minimizedShelfRect.x,
-                        top: minimizedShelfRect.y,
-                        width: minimizedShelfRect.width,
-                        height: minimizedShelfRect.height,
-                      }}
-                    >
-                      <div className="flex h-full items-center gap-3 overflow-x-auto rounded-[16px] border border-white/10 bg-[rgba(9,16,27,0.65)] px-3 shadow-[0_6px_16px_rgba(15,23,42,0.18)] backdrop-blur-xl">
-                        <div className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.24em] text-text-lo">
-                          Minimized
-                        </div>
-                        <div className="flex min-w-0 items-center gap-2">
-                          {minimizedWorkspacePanelIds.map((panelId) => {
-                            const title = getWorkspacePanelTitle(panelId);
-                            const badge = getWorkspacePanelBadge(panelId);
-                            return (
-                              <button
-                                key={`minimized-panel-${panelId}`}
-                                type="button"
-                                className="flex shrink-0 items-center gap-2 rounded-full border border-subtle bg-surface-1 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/30 hover:bg-surface-2"
-                                aria-label={`Restore ${title}`}
-                                title={`Restore ${title}`}
-                                onClick={() => setFloatingStudioPanelMinimized(panelId, false)}
-                              >
-                                <span>{title}</span>
-                                {badge ? (
-                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.18em] text-text-md">
-                                    {badge}
+                  {/* ── Right-side overlay drawer ── */}
+                  {(() => {
+                    const definition = drawerPanelId ? getWorkspacePanelDefinition(drawerPanelId) : null;
+                    const isOpen = Boolean(drawerPanelId && definition);
+                    return (
+                      <div
+                        className={`pointer-events-auto absolute right-0 top-0 z-30 flex h-full w-[320px] flex-col overflow-hidden rounded-r-[24px] border-l border-white/10 bg-[rgba(9,14,23,0.88)] shadow-[-12px_0_40px_rgba(9,14,23,0.4)] backdrop-blur-xl transition-transform duration-200 ${
+                          isOpen ? "translate-x-0" : "translate-x-full"
+                        }`}
+                      >
+                        {definition ? (
+                          <>
+                            {/* Drawer header */}
+                            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.6)] px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-hi">
+                                  {definition.title}
+                                </div>
+                                {definition.badge ? (
+                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.14em] text-text-md">
+                                    {definition.badge}
                                   </span>
                                 ) : null}
-                                <span className="text-[9px] tracking-[0.18em] text-text-sky-token">
-                                  Restore
-                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-text-lo transition hover:bg-white/10 hover:text-text-hi"
+                                onClick={() => {
+                                  setDrawerPanelId(null);
+                                  if (drawerPanelId === "inspector") setSelectedDagNodeId(null);
+                                }}
+                                aria-label="Close panel"
+                              >
+                                ✕
                               </button>
-                            );
-                          })}
-                        </div>
+                            </div>
+                            {/* Drawer content */}
+                            <div
+                              id={definition.panelDomId}
+                              className={`min-h-0 flex-1 overflow-auto ${definition.bodyClassName || ""}`.trim()}
+                            >
+                              {definition.content}
+                            </div>
+                          </>
+                        ) : null}
                       </div>
-                    </div>
-                  ) : null}
-
-                  {floatingWorkspacePanelIds.map((panelId) => renderWorkspacePanel(panelId))}
+                    );
+                  })()}
                 </div>
               </div>
       </section>
