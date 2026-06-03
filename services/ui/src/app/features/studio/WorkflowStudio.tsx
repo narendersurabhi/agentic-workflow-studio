@@ -1625,6 +1625,42 @@ const resolveWorkspacePanelRects = (
   };
 };
 
+// Surface the actual reason from a workflow API error body. The save/publish/run
+// endpoints return object-shaped detail (preflight_errors per node, draft
+// diagnostics) — without this they collapse to a generic "failed (400)".
+function formatWorkflowApiError(detail: unknown, status: number, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+  if (detail && typeof detail === "object") {
+    const obj = detail as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof obj.error === "string" && obj.error.trim()) {
+      parts.push(obj.error.replace(/_/g, " "));
+    }
+    const preflight = obj.preflight_errors;
+    if (preflight && typeof preflight === "object") {
+      for (const [node, message] of Object.entries(preflight as Record<string, unknown>)) {
+        parts.push(`${node}: ${String(message)}`);
+      }
+    }
+    const diagnostics = obj.diagnostics as { errors?: Array<Record<string, unknown>> } | undefined;
+    if (diagnostics && Array.isArray(diagnostics.errors)) {
+      for (const entry of diagnostics.errors) {
+        const message = entry.message ?? entry.code;
+        if (message) {
+          const field = entry.field ? ` (${String(entry.field)})` : "";
+          parts.push(`${String(message)}${field}`);
+        }
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join(" — ");
+    }
+  }
+  return `${fallback} (${status}).`;
+}
+
 export default function WorkflowStudio() {
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState(initialContextJson);
@@ -4726,9 +4762,11 @@ export default function WorkflowStudio() {
       const body = (await response.json()) as WorkflowDefinition | { detail?: unknown };
       if (!response.ok) {
         throw new Error(
-          typeof (body as { detail?: unknown }).detail === "string"
-            ? (body as { detail: string }).detail
-            : `Save draft failed (${response.status}).`
+          formatWorkflowApiError(
+            (body as { detail?: unknown }).detail,
+            response.status,
+            "Save draft failed",
+          )
         );
       }
       const definition = body as WorkflowDefinition;
@@ -4777,9 +4815,12 @@ export default function WorkflowStudio() {
       );
       const body = (await response.json()) as WorkflowVersion | { detail?: unknown };
       if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
         throw new Error(
-          typeof detail === "string" ? detail : `Publish version failed (${response.status}).`
+          formatWorkflowApiError(
+            (body as { detail?: unknown }).detail,
+            response.status,
+            "Publish version failed",
+          )
         );
       }
       const version = body as WorkflowVersion;
@@ -4816,9 +4857,12 @@ export default function WorkflowStudio() {
       );
       const body = (await response.json()) as WorkflowRunResult | { detail?: unknown };
       if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
         throw new Error(
-          typeof detail === "string" ? detail : `Run workflow failed (${response.status}).`
+          formatWorkflowApiError(
+            (body as { detail?: unknown }).detail,
+            response.status,
+            "Run workflow failed",
+          )
         );
       }
       const result = body as WorkflowRunResult;
