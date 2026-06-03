@@ -1625,6 +1625,42 @@ const resolveWorkspacePanelRects = (
   };
 };
 
+// Surface the actual reason from a workflow API error body. The save/publish/run
+// endpoints return object-shaped detail (preflight_errors per node, draft
+// diagnostics) — without this they collapse to a generic "failed (400)".
+function formatWorkflowApiError(detail: unknown, status: number, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+  if (detail && typeof detail === "object") {
+    const obj = detail as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof obj.error === "string" && obj.error.trim()) {
+      parts.push(obj.error.replace(/_/g, " "));
+    }
+    const preflight = obj.preflight_errors;
+    if (preflight && typeof preflight === "object") {
+      for (const [node, message] of Object.entries(preflight as Record<string, unknown>)) {
+        parts.push(`${node}: ${String(message)}`);
+      }
+    }
+    const diagnostics = obj.diagnostics as { errors?: Array<Record<string, unknown>> } | undefined;
+    if (diagnostics && Array.isArray(diagnostics.errors)) {
+      for (const entry of diagnostics.errors) {
+        const message = entry.message ?? entry.code;
+        if (message) {
+          const field = entry.field ? ` (${String(entry.field)})` : "";
+          parts.push(`${String(message)}${field}`);
+        }
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join(" — ");
+    }
+  }
+  return `${fallback} (${status}).`;
+}
+
 export default function WorkflowStudio() {
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState(initialContextJson);
@@ -1646,6 +1682,7 @@ export default function WorkflowStudio() {
   const [paletteGroup, setPaletteGroup] = useState("all");
   const [selectedDagNodeId, setSelectedDagNodeId] = useState<string | null>(null);
   const [studioNotice, setStudioNotice] = useState<string | null>(null);
+  const [lastStartedJobId, setLastStartedJobId] = useState<string | null>(null);
   const [chainPreflightLoading, setChainPreflightLoading] = useState(false);
   const [composerCompileLoading, setComposerCompileLoading] = useState(false);
   const [chainPreflightResult, setChainPreflightResult] = useState<ChainPreflightResult | null>(null);
@@ -4366,6 +4403,7 @@ export default function WorkflowStudio() {
   };
 
   const startFreshStudioDraft = () => {
+    setLastStartedJobId(null);
     setGoal("");
     setContextJson(initialContextJson());
     setComposerDraft(initialStudioDraft());
@@ -4724,9 +4762,11 @@ export default function WorkflowStudio() {
       const body = (await response.json()) as WorkflowDefinition | { detail?: unknown };
       if (!response.ok) {
         throw new Error(
-          typeof (body as { detail?: unknown }).detail === "string"
-            ? (body as { detail: string }).detail
-            : `Save draft failed (${response.status}).`
+          formatWorkflowApiError(
+            (body as { detail?: unknown }).detail,
+            response.status,
+            "Save draft failed",
+          )
         );
       }
       const definition = body as WorkflowDefinition;
@@ -4775,9 +4815,12 @@ export default function WorkflowStudio() {
       );
       const body = (await response.json()) as WorkflowVersion | { detail?: unknown };
       if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
         throw new Error(
-          typeof detail === "string" ? detail : `Publish version failed (${response.status}).`
+          formatWorkflowApiError(
+            (body as { detail?: unknown }).detail,
+            response.status,
+            "Publish version failed",
+          )
         );
       }
       const version = body as WorkflowVersion;
@@ -4797,6 +4840,7 @@ export default function WorkflowStudio() {
   };
 
   const runWorkflowVersion = async () => {
+    setLastStartedJobId(null);
     const version = await publishWorkflowVersion();
     if (!version) {
       return;
@@ -4813,15 +4857,19 @@ export default function WorkflowStudio() {
       );
       const body = (await response.json()) as WorkflowRunResult | { detail?: unknown };
       if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
         throw new Error(
-          typeof detail === "string" ? detail : `Run workflow failed (${response.status}).`
+          formatWorkflowApiError(
+            (body as { detail?: unknown }).detail,
+            response.status,
+            "Run workflow failed",
+          )
         );
       }
       const result = body as WorkflowRunResult;
       setPublishedWorkflowVersion(result.workflow_version);
       setLoadedWorkflowVersionId(result.workflow_version.id);
       void refreshWorkflowRuns(result.workflow_definition.id);
+      setLastStartedJobId(result.job.id);
       setStudioNotice(
         `Started job ${result.job.id} from workflow version v${result.workflow_version.version_number}.`
       );
@@ -6573,6 +6621,20 @@ export default function WorkflowStudio() {
       {activeStudioSurface === "workflow" && studioNotice ? (
         <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {studioNotice}
+        </div>
+      ) : null}
+      {activeStudioSurface === "workflow" && lastStartedJobId ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-emerald-300/20 bg-accent-emerald px-4 py-3 text-sm text-text-emerald-token">
+          <span>
+            Workflow run started · job{" "}
+            <span className="font-mono text-xs">{lastStartedJobId}</span>
+          </span>
+          <a
+            href={`/observability?job=${encodeURIComponent(lastStartedJobId)}`}
+            className="rounded-xl border border-emerald-200/30 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition hover:border-emerald-100/60"
+          >
+            View run in Observability →
+          </a>
         </div>
       ) : null}
       <section
