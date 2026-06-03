@@ -34,3 +34,11 @@ scripts/largest_paths_cleanup.sh
 ./test.db
 ./text.md
 ./tmp
+
+# Screenshots and generated images
+output/screenshots/
+docs/assets/*.png
+docs/assets/*.jpg
+docs/assets/*.jpeg
+docs/assets/*.gif
+docs/assets/*.webp
