@@ -356,8 +356,11 @@ export default function StudioNodeInspector({
             execution gates and dependency structure. <code>switch</code> is still authoring-only.
           </div>
           <div className="mt-2 text-[11px] text-amber-800">
-            Supported expressions: <code>context.*</code>, <code>workflow.input.*</code>, and{" "}
-            <code>workflow.variable.*</code> with truthy checks, <code>==</code>, or <code>!=</code>.
+            References: <code>context.*</code>, <code>workflow.input.*</code>,{" "}
+            <code>workflow.variable.*</code>, <code>step.{"{task}"}.*</code>. Operators:{" "}
+            <code>==</code> <code>!=</code> <code>&gt;</code> <code>&lt;</code> <code>&gt;=</code>{" "}
+            <code>&lt;=</code> <code>contains</code> <code>startswith</code> <code>endswith</code>.
+            Combine clauses with <code>and</code> / <code>or</code>.
           </div>
           <div className="mt-4 grid gap-3">
             <label className="block">

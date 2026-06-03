@@ -312,7 +312,51 @@ def _evaluate_execution_gate(
 _BINARY_OPERATORS = (">=", "<=", "!=", "==", ">", "<", " contains ", " startswith ", " endswith ")
 
 
+def _split_logical(expression: str, keyword: str) -> list[str]:
+    """Split on a logical keyword (' and ' / ' or ') outside of quoted strings."""
+    parts: list[str] = []
+    buf = ""
+    quote: str | None = None
+    i = 0
+    length = len(expression)
+    keyword_len = len(keyword)
+    while i < length:
+        ch = expression[i]
+        if quote is not None:
+            buf += ch
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf += ch
+            i += 1
+            continue
+        if expression[i : i + keyword_len].lower() == keyword:
+            parts.append(buf)
+            buf = ""
+            i += keyword_len
+            continue
+        buf += ch
+        i += 1
+    parts.append(buf)
+    return [part.strip() for part in parts if part.strip()]
+
+
 def _evaluate_context_expression(expression: str, context: Mapping[str, Any]) -> Any:
+    normalized = expression.strip()
+    # OR has the lowest precedence; AND binds tighter than OR.
+    or_parts = _split_logical(normalized, " or ")
+    if len(or_parts) > 1:
+        return any(bool(_evaluate_context_expression(part, context)) for part in or_parts)
+    and_parts = _split_logical(normalized, " and ")
+    if len(and_parts) > 1:
+        return all(bool(_evaluate_context_expression(part, context)) for part in and_parts)
+    return _evaluate_context_atom(normalized, context)
+
+
+def _evaluate_context_atom(expression: str, context: Mapping[str, Any]) -> Any:
     normalized = expression.strip()
     for op in _BINARY_OPERATORS:
         if op not in normalized:
@@ -385,7 +429,7 @@ def _parse_expression_literal(token: str, context: Mapping[str, Any]) -> Any:
         return False
     if lowered == "null":
         return None
-    if normalized.startswith(("context.", "workflow.input.", "workflow.variable.")):
+    if normalized.startswith(("context.", "workflow.input.", "workflow.variable.", "step.")):
         return _resolve_context_operand(normalized, context)
     if normalized.startswith(("'", '"')) and normalized.endswith(("'", '"')) and len(normalized) >= 2:
         return normalized[1:-1]

@@ -94,6 +94,7 @@ from . import (
     memory_promotion_service,
     memory_store,
     replan_controller,
+    run_context_service,
 )
 
 core_logging.configure_logging("api")
@@ -10743,7 +10744,7 @@ def _composer_default_task_name(capability_id: str, index: int) -> str:
 
 
 _COMPOSER_CONTROL_KINDS = {"if", "if_else", "switch", "parallel"}
-_COMPOSER_EXPRESSION_ROOTS = ("context.", "workflow.input.", "workflow.variable.")
+_COMPOSER_EXPRESSION_ROOTS = ("context.", "workflow.input.", "workflow.variable.", "step.")
 
 
 def _composer_control_kind(raw_node: Mapping[str, Any]) -> str:
@@ -10805,8 +10806,9 @@ def _validate_composer_control_node(
                 "field": "expression",
                 "message": (
                     "Conditional control-flow supports context.*, workflow.input.*, "
-                    "workflow.variable.*, and step.{task_name}.* expressions. "
-                    "Operators: ==, !=, >, <, >=, <=, contains, startswith, endswith."
+                    "workflow.variable.*, and step.{task_name}.* references. "
+                    "Operators: ==, !=, >, <, >=, <=, contains, startswith, endswith. "
+                    "Combine clauses with 'and' / 'or'."
                 ),
             }
         )
@@ -10930,7 +10932,76 @@ def _composer_expression_operand_supported(
 _COMPOSER_BINARY_OPERATORS = (">=", "<=", "!=", "==", ">", "<", " contains ", " startswith ", " endswith ")
 
 
+def _composer_split_logical(expression: str, keyword: str) -> list[str]:
+    """Split on a logical keyword (' and ' / ' or ') outside of quoted strings."""
+    parts: list[str] = []
+    buf = ""
+    quote: str | None = None
+    i = 0
+    length = len(expression)
+    keyword_len = len(keyword)
+    while i < length:
+        ch = expression[i]
+        if quote is not None:
+            buf += ch
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf += ch
+            i += 1
+            continue
+        if expression[i : i + keyword_len].lower() == keyword:
+            parts.append(buf)
+            buf = ""
+            i += keyword_len
+            continue
+        buf += ch
+        i += 1
+    parts.append(buf)
+    return [part.strip() for part in parts if part.strip()]
+
+
 def _composer_if_expression_supported(
+    expression: str,
+    *,
+    workflow_input_keys: set[str] | None = None,
+    workflow_variable_keys: set[str] | None = None,
+) -> bool:
+    normalized = expression.strip()
+    if not normalized:
+        return False
+    # Compound expressions: every clause across ' or '/' and ' must be supported.
+    or_parts = _composer_split_logical(normalized, " or ")
+    if len(or_parts) > 1:
+        return all(
+            _composer_if_expression_supported(
+                part,
+                workflow_input_keys=workflow_input_keys,
+                workflow_variable_keys=workflow_variable_keys,
+            )
+            for part in or_parts
+        )
+    and_parts = _composer_split_logical(normalized, " and ")
+    if len(and_parts) > 1:
+        return all(
+            _composer_if_expression_supported(
+                part,
+                workflow_input_keys=workflow_input_keys,
+                workflow_variable_keys=workflow_variable_keys,
+            )
+            for part in and_parts
+        )
+    return _composer_atom_supported(
+        normalized,
+        workflow_input_keys=workflow_input_keys,
+        workflow_variable_keys=workflow_variable_keys,
+    )
+
+
+def _composer_atom_supported(
     expression: str,
     *,
     workflow_input_keys: set[str] | None = None,
@@ -11851,8 +11922,32 @@ def _build_plan_from_composer_draft(
             resolved.update(_resolve_non_control_deps(source_id, next_seen))
         return resolved
 
+    def _topological_node_order() -> list[str]:
+        indegree = {nid: len(deps_by_node_id.get(nid, set())) for nid in node_by_id}
+        queue = sorted(nid for nid, deg in indegree.items() if deg == 0)
+        order: list[str] = []
+        while queue:
+            nid = queue.pop(0)
+            order.append(nid)
+            for child in sorted(children_by_node_id.get(nid, set())):
+                indegree[child] -= 1
+                if indegree[child] == 0:
+                    queue.append(child)
+            queue.sort()
+        # Append any nodes left out by cycles so they still get processed.
+        for nid in node_by_id:
+            if nid not in order:
+                order.append(nid)
+        return order
+
+    topo_order = _topological_node_order()
+
     for node in canonical_nodes:
         node["execution_gate"] = None
+
+    # ── if: a node inherits the gate only if EVERY path into it is gated. ──
+    # Nodes where a branch rejoins an ungated path (merge points) are left
+    # ungated so they run unconditionally.
     for node in canonical_nodes:
         if not node.get("is_control") or node.get("control_kind") != "if":
             continue
@@ -11863,20 +11958,25 @@ def _build_plan_from_composer_draft(
             workflow_variable_keys=workflow_variable_keys,
         ):
             continue
-        queue = list(children_by_node_id.get(node["node_id"], set()))
-        visited: set[str] = set()
-        while queue:
-            candidate_id = queue.pop(0)
-            if candidate_id in visited:
+        control_id = node["node_id"]
+        # gate_holders carry the gate downstream; the control node itself seeds it.
+        gate_holders: set[str] = {control_id}
+        for candidate_id in topo_order:
+            if candidate_id == control_id:
                 continue
-            visited.add(candidate_id)
-            candidate = node_by_id.get(candidate_id)
-            if candidate is None:
+            incoming = deps_by_node_id.get(candidate_id, set())
+            if not incoming:
                 continue
-            if not candidate.get("is_control"):
-                candidate["execution_gate"] = {"expression": expression}
-            queue.extend(children_by_node_id.get(candidate_id, set()))
+            # Dominance: gated only if every incoming edge originates from a holder.
+            if all(src in gate_holders for src in incoming):
+                gate_holders.add(candidate_id)
+                candidate = node_by_id.get(candidate_id)
+                if candidate is not None and not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression}
+            # else: merge point — not gated, propagation stops here.
 
+    # ── if_else: two holder sets (true/false). Where branches rejoin (a node ──
+    # whose incoming edges are not all from a single branch) is a merge point.
     for node in canonical_nodes:
         if not node.get("is_control") or node.get("control_kind") != "if_else":
             continue
@@ -11890,11 +11990,12 @@ def _build_plan_from_composer_draft(
         config = node.get("control_config", {})
         true_label = str(config.get("trueLabel") or "true").strip().lower()
         false_label = str(config.get("falseLabel") or "false").strip().lower()
-        outgoing = sorted(children_by_node_id.get(node["node_id"], set()))
+        control_id = node["node_id"]
+        outgoing = sorted(children_by_node_id.get(control_id, set()))
         true_roots: set[str] = set()
         false_roots: set[str] = set()
         for target_id in outgoing:
-            branch_label = edge_branch_labels.get((node["node_id"], target_id), "").strip().lower()
+            branch_label = edge_branch_labels.get((control_id, target_id), "").strip().lower()
             if branch_label == true_label:
                 true_roots.add(target_id)
             elif branch_label == false_label:
@@ -11903,7 +12004,7 @@ def _build_plan_from_composer_draft(
             diagnostics_errors.append(
                 {
                     "code": "draft.control_if_else_true_branch_missing",
-                    "node_id": node["node_id"],
+                    "node_id": control_id,
                     "field": "edges",
                     "message": "If / Else control node requires an outgoing edge labeled for the true branch.",
                 }
@@ -11912,33 +12013,38 @@ def _build_plan_from_composer_draft(
             diagnostics_errors.append(
                 {
                     "code": "draft.control_if_else_false_branch_missing",
-                    "node_id": node["node_id"],
+                    "node_id": control_id,
                     "field": "edges",
                     "message": "If / Else control node requires an outgoing edge labeled for the false branch.",
                 }
             )
 
-        def _descendants(roots: set[str]) -> set[str]:
-            seen: set[str] = set()
-            queue = list(roots)
-            while queue:
-                candidate_id = queue.pop(0)
-                if candidate_id in seen:
-                    continue
-                seen.add(candidate_id)
-                queue.extend(sorted(children_by_node_id.get(candidate_id, set())))
-            return seen
-
-        true_descendants = _descendants(true_roots)
-        false_descendants = _descendants(false_roots)
-        for candidate_id in sorted(true_descendants - false_descendants):
+        true_holders: set[str] = set(true_roots)
+        false_holders: set[str] = set(false_roots)
+        for candidate_id in topo_order:
             candidate = node_by_id.get(candidate_id)
-            if candidate is not None and not candidate.get("is_control"):
-                candidate["execution_gate"] = {"expression": expression}
-        for candidate_id in sorted(false_descendants - true_descendants):
-            candidate = node_by_id.get(candidate_id)
-            if candidate is not None and not candidate.get("is_control"):
-                candidate["execution_gate"] = {"expression": expression, "negate": True}
+            if candidate is None:
+                continue
+            if candidate_id in true_roots:
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression}
+                continue
+            if candidate_id in false_roots:
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression, "negate": True}
+                continue
+            incoming = deps_by_node_id.get(candidate_id, set())
+            if not incoming:
+                continue
+            if all(src in true_holders for src in incoming):
+                true_holders.add(candidate_id)
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression}
+            elif all(src in false_holders for src in incoming):
+                false_holders.add(candidate_id)
+                if not candidate.get("is_control"):
+                    candidate["execution_gate"] = {"expression": expression, "negate": True}
+            # else: merge point (mixed/external incoming) — left ungated.
 
     tasks_payload: list[dict[str, Any]] = []
     for node in canonical_nodes:
@@ -14094,10 +14200,11 @@ def _task_payload_from_record(
     replay_context: Mapping[str, Any] | None = None,
     sync_execution_request: bool = True,
 ) -> dict[str, Any]:
+    enriched_context = _task_context_with_run_context(record, context)
     payload = dispatch_service.task_payload_from_record(
         record,
         correlation_id,
-        context=context,
+        context=enriched_context,
         goal_text=goal_text,
         intent_profile=intent_profile,
         config=_dispatch_runtime().config,
@@ -14115,6 +14222,36 @@ def _task_payload_from_record(
     if correlation_id and sync_execution_request:
         _sync_execution_request_snapshot(payload)
     return payload
+
+
+def _task_context_with_run_context(
+    record: TaskRecord,
+    context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    enriched = dict(context or {})
+    if "run_state" in enriched and "blackboard" in enriched:
+        return enriched
+    try:
+        with SessionLocal() as db:
+            job = db.query(JobRecord).filter(JobRecord.id == record.job_id).first()
+            run_id = _durable_run_id(job, record.job_id)
+            bundle = run_context_service.get_run_context_bundle(db, run_id, limit=100)
+            enriched.setdefault("run_state", bundle.state.model_dump(mode="json"))
+            enriched.setdefault(
+                "blackboard",
+                [entry.model_dump(mode="json") for entry in bundle.blackboard],
+            )
+            enriched.setdefault(
+                "handoffs",
+                [handoff.model_dump(mode="json") for handoff in bundle.handoffs],
+            )
+            enriched.setdefault(
+                "artifacts",
+                [artifact.model_dump(mode="json") for artifact in bundle.artifacts],
+            )
+    except Exception:
+        return enriched
+    return enriched
 
 
 def _task_payload_with_error(
@@ -15353,6 +15490,7 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
                 if task is not None
                 else str(normalized_result.get("job_id") or "").strip() or None
             )
+            job = db.query(JobRecord).filter(JobRecord.id == job_id).first() if job_id else None
             plan_id = task.plan_id if task is not None else None
             latest_error = _extract_error_from_task_result(normalized_result)
             status = str(normalized_result.get("status") or "").strip()
@@ -15376,6 +15514,17 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
                 record.result_json = normalized_result
                 record.latest_error = latest_error
                 record.updated_at = now
+            if task is not None and job_id:
+                run_id = str(normalized_result.get("run_id") or "").strip()
+                if not run_id:
+                    run_id = _durable_run_id(job, job_id)
+                run_context_service.index_task_result_collaboration(
+                    db,
+                    run_id=run_id,
+                    step_id=task.id,
+                    task_id=task.id,
+                    result=normalized_result,
+                )
             db.commit()
     except Exception:
         return
@@ -18411,6 +18560,16 @@ def get_job_debugger(
             }
         )
 
+    run_context = None
+    try:
+        run_context = run_context_service.get_run_context_bundle(
+            db,
+            _durable_run_id(job, job_id),
+            limit=min(max(limit, 1), 500),
+        )
+    except Exception:
+        run_context = None
+
     return {
         "job_id": job_id,
         "job_status": job.status,
@@ -18437,6 +18596,16 @@ def get_job_debugger(
         "normalization_clarification": normalization_fields["normalization_clarification"],
         "normalization_candidate_capabilities": normalization_fields["normalization_candidate_capabilities"],
         "tasks": tasks_payload,
+        "run_state": run_context.state.model_dump(mode="json") if run_context else None,
+        "blackboard": [
+            entry.model_dump(mode="json") for entry in run_context.blackboard
+        ] if run_context else [],
+        "handoffs": [
+            handoff.model_dump(mode="json") for handoff in run_context.handoffs
+        ] if run_context else [],
+        "artifacts": [
+            artifact.model_dump(mode="json") for artifact in run_context.artifacts
+        ] if run_context else [],
     }
 
 
@@ -18599,6 +18768,11 @@ def _run_debugger_payload(
         checkpoints_by_step.setdefault(checkpoint.step_id, []).append(
             _step_checkpoint_from_record(checkpoint).model_dump(mode="json")
         )
+    run_context = run_context_service.get_run_context_bundle(
+        db,
+        run_record.id,
+        limit=min(max(limit, 1), 500),
+    )
     latest_failure = _latest_task_failures_for_jobs(db, [job.id]).get(job.id)
     revision_context = planner_contracts.parse_revision_context_from_metadata(
         job.metadata_json if isinstance(job.metadata_json, dict) else {}
@@ -18699,6 +18873,10 @@ def _run_debugger_payload(
             _step_checkpoint_from_record(checkpoint).model_dump(mode="json")
             for checkpoint in checkpoints
         ],
+        "run_state": run_context.state.model_dump(mode="json"),
+        "blackboard": [entry.model_dump(mode="json") for entry in run_context.blackboard],
+        "handoffs": [handoff.model_dump(mode="json") for handoff in run_context.handoffs],
+        "artifacts": [artifact.model_dump(mode="json") for artifact in run_context.artifacts],
     }
 
 
@@ -18776,6 +18954,108 @@ def get_run_debugger(
     if run_record is None:
         raise HTTPException(status_code=404, detail="run_not_found")
     return _run_debugger_payload(run_record, db=db, limit=limit)
+
+
+@app.get("/runs/{run_id}/state", response_model=models.RunStateSnapshot)
+def get_run_state(run_id: str, db: Session = Depends(get_db)) -> models.RunStateSnapshot:
+    try:
+        return run_context_service.get_run_state(db, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/context", response_model=models.RunContextBundle)
+def get_run_context(
+    run_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> models.RunContextBundle:
+    try:
+        return run_context_service.get_run_context_bundle(db, run_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/blackboard", response_model=List[models.BlackboardEntry])
+def list_run_blackboard(
+    run_id: str,
+    kind: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> List[models.BlackboardEntry]:
+    try:
+        return run_context_service.list_blackboard_entries(
+            db,
+            run_id,
+            kind=kind,
+            limit=limit,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/blackboard", response_model=models.BlackboardEntry)
+def create_run_blackboard_entry(
+    run_id: str,
+    entry: models.BlackboardEntryCreate,
+    db: Session = Depends(get_db),
+) -> models.BlackboardEntry:
+    try:
+        return run_context_service.create_blackboard_entry(db, run_id, entry)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/handoffs", response_model=List[models.AgentHandoff])
+def list_run_handoffs(
+    run_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> List[models.AgentHandoff]:
+    try:
+        return run_context_service.list_handoffs(db, run_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/handoffs", response_model=models.AgentHandoff)
+def create_run_handoff(
+    run_id: str,
+    handoff: models.AgentHandoffCreate,
+    db: Session = Depends(get_db),
+) -> models.AgentHandoff:
+    try:
+        return run_context_service.create_handoff(db, run_id, handoff)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/artifacts", response_model=List[models.Artifact])
+def list_run_artifacts(
+    run_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> List[models.Artifact]:
+    try:
+        return run_context_service.list_artifacts(db, run_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/artifacts", response_model=models.Artifact)
+def create_run_artifact(
+    run_id: str,
+    artifact: models.ArtifactCreate,
+    db: Session = Depends(get_db),
+) -> models.Artifact:
+    try:
+        return run_context_service.create_artifact(db, run_id, artifact)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/runs/{run_id}/cancel", response_model=models.Run)
@@ -19059,6 +19339,14 @@ def download_artifact(path: str = Query(..., description="Path relative to /shar
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/artifacts/{artifact_id}", response_model=models.Artifact)
+def get_artifact(artifact_id: str, db: Session = Depends(get_db)) -> models.Artifact:
+    artifact = run_context_service.get_artifact(db, artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="artifact_not_found")
+    return artifact
 
 
 @app.get("/workspace/download")
