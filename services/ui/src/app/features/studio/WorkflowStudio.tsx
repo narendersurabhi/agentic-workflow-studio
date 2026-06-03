@@ -1705,6 +1705,8 @@ export default function WorkflowStudio() {
   const [activeStudioPanelMenuId, setActiveStudioPanelMenuId] =
     useState<FloatingStudioPanelId | null>(null);
   const [drawerPanelId, setDrawerPanelId] = useState<FloatingStudioPanelId | null>(null);
+  const [drawerWidth, setDrawerWidth] = useState(320);
+  const drawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const dagCanvasDragOffsetRef = useRef<CanvasPoint>({ x: 0, y: 0 });
   const dagCanvasViewportRef = useRef<HTMLDivElement | null>(null);
@@ -2142,6 +2144,22 @@ export default function WorkflowStudio() {
       setSelectedDagNodeId(null);
     }
   }, [selectedDagNodeId, visualChainNodes]);
+
+  // Drawer resize mouse handlers
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      if (!drawerResizeRef.current) return;
+      const delta = drawerResizeRef.current.startX - event.clientX;
+      setDrawerWidth(Math.max(260, Math.min(600, drawerResizeRef.current.startWidth + delta)));
+    };
+    const onMouseUp = () => { drawerResizeRef.current = null; };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
 
   // Auto-open inspector drawer when a node is selected
   useEffect(() => {
@@ -6905,10 +6923,20 @@ export default function WorkflowStudio() {
                     const isOpen = Boolean(drawerPanelId && definition);
                     return (
                       <div
-                        className={`pointer-events-auto absolute right-0 top-0 z-30 flex h-full w-[320px] flex-col overflow-hidden rounded-r-[24px] border-l border-white/10 bg-[rgba(9,14,23,0.88)] shadow-[-12px_0_40px_rgba(9,14,23,0.4)] backdrop-blur-xl transition-transform duration-200 ${
+                        className={`pointer-events-auto absolute right-0 top-0 z-30 flex h-full flex-col overflow-hidden rounded-r-[24px] border-l border-white/10 bg-[rgba(9,14,23,0.88)] shadow-[-12px_0_40px_rgba(9,14,23,0.4)] backdrop-blur-xl transition-transform duration-200 ${
                           isOpen ? "translate-x-0" : "translate-x-full"
                         }`}
+                        style={{ width: drawerWidth }}
                       >
+                        {/* Left resize handle */}
+                        <div
+                          className="absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize transition hover:bg-sky-300/30 active:bg-sky-300/50"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            drawerResizeRef.current = { startX: event.clientX, startWidth: drawerWidth };
+                          }}
+                          title="Drag to resize"
+                        />
                         {definition ? (
                           <>
                             {/* Drawer header */}
