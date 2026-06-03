@@ -6983,70 +6983,47 @@ const openTemplateModal = (template: Template) => {
         }
       >
         <section className="relative">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
-                AI Workflow Workspace
-              </div>
-              <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
-                Start, Manage, and Monitor AI Workflows
-              </h2>
-              <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
-                Launch prompt-based runs, chat-assisted requests, saved workflows, knowledge, and
-                reusable context from one product workspace.
-              </p>
+          <div className="mb-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+              AI Workflow Workspace
             </div>
-
-            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                run from prompt
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                workflow chat
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                studio
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                context
-              </span>
-              <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                knowledge
-              </span>
-            </div>
+            <h2 className="mt-1 text-xl font-semibold tracking-tight text-text-hi">
+              Start, Manage, and Monitor AI Workflows
+            </h2>
+            <p className="mt-0.5 text-xs text-text-md">
+              Launch prompt-based runs, chat-assisted requests, saved workflows, knowledge, and reusable context.
+            </p>
           </div>
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {welcomeSurfaceCards.map((card) => (
               <Link
                 key={card.href}
                 href={card.href}
-                className="group rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-gradient-panel"
+                className="group rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28"
               >
-                <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div
-                      className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${card.accentClassName}`}
-                    >
+                    <div className={`text-[10px] font-semibold uppercase tracking-[0.22em] ${card.accentClassName}`}>
                       {card.eyebrow}
                     </div>
-                    <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
+                    <h3 className="mt-1 text-base font-semibold tracking-tight text-text-hi">
                       {card.title}
                     </h3>
                   </div>
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-subtle bg-surface-1 text-sm font-semibold uppercase tracking-[0.18em] text-text-hi">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-xs font-semibold uppercase tracking-[0.16em] text-text-hi">
                     {card.marker}
                   </div>
                 </div>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-text-md">
+                <p className="mt-2 text-xs leading-5 text-text-md">
                   {card.description}
                 </p>
-                <div className="mt-5 flex items-center justify-between gap-3">
-                  <span className="inline-flex items-center rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-hi">
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi">
                     {card.badge}
                   </span>
-                  <span className="inline-flex items-center rounded-full border border-subtle bg-surface-1 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-surface-1">
-                    {card.cta}
+                  <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition group-hover:border-sky-300/30">
+                    {card.cta} →
                   </span>
                 </div>
               </Link>
