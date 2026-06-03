@@ -42,6 +42,21 @@ def test_agent_run_honours_explicit_agent_id() -> None:
     assert result["agents"][0]["agent_id"] == "lead-agent"
 
 
+def test_resolve_input_schema_finds_real_schema_regardless_of_cwd(tmp_path, monkeypatch) -> None:
+    # Even when CWD has no schemas/ dir (as in the worker container), the
+    # resolver locates the schema relative to the module / repo root.
+    monkeypatch.chdir(tmp_path)
+
+    class _Spec:
+        input_schema_ref = "agent_run_capability_input"
+        capability_id = "agent.run"
+
+    schema = agent_tools._resolve_input_schema(_Spec())
+    assert schema.get("type") == "object"
+    assert "goal" in schema.get("properties", {})
+    assert "allowed_capability_ids" in schema.get("properties", {})
+
+
 def test_accumulate_spawned_agents_bubbles_only_agent_run_children() -> None:
     spawned: list[dict] = []
     # A sub-agent.run call contributes its reported agent tree.

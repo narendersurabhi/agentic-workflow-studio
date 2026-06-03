@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
@@ -310,17 +311,38 @@ def _agent_run_anthropic(
 
 # ─── Schema resolution ────────────────────────────────────────────────────────
 
+def _schema_search_dirs() -> list[Path]:
+    """Candidate locations for capability input-schema JSON files.
+
+    Robust across services: the worker runs from /app/services/worker (CWD has
+    no schemas/), while /app/schemas exists. Resolving relative to this module
+    (libs/tools/agent_tools.py → <root>/schemas) works in both the container
+    (/app/schemas) and local dev (repo-root schemas/), regardless of CWD.
+    """
+    dirs: list[Path] = []
+    env_dir = os.getenv("SCHEMAS_DIR")
+    if env_dir:
+        dirs.append(Path(env_dir))
+    dirs.append(Path(__file__).resolve().parents[2] / "schemas")
+    dirs.append(Path("schemas"))
+    dirs.append(Path("/app/schemas"))
+    return dirs
+
+
 def _resolve_input_schema(spec: Any) -> dict[str, Any]:
     """Load the declared JSON schema for a capability, falling back to an empty object schema."""
     ref = getattr(spec, "input_schema_ref", None)
     if not ref:
         return {"type": "object", "properties": {}}
-    schema_path = Path("schemas") / f"{ref}.json"
-    try:
-        return json.loads(schema_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("agent_run: could not load input schema for %s", spec.capability_id)
-        return {"type": "object", "properties": {}}
+    for base in _schema_search_dirs():
+        schema_path = base / f"{ref}.json"
+        try:
+            if schema_path.is_file():
+                return json.loads(schema_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+    LOGGER.warning("agent_run: could not load input schema for %s", spec.capability_id)
+    return {"type": "object", "properties": {}}
 
 
 # ─── Public entry point ───────────────────────────────────────────────────────
