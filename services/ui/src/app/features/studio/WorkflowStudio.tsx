@@ -3213,6 +3213,23 @@ export default function WorkflowStudio() {
     }));
   };
 
+  const handleDropCapability = (
+    type: "capability" | "control" | "agent",
+    id: string,
+    x: number,
+    y: number
+  ) => {
+    const pos = { x, y };
+    if (type === "capability") {
+      addCapabilityNodeToStudio(id, pos);
+    } else if (type === "control") {
+      addControlNodeToStudio(id as StudioControlKind, pos);
+    } else if (type === "agent") {
+      const definition = agentDefinitions.find((d) => d.id === id);
+      if (definition) addAgentNodeToStudio(id, definition, pos);
+    }
+  };
+
   const addTemplateToStudio = (template: "single" | "sequential" | "agent") => {
     const templates: Record<string, string[]> = {
       single: ["codegen.autonomous"],
@@ -3226,7 +3243,7 @@ export default function WorkflowStudio() {
     setTimeout(() => { autoLayoutDagCanvas(); }, 50);
   };
 
-  const addCapabilityNodeToStudio = (capabilityId: string) => {
+  const addCapabilityNodeToStudio = (capabilityId: string, dropPosition?: { x: number; y: number }) => {
     const capability = capabilityById.get(capabilityId);
     const context = contextState.context;
     const nodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3278,14 +3295,14 @@ export default function WorkflowStudio() {
     });
 
     setComposerNodePositions((prev) => {
+      if (dropPosition) {
+        return { ...prev, [nodeId]: dropPosition };
+      }
       const anchorPosition = selectedDagNodeId ? prev[selectedDagNodeId] : null;
       return {
         ...prev,
         [nodeId]: anchorPosition
-          ? {
-              x: anchorPosition.x + DAG_CANVAS_NODE_WIDTH + 64,
-              y: anchorPosition.y,
-            }
+          ? { x: anchorPosition.x + DAG_CANVAS_NODE_WIDTH + 64, y: anchorPosition.y }
           : defaultDagNodePosition(Object.keys(prev).length),
       };
     });
@@ -3293,7 +3310,7 @@ export default function WorkflowStudio() {
     setStudioNotice(`Added ${capabilityId} to the workflow.`);
   };
 
-  const addControlNodeToStudio = (kind: StudioControlKind) => {
+  const addControlNodeToStudio = (kind: StudioControlKind, dropPosition?: { x: number; y: number }) => {
     const nodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const controlId = `studio.control.${kind}`;
     setComposerDraft((prev) => {
@@ -3323,6 +3340,7 @@ export default function WorkflowStudio() {
       };
     });
     setComposerNodePositions((prev) => {
+      if (dropPosition) return { ...prev, [nodeId]: dropPosition };
       const anchorPosition = selectedDagNodeId ? prev[selectedDagNodeId] : null;
       return {
         ...prev,
@@ -3335,7 +3353,7 @@ export default function WorkflowStudio() {
     setStudioNotice(`Added ${kind.replace("_", " ")} control node.`);
   };
 
-  const addAgentNodeToStudio = (definitionId: string, definition: AgentDefinition) => {
+  const addAgentNodeToStudio = (definitionId: string, definition: AgentDefinition, dropPosition?: { x: number; y: number }) => {
     const nodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setComposerDraft((prev) => {
       const anchorNode =
@@ -3371,6 +3389,7 @@ export default function WorkflowStudio() {
       };
     });
     setComposerNodePositions((prev) => {
+      if (dropPosition) return { ...prev, [nodeId]: dropPosition };
       const anchorPosition = selectedDagNodeId ? prev[selectedDagNodeId] : null;
       return {
         ...prev,
@@ -6739,6 +6758,7 @@ export default function WorkflowStudio() {
                       showToolbar
                       showBlueprintPreview
                       onFitToScreen={fitNodesToView}
+                      onDropCapability={handleDropCapability}
                       onZoomIn={zoomInDagCanvas}
                       onZoomOut={zoomOutDagCanvas}
                       zoomInDisabled={dagCanvasZoom >= DAG_CANVAS_ZOOM_MAX}

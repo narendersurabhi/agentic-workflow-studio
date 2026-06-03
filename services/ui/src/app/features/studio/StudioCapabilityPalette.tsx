@@ -295,7 +295,12 @@ export default function StudioCapabilityPalette({
                             <button
                               key={`studio-agent-${item.id}`}
                               type="button"
-                              className="group flex w-full items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1"
+                              draggable
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData("text/plain", JSON.stringify({ type: "agent", id: item.id }));
+                                e.dataTransfer.effectAllowed = "copy";
+                              }}
+                              className="group flex w-full cursor-grab items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1 active:cursor-grabbing"
                               style={{
                                 borderColor: hexToRgba(visual.stroke, 0.28),
                                 background: `linear-gradient(180deg, ${hexToRgba(visual.fill, 0.18)} 0%, rgba(26,35,46,0.58) 100%)`,
@@ -328,7 +333,12 @@ export default function StudioCapabilityPalette({
                               <button
                                 key={`studio-control-${item.kind}`}
                                 type="button"
-                                className="group flex w-full items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1"
+                                draggable
+                                onDragStart={(e) => {
+                                  e.dataTransfer.setData("text/plain", JSON.stringify({ type: "control", id: item.kind }));
+                                  e.dataTransfer.effectAllowed = "copy";
+                                }}
+                                className="group flex w-full cursor-grab items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1 active:cursor-grabbing"
                                 style={{
                                   borderColor: hexToRgba(visual.stroke, 0.28),
                                   background: `linear-gradient(180deg, ${hexToRgba(
@@ -363,7 +373,13 @@ export default function StudioCapabilityPalette({
                               <button
                                 key={`studio-capability-${item.id}`}
                                 type="button"
-                                className="group flex w-full items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1 disabled:cursor-not-allowed"
+                                draggable={item.enabled}
+                                onDragStart={(e) => {
+                                  if (!item.enabled) { e.preventDefault(); return; }
+                                  e.dataTransfer.setData("text/plain", JSON.stringify({ type: "capability", id: item.id }));
+                                  e.dataTransfer.effectAllowed = "copy";
+                                }}
+                                className="group flex w-full cursor-grab items-center gap-3 rounded-[10px] border px-2.5 py-1.5 text-left transition hover:border-default-theme hover:bg-surface-1 disabled:cursor-not-allowed active:cursor-grabbing"
                                 style={{
                                   borderColor: hexToRgba(visual.stroke, item.enabled ? 0.26 : 0.14),
                                   background: item.enabled
