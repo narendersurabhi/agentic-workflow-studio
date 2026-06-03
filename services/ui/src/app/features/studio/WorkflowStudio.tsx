@@ -6039,27 +6039,27 @@ export default function WorkflowStudio() {
       <div
         id={options.panelDomId}
         key={`docked-studio-panel-${panelId}`}
-        className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl"
+        className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/12 bg-gradient-panel-deep shadow-[0_8px_20px_rgba(15,23,42,0.2)] backdrop-blur-xl"
       >
-        <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.46)] px-3 py-2">
+        <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.6)] px-3 py-2">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 aria-label={isMinimized ? `Open ${title}` : `Minimize ${title}`}
                 title={isMinimized ? "Open panel" : "Minimize panel"}
-                className="h-3 w-3 rounded-full bg-[#f6cf58] shadow-[inset_0_1px_0_rgba(255,255,255,0.34),0_0_0_1px_rgba(125,77,0,0.2)] transition hover:brightness-105"
+                className="h-2.5 w-2.5 rounded-full bg-[#f6cf58] shadow-[inset_0_1px_0_rgba(255,255,255,0.34),0_0_0_1px_rgba(125,77,0,0.2)] transition hover:brightness-105"
                 onClick={() => toggleFloatingStudioPanelMinimized(panelId)}
               />
               <button
                 type="button"
                 aria-label={`Restore ${title}`}
                 title="Reset panel"
-                className="h-3 w-3 rounded-full bg-[#50d16e] shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_0_0_1px_rgba(6,95,70,0.2)] transition hover:brightness-105"
+                className="h-2.5 w-2.5 rounded-full bg-[#50d16e] shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_0_0_1px_rgba(6,95,70,0.2)] transition hover:brightness-105"
                 onClick={() => restoreFloatingStudioPanel(panelId)}
               />
             </div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-hi">
               {title}
             </div>
           </div>
@@ -6107,7 +6107,7 @@ export default function WorkflowStudio() {
           floatingStudioPanelRefs.current[panelId] = node;
         }}
         key={`floating-studio-panel-${panelId}`}
-        className="studio-contrast-surface pointer-events-auto absolute flex flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-mid shadow-[0_28px_64px_rgba(15,23,42,0.34)] backdrop-blur-xl"
+        className="studio-contrast-surface pointer-events-auto absolute flex flex-col overflow-hidden rounded-[20px] border border-white/12 bg-gradient-panel-mid shadow-[0_12px_32px_rgba(15,23,42,0.28)] backdrop-blur-xl"
         style={{
           left: layout.x,
           top: layout.y,
@@ -6118,7 +6118,7 @@ export default function WorkflowStudio() {
         onMouseDown={() => bringFloatingStudioPanelToFront(panelId)}
       >
         <div
-          className="flex cursor-grab items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.38)] px-3 py-2 active:cursor-grabbing"
+          className="flex cursor-grab items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.55)] px-3 py-2 active:cursor-grabbing"
           onMouseDown={(event) => beginFloatingStudioPanelDrag(panelId, event)}
         >
           <div className="flex items-center gap-3">
@@ -6144,14 +6144,14 @@ export default function WorkflowStudio() {
                 onClick={() => restoreFloatingStudioPanel(panelId)}
               />
             </div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-hi">
               {title}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-subtle hover:bg-white/[0.1]"
+              className="rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:bg-white/[0.12]"
               onMouseDown={(event) => {
                 event.stopPropagation();
               }}
@@ -6635,16 +6635,30 @@ export default function WorkflowStudio() {
                 <div
                   ref={studioWorkspaceStageRef}
                   id="studio-graph-section"
-                  className={`studio-contrast-surface relative mt-3 h-[calc(100vh-172px)] min-h-[980px] overflow-hidden rounded-[24px] bg-gradient-panel-mid shadow-[0_12px_32px_rgba(15,23,42,0.14)] ${
+                  className={`studio-contrast-surface relative mt-3 h-[calc(100vh-172px)] min-h-[980px] overflow-hidden rounded-[24px] shadow-[0_12px_32px_rgba(15,23,42,0.14)] ${
                     studioWorkspaceMode === "focus_graph"
                       ? "ring-2 ring-sky-300/25"
                       : "ring-1 ring-white/10"
                   }`}
+                  style={{
+                    background:
+                      studioWorkspaceMode === "focus_graph"
+                        ? "radial-gradient(ellipse at 60% 20%, rgba(56,189,248,0.06) 0%, transparent 60%), radial-gradient(ellipse at 20% 80%, rgba(99,102,241,0.05) 0%, transparent 55%), var(--gradient-panel-mid, #0d1524)"
+                        : "radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, radial-gradient(ellipse at 70% 10%, rgba(56,189,248,0.05) 0%, transparent 50%), var(--gradient-panel-mid, #0d1524)",
+                  }}
                 >
-                  <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-hi">
-                    {studioWorkspaceMode === "focus_graph"
-                      ? "Focus Graph active. Press F to restore your workspace."
-                      : "Minimized panels collapse into the stage shelf so the graph stays clear"}
+                  {/* Stage status pill */}
+                  <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2">
+                    <div className={`flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] backdrop-blur-sm ${
+                      studioWorkspaceMode === "focus_graph"
+                        ? "border-sky-300/35 bg-accent-sky/80 text-text-sky-token"
+                        : "border-white/10 bg-black/30 text-text-lo"
+                    }`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${studioWorkspaceMode === "focus_graph" ? "bg-sky-400" : "bg-white/20"}`} />
+                      {studioWorkspaceMode === "focus_graph"
+                        ? "Focus mode — press F to restore"
+                        : "Process Flow Designer"}
+                    </div>
                   </div>
 
                   <div
@@ -6777,7 +6791,7 @@ export default function WorkflowStudio() {
                         height: bottomDockRect.height,
                       }}
                     >
-                      <div className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)] backdrop-blur-xl">
+                      <div className="studio-contrast-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/12 bg-gradient-panel-deep shadow-[0_8px_20px_rgba(15,23,42,0.2)] backdrop-blur-xl">
                         <div
                           className="h-2 cursor-ns-resize transition hover:bg-surface-1"
                           onMouseDown={beginStudioBottomTrayResize}
@@ -6858,8 +6872,8 @@ export default function WorkflowStudio() {
                         height: minimizedShelfRect.height,
                       }}
                     >
-                      <div className="flex h-full items-center gap-3 overflow-x-auto rounded-[22px] border border-subtle bg-[rgba(9,16,27,0.52)] px-3 shadow-[0_18px_40px_rgba(15,23,42,0.2)] backdrop-blur-xl">
-                        <div className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-hi">
+                      <div className="flex h-full items-center gap-3 overflow-x-auto rounded-[16px] border border-white/10 bg-[rgba(9,16,27,0.65)] px-3 shadow-[0_6px_16px_rgba(15,23,42,0.18)] backdrop-blur-xl">
+                        <div className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.24em] text-text-lo">
                           Minimized
                         </div>
                         <div className="flex min-w-0 items-center gap-2">
