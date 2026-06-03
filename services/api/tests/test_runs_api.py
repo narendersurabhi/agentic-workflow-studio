@@ -671,6 +671,45 @@ def test_multi_agent_task_assignment_and_attribution() -> None:
     assert researcher["assigned_task_id"]
 
 
+def test_agent_run_result_materializes_dynamic_agents_into_registry() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        # Shape of an agent.run result: an 'agents' tree (self + spawned sub-agents).
+        main._store_task_result(
+            task.id,
+            {
+                "task_id": task.id,
+                "run_id": run_id,
+                "status": "completed",
+                "result": "done",
+                "agents": [
+                    {"agent_id": "agent-run-d0-aaa", "role": "lead", "depth": 0, "status": "done", "steps_taken": 3},
+                    {"agent_id": "agent-run-d1-bbb", "role": "agent", "depth": 1, "status": "done", "steps_taken": 2},
+                ],
+                "tool_calls": [],
+            },
+        )
+
+    agents = client.get(f"/runs/{run_id}/agents").json()
+    by_id = {agent["agent_id"]: agent for agent in agents}
+    assert "agent-run-d0-aaa" in by_id
+    assert "agent-run-d1-bbb" in by_id
+    assert by_id["agent-run-d0-aaa"]["role"] == "lead"
+    assert by_id["agent-run-d0-aaa"]["status"] == "done"
+    # Spawn provenance is recorded in metadata.
+    assert by_id["agent-run-d1-bbb"]["metadata"].get("spawned_by") == "agent.run"
+    assert by_id["agent-run-d1-bbb"]["metadata"].get("depth") == 1
+
+    # They surface in the run context bundle / debugger alongside static agents.
+    context = client.get(f"/runs/{run_id}/context").json()
+    assert {"agent-run-d0-aaa", "agent-run-d1-bbb"} <= {a["agent_id"] for a in context["agents"]}
+
+
 def test_execution_request_snapshot_captures_retry_policy_and_context_provenance() -> None:
     job = _create_job()
     _create_plan(job["id"])

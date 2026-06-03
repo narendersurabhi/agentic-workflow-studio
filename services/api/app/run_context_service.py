@@ -418,6 +418,84 @@ def list_agents(db: Session, run_id: str) -> list[models.AgentDescriptor]:
     return [agent_from_record(row) for row in rows]
 
 
+def materialize_dynamic_agents(
+    db: Session,
+    *,
+    run_record: RunRecord,
+    result: Mapping[str, Any],
+    task_id: str | None = None,
+) -> list[str]:
+    """Register agents reported by an agent.run result into the durable registry.
+
+    An agent.run result carries an ``agents`` list (this invocation + every
+    recursively spawned sub-agent). Each is upserted into agent_registry so the
+    orchestrator's runtime-spawned agents become first-class citizens — visible
+    in the Agents panel and available for attribution. Best-effort.
+    """
+    if not isinstance(result, Mapping):
+        return []
+    reported = result.get("agents")
+    if not isinstance(reported, Sequence) or isinstance(reported, (str, bytes)):
+        return []
+    registered: list[str] = []
+    now = utcnow()
+    for entry in reported:
+        if not isinstance(entry, Mapping):
+            continue
+        agent_id = _clean_optional(entry.get("agent_id"))
+        if agent_id is None:
+            continue
+        status = _clean_optional(entry.get("status")) or "done"
+        role = _clean_optional(entry.get("role")) or "agent"
+        metadata = {
+            "spawned_by": "agent.run",
+            "depth": entry.get("depth"),
+            "steps_taken": entry.get("steps_taken"),
+            "goal": entry.get("goal"),
+            "origin_task_id": task_id,
+        }
+        existing = (
+            db.query(AgentRegistryRecord)
+            .filter(
+                AgentRegistryRecord.run_id == run_record.id,
+                AgentRegistryRecord.agent_id == agent_id,
+            )
+            .first()
+        )
+        if existing is None:
+            db.add(
+                AgentRegistryRecord(
+                    id=str(uuid.uuid4()),
+                    run_id=run_record.id,
+                    job_id=run_record.job_id,
+                    agent_id=agent_id,
+                    role=role,
+                    status=status,
+                    assigned_task_id=task_id,
+                    capabilities_json=[],
+                    metadata_json={k: v for k, v in metadata.items() if v is not None},
+                    last_heartbeat=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        else:
+            existing.status = status
+            existing.role = existing.role or role
+            if task_id:
+                existing.assigned_task_id = task_id
+            existing.metadata_json = {
+                **dict(existing.metadata_json or {}),
+                **{k: v for k, v in metadata.items() if v is not None},
+            }
+            existing.last_heartbeat = now
+            existing.updated_at = now
+        registered.append(agent_id)
+    if registered:
+        db.flush()
+    return registered
+
+
 def agent_from_record(record: AgentRegistryRecord) -> models.AgentDescriptor:
     return models.AgentDescriptor(
         id=record.id,
@@ -675,6 +753,14 @@ def index_task_result_collaboration(
     if run_record is None:
         return []
     producing_agent = _clean_optional(producing_agent_id)
+    # Dynamic agents: an agent.run result reports the agent tree it spawned.
+    # Register each in the durable registry so they become visible + attributed.
+    materialize_dynamic_agents(
+        db,
+        run_record=run_record,
+        result=result,
+        task_id=task_id,
+    )
     summary = task_result_summary(result)
     if producing_agent is not None:
         summary = {**summary, "producing_agent_id": producing_agent}
