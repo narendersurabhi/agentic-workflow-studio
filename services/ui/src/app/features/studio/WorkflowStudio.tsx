@@ -1651,6 +1651,9 @@ export default function WorkflowStudio() {
   const [chainPreflightResult, setChainPreflightResult] = useState<ChainPreflightResult | null>(null);
   const [composerCompileResult, setComposerCompileResult] = useState<ComposerCompileResponse | null>(null);
   const [savedWorkflowDefinition, setSavedWorkflowDefinition] = useState<WorkflowDefinition | null>(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveDialogTitle, setSaveDialogTitle] = useState("");
+  const [saveDialogGoal, setSaveDialogGoal] = useState("");
   const [publishedWorkflowVersion, setPublishedWorkflowVersion] = useState<WorkflowVersion | null>(null);
   const [loadedWorkflowVersionId, setLoadedWorkflowVersionId] = useState<string | null>(null);
   const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([]);
@@ -4673,13 +4676,15 @@ export default function WorkflowStudio() {
     setPendingWorkbenchWorkflowDraft(null);
   }, [pendingWorkbenchWorkflowDraft]);
 
-  const saveWorkflowDefinition = async () => {
+  const executeSaveWorkflowDefinition = async (overrideTitle?: string, overrideGoal?: string) => {
     if (contextState.invalid) {
       setStudioNotice("Workflow drafts can only be saved when Context JSON is valid.");
       return null;
     }
     setWorkflowActionLoading("save");
     try {
+      const title = overrideTitle || composerDraft.summary || goal.trim() || "Workflow Studio draft";
+      const resolvedGoal = overrideGoal ?? goal.trim();
       const response = await apiFetch(
         savedWorkflowDefinition
           ? `${apiUrl}/workflows/definitions/${encodeURIComponent(savedWorkflowDefinition.id)}`
@@ -4688,8 +4693,8 @@ export default function WorkflowStudio() {
           method: savedWorkflowDefinition ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            title: composerDraft.summary || goal.trim() || "Workflow Studio draft",
-            goal: goal.trim(),
+            title,
+            goal: resolvedGoal,
             context_json: withWorkspaceUserContext(contextState.context),
             draft: persistedWorkflowDraft,
             user_id: workspaceUserId.trim() || undefined,
@@ -4712,7 +4717,7 @@ export default function WorkflowStudio() {
       void refreshWorkflowDefinitions();
       void refreshWorkflowTriggers(definition.id);
       void refreshWorkflowRuns(definition.id);
-      setStudioNotice(`Saved draft ${definition.title}.`);
+      setStudioNotice(`Saved draft "${definition.title}".`);
       return definition;
     } catch (error) {
       setStudioNotice(error instanceof Error ? error.message : "Failed to save workflow draft.");
@@ -4720,6 +4725,18 @@ export default function WorkflowStudio() {
     } finally {
       setWorkflowActionLoading(null);
     }
+  };
+
+  const saveWorkflowDefinition = async () => {
+    // Existing workflow — save immediately (title already set)
+    if (savedWorkflowDefinition) {
+      return executeSaveWorkflowDefinition();
+    }
+    // New workflow — open dialog to collect name and description
+    setSaveDialogTitle(composerDraft.summary.trim() || goal.trim() || "");
+    setSaveDialogGoal(goal.trim());
+    setSaveDialogOpen(true);
+    return null;
   };
 
   const publishWorkflowVersion = async () => {
@@ -6845,6 +6862,85 @@ export default function WorkflowStudio() {
           <option key={`studio-capability-id-option-${item.id}`} value={item.id} />
         ))}
       </datalist>
+
+      {/* ── Save workflow dialog ── */}
+      {saveDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <button
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setSaveDialogOpen(false)}
+            aria-label="Cancel"
+          />
+          <div className="relative z-10 w-full max-w-md rounded-[24px] border border-white/12 bg-[rgba(9,14,23,0.95)] p-6 shadow-[0_32px_80px_rgba(9,14,23,0.7)] backdrop-blur-xl">
+            <div className="mb-5">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+                Workflow Studio
+              </div>
+              <h2 className="mt-1 text-lg font-semibold tracking-tight text-text-hi">
+                Save workflow
+              </h2>
+              <p className="mt-0.5 text-xs text-text-md">
+                Give this workflow a name before saving. You can rename it later from the Workflows page.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                  Name <span className="text-rose-400">*</span>
+                </div>
+                <input
+                  autoFocus
+                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10"
+                  placeholder="e.g. Document generation pipeline"
+                  value={saveDialogTitle}
+                  onChange={(e) => setSaveDialogTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && saveDialogTitle.trim()) {
+                      setSaveDialogOpen(false);
+                      void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+                    }
+                    if (e.key === "Escape") setSaveDialogOpen(false);
+                  }}
+                />
+              </label>
+              <label className="block">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                  Goal <span className="text-text-lo">(optional)</span>
+                </div>
+                <textarea
+                  rows={2}
+                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10 resize-none"
+                  placeholder="What does this workflow accomplish?"
+                  value={saveDialogGoal}
+                  onChange={(e) => setSaveDialogGoal(e.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-md transition hover:text-text-hi"
+                onClick={() => setSaveDialogOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-xl border border-sky-300/35 bg-accent-sky px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/55 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!saveDialogTitle.trim()}
+                onClick={() => {
+                  setSaveDialogOpen(false);
+                  void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+                }}
+              >
+                Save workflow
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }
