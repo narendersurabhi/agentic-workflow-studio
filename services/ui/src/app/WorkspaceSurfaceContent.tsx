@@ -2008,7 +2008,17 @@ const statusColors: Record<string, { fill: string; stroke: string }> = {
   completed: { fill: "#dcfce7", stroke: "#22c55e" },
   accepted: { fill: "#bbf7d0", stroke: "#16a34a" },
   failed: { fill: "#fecaca", stroke: "#ef4444" },
-  canceled: { fill: "#f1f5f9", stroke: "#94a3b8" }
+  canceled: { fill: "#f1f5f9", stroke: "#94a3b8" },
+  skipped: { fill: "#f5f3ff", stroke: "#a78bfa" },
+};
+
+const taskStatusBadgeClass = (status: string) => {
+  if (status === "failed") return "bg-rose-100 text-rose-700";
+  if (status === "completed" || status === "accepted") return "bg-emerald-100 text-emerald-700";
+  if (status === "running") return "bg-amber-100 text-amber-700";
+  if (status === "skipped") return "bg-violet-100 text-violet-700";
+  if (status === "canceled") return "bg-slate-100 text-slate-500";
+  return "bg-slate-100 text-slate-600";
 };
 
 const truncate = (value: string, length: number) =>
@@ -10598,7 +10608,7 @@ const openTemplateModal = (template: Template) => {
                                   <span className="text-xs font-semibold text-slate-800">
                                     {entry.task.name}
                                   </span>
-                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-slate-600">
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] ${taskStatusBadgeClass(taskStatus)}`}>
                                     {taskStatus}
                                   </span>
                                   <span className={`rounded-full px-2 py-0.5 text-[10px] ${categoryClass}`}>
@@ -10916,7 +10926,7 @@ const openTemplateModal = (template: Template) => {
                               <div className="mt-1 text-xs text-text-lo">{task.id}</div>
                             </div>
                             <div className="flex flex-col items-end gap-2">
-                              <span className="rounded-full bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-text-lo">
+                              <span className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.2em] ${taskStatusBadgeClass(task.status)}`}>
                                 {task.status}
                               </span>
                               <button

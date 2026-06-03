@@ -309,14 +309,42 @@ def _evaluate_execution_gate(
     }
 
 
+_BINARY_OPERATORS = (">=", "<=", "!=", "==", ">", "<", " contains ", " startswith ", " endswith ")
+
+
 def _evaluate_context_expression(expression: str, context: Mapping[str, Any]) -> Any:
-    for operator in ("==", "!="):
-        if operator in expression:
-            left, right = expression.split(operator, 1)
-            left_value = _resolve_context_operand(left.strip(), context)
-            right_value = _parse_expression_literal(right.strip(), context)
-            return left_value == right_value if operator == "==" else left_value != right_value
-    return _resolve_context_operand(expression.strip(), context)
+    normalized = expression.strip()
+    for op in _BINARY_OPERATORS:
+        if op not in normalized:
+            continue
+        left_raw, right_raw = normalized.split(op, 1)
+        left_value = _resolve_context_operand(left_raw.strip(), context)
+        right_value = _parse_expression_literal(right_raw.strip(), context)
+        op_clean = op.strip()
+        if op_clean == "==":
+            return left_value == right_value
+        if op_clean == "!=":
+            return left_value != right_value
+        if op_clean == "contains":
+            return right_value in str(left_value) if left_value is not None else False
+        if op_clean == "startswith":
+            return str(left_value).startswith(str(right_value)) if left_value is not None else False
+        if op_clean == "endswith":
+            return str(left_value).endswith(str(right_value)) if left_value is not None else False
+        try:
+            left_num = float(left_value) if left_value is not None else 0.0
+            right_num = float(right_value) if right_value is not None else 0.0
+        except (TypeError, ValueError):
+            return False
+        if op_clean == ">":
+            return left_num > right_num
+        if op_clean == "<":
+            return left_num < right_num
+        if op_clean == ">=":
+            return left_num >= right_num
+        if op_clean == "<=":
+            return left_num <= right_num
+    return _resolve_context_operand(normalized, context)
 
 
 def _resolve_context_operand(token: str, context: Mapping[str, Any]) -> Any:
@@ -324,7 +352,7 @@ def _resolve_context_operand(token: str, context: Mapping[str, Any]) -> Any:
     if not normalized:
         return None
     if normalized.startswith("context."):
-        base = _gate_job_context(context)
+        base: Any = _gate_job_context(context)
         segments = normalized.split(".")[1:]
     elif normalized.startswith("workflow.input."):
         base = _gate_workflow_scope(context, "inputs")
@@ -332,6 +360,9 @@ def _resolve_context_operand(token: str, context: Mapping[str, Any]) -> Any:
     elif normalized.startswith("workflow.variable."):
         base = _gate_workflow_scope(context, "variables")
         segments = normalized.split(".")[2:]
+    elif normalized.startswith("step."):
+        base = _gate_step_outputs(context)
+        segments = normalized.split(".")[1:]  # [task_name, ...field_path]
     else:
         raise ValueError("unsupported_operand")
     value: Any = base
@@ -380,6 +411,12 @@ def _gate_workflow_scope(context: Mapping[str, Any], scope: str) -> Mapping[str,
         return {}
     value = workflow.get(scope)
     return value if isinstance(value, Mapping) else {}
+
+
+def _gate_step_outputs(context: Mapping[str, Any]) -> Mapping[str, Any]:
+    # dependencies_by_name maps task_name -> output dict for all completed upstream tasks
+    by_name = context.get("dependencies_by_name")
+    return by_name if isinstance(by_name, Mapping) else {}
 
 
 def _execute_capability_tool(

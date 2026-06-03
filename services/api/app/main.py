@@ -10804,8 +10804,9 @@ def _validate_composer_control_node(
                 "node_id": node_id,
                 "field": "expression",
                 "message": (
-                    "Conditional control-flow supports only context.*, workflow.input.*, "
-                    "and workflow.variable.* expressions, with declared workflow keys."
+                    "Conditional control-flow supports context.*, workflow.input.*, "
+                    "workflow.variable.*, and step.{task_name}.* expressions. "
+                    "Operators: ==, !=, >, <, >=, <=, contains, startswith, endswith."
                 ),
             }
         )
@@ -10895,6 +10896,7 @@ def _composer_expression_operand(
         ("context.", "context"),
         ("workflow.input.", "workflow_input"),
         ("workflow.variable.", "workflow_variable"),
+        ("step.", "step_output"),
     ):
         if not normalized.startswith(prefix):
             continue
@@ -10925,6 +10927,9 @@ def _composer_expression_operand_supported(
     return True
 
 
+_COMPOSER_BINARY_OPERATORS = (">=", "<=", "!=", "==", ">", "<", " contains ", " startswith ", " endswith ")
+
+
 def _composer_if_expression_supported(
     expression: str,
     *,
@@ -10934,8 +10939,10 @@ def _composer_if_expression_supported(
     normalized = expression.strip()
     if not normalized:
         return False
-    if "==" in normalized or "!=" in normalized:
-        left, right = normalized.split("==" if "==" in normalized else "!=", 1)
+    for op in _COMPOSER_BINARY_OPERATORS:
+        if op not in normalized:
+            continue
+        left, right = normalized.split(op, 1)
         left = left.strip()
         right = right.strip()
         if not _composer_expression_operand_supported(
