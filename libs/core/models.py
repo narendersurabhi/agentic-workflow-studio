@@ -1084,6 +1084,15 @@ class IntentTuningCandidateExportResponse(BaseModel):
     items: List[IntentTuningCandidate] = Field(default_factory=list)
 
 
+class JobAgentSpec(BaseModel):
+    """An agent slot for a multi-agent job: a role that owns a capability domain."""
+
+    role: str
+    agent_id: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class JobCreate(BaseModel):
     goal: str
     context_json: Dict[str, Any] = Field(default_factory=dict)
@@ -1091,6 +1100,10 @@ class JobCreate(BaseModel):
     idempotency_key: Optional[str] = None
     planning_mode: PlanningMode = PlanningMode.static
     adaptive_policy: Dict[str, Any] = Field(default_factory=dict)
+    # Optional multi-agent team. When provided, each agent is pre-registered in
+    # the run's agent registry and owns the capabilities listed; the planner is
+    # constrained to the team's combined capabilities.
+    agents: List[JobAgentSpec] = Field(default_factory=list)
 
 
 class AgentDefinitionCreate(BaseModel):

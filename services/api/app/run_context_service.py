@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import os
+import re
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -434,6 +435,88 @@ def agent_from_record(record: AgentRegistryRecord) -> models.AgentDescriptor:
     )
 
 
+# ── Multi-agent roster (capability-team assignment) ────────────────────────────
+
+
+def _slugify_agent_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return cleaned or "agent"
+
+
+def normalize_agent_roster(specs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Normalise raw agent specs into a deterministic roster with unique ids."""
+    roster: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    for spec in specs:
+        if not isinstance(spec, Mapping):
+            continue
+        role = str(spec.get("role") or "").strip()
+        raw_id = str(spec.get("agent_id") or "").strip()
+        base_id = _slugify_agent_id(raw_id or role or f"agent-{len(roster) + 1}")
+        agent_id = base_id
+        suffix = 2
+        while agent_id in used_ids:
+            agent_id = f"{base_id}-{suffix}"
+            suffix += 1
+        used_ids.add(agent_id)
+        capabilities = [
+            str(cap).strip()
+            for cap in (spec.get("capabilities") or [])
+            if isinstance(cap, str) and str(cap).strip()
+        ]
+        roster.append(
+            {
+                "agent_id": agent_id,
+                "role": role or agent_id,
+                "capabilities": capabilities,
+                "metadata": dict(spec.get("metadata") or {}),
+            }
+        )
+    return roster
+
+
+def capability_matches(patterns: Sequence[str], capability_id: str) -> bool:
+    """True if capability_id matches any pattern (exact, 'prefix.*', or '*')."""
+    candidate = str(capability_id or "").strip()
+    if not candidate:
+        return False
+    for raw_pattern in patterns:
+        pattern = str(raw_pattern or "").strip()
+        if not pattern or pattern == "*":
+            return True
+        if pattern == candidate:
+            return True
+        if pattern.endswith(".*") and candidate.startswith(pattern[:-1]):
+            return True
+        if pattern.endswith("*") and candidate.startswith(pattern[:-1]):
+            return True
+    return False
+
+
+def resolve_agent_for_capabilities(
+    roster: Sequence[Mapping[str, Any]],
+    capability_ids: Sequence[str],
+) -> dict[str, Any] | None:
+    """Return the first roster agent whose capabilities cover any of the task's.
+
+    Agents with no declared capabilities act as wildcard owners only when no
+    capability-scoped agent matches.
+    """
+    wildcard: dict[str, Any] | None = None
+    for agent in roster:
+        if not isinstance(agent, Mapping):
+            continue
+        patterns = agent.get("capabilities") or []
+        if not patterns:
+            if wildcard is None:
+                wildcard = dict(agent)
+            continue
+        for capability_id in capability_ids:
+            if capability_matches(patterns, capability_id):
+                return dict(agent)
+    return wildcard
+
+
 # ── Distributed locks (durable, TTL via expires_at) ────────────────────────────
 
 
@@ -586,11 +669,15 @@ def index_task_result_collaboration(
     step_id: str,
     task_id: str,
     result: Mapping[str, Any],
+    producing_agent_id: str | None = None,
 ) -> list[models.Artifact]:
     run_record = get_run_record(db, run_id)
     if run_record is None:
         return []
+    producing_agent = _clean_optional(producing_agent_id)
     summary = task_result_summary(result)
+    if producing_agent is not None:
+        summary = {**summary, "producing_agent_id": producing_agent}
     write_task_snapshot(
         db,
         run_id=run_record.id,
@@ -598,6 +685,8 @@ def index_task_result_collaboration(
         task_id=task_id,
         summary=summary,
     )
+    if producing_agent is not None:
+        _touch_agent_for_task(db, run_record=run_record, agent_id=producing_agent, task_id=task_id)
     created: list[models.Artifact] = []
     for candidate in artifact_candidates_from_result(result):
         path = str(candidate.get("path") or "").strip()
@@ -610,7 +699,7 @@ def index_task_result_collaboration(
             path=path,
             step_id=step_id,
             task_id=task_id,
-            producing_agent_id=_clean_optional(candidate.get("producing_agent_id")),
+            producing_agent_id=_clean_optional(candidate.get("producing_agent_id")) or producing_agent,
             storage_key=_clean_optional(candidate.get("storage_key")),
             mime_type=_clean_optional(candidate.get("mime_type")),
             size_bytes=_optional_int(candidate.get("size_bytes")),
@@ -619,6 +708,37 @@ def index_task_result_collaboration(
         )
         created.append(artifact_from_record(record))
     return created
+
+
+def _touch_agent_for_task(
+    db: Session,
+    *,
+    run_record: RunRecord,
+    agent_id: str,
+    task_id: str,
+) -> None:
+    """Record that an agent produced a task result: refresh heartbeat + assignment.
+
+    Best-effort — never raises into the result-storage path.
+    """
+    try:
+        record = (
+            db.query(AgentRegistryRecord)
+            .filter(
+                AgentRegistryRecord.run_id == run_record.id,
+                AgentRegistryRecord.agent_id == agent_id,
+            )
+            .first()
+        )
+        if record is None:
+            return
+        now = utcnow()
+        record.assigned_task_id = task_id
+        record.last_heartbeat = now
+        record.updated_at = now
+        db.flush()
+    except Exception:  # noqa: BLE001
+        return
 
 
 def task_result_summary(result: Mapping[str, Any]) -> dict[str, Any]:

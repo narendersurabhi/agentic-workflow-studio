@@ -15,6 +15,7 @@ os.environ["CHAT_INTENT_VECTOR_SEARCH_ENABLED"] = "false"
 
 from libs.core import models  # noqa: E402
 from services.api.app import main  # noqa: E402
+from services.api.app import run_context_service  # noqa: E402
 from services.api.app.database import Base, SessionLocal, engine  # noqa: E402
 from services.api.app.models import (  # noqa: E402
     ExecutionRequestRecord,
@@ -557,6 +558,117 @@ def test_run_context_bundle_includes_agents_and_locks() -> None:
     debugger = client.get(f"/jobs/{job['id']}/debugger").json()
     assert any(agent["agent_id"] == "critic-1" for agent in debugger["agents"])
     assert any(lock["resource"] == "doc" for lock in debugger["locks"])
+
+
+def test_agent_roster_resolver_capability_matching() -> None:
+    roster = run_context_service.normalize_agent_roster(
+        [
+            {"role": "Researcher", "capabilities": ["memory.read", "filesystem.*"]},
+            {"role": "Writer", "capabilities": ["llm.text.generate", "document.*"]},
+            {"role": "Generalist"},  # no capabilities → wildcard fallback
+        ]
+    )
+    assert [agent["agent_id"] for agent in roster] == ["researcher", "writer", "generalist"]
+
+    researcher = run_context_service.resolve_agent_for_capabilities(
+        roster, ["filesystem.workspace.list"]
+    )
+    assert researcher is not None and researcher["agent_id"] == "researcher"
+
+    writer = run_context_service.resolve_agent_for_capabilities(roster, ["document.spec.generate"])
+    assert writer is not None and writer["agent_id"] == "writer"
+
+    # Unowned capability falls back to the wildcard (no-capabilities) agent.
+    fallback = run_context_service.resolve_agent_for_capabilities(roster, ["github.repo.list"])
+    assert fallback is not None and fallback["agent_id"] == "generalist"
+
+    # Duplicate roles get deduped ids.
+    dup = run_context_service.normalize_agent_roster([{"role": "critic"}, {"role": "critic"}])
+    assert [agent["agent_id"] for agent in dup] == ["critic", "critic-2"]
+
+
+def test_multi_agent_job_preregisters_team_and_constrains_capabilities() -> None:
+    response = client.post(
+        "/jobs",
+        json={
+            "goal": f"multi-agent-{uuid.uuid4()}",
+            "context_json": {},
+            "priority": 1,
+            "agents": [
+                {"role": "researcher", "capabilities": ["filesystem.workspace.list", "memory.read"]},
+                {"role": "writer", "capabilities": ["llm.text.generate"]},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    job = response.json()
+    run_id = job["run_id"]
+
+    # Agents are pre-registered in the run's registry.
+    agents = client.get(f"/runs/{run_id}/agents").json()
+    assert {agent["agent_id"] for agent in agents} == {"researcher", "writer"}
+    assert all(agent["status"] == "idle" for agent in agents)
+
+    # Roster + combined capability allow-list are recorded on the job.
+    with SessionLocal() as db:
+        record = db.query(JobRecord).filter(JobRecord.id == job["id"]).first()
+        assert record is not None
+        metadata = record.metadata_json or {}
+        roster = metadata.get("agents")
+        assert isinstance(roster, list) and len(roster) == 2
+        allowed = metadata.get("allowed_capability_ids")
+        assert "filesystem.workspace.list" in allowed
+        assert "llm.text.generate" in allowed
+
+
+def test_multi_agent_task_assignment_and_attribution() -> None:
+    response = client.post(
+        "/jobs",
+        json={
+            "goal": f"multi-agent-assign-{uuid.uuid4()}",
+            "context_json": {},
+            "priority": 1,
+            "agents": [
+                {"role": "researcher", "capabilities": ["filesystem.workspace.list"]},
+                {"role": "writer", "capabilities": ["llm.text.generate"]},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    job = response.json()
+    run_id = job["run_id"]
+    _create_plan(job["id"])  # task uses filesystem.workspace.list → owned by researcher
+
+    # The task payload is stamped with the owning agent.
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        payload = main._task_payload_from_record(task, correlation_id=f"corr-{uuid.uuid4()}", context={})
+        assigned = payload["context"].get("assigned_agent")
+        assert assigned is not None
+        assert assigned["agent_id"] == "researcher"
+
+        # Storing a result attributes artifacts to the producing agent.
+        main._store_task_result(
+            task.id,
+            {
+                "task_id": task.id,
+                "run_id": run_id,
+                "status": "completed",
+                "outputs": {"path": "artifacts/listing.json"},
+                "artifacts": [{"type": "document", "path": "artifacts/listing.json"}],
+                "tool_calls": [],
+            },
+        )
+
+    artifacts = client.get(f"/runs/{run_id}/artifacts").json()
+    listing = [a for a in artifacts if a["path"] == "listing.json"]
+    assert listing and listing[0]["producing_agent_id"] == "researcher"
+
+    # The producing agent's registry row records the assignment.
+    agents = client.get(f"/runs/{run_id}/agents").json()
+    researcher = next(agent for agent in agents if agent["agent_id"] == "researcher")
+    assert researcher["assigned_task_id"]
 
 
 def test_execution_request_snapshot_captures_retry_policy_and_context_provenance() -> None:

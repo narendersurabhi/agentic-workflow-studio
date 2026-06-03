@@ -14328,9 +14328,36 @@ def _task_context_with_run_context(
                 "artifacts",
                 [artifact.model_dump(mode="json") for artifact in bundle.artifacts],
             )
+            enriched.setdefault(
+                "agents",
+                [agent.model_dump(mode="json") for agent in bundle.agents],
+            )
+            enriched.setdefault(
+                "locks",
+                [lock.model_dump(mode="json") for lock in bundle.locks],
+            )
+            # Multi-agent: stamp the agent that owns this task's capability so the
+            # executor / debugger can attribute the work to a team member.
+            roster = _job_agent_roster(job)
+            if roster and "assigned_agent" not in enriched:
+                assigned = run_context_service.resolve_agent_for_capabilities(
+                    roster,
+                    list(record.tool_requests or []),
+                )
+                if assigned is not None:
+                    enriched["assigned_agent"] = {
+                        "agent_id": assigned.get("agent_id"),
+                        "role": assigned.get("role"),
+                    }
     except Exception:
         return enriched
     return enriched
+
+
+def _job_agent_roster(job: JobRecord | None) -> list[dict[str, Any]]:
+    metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
+    roster = metadata.get("agents")
+    return [agent for agent in roster if isinstance(agent, dict)] if isinstance(roster, list) else []
 
 
 def _task_payload_with_error(
@@ -15597,12 +15624,22 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
                 run_id = str(normalized_result.get("run_id") or "").strip()
                 if not run_id:
                     run_id = _durable_run_id(job, job_id)
+                producing_agent_id = None
+                roster = _job_agent_roster(job)
+                if roster:
+                    owner = run_context_service.resolve_agent_for_capabilities(
+                        roster,
+                        list(task.tool_requests or []),
+                    )
+                    if owner is not None:
+                        producing_agent_id = owner.get("agent_id")
                 run_context_service.index_task_result_collaboration(
                     db,
                     run_id=run_id,
                     step_id=task.id,
                     task_id=task.id,
                     result=normalized_result,
+                    producing_agent_id=producing_agent_id,
                 )
             db.commit()
     except Exception:
@@ -18217,6 +18254,22 @@ def _create_job_internal(
         metadata["current_revision_number"] = 0
     if not _delay_shadow_run_creation(metadata):
         metadata["canonical_run_id"] = job_id
+    # Multi-agent team: normalise the roster, constrain the planner to the team's
+    # combined capabilities, and remember the roster for assignment + registry.
+    agent_roster: list[dict[str, Any]] = []
+    if getattr(job, "agents", None):
+        agent_roster = run_context_service.normalize_agent_roster(
+            [spec.model_dump() for spec in job.agents]
+        )
+        if agent_roster:
+            metadata["agents"] = agent_roster
+            team_capabilities: list[str] = []
+            for agent in agent_roster:
+                for capability_id in agent.get("capabilities", []):
+                    if capability_id != "*" and capability_id not in team_capabilities:
+                        team_capabilities.append(capability_id)
+            if team_capabilities and not metadata.get("allowed_capability_ids"):
+                metadata["allowed_capability_ids"] = team_capabilities
     record = JobRecord(
         id=job_id,
         goal=job.goal,
@@ -18231,6 +18284,21 @@ def _create_job_internal(
     if not _delay_shadow_run_creation(metadata):
         _upsert_shadow_run(db, job_record=record)
     db.commit()
+    if agent_roster and not _delay_shadow_run_creation(metadata):
+        for agent in agent_roster:
+            try:
+                run_context_service.register_agent(
+                    db,
+                    job_id,
+                    models.AgentRegistration(
+                        agent_id=agent["agent_id"],
+                        role=agent.get("role", ""),
+                        capabilities=list(agent.get("capabilities", [])),
+                        metadata=dict(agent.get("metadata", {})),
+                    ),
+                )
+            except (KeyError, ValueError):
+                continue
     jobs_created_total.inc()
     if interaction_summaries_raw:
         _persist_interaction_summaries_memory(
