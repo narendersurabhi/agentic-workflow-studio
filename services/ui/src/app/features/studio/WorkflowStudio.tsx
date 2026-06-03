@@ -1646,6 +1646,7 @@ export default function WorkflowStudio() {
   const [paletteGroup, setPaletteGroup] = useState("all");
   const [selectedDagNodeId, setSelectedDagNodeId] = useState<string | null>(null);
   const [studioNotice, setStudioNotice] = useState<string | null>(null);
+  const [lastStartedJobId, setLastStartedJobId] = useState<string | null>(null);
   const [chainPreflightLoading, setChainPreflightLoading] = useState(false);
   const [composerCompileLoading, setComposerCompileLoading] = useState(false);
   const [chainPreflightResult, setChainPreflightResult] = useState<ChainPreflightResult | null>(null);
@@ -4366,6 +4367,7 @@ export default function WorkflowStudio() {
   };
 
   const startFreshStudioDraft = () => {
+    setLastStartedJobId(null);
     setGoal("");
     setContextJson(initialContextJson());
     setComposerDraft(initialStudioDraft());
@@ -4797,6 +4799,7 @@ export default function WorkflowStudio() {
   };
 
   const runWorkflowVersion = async () => {
+    setLastStartedJobId(null);
     const version = await publishWorkflowVersion();
     if (!version) {
       return;
@@ -4822,6 +4825,7 @@ export default function WorkflowStudio() {
       setPublishedWorkflowVersion(result.workflow_version);
       setLoadedWorkflowVersionId(result.workflow_version.id);
       void refreshWorkflowRuns(result.workflow_definition.id);
+      setLastStartedJobId(result.job.id);
       setStudioNotice(
         `Started job ${result.job.id} from workflow version v${result.workflow_version.version_number}.`
       );
@@ -6573,6 +6577,20 @@ export default function WorkflowStudio() {
       {activeStudioSurface === "workflow" && studioNotice ? (
         <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {studioNotice}
+        </div>
+      ) : null}
+      {activeStudioSurface === "workflow" && lastStartedJobId ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-emerald-300/20 bg-accent-emerald px-4 py-3 text-sm text-text-emerald-token">
+          <span>
+            Workflow run started · job{" "}
+            <span className="font-mono text-xs">{lastStartedJobId}</span>
+          </span>
+          <a
+            href={`/observability?job=${encodeURIComponent(lastStartedJobId)}`}
+            className="rounded-xl border border-emerald-200/30 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition hover:border-emerald-100/60"
+          >
+            View run in Observability →
+          </a>
         </div>
       ) : null}
       <section
