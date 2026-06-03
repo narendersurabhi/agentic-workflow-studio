@@ -26,6 +26,7 @@ from services.api.app.models import (  # noqa: E402
     StepAttemptRecord,
     StepCheckpointRecord,
     TaskRecord,
+    WorkflowVersionRecord,
 )
 
 
@@ -774,6 +775,109 @@ def test_spawn_agents_workflow_compiles_with_recursive_agent_run() -> None:
     # The defining property of a spawn-agents workflow: the orchestrator may call
     # agent.run itself, i.e. it can delegate to recursively-spawned sub-agents.
     assert "agent.run" in inputs.get("allowed_capability_ids", [])
+
+
+def test_compile_coerces_agent_run_allowed_capability_ids_scalar_literal() -> None:
+    draft = {
+        "summary": "Agent Orchestrator (spawns sub-agents)",
+        "nodes": [
+            {
+                "id": "orchestrator",
+                "taskName": "OrchestratorAgent",
+                "capabilityId": "agent.run",
+                "inputBindings": {
+                    "goal": {
+                        "kind": "literal",
+                        "value": (
+                            "Inspect the workspace, delegate research and drafting to "
+                            "specialised sub-agents, then synthesise their results."
+                        ),
+                    },
+                    "instructions": {"kind": "literal", "value": ""},
+                    # Studio used to persist this scalar string for an array schema field,
+                    # which later failed at dispatch with tool_inputs_invalid.
+                    "allowed_capability_ids": {"kind": "literal", "value": "agent.run"},
+                    "max_steps": {"kind": "literal", "value": "8"},
+                },
+            }
+        ],
+        "edges": [],
+    }
+
+    response = client.post(
+        "/composer/compile",
+        json={"draft": draft, "goal": draft["summary"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"], body["diagnostics"]
+
+    inputs = body["plan"]["tasks"][0]["tool_inputs"]["agent.run"]
+    assert inputs["allowed_capability_ids"] == ["agent.run"]
+    assert inputs["max_steps"] == 8
+
+
+def test_workflow_version_plan_normalizes_stored_agent_run_inputs() -> None:
+    run_spec = models.RunSpec(
+        kind=models.RunKind.studio,
+        planner_version="ui_chaining_composer_v2",
+        tasks_summary="Agent Orchestrator (spawns sub-agents)",
+        steps=[
+            models.StepSpec(
+                step_id="orchestratoragent",
+                name="OrchestratorAgent",
+                description="Run a general-purpose agentic loop.",
+                instruction="Use capability agent.run.",
+                capability_request=models.CapabilityRequestSpec(
+                    request_id="agent.run",
+                    capability_id="agent.run",
+                    execution_request_id="agent_run",
+                ),
+                input_bindings={
+                    "goal": "Inspect the workspace and delegate.",
+                    "allowed_capability_ids": "agent.run",
+                    "max_steps": "8",
+                },
+                acceptance_policy=models.StepAcceptancePolicy(
+                    acceptance_criteria=["Completed capability agent.run"],
+                    critic_required=False,
+                ),
+                routing_hints={
+                    "tool_name": "agent_run",
+                    "adapter_type": "tool",
+                    "server_id": "local_worker",
+                    "planner_request_field": "tool_requests",
+                },
+            )
+        ],
+        capability_requests=[
+            models.CapabilityRequestSpec(
+                request_id="agent.run",
+                capability_id="agent.run",
+                execution_request_id="agent_run",
+            )
+        ],
+    )
+    version = WorkflowVersionRecord(
+        id=str(uuid.uuid4()),
+        definition_id=str(uuid.uuid4()),
+        version_number=1,
+        title="Agent Orchestrator",
+        goal="Inspect the workspace and delegate.",
+        context_json={},
+        draft_json={},
+        compiled_plan_json={},
+        user_id=None,
+        metadata_json={"run_spec": run_spec.model_dump(mode="json")},
+        created_at=_utcnow(),
+    )
+
+    plan = main._workflow_version_plan(version)
+
+    assert plan is not None
+    inputs = plan.tasks[0].tool_inputs["agent.run"]
+    assert inputs["allowed_capability_ids"] == ["agent.run"]
+    assert inputs["max_steps"] == 8
 
 
 def test_compile_flags_agent_run_missing_required_goal() -> None:
