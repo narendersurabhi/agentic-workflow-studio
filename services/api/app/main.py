@@ -2402,12 +2402,14 @@ def _workflow_version_run_spec(record: WorkflowVersionRecord) -> models.RunSpec 
     metadata = record.metadata_json if isinstance(record.metadata_json, dict) else {}
     stored_run_spec = run_specs.parse_run_spec(metadata.get("run_spec"))
     if stored_run_spec is not None:
-        return stored_run_spec
+        return _normalize_run_spec_capability_inputs(stored_run_spec)
     compiled_plan = _parse_plan_payload(record.compiled_plan_json or {})
     if compiled_plan is None:
         return None
     try:
-        return run_specs.plan_to_run_spec(compiled_plan, kind=models.RunKind.studio)
+        return _normalize_run_spec_capability_inputs(
+            run_specs.plan_to_run_spec(compiled_plan, kind=models.RunKind.studio)
+        )
     except ValueError:
         return None
 
@@ -9033,6 +9035,185 @@ def _capability_required_input_fields(
     return []
 
 
+def _json_schema_declared_types(schema: Mapping[str, Any] | None) -> set[str]:
+    if not isinstance(schema, Mapping):
+        return set()
+    raw_type = schema.get("type")
+    if isinstance(raw_type, str) and raw_type.strip():
+        return {raw_type.strip()}
+    if isinstance(raw_type, list):
+        return {str(item).strip() for item in raw_type if str(item).strip()}
+    if isinstance(schema.get("items"), Mapping):
+        return {"array"}
+    if isinstance(schema.get("properties"), Mapping):
+        return {"object"}
+    return set()
+
+
+def _capability_input_property_schema(
+    spec: capability_registry.CapabilitySpec,
+    field_name: str,
+) -> Mapping[str, Any] | None:
+    try:
+        input_schema, _ = _resolve_capability_schemas(spec, include_schemas=True)
+    except Exception:  # noqa: BLE001
+        return None
+    properties = input_schema.get("properties") if isinstance(input_schema, Mapping) else None
+    field_schema = properties.get(field_name) if isinstance(properties, Mapping) else None
+    return field_schema if isinstance(field_schema, Mapping) else None
+
+
+def _coerce_literal_for_schema(value: Any, schema: Mapping[str, Any] | None) -> Any:
+    """Coerce Studio literal text into the JSON type declared by capability schemas."""
+    types = _json_schema_declared_types(schema)
+    if not types:
+        return value
+
+    if "array" in types and "string" not in types:
+        item_schema = schema.get("items") if isinstance(schema, Mapping) else None
+        if isinstance(value, list):
+            return [
+                _coerce_literal_for_schema(item, item_schema if isinstance(item_schema, Mapping) else None)
+                for item in value
+            ]
+        if value is None:
+            return []
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if not trimmed:
+                return []
+            if trimmed.startswith("["):
+                try:
+                    parsed = json.loads(trimmed)
+                except Exception:  # noqa: BLE001
+                    parsed = None
+                if isinstance(parsed, list):
+                    return [
+                        _coerce_literal_for_schema(
+                            item,
+                            item_schema if isinstance(item_schema, Mapping) else None,
+                        )
+                        for item in parsed
+                    ]
+            if "," in trimmed:
+                return [
+                    _coerce_literal_for_schema(
+                        item.strip(),
+                        item_schema if isinstance(item_schema, Mapping) else None,
+                    )
+                    for item in trimmed.split(",")
+                    if item.strip()
+                ]
+            return [
+                _coerce_literal_for_schema(
+                    trimmed,
+                    item_schema if isinstance(item_schema, Mapping) else None,
+                )
+            ]
+        return [value]
+
+    if "object" in types and "string" not in types and isinstance(value, str):
+        trimmed = value.strip()
+        if trimmed.startswith("{"):
+            try:
+                parsed = json.loads(trimmed)
+            except Exception:  # noqa: BLE001
+                return value
+            if isinstance(parsed, dict):
+                return parsed
+        return value
+
+    if "integer" in types and "string" not in types and isinstance(value, str):
+        trimmed = value.strip()
+        if re.fullmatch(r"[-+]?\d+", trimmed):
+            try:
+                return int(trimmed)
+            except ValueError:
+                return value
+        return value
+
+    if "number" in types and "string" not in types and isinstance(value, str):
+        trimmed = value.strip()
+        try:
+            return float(trimmed)
+        except ValueError:
+            return value
+
+    if "boolean" in types and "string" not in types and isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return value
+
+
+def _normalize_capability_input_payload(
+    spec: capability_registry.CapabilitySpec,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        str(field): _coerce_literal_for_schema(
+            value,
+            _capability_input_property_schema(spec, str(field)),
+        )
+        for field, value in payload.items()
+    }
+
+
+def _normalize_plan_capability_inputs(plan: models.PlanCreate) -> models.PlanCreate:
+    registry = capability_registry.load_capability_registry()
+    normalized_tasks: list[models.TaskCreate] = []
+    changed = False
+    for task in plan.tasks:
+        tool_inputs = dict(task.tool_inputs or {})
+        task_changed = False
+        request_ids = [
+            request_id
+            for request_id in [*list(task.tool_requests or []), *list(task.capability_requests or [])]
+            if isinstance(request_id, str) and request_id.strip()
+        ]
+        for request_id in request_ids:
+            spec = registry.get(request_id)
+            payload = tool_inputs.get(request_id)
+            if spec is None or not isinstance(payload, Mapping):
+                continue
+            normalized_payload = _normalize_capability_input_payload(spec, payload)
+            if normalized_payload != payload:
+                tool_inputs[request_id] = normalized_payload
+                task_changed = True
+        if task_changed:
+            normalized_tasks.append(task.model_copy(update={"tool_inputs": tool_inputs}))
+            changed = True
+        else:
+            normalized_tasks.append(task)
+    if not changed:
+        return plan
+    return plan.model_copy(update={"tasks": normalized_tasks})
+
+
+def _normalize_run_spec_capability_inputs(run_spec: models.RunSpec) -> models.RunSpec:
+    registry = capability_registry.load_capability_registry()
+    normalized_steps: list[models.StepSpec] = []
+    changed = False
+    for step in run_spec.steps:
+        capability_id = str(step.capability_request.capability_id or "").strip()
+        request_id = str(step.capability_request.request_id or "").strip()
+        spec = registry.get(capability_id) or registry.get(request_id)
+        if spec is None or not isinstance(step.input_bindings, Mapping):
+            normalized_steps.append(step)
+            continue
+        normalized_inputs = _normalize_capability_input_payload(spec, step.input_bindings)
+        if normalized_inputs != step.input_bindings:
+            normalized_steps.append(step.model_copy(update={"input_bindings": normalized_inputs}))
+            changed = True
+        else:
+            normalized_steps.append(step)
+    if not changed:
+        return run_spec
+    return run_spec.model_copy(update={"steps": normalized_steps})
+
+
 def _resolve_capability_schemas(
     spec: capability_registry.CapabilitySpec,
     *,
@@ -12166,7 +12347,10 @@ def _build_plan_from_composer_draft(
                 continue
             binding_kind = str(raw_binding.get("kind") or raw_binding.get("mode") or "").strip()
             if binding_kind == "literal":
-                tool_input_payload[field_name] = raw_binding.get("value")
+                tool_input_payload[field_name] = _coerce_literal_for_schema(
+                    raw_binding.get("value"),
+                    _capability_input_property_schema(capability_spec, field_name),
+                )
                 continue
             if binding_kind == "context":
                 raw_path = str(raw_binding.get("path") or raw_binding.get("contextPath") or "").strip()
@@ -14058,7 +14242,7 @@ def _handle_task_rework(envelope: dict) -> None:
 
 def _parse_plan_payload(payload: dict) -> models.PlanCreate | None:
     try:
-        return models.PlanCreate.model_validate(payload)
+        return _normalize_plan_capability_inputs(models.PlanCreate.model_validate(payload))
     except Exception:
         return None
 
@@ -21543,6 +21727,7 @@ def _create_plan_internal(
     db: Session,
     emit_plan_created_event: bool = True,
 ) -> models.Plan:
+    plan = _normalize_plan_capability_inputs(plan)
     job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
     goal_text = job.goal if job and isinstance(job.goal, str) else ""
     metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
