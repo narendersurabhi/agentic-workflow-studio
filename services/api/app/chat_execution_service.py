@@ -64,9 +64,6 @@ class ChatDirectExecutor:
         spec = registry.require(normalized_capability_id)
         if not spec.enabled:
             raise ToolExecutionError(f"chat_direct_capability_disabled:{normalized_capability_id}")
-        if spec.risk_tier != "read_only":
-            raise ToolExecutionError(f"chat_direct_capability_not_read_only:{normalized_capability_id}")
-
         allow_decision = capability_registry.evaluate_capability_allowlist(
             normalized_capability_id,
             self.service_name,

@@ -9,7 +9,8 @@ export type StudioWorkbenchIconKind =
   | "library"
   | "inspect"
   | "run"
-  | "zap";
+  | "zap"
+  | "activity";
 
 export default function StudioWorkbenchIcon({
   kind,
@@ -92,6 +93,12 @@ export default function StudioWorkbenchIcon({
       return (
         <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
           <path d="M13 3 4.5 13.5H12L11 21l8.5-10.5H12L13 3Z" {...sharedProps} />
+        </svg>
+      );
+    case "activity":
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <polyline points="22 12 18 12 15 20 9 4 6 12 2 12" {...sharedProps} />
         </svg>
       );
   }

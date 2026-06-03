@@ -52,6 +52,7 @@ type AgentStepDraft = {
 
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "canceled", "accepted", "completed"]);
 const DEFAULT_AGENT_CAPABILITY_ID = "codegen.autonomous";
+const AGENT_RUN_CAPABILITY_ID = "agent.run";
 const DEFAULT_AGENT_WORKSPACE_PATH = "workbench-agent";
 const DEFAULT_AGENT_MAX_STEPS = "6";
 
@@ -116,6 +117,9 @@ function defaultAgentInputDraft(capabilityId: string): CapabilityInputDraft {
       max_steps: DEFAULT_AGENT_MAX_STEPS,
     };
   }
+  if (isAgentRunCapability(capabilityId)) {
+    return { max_steps: DEFAULT_AGENT_MAX_STEPS };
+  }
   return {};
 }
 
@@ -154,10 +158,16 @@ function isAgenticCapability(item: CapabilityItem): boolean {
   const tags = item.tags.map((tag) => tag.toLowerCase());
   return (
     id === DEFAULT_AGENT_CAPABILITY_ID ||
+    id === AGENT_RUN_CAPABILITY_ID ||
     id.includes(".autonomous") ||
     tags.includes("autonomous") ||
-    tags.includes("coding-agent")
+    tags.includes("coding-agent") ||
+    tags.includes("loop")
   );
+}
+
+function isAgentRunCapability(capabilityId: string): boolean {
+  return capabilityId.trim() === AGENT_RUN_CAPABILITY_ID;
 }
 
 function stringInputValue(inputDraft: CapabilityInputDraft, key: string): string {
@@ -271,9 +281,12 @@ function createAgentProfileInputDraft(
   if (definition.default_goal.trim()) {
     inputDraft.goal = definition.default_goal;
   }
+  const agentCapId = definition.agent_capability_id || DEFAULT_AGENT_CAPABILITY_ID;
   const workspacePath =
-    definition.default_workspace_path?.trim() ||
-    (definition.agent_capability_id === DEFAULT_AGENT_CAPABILITY_ID ? DEFAULT_AGENT_WORKSPACE_PATH : "");
+    isAgentRunCapability(agentCapId)
+      ? ""
+      : definition.default_workspace_path?.trim() ||
+        (agentCapId === DEFAULT_AGENT_CAPABILITY_ID ? DEFAULT_AGENT_WORKSPACE_PATH : "");
   if (workspacePath) {
     inputDraft.workspace_path = workspacePath;
   }
@@ -282,7 +295,7 @@ function createAgentProfileInputDraft(
   }
   const maxSteps =
     definition.default_max_steps ??
-    (definition.agent_capability_id === DEFAULT_AGENT_CAPABILITY_ID
+    (agentCapId === DEFAULT_AGENT_CAPABILITY_ID || isAgentRunCapability(agentCapId)
       ? Number(DEFAULT_AGENT_MAX_STEPS)
       : null);
   if (maxSteps !== null) {
@@ -565,7 +578,11 @@ export default function StudioWorkbenchSurface({
   workspaceUserId: string;
   onPromoteWorkflowDraft?: (draft: WorkbenchWorkflowPromotionDraft) => void;
 }) {
-  const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("capability");
+  const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("agent");
+  const [catalogCollapsed, setCatalogCollapsed] = useState(false);
+  const [showDevPreview, setShowDevPreview] = useState(false);
+  const [showAgentAdvanced, setShowAgentAdvanced] = useState(false);
+  const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<CapabilityItem[]>([]);
@@ -593,6 +610,7 @@ export default function StudioWorkbenchSurface({
   const [agentSteps, setAgentSteps] = useState<AgentStepDraft[]>([
     createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent"),
   ]);
+  const [agentAllowedCapabilityIds, setAgentAllowedCapabilityIds] = useState<string[]>([]);
   const [agentRawRunSpecText, setAgentRawRunSpecText] = useState("{\n  \n}");
   const [agentDefinitions, setAgentDefinitions] = useState<AgentDefinition[]>([]);
   const [agentDefinitionsLoading, setAgentDefinitionsLoading] = useState(false);
@@ -605,6 +623,7 @@ export default function StudioWorkbenchSurface({
   const [agentProfileVersionNote, setAgentProfileVersionNote] = useState("");
   const [agentProfileName, setAgentProfileName] = useState("");
   const [agentProfileDescription, setAgentProfileDescription] = useState("");
+  const [agentInstructions, setAgentInstructions] = useState("");
   const [agentProfileError, setAgentProfileError] = useState<string | null>(null);
   const [agentProfileSaving, setAgentProfileSaving] = useState(false);
   const [agentProfilePublishing, setAgentProfilePublishing] = useState(false);
@@ -644,6 +663,15 @@ export default function StudioWorkbenchSurface({
         }
         setCatalog(response.items);
         setSelectedCapabilityId((current) => current || response.items[0]?.id || "");
+        const agentRunInCatalog = response.items.some((item) => item.id === AGENT_RUN_CAPABILITY_ID);
+        if (agentRunInCatalog) {
+          setAgentSteps((current) => {
+            if (current.length === 1 && current[0].capabilityId === DEFAULT_AGENT_CAPABILITY_ID) {
+              return [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
+            }
+            return current;
+          });
+        }
       } catch (error) {
         if (!cancelled) {
           setCatalogError(
@@ -946,13 +974,27 @@ export default function StudioWorkbenchSurface({
         capability_id: capabilityId,
         execution_request_id: capabilityId,
       };
+      const stepCapabilityItem = catalog.find((c) => c.id === capabilityId) ?? null;
+      const stepIsAgentic = stepCapabilityItem
+        ? isAgenticCapability(stepCapabilityItem)
+        : capabilityId.includes(".autonomous");
+      const stepIntent = stepIsAgentic ? "generate" : undefined;
       steps.push({
         step_id: stepId,
         name: step.name.trim() || stepId,
         description: step.description.trim() || `Workbench step for ${capabilityId}`,
         instruction: step.instruction.trim() || `Execute capability ${capabilityId}.`,
+        ...(stepIntent ? { intent: stepIntent } : {}),
         capability_request: capabilityRequest,
-        input_bindings: parsedInputs.value,
+        input_bindings: isAgentRunCapability(capabilityId)
+          ? {
+              ...parsedInputs.value,
+              ...(agentInstructions.trim() ? { instructions: agentInstructions.trim() } : {}),
+              ...(agentAllowedCapabilityIds.length > 0
+                ? { allowed_capability_ids: agentAllowedCapabilityIds }
+                : {}),
+            }
+          : parsedInputs.value,
         retry_policy:
           Object.keys(parsedRetryPolicy.value).length > 0
             ? parsedRetryPolicy.value
@@ -992,7 +1034,7 @@ export default function StudioWorkbenchSurface({
       },
       error: null,
     };
-  }, [agentGoal, agentSteps, agentTitle, catalog]);
+  }, [agentAllowedCapabilityIds, agentGoal, agentInstructions, agentSteps, agentTitle, catalog]);
 
   const rawAgentRunSpec = useMemo(
     () => parseJsonObject(agentRawRunSpecText, "Agent RunSpec"),
@@ -1093,10 +1135,12 @@ export default function StudioWorkbenchSurface({
     setSelectedAgentDefinitionVersionId("");
     setAgentProfileName(definition.name);
     setAgentProfileDescription(definition.description ?? "");
+    setAgentInstructions(definition.instructions || "");
     setAgentTitle(definition.name || "Agent workbench run");
     setAgentGoal(definition.default_goal || "");
     setAgentUserId(definition.user_id || workspaceUserId);
     setAgentSteps([primaryStep]);
+    setAgentAllowedCapabilityIds(definition.allowed_capability_ids ?? []);
     setAgentProfileError(null);
     setLaunchError(null);
     setWorkbenchBanner({
@@ -1113,10 +1157,12 @@ export default function StudioWorkbenchSurface({
     setSelectedAgentDefinitionVersionId(version.id);
     setAgentProfileName(version.name);
     setAgentProfileDescription(version.description ?? "");
+    setAgentInstructions(version.instructions || "");
     setAgentTitle(version.name || "Agent workbench run");
     setAgentGoal(version.default_goal || "");
     setAgentUserId(version.user_id || workspaceUserId);
     setAgentSteps([primaryStep]);
+    setAgentAllowedCapabilityIds(version.allowed_capability_ids ?? []);
     setAgentProfileError(null);
     setLaunchError(null);
     setWorkbenchBanner({
@@ -1143,21 +1189,16 @@ export default function StudioWorkbenchSurface({
       }
       maxSteps = parsedMaxSteps;
     }
-    const allowedCapabilityIds = Array.from(
-      new Set(
-        agentSteps
-          .slice(1)
-          .map((step) => step.capabilityId.trim())
-          .filter(Boolean)
-      )
-    );
+    const allowedCapabilityIds = Array.from(new Set(agentAllowedCapabilityIds.filter(Boolean)));
     const fallbackName = defaultGoal ? defaultGoal.slice(0, 96) : "Agent profile";
     const name =
       agentProfileName.trim() ||
       agentTitle.trim() ||
       fallbackName;
     const instructions =
-      primaryStep.instruction.trim() || defaultStepInstruction(capabilityId, "agent");
+      agentInstructions.trim() ||
+      primaryStep.instruction.trim() ||
+      defaultStepInstruction(capabilityId, "agent");
     return {
       name,
       description: agentProfileDescription.trim() || null,
@@ -1504,8 +1545,8 @@ export default function StudioWorkbenchSurface({
   const handleAgentInsert = (item: CapabilityItem) => {
     setWorkbenchMode("agent");
     setAgentEditorMode("structured");
-    setAgentSteps((current) => {
-      if (isAgenticCapability(item)) {
+    if (isAgenticCapability(item)) {
+      setAgentSteps((current) => {
         const [first, ...rest] =
           current.length > 0
             ? current
@@ -1525,10 +1566,25 @@ export default function StudioWorkbenchSurface({
           },
           ...rest,
         ];
-      }
-      return [...current, createAgentStepDraft(item.id)];
-    });
+      });
+    } else {
+      setAgentAllowedCapabilityIds((prev) =>
+        prev.includes(item.id) ? prev : [...prev, item.id]
+      );
+    }
     setWorkbenchBanner(null);
+  };
+
+  const handleToolInsert = (capabilityId: string) => {
+    if (capabilityId.trim()) {
+      setAgentAllowedCapabilityIds((prev) =>
+        prev.includes(capabilityId) ? prev : [...prev, capabilityId]
+      );
+    }
+  };
+
+  const handleToolRemove = (capabilityId: string) => {
+    setAgentAllowedCapabilityIds((prev) => prev.filter((id) => id !== capabilityId));
   };
 
   const updateAgentStepCapability = (localId: string, capabilityId: string) => {
@@ -1650,6 +1706,25 @@ export default function StudioWorkbenchSurface({
         if (agentRunSpecPreview.error || !agentRunSpecPreview.value) {
           throw new Error(agentRunSpecPreview.error || "Agent RunSpec is invalid.");
         }
+        // Pre-flight: validate step capability IDs against loaded catalog
+        const catalogIds = new Set(catalog.map((c) => c.id));
+        const stepIssues: string[] = [];
+        for (const step of agentSteps) {
+          const cid = step.capabilityId.trim();
+          if (!cid) {
+            stepIssues.push(`Step "${step.name || step.stepId}" has no capability selected.`);
+          } else if (catalogIds.size > 0 && !catalogIds.has(cid)) {
+            const suggestion = catalog.find((c) =>
+              c.id.includes(cid.toLowerCase()) || cid.toLowerCase().includes(c.id.split(".")[0])
+            );
+            stepIssues.push(
+              `"${cid}" is not a known capability.${suggestion ? ` Did you mean "${suggestion.id}"?` : " Browse the catalog to find the right ID."}`
+            );
+          }
+        }
+        if (stepIssues.length > 0) {
+          throw new Error(stepIssues.join("\n"));
+        }
         const primaryAgentGoal = stringInputValue(primaryAgentStep?.inputDraft ?? {}, "goal").trim();
         response = await launchAgentRun({
           title: agentTitle.trim(),
@@ -1702,20 +1777,10 @@ export default function StudioWorkbenchSurface({
               <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-300/22 bg-accent-sky text-text-sky-token">
                 <StudioWorkbenchIcon kind="run" className="h-5 w-5" />
               </span>
-              Agent + Capability Workbench
+              Agent Workbench
             </h2>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
-              Launch ephemeral capability and agent runs through the canonical runtime, then inspect
-              the resulting debugger state without leaving <span className="font-semibold">{activeSurface}</span>.
-            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-              catalog {catalog.length}
-            </span>
-            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-              mode {workbenchMode}
-            </span>
             {activeRunId ? (
               <span className="rounded-full border border-sky-300/28 bg-accent-sky px-3 py-1 text-text-hi">
                 run {activeRunId.slice(0, 8)}
@@ -1748,12 +1813,20 @@ export default function StudioWorkbenchSurface({
         </datalist>
 
         <div className="studio-contrast-surface mt-4 overflow-hidden rounded-[30px] border border-subtle bg-gradient-panel-mid p-4 shadow-[0_22px_56px_rgba(15,23,42,0.16)]">
-          <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
+          <div className={`grid gap-4 ${catalogCollapsed ? "xl:grid-cols-[auto_minmax(0,1fr)]" : "xl:grid-cols-[240px_minmax(0,1fr)]"}`}>
             <SurfacePanel
-              title="Catalog"
-              subtitle="Search live capabilities, filter the catalog, and insert into either sandbox."
+              title={catalogCollapsed ? "" : "Catalog"}
+              subtitle={catalogCollapsed ? "" : "Search live capabilities, filter the catalog, and insert into either sandbox."}
             >
-              <div className="space-y-3">
+              <button
+                type="button"
+                className="mb-2 flex items-center gap-1 rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo transition hover:text-text-hi"
+                onClick={() => setCatalogCollapsed((prev) => !prev)}
+                title={catalogCollapsed ? "Expand catalog" : "Collapse catalog"}
+              >
+                {catalogCollapsed ? "›" : "‹"} {catalogCollapsed ? "" : "Collapse"}
+              </button>
+              {catalogCollapsed ? null : <div className="space-y-3">
                 <input
                   value={catalogQuery}
                   onChange={(event) => setCatalogQuery(event.target.value)}
@@ -1858,16 +1931,16 @@ export default function StudioWorkbenchSurface({
                           <button
                             type="button"
                             className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-                            onClick={() => handleCapabilityInsert(item)}
+                            onClick={() => handleAgentInsert(item)}
                           >
-                            capability
+                            {isAgenticCapability(item) ? "Use as Agent" : "Add as Tool"}
                           </button>
                           <button
                             type="button"
-                            className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-                            onClick={() => handleAgentInsert(item)}
+                            className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-lo transition hover:border-sky-300/35 hover:bg-surface-1 hover:text-text-hi"
+                            onClick={() => handleCapabilityInsert(item)}
                           >
-                            {isAgenticCapability(item) ? "agent" : "agent step"}
+                            Test
                           </button>
                         </div>
                       </div>
@@ -1879,31 +1952,17 @@ export default function StudioWorkbenchSurface({
                     </div>
                   ) : null}
                 </div>
-              </div>
+              </div>}
             </SurfacePanel>
 
             <SurfacePanel
-              title="Workbench Editor"
-              subtitle="Structured editors are the default. Raw JSON editors stay available as advanced overrides."
+              title="Configure"
+              subtitle=""
             >
-              <div className="flex flex-wrap items-center gap-2">
-                {(["capability", "agent"] as WorkbenchMode[]).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
-                      workbenchMode === mode
-                        ? "border-sky-300/35 bg-accent-sky text-text-hi"
-                        : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                    }`}
-                    onClick={() => {
-                      setWorkbenchMode(mode);
-                      setWorkbenchBanner(null);
-                    }}
-                  >
-                    {mode === "capability" ? "Capability Sandbox" : "Agent Sandbox"}
-                  </button>
-                ))}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="rounded-full border border-sky-300/28 bg-accent-sky px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi">
+                  {workbenchMode === "capability" ? "Test Capability" : "Build Agent"}
+                </span>
               </div>
 
               {workbenchMode === "capability" ? (
@@ -2083,682 +2142,738 @@ export default function StudioWorkbenchSurface({
                 </div>
               ) : (
                 <div className="mt-4 space-y-4">
-                  <div className="rounded-2xl border border-sky-300/16 bg-accent-sky p-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-text-hi">Agent Profile</div>
-                        <div className="mt-1 text-xs leading-5 text-text-md">
-                          {selectedAgentDefinitionVersion
-                            ? `Published v${selectedAgentDefinitionVersion.version_number} from ${new Date(
-                                selectedAgentDefinitionVersion.created_at
-                              ).toLocaleString()}`
-                            : selectedAgentDefinition
-                            ? `Saved profile updated ${new Date(
-                                selectedAgentDefinition.updated_at
-                              ).toLocaleString()}`
-                            : "Unsaved draft"}
-                        </div>
-                      </div>
-                      <span className="rounded-full border border-sky-300/22 bg-accent-sky px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-sky-token">
-                        {selectedAgentDefinitionVersion
-                          ? `v${selectedAgentDefinitionVersion.version_number}`
-                          : agentDefinitionsLoading
-                          ? "loading"
-                          : `${agentDefinitions.length} saved`}
-                      </span>
+
+                  {/* ── Profile header: compact select + version + Manage button ── */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={selectedAgentDefinitionId}
+                      onChange={(event) => {
+                        const nextId = event.target.value;
+                        if (!nextId) {
+                          setSelectedAgentDefinitionId("");
+                          setSelectedAgentDefinitionVersionId("");
+                          setAgentDefinitionVersions([]);
+                          setAgentProfileName("");
+                          setAgentProfileDescription("");
+                          setAgentInstructions("");
+                          setAgentProfileError(null);
+                          return;
+                        }
+                        const definition =
+                          agentDefinitions.find((item) => item.id === nextId) ?? null;
+                        if (definition) {
+                          applyAgentDefinitionDraft(definition);
+                        }
+                      }}
+                      className="rounded-xl border border-subtle bg-slate-950/45 px-3 py-1.5 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                    >
+                      <option value="">Unsaved draft</option>
+                      {agentDefinitions.map((definition) => (
+                        <option key={definition.id} value={definition.id}>
+                          {definition.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={selectedAgentDefinitionVersionId}
+                      onChange={(event) => {
+                        const nextVersionId = event.target.value;
+                        if (!nextVersionId) {
+                          setSelectedAgentDefinitionVersionId("");
+                          if (selectedAgentDefinition) {
+                            applyAgentDefinitionDraft(selectedAgentDefinition);
+                          }
+                          return;
+                        }
+                        const version =
+                          agentDefinitionVersions.find((item) => item.id === nextVersionId) ?? null;
+                        if (version) {
+                          applyAgentDefinitionVersionDraft(version);
+                        }
+                      }}
+                      disabled={!selectedAgentDefinitionId || agentDefinitionVersionsLoading}
+                      className="rounded-xl border border-subtle bg-slate-950/45 px-3 py-1.5 text-sm text-text-hi outline-none transition focus:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <option value="">Draft / latest</option>
+                      {agentDefinitionVersions.map((version) => (
+                        <option key={version.id} value={version.id}>
+                          v{version.version_number}
+                          {version.version_note ? ` — ${version.version_note}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="ml-auto rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35"
+                      onClick={() => setProfileDrawerOpen(true)}
+                    >
+                      Manage Profile
+                    </button>
+                  </div>
+                  {(agentDefinitionVersionsError || agentDefinitionsError || agentProfileError) ? (
+                    <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
+                      {agentDefinitionVersionsError || agentDefinitionsError || agentProfileError}
                     </div>
-                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  ) : null}
+
+                  {/* ── Profile Drawer (slide-in) ── */}
+                  {profileDrawerOpen ? (
+                    <div className="fixed inset-0 z-50 flex justify-end">
+                      <button
+                        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                        onClick={() => setProfileDrawerOpen(false)}
+                        aria-label="Close profile drawer"
+                      />
+                      <div className="relative z-10 flex w-full max-w-sm flex-col gap-4 border-l border-subtle bg-surface-1 p-6 shadow-[0_0_48px_rgba(15,23,42,0.4)]">
+                        <div className="flex items-center justify-between">
+                          <div className="text-sm font-semibold text-text-hi">Manage Profile</div>
+                          <button
+                            type="button"
+                            className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-xs text-text-lo hover:text-text-hi"
+                            onClick={() => setProfileDrawerOpen(false)}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            className="w-full rounded-xl border border-sky-300/26 bg-accent-sky px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => { void handleSaveAgentProfileAs(); setProfileDrawerOpen(false); }}
+                            disabled={agentProfileSaving}
+                          >
+                            {agentProfileSaving ? "Saving…" : "Save as new profile"}
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => { void handleSaveAgentProfile(); }}
+                            disabled={!selectedAgentDefinitionId || agentProfileSaving}
+                          >
+                            {agentProfileSaving ? "Saving…" : "Save (update in-place)"}
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full rounded-xl border border-emerald-300/24 bg-accent-emerald px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-emerald-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => void handlePublishAgentProfile()}
+                            disabled={!selectedAgentDefinitionId || agentProfileSaving || agentProfilePublishing}
+                          >
+                            {agentProfilePublishing ? "Publishing…" : "Publish version"}
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35"
+                            onClick={() => { handleNewAgentProfile(); setProfileDrawerOpen(false); }}
+                          >
+                            New profile
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => { void handleDeleteAgentProfile(); setProfileDrawerOpen(false); }}
+                            disabled={!selectedAgentDefinitionId || agentProfileDeleting}
+                          >
+                            {agentProfileDeleting ? "Deleting…" : "Delete profile"}
+                          </button>
+                        </div>
+                        {agentProfileError ? (
+                          <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
+                            {agentProfileError}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* ── Agent identity ── */}
+                  <div className="space-y-3">
+                    <div className="grid gap-3 lg:grid-cols-2">
                       <label className="text-xs text-text-md">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                          Profile
-                        </span>
-                        <select
-                          value={selectedAgentDefinitionId}
-                          onChange={(event) => {
-                            const nextId = event.target.value;
-                            if (!nextId) {
-                              setSelectedAgentDefinitionId("");
-                              setSelectedAgentDefinitionVersionId("");
-                              setAgentDefinitionVersions([]);
-                              setAgentProfileName("");
-                              setAgentProfileDescription("");
-                              setAgentProfileError(null);
-                              return;
-                            }
-                            const definition =
-                              agentDefinitions.find((item) => item.id === nextId) ?? null;
-                            if (definition) {
-                              applyAgentDefinitionDraft(definition);
-                            }
-                          }}
-                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                        >
-                          <option value="">Unsaved draft</option>
-                          {agentDefinitions.map((definition) => (
-                            <option key={definition.id} value={definition.id}>
-                              {definition.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-xs text-text-md">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                          Published version
-                        </span>
-                        <select
-                          value={selectedAgentDefinitionVersionId}
-                          onChange={(event) => {
-                            const nextVersionId = event.target.value;
-                            if (!nextVersionId) {
-                              setSelectedAgentDefinitionVersionId("");
-                              if (selectedAgentDefinition) {
-                                applyAgentDefinitionDraft(selectedAgentDefinition);
-                              }
-                              return;
-                            }
-                            const version =
-                              agentDefinitionVersions.find((item) => item.id === nextVersionId) ?? null;
-                            if (version) {
-                              applyAgentDefinitionVersionDraft(version);
-                            }
-                          }}
-                          disabled={!selectedAgentDefinitionId || agentDefinitionVersionsLoading}
-                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <option value="">Draft / latest profile</option>
-                          {agentDefinitionVersions.map((version) => (
-                            <option key={version.id} value={version.id}>
-                              v{version.version_number}
-                              {version.version_note ? ` - ${version.version_note}` : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-xs text-text-md">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                          Profile name
-                        </span>
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-lo">Name</span>
                         <input
                           value={agentProfileName}
                           onChange={(event) => setAgentProfileName(event.target.value)}
-                          placeholder="Agent profile"
+                          placeholder="My agent"
                           className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                         />
                       </label>
-                      <label className="text-xs text-text-md lg:col-span-2">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                          Description
-                        </span>
+                      <label className="text-xs text-text-md">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-lo">Description</span>
                         <input
                           value={agentProfileDescription}
                           onChange={(event) => setAgentProfileDescription(event.target.value)}
+                          placeholder="What this agent does"
                           className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                         />
                       </label>
-                      <label className="text-xs text-text-md lg:col-span-2">
-                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                          Publish note
-                        </span>
-                        <input
-                          value={agentProfileVersionNote}
-                          onChange={(event) => setAgentProfileVersionNote(event.target.value)}
-                          disabled={!selectedAgentDefinitionId}
-                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
-                        />
-                      </label>
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-                        onClick={handleNewAgentProfile}
-                      >
-                        New
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() => void handleSaveAgentProfile()}
-                        disabled={!selectedAgentDefinitionId || agentProfileSaving}
-                      >
-                        {agentProfileSaving ? "Saving..." : "Save"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-xl border border-sky-300/26 bg-accent-sky px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() => void handleSaveAgentProfileAs()}
-                        disabled={agentProfileSaving}
-                      >
-                        {agentProfileSaving ? "Saving..." : "Save as"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-xl border border-emerald-300/24 bg-accent-emerald px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-emerald-300/36 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() => void handlePublishAgentProfile()}
-                        disabled={
-                          !selectedAgentDefinitionId ||
-                          agentProfileSaving ||
-                          agentProfilePublishing
-                        }
-                      >
-                        {agentProfilePublishing ? "Publishing..." : "Publish version"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() => void handleDeleteAgentProfile()}
-                        disabled={!selectedAgentDefinitionId || agentProfileDeleting}
-                      >
-                        {agentProfileDeleting ? "Deleting..." : "Delete"}
-                      </button>
-                    </div>
-                    {agentDefinitionVersionsError ? (
-                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
-                        {agentDefinitionVersionsError}
-                      </div>
-                    ) : null}
-                    {agentDefinitionsError ? (
-                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
-                        {agentDefinitionsError}
-                      </div>
-                    ) : null}
-                    {agentProfileError ? (
-                      <div className="mt-3 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
-                        {agentProfileError}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    <label className="text-xs text-text-md">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                        Title
-                      </span>
-                      <input
-                        value={agentTitle}
-                        onChange={(event) => setAgentTitle(event.target.value)}
-                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                      />
-                    </label>
-                    <label className="text-xs text-text-md">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                        User Id
-                      </span>
-                      <input
-                        value={agentUserId}
-                        onChange={(event) => setAgentUserId(event.target.value)}
-                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                      />
-                    </label>
-                    <label className="text-xs text-text-md lg:col-span-2">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                        Run goal
-                      </span>
-                      <input
-                        value={agentGoal}
-                        onChange={(event) => {
-                          const nextGoal = event.target.value;
-                          if (agentEditorMode === "structured") {
-                            updatePrimaryAgentInput("goal", nextGoal);
-                          } else {
-                            setAgentGoal(nextGoal);
-                          }
-                        }}
-                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                    <label className="block text-xs text-text-md">
+                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-lo">Instructions</span>
+                      <textarea
+                        rows={5}
+                        value={agentInstructions}
+                        onChange={(event) => setAgentInstructions(event.target.value)}
+                        placeholder="You are a helpful agent. Think step by step and use your tools to achieve the goal."
+                        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
                   </div>
 
+                  {/* ── Goal ── */}
                   <label className="block text-xs text-text-md">
-                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                      Context JSON
-                    </span>
+                    <span className="mb-1 block text-sm font-semibold text-text-hi">Goal</span>
                     <textarea
-                      rows={5}
-                      value={agentContextJsonText}
-                      onChange={(event) => setAgentContextJsonText(event.target.value)}
-                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                      rows={4}
+                      value={agentGoal}
+                      onChange={(event) => {
+                        const nextGoal = event.target.value;
+                        if (agentEditorMode === "structured") {
+                          updatePrimaryAgentInput("goal", nextGoal);
+                        } else {
+                          setAgentGoal(nextGoal);
+                        }
+                      }}
+                      placeholder="Describe what this agent should accomplish…"
+                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                     />
                   </label>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {(["structured", "raw"] as AgentEditorMode[]).map((mode) => (
+                  {/* ── Tools ── */}
+                  <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-md">Tools</div>
+                        <div className="mt-0.5 text-[11px] text-text-lo">Capabilities this agent can call during the run loop.</div>
+                      </div>
+                      <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[10px] text-text-lo">
+                        {agentAllowedCapabilityIds.length} added
+                      </span>
+                    </div>
+                    {agentAllowedCapabilityIds.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {agentAllowedCapabilityIds.map((capId) => {
+                          const cap = catalog.find((c) => c.id === capId);
+                          return (
+                            <div
+                              key={capId}
+                              className="flex items-center gap-1.5 rounded-xl border border-subtle bg-surface-1 pl-3 pr-1.5 py-1"
+                            >
+                              <span className="text-[11px] font-medium text-text-hi">{capId}</span>
+                              {cap?.group ? (
+                                <span className="rounded-full border border-subtle bg-surface-2 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-text-lo">
+                                  {cap.group}
+                                </span>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ml-1 rounded-md px-1.5 py-0.5 text-[10px] text-text-lo transition hover:bg-accent-rose hover:text-text-rose-token"
+                                onClick={() => handleToolRemove(capId)}
+                                aria-label={`Remove ${capId}`}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-[11px] text-text-lo">
+                        No tools added. Click <span className="font-semibold text-text-md">Add as Tool</span> in the catalog.
+                      </div>
+                    )}
+                    <div className="mt-3 flex items-center gap-2">
+                      <input
+                        list="studio-capability-id-options"
+                        className="flex-1 rounded-xl border border-subtle bg-slate-950/45 px-3 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/35"
+                        placeholder="capability.id"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            handleToolInsert((e.target as HTMLInputElement).value.trim());
+                            (e.target as HTMLInputElement).value = "";
+                          }
+                        }}
+                      />
                       <button
-                        key={mode}
                         type="button"
-                        className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
-                          agentEditorMode === mode
-                            ? "border-sky-300/35 bg-accent-sky text-text-hi"
-                            : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                        }`}
-                        onClick={() => {
-                          setAgentEditorMode(mode);
-                          setWorkbenchBanner(null);
+                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35"
+                        onClick={(e) => {
+                          const input = (e.currentTarget.previousElementSibling as HTMLInputElement);
+                          handleToolInsert(input.value.trim());
+                          input.value = "";
                         }}
                       >
-                        {mode === "structured" ? "Structured Editor" : "Raw RunSpec"}
-                      </button>
-                    ))}
-                  </div>
-
-                  {agentEditorMode === "structured" ? (
-                    <div className="space-y-3">
-                      {primaryAgentStep ? (
-                        <div className="rounded-2xl border border-sky-300/18 bg-accent-sky p-3">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-semibold text-text-hi">Agent</div>
-                              {primaryAgentCapability ? (
-                                <div className="mt-1 text-xs leading-5 text-text-md">
-                                  {primaryAgentCapability.description}
-                                </div>
-                              ) : null}
-                            </div>
-                            <span className="rounded-full border border-sky-300/22 bg-accent-sky px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-sky-token">
-                              primary step
-                            </span>
-                          </div>
-                          <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Agent capability
-                              </span>
-                              <input
-                                list="studio-agent-capability-options"
-                                value={primaryAgentStep.capabilityId}
-                                onChange={(event) =>
-                                  updatePrimaryAgentCapability(event.target.value)
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Step id
-                              </span>
-                              <input
-                                value={primaryAgentStep.stepId}
-                                onChange={(event) =>
-                                  updatePrimaryAgentStep((current) => ({
-                                    ...current,
-                                    stepId: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Agent task
-                              </span>
-                              <textarea
-                                rows={3}
-                                value={
-                                  stringInputValue(primaryAgentStep.inputDraft, "goal") ||
-                                  agentGoal
-                                }
-                                onChange={(event) =>
-                                  updatePrimaryAgentInput("goal", event.target.value)
-                                }
-                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Workspace path
-                              </span>
-                              <input
-                                value={stringInputValue(
-                                  primaryAgentStep.inputDraft,
-                                  "workspace_path"
-                                )}
-                                onChange={(event) =>
-                                  updatePrimaryAgentInput("workspace_path", event.target.value)
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Max steps
-                              </span>
-                              <input
-                                type="number"
-                                min={1}
-                                max={12}
-                                value={stringInputValue(primaryAgentStep.inputDraft, "max_steps")}
-                                onChange={(event) =>
-                                  updatePrimaryAgentInput("max_steps", event.target.value)
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Constraints
-                              </span>
-                              <textarea
-                                rows={3}
-                                value={stringInputValue(
-                                  primaryAgentStep.inputDraft,
-                                  "constraints"
-                                )}
-                                onChange={(event) =>
-                                  updatePrimaryAgentInput("constraints", event.target.value)
-                                }
-                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Instruction
-                              </span>
-                              <input
-                                value={primaryAgentStep.instruction}
-                                onChange={(event) =>
-                                  updatePrimaryAgentStep((current) => ({
-                                    ...current,
-                                    instruction: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      ) : null}
-                      {agentSteps.slice(1).map((step, index) => {
-                        const stepCapability =
-                          catalog.find((item) => item.id === step.capabilityId) ?? null;
-                        const stepSchemaProperties = getCapabilitySchemaProperties(stepCapability);
-                        return (
-                          <div
-                            key={step.localId}
-                            className="rounded-2xl border border-white/8 bg-black/18 p-3"
-                          >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-semibold text-text-hi">Step {index + 2}</div>
-                            <button
-                              type="button"
-                              className="rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28"
-                              onClick={() =>
-                                setAgentSteps((current) =>
-                                  current.length > 1
-                                    ? current.filter((item) => item.localId !== step.localId)
-                                    : current
-                                )
-                              }
-                            >
-                              remove
-                            </button>
-                          </div>
-                          <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Step id
-                              </span>
-                              <input
-                                value={step.stepId}
-                                onChange={(event) =>
-                                  updateAgentStep(step.localId, (current) => ({
-                                    ...current,
-                                    stepId: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Capability id
-                              </span>
-                              <input
-                                list="studio-capability-id-options"
-                                value={step.capabilityId}
-                                onChange={(event) =>
-                                  updateAgentStepCapability(step.localId, event.target.value)
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Name
-                              </span>
-                              <input
-                                value={step.name}
-                                onChange={(event) =>
-                                  updateAgentStep(step.localId, (current) => ({
-                                    ...current,
-                                    name: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Depends on
-                              </span>
-                              <input
-                                value={step.dependsOnText}
-                                onChange={(event) =>
-                                  updateAgentStep(step.localId, (current) => ({
-                                    ...current,
-                                    dependsOnText: event.target.value,
-                                  }))
-                                }
-                                placeholder="comma separated step ids"
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Description
-                              </span>
-                              <input
-                                value={step.description}
-                                onChange={(event) =>
-                                  updateAgentStep(step.localId, (current) => ({
-                                    ...current,
-                                    description: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <label className="text-xs text-text-md lg:col-span-2">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Instruction
-                              </span>
-                              <input
-                                value={step.instruction}
-                                onChange={(event) =>
-                                  updateAgentStep(step.localId, (current) => ({
-                                    ...current,
-                                    instruction: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                            <div className="rounded-2xl border border-white/8 bg-slate-950/30 p-3 text-xs text-text-md lg:col-span-2">
-                              <div className="flex items-center justify-between gap-3">
-                                <div>
-                                  <div className="font-semibold uppercase tracking-[0.16em] text-text-md">
-                                    Inputs
-                                  </div>
-                                  <div className="mt-1 text-text-md">
-                                    Fill required fields from the selected capability schema.
-                                  </div>
-                                </div>
-                                <label className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-md">
-                                  <input
-                                    type="checkbox"
-                                    checked={step.rawInputOverrideEnabled}
-                                    onChange={(event) =>
-                                      updateAgentStep(step.localId, (current) => ({
-                                        ...current,
-                                        rawInputOverrideEnabled: event.target.checked,
-                                      }))
-                                    }
-                                  />
-                                  raw override
-                                </label>
-                              </div>
-                              {!step.rawInputOverrideEnabled && stepSchemaProperties.length > 0 ? (
-                                <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                                  {stepSchemaProperties.map(([fieldName, schema]) => {
-                                    const fieldType = normalizeSchemaType(schema);
-                                    const required =
-                                      stepCapability?.required_inputs?.includes(fieldName) ?? false;
-                                    const rawFieldValue = step.inputDraft[fieldName];
-                                    const fieldValue =
-                                      typeof rawFieldValue === "string" ? rawFieldValue : "";
-                                    if (fieldType === "boolean") {
-                                      return (
-                                        <label
-                                          key={fieldName}
-                                          className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-2 text-sm text-text-hi"
-                                        >
-                                          <span>
-                                            {fieldName}
-                                            {required ? (
-                                              <span className="ml-2 text-[10px] uppercase text-text-sky-token">
-                                                required
-                                              </span>
-                                            ) : null}
-                                          </span>
-                                          <input
-                                            type="checkbox"
-                                            checked={step.inputDraft[fieldName] === true}
-                                            onChange={(event) =>
-                                              updateAgentStep(step.localId, (current) => ({
-                                                ...current,
-                                                inputDraft: {
-                                                  ...current.inputDraft,
-                                                  [fieldName]: event.target.checked,
-                                                },
-                                              }))
-                                            }
-                                          />
-                                        </label>
-                                      );
-                                    }
-                                    const multiLine = fieldType === "object" || fieldType === "array";
-                                    return (
-                                      <label
-                                        key={fieldName}
-                                        className={`block text-xs text-text-md ${
-                                          multiLine ? "lg:col-span-2" : ""
-                                        }`.trim()}
-                                      >
-                                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                          {fieldName}
-                                          {required ? " *" : ""}
-                                        </span>
-                                        {multiLine ? (
-                                          <textarea
-                                            rows={4}
-                                            value={fieldValue}
-                                            onChange={(event) =>
-                                              updateAgentStep(step.localId, (current) => ({
-                                                ...current,
-                                                inputDraft: {
-                                                  ...current.inputDraft,
-                                                  [fieldName]: event.target.value,
-                                                },
-                                              }))
-                                            }
-                                            className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
-                                          />
-                                        ) : (
-                                          <input
-                                            value={fieldValue}
-                                            onChange={(event) =>
-                                              updateAgentStep(step.localId, (current) => ({
-                                                ...current,
-                                                inputDraft: {
-                                                  ...current.inputDraft,
-                                                  [fieldName]: event.target.value,
-                                                },
-                                              }))
-                                            }
-                                            className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                                          />
-                                        )}
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              ) : null}
-                              {!step.rawInputOverrideEnabled && stepSchemaProperties.length === 0 ? (
-                                <div className="mt-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-4 text-xs text-text-md">
-                                  Select a catalog capability with an input schema to show generated fields.
-                                </div>
-                              ) : null}
-                              {step.rawInputOverrideEnabled ? (
-                                <label className="mt-3 block text-xs text-text-md">
-                                  <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                    Raw input override JSON
-                                  </span>
-                                  <textarea
-                                    rows={5}
-                                    value={step.inputJsonText}
-                                    onChange={(event) =>
-                                      updateAgentStep(step.localId, (current) => ({
-                                        ...current,
-                                        inputJsonText: event.target.value,
-                                      }))
-                                    }
-                                    className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
-                                  />
-                                </label>
-                              ) : null}
-                            </div>
-                            <label className="text-xs text-text-md">
-                              <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                Retry policy JSON
-                              </span>
-                              <textarea
-                                rows={5}
-                                value={step.retryPolicyText}
-                                onChange={(event) =>
-                                  updateAgentStep(step.localId, (current) => ({
-                                    ...current,
-                                    retryPolicyText: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      );
-                    })}
-                      <button
-                        type="button"
-                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-                        onClick={() => setAgentSteps((current) => [...current, createAgentStepDraft()])}
-                      >
-                        add step
+                        + Add
                       </button>
                     </div>
-                  ) : (
-                    <label className="block text-xs text-text-md">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                        Raw RunSpec JSON
-                      </span>
-                      <textarea
-                        rows={18}
-                        value={agentRawRunSpecText}
-                        onChange={(event) => setAgentRawRunSpecText(event.target.value)}
-                        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
-                      />
-                    </label>
-                  )}
+                  </div>
+
+                  {/* ── Advanced ── */}
+                  <div>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 text-[11px] text-text-lo transition hover:text-text-md"
+                      onClick={() => setShowAgentAdvanced((v) => !v)}
+                    >
+                      <span className={`transition-transform ${showAgentAdvanced ? "rotate-90" : ""}`}>▶</span>
+                      Advanced
+                    </button>
+                    {showAgentAdvanced ? (
+                      <div className="mt-3 space-y-4">
+                        {/* Title / User Id / Context JSON */}
+                        <div className="grid gap-3 lg:grid-cols-2">
+                          <label className="text-xs text-text-md">
+                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                              Title
+                            </span>
+                            <input
+                              value={agentTitle}
+                              onChange={(event) => setAgentTitle(event.target.value)}
+                              className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                            />
+                          </label>
+                          <label className="text-xs text-text-md">
+                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                              User Id
+                            </span>
+                            <input
+                              value={agentUserId}
+                              onChange={(event) => setAgentUserId(event.target.value)}
+                              className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                            />
+                          </label>
+                          <label className="block text-xs text-text-md lg:col-span-2">
+                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                              Context JSON
+                            </span>
+                            <textarea
+                              rows={5}
+                              value={agentContextJsonText}
+                              onChange={(event) => setAgentContextJsonText(event.target.value)}
+                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                            />
+                          </label>
+                        </div>
+
+                        {/* Editor mode toggle */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {(["structured", "raw"] as AgentEditorMode[]).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+                                agentEditorMode === mode
+                                  ? "border-sky-300/35 bg-accent-sky text-text-hi"
+                                  : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
+                              }`}
+                              onClick={() => {
+                                setAgentEditorMode(mode);
+                                setWorkbenchBanner(null);
+                              }}
+                            >
+                              {mode === "structured" ? "Structured editor" : "Raw RunSpec"}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Structured / Raw editor content */}
+                        {agentEditorMode === "structured" ? (
+                          <div className="space-y-3">
+                            {/* Primary agent step */}
+                            {primaryAgentStep ? (
+                              <div className="rounded-2xl border border-sky-300/18 bg-accent-sky p-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <div className="text-sm font-semibold text-text-hi">Agent</div>
+                                    {primaryAgentCapability ? (
+                                      <div className="mt-1 text-xs leading-5 text-text-md">
+                                        {primaryAgentCapability.description}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                  <span className="rounded-full border border-sky-300/22 bg-accent-sky px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-sky-token">
+                                    primary step
+                                  </span>
+                                </div>
+                                <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                                  <label className="text-xs text-text-md lg:col-span-2">
+                                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                      Agent capability
+                                    </span>
+                                    <input
+                                      list="studio-agent-capability-options"
+                                      value={primaryAgentStep.capabilityId}
+                                      onChange={(event) =>
+                                        updatePrimaryAgentCapability(event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                    />
+                                  </label>
+                                  {!isAgentRunCapability(primaryAgentStep.capabilityId) ? (
+                                    <label className="text-xs text-text-md">
+                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                        Workspace path
+                                      </span>
+                                      <input
+                                        value={stringInputValue(
+                                          primaryAgentStep.inputDraft,
+                                          "workspace_path"
+                                        )}
+                                        onChange={(event) =>
+                                          updatePrimaryAgentInput("workspace_path", event.target.value)
+                                        }
+                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                      />
+                                    </label>
+                                  ) : null}
+                                  <label className="text-xs text-text-md">
+                                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                      Max steps
+                                    </span>
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={12}
+                                      value={stringInputValue(primaryAgentStep.inputDraft, "max_steps")}
+                                      onChange={(event) =>
+                                        updatePrimaryAgentInput("max_steps", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                    />
+                                  </label>
+                                  <label className="text-xs text-text-md lg:col-span-2">
+                                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                      Constraints
+                                    </span>
+                                    <textarea
+                                      rows={3}
+                                      value={stringInputValue(
+                                        primaryAgentStep.inputDraft,
+                                        "constraints"
+                                      )}
+                                      onChange={(event) =>
+                                        updatePrimaryAgentInput("constraints", event.target.value)
+                                      }
+                                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                    />
+                                  </label>
+                                </div>
+                              </div>
+                            ) : null}
+
+                            {/* Additional steps */}
+                            {agentSteps.slice(1).map((step, index) => {
+                              const stepCapability =
+                                catalog.find((item) => item.id === step.capabilityId) ?? null;
+                              const stepSchemaProperties = getCapabilitySchemaProperties(stepCapability);
+                              return (
+                                <div
+                                  key={step.localId}
+                                  className="rounded-2xl border border-white/8 bg-black/18 p-3"
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="text-sm font-semibold text-text-hi">Step {index + 2}</div>
+                                    <button
+                                      type="button"
+                                      className="rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28"
+                                      onClick={() =>
+                                        setAgentSteps((current) =>
+                                          current.length > 1
+                                            ? current.filter((item) => item.localId !== step.localId)
+                                            : current
+                                        )
+                                      }
+                                    >
+                                      remove
+                                    </button>
+                                  </div>
+                                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                                    <label className="text-xs text-text-md">
+                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                        Capability id
+                                      </span>
+                                      <input
+                                        list="studio-capability-id-options"
+                                        value={step.capabilityId}
+                                        onChange={(event) =>
+                                          updateAgentStepCapability(step.localId, event.target.value)
+                                        }
+                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                      />
+                                    </label>
+                                    <label className="text-xs text-text-md">
+                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                        Name
+                                      </span>
+                                      <input
+                                        value={step.name}
+                                        onChange={(event) =>
+                                          updateAgentStep(step.localId, (current) => ({
+                                            ...current,
+                                            name: event.target.value,
+                                          }))
+                                        }
+                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                      />
+                                    </label>
+                                    <label className="text-xs text-text-md lg:col-span-2">
+                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                        Depends on
+                                      </span>
+                                      <input
+                                        value={step.dependsOnText}
+                                        onChange={(event) =>
+                                          updateAgentStep(step.localId, (current) => ({
+                                            ...current,
+                                            dependsOnText: event.target.value,
+                                          }))
+                                        }
+                                        placeholder="comma-separated step ids"
+                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                      />
+                                    </label>
+                                    <div className="rounded-2xl border border-white/8 bg-slate-950/30 p-3 text-xs text-text-md lg:col-span-2">
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                          <div className="font-semibold uppercase tracking-[0.16em] text-text-md">
+                                            Inputs
+                                          </div>
+                                          <div className="mt-1 text-text-md">
+                                            Fill required fields from the selected capability schema.
+                                          </div>
+                                        </div>
+                                        <label className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-md">
+                                          <input
+                                            type="checkbox"
+                                            checked={step.rawInputOverrideEnabled}
+                                            onChange={(event) =>
+                                              updateAgentStep(step.localId, (current) => ({
+                                                ...current,
+                                                rawInputOverrideEnabled: event.target.checked,
+                                              }))
+                                            }
+                                          />
+                                          Raw overrides
+                                        </label>
+                                      </div>
+                                      {!step.rawInputOverrideEnabled && stepSchemaProperties.length > 0 ? (
+                                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                                          {stepSchemaProperties.map(([fieldName, schema]) => {
+                                            const fieldType = normalizeSchemaType(schema);
+                                            const required =
+                                              stepCapability?.required_inputs?.includes(fieldName) ?? false;
+                                            const rawFieldValue = step.inputDraft[fieldName];
+                                            const fieldValue =
+                                              typeof rawFieldValue === "string" ? rawFieldValue : "";
+                                            if (fieldType === "boolean") {
+                                              return (
+                                                <label
+                                                  key={fieldName}
+                                                  className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-2 text-sm text-text-hi"
+                                                >
+                                                  <span>
+                                                    {fieldName}
+                                                    {required ? (
+                                                      <span className="ml-2 text-[10px] uppercase text-text-sky-token">
+                                                        required
+                                                      </span>
+                                                    ) : null}
+                                                  </span>
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={step.inputDraft[fieldName] === true}
+                                                    onChange={(event) =>
+                                                      updateAgentStep(step.localId, (current) => ({
+                                                        ...current,
+                                                        inputDraft: {
+                                                          ...current.inputDraft,
+                                                          [fieldName]: event.target.checked,
+                                                        },
+                                                      }))
+                                                    }
+                                                  />
+                                                </label>
+                                              );
+                                            }
+                                            const multiLine = fieldType === "object" || fieldType === "array";
+                                            return (
+                                              <label
+                                                key={fieldName}
+                                                className={`block text-xs text-text-md ${
+                                                  multiLine ? "lg:col-span-2" : ""
+                                                }`.trim()}
+                                              >
+                                                <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                                  {fieldName}
+                                                  {required ? " *" : ""}
+                                                </span>
+                                                {multiLine ? (
+                                                  <textarea
+                                                    rows={4}
+                                                    value={fieldValue}
+                                                    onChange={(event) =>
+                                                      updateAgentStep(step.localId, (current) => ({
+                                                        ...current,
+                                                        inputDraft: {
+                                                          ...current.inputDraft,
+                                                          [fieldName]: event.target.value,
+                                                        },
+                                                      }))
+                                                    }
+                                                    className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                                                  />
+                                                ) : (
+                                                  <input
+                                                    value={fieldValue}
+                                                    onChange={(event) =>
+                                                      updateAgentStep(step.localId, (current) => ({
+                                                        ...current,
+                                                        inputDraft: {
+                                                          ...current.inputDraft,
+                                                          [fieldName]: event.target.value,
+                                                        },
+                                                      }))
+                                                    }
+                                                    className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                                  />
+                                                )}
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : null}
+                                      {!step.rawInputOverrideEnabled && stepSchemaProperties.length === 0 ? (
+                                        <div className="mt-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-4 text-xs text-text-md">
+                                          Select a catalog capability with an input schema to show generated fields.
+                                        </div>
+                                      ) : null}
+                                      {step.rawInputOverrideEnabled ? (
+                                        <div className="mt-3 space-y-3">
+                                          <label className="block text-xs text-text-md">
+                                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                              Raw input override JSON
+                                            </span>
+                                            <textarea
+                                              rows={5}
+                                              value={step.inputJsonText}
+                                              onChange={(event) =>
+                                                updateAgentStep(step.localId, (current) => ({
+                                                  ...current,
+                                                  inputJsonText: event.target.value,
+                                                }))
+                                              }
+                                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                                            />
+                                          </label>
+                                          <label className="block text-xs text-text-md">
+                                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                                              Retry policy JSON
+                                            </span>
+                                            <textarea
+                                              rows={4}
+                                              value={step.retryPolicyText}
+                                              onChange={(event) =>
+                                                updateAgentStep(step.localId, (current) => ({
+                                                  ...current,
+                                                  retryPolicyText: event.target.value,
+                                                }))
+                                              }
+                                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                                            />
+                                          </label>
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+                              onClick={() => setAgentSteps((current) => [...current, createAgentStepDraft()])}
+                            >
+                              + Add Step
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="block text-xs text-text-md">
+                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                              Raw RunSpec JSON
+                            </span>
+                            <textarea
+                              rows={18}
+                              value={agentRawRunSpecText}
+                              onChange={(event) => setAgentRawRunSpecText(event.target.value)}
+                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                            />
+                          </label>
+                        )}
+
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               )}
+
+              {/* Developer preview — shared between both modes */}
+              <div className="mt-4">
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-lo transition hover:text-text-hi"
+                  onClick={() => setShowDevPreview((v) => !v)}
+                >
+                  <span className={`transition-transform ${showDevPreview ? "rotate-90" : ""}`}>▶</span>
+                  Developer Preview
+                </button>
+                {showDevPreview ? (
+                  <div className="mt-3 space-y-3">
+                    <JsonPreview
+                      title="RunSpec Preview"
+                      value={workbenchMode === "capability" ? capabilityRunSpecPreview : agentRunSpecPreview.value}
+                      emptyLabel="The current editor state does not yet produce a valid run specification."
+                    />
+                    <JsonPreview
+                      title="Predicted First ExecutionRequest"
+                      value={predictedExecutionRequestPreview}
+                      emptyLabel="Execution request preview will appear once the first step is valid."
+                    />
+                    {workbenchMode === "capability" && selectedCapability ? (
+                      <>
+                        <JsonPreview
+                          title="Capability Input Schema"
+                          value={selectedCapability.input_schema}
+                          emptyLabel="No input schema is available for the selected capability."
+                        />
+                        <JsonPreview
+                          title="Capability Output Schema"
+                          value={selectedCapability.output_schema}
+                          emptyLabel="No output schema is available for the selected capability."
+                        />
+                      </>
+                    ) : null}
+                    <JsonPreview
+                      title="Retry / Policy Snapshot"
+                      value={
+                        workbenchMode === "capability"
+                          ? {
+                              retry_policy:
+                                capabilityRetryPolicy.value && Object.keys(capabilityRetryPolicy.value).length > 0
+                                  ? capabilityRetryPolicy.value
+                                  : DEFAULT_RETRY_POLICY_PREVIEW,
+                              acceptance_policy: { acceptance_criteria: [], critic_required: false },
+                            }
+                          : isRecord(predictedExecutionRequestPreview)
+                            ? {
+                                retry_policy: predictedExecutionRequestPreview.retry_policy ?? {},
+                                policy_snapshot: predictedExecutionRequestPreview.policy_snapshot ?? {},
+                              }
+                            : null
+                      }
+                      emptyLabel="Policy preview will appear once the active workbench payload is valid."
+                    />
+                  </div>
+                ) : null}
+              </div>
 
               {(workbenchMode === "capability"
                 ? capabilityLaunchInputs.error || capabilityContextJson.error || capabilityRetryPolicy.error
@@ -2773,98 +2888,17 @@ export default function StudioWorkbenchSurface({
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  className="inline-flex items-center gap-2 rounded-xl border border-sky-300/26 bg-accent-sky px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-xl border border-sky-300/26 bg-accent-sky px-5 py-2.5 text-[12px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => void launchCurrentWorkbenchRun()}
                   disabled={launchLoading}
                 >
                   <StudioWorkbenchIcon kind="run" className="h-4 w-4" />
-                  {launchLoading ? "Launching..." : "Launch Run"}
+                  {launchLoading ? "Running..." : workbenchMode === "agent" ? "Run Agent" : "Run"}
                 </button>
                 {launchError ? <div className="text-xs text-text-rose-token">{launchError}</div> : null}
               </div>
             </SurfacePanel>
 
-            <SurfacePanel
-              title="Preview"
-              subtitle="Inspect the normalized run payload before launch, plus the initial execution-request shape."
-            >
-              <div className="space-y-3">
-                {workbenchMode === "capability" ? (
-                  <>
-                    <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-                      <div className="text-sm font-semibold text-text-hi">
-                        {selectedCapability?.id || "No capability selected"}
-                      </div>
-                      <div className="mt-1 text-xs leading-5 text-text-md">
-                        {selectedCapability?.description || "Pick a capability from the catalog to preview its schema."}
-                      </div>
-                      {selectedCapability ? (
-                        <div className="mt-3 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-text-md">
-                          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
-                            {selectedCapability.risk_tier}
-                          </span>
-                          <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
-                            {selectedCapability.idempotency}
-                          </span>
-                          {(selectedCapability.adapters || []).map((adapter) => (
-                            <span
-                              key={`${adapter.server_id}:${adapter.tool_name}`}
-                              className="rounded-full border border-subtle bg-surface-1 px-2 py-1"
-                            >
-                              {adapter.tool_name}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                    <JsonPreview
-                      title="Capability Input Schema"
-                      value={selectedCapability?.input_schema}
-                      emptyLabel="No input schema is available for the selected capability."
-                    />
-                    <JsonPreview
-                      title="Capability Output Schema"
-                      value={selectedCapability?.output_schema}
-                      emptyLabel="No output schema is available for the selected capability."
-                    />
-                  </>
-                ) : null}
-
-                <JsonPreview
-                  title="RunSpec Preview"
-                  value={workbenchMode === "capability" ? capabilityRunSpecPreview : agentRunSpecPreview.value}
-                  emptyLabel="The current editor state does not yet produce a valid run specification."
-                />
-                <JsonPreview
-                  title="Predicted First ExecutionRequest"
-                  value={predictedExecutionRequestPreview}
-                  emptyLabel="Execution request preview will appear once the first step is valid."
-                />
-                <JsonPreview
-                  title="Retry / Policy Snapshot"
-                  value={
-                    workbenchMode === "capability"
-                      ? {
-                          retry_policy:
-                            capabilityRetryPolicy.value && Object.keys(capabilityRetryPolicy.value).length > 0
-                              ? capabilityRetryPolicy.value
-                              : DEFAULT_RETRY_POLICY_PREVIEW,
-                          acceptance_policy: {
-                            acceptance_criteria: [],
-                            critic_required: false,
-                          },
-                        }
-                      : isRecord(predictedExecutionRequestPreview)
-                        ? {
-                            retry_policy: predictedExecutionRequestPreview.retry_policy ?? {},
-                            policy_snapshot: predictedExecutionRequestPreview.policy_snapshot ?? {},
-                          }
-                        : null
-                  }
-                  emptyLabel="Policy preview will appear once the active workbench payload is valid."
-                />
-              </div>
-            </SurfacePanel>
           </div>
 
           <div className="mt-4 rounded-[24px] border border-subtle bg-gradient-panel-deep shadow-[0_18px_36px_rgba(15,23,42,0.24)]">
@@ -2872,9 +2906,6 @@ export default function StudioWorkbenchSurface({
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-md">
                   Run Results
-                </div>
-                <div className="mt-1 text-xs text-text-md">
-                  Canonical run status, step progression, execution requests, attempts, artifacts, and debugger events.
                 </div>
               </div>
               <div className="flex flex-col items-end gap-2">
@@ -2928,7 +2959,7 @@ export default function StudioWorkbenchSurface({
             </div>
             <div className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
               <div className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-4">
                   <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3">
                     <div className="text-[11px] uppercase tracking-[0.14em] text-text-md">
                       steps
@@ -2947,10 +2978,18 @@ export default function StudioWorkbenchSurface({
                   </div>
                   <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3">
                     <div className="text-[11px] uppercase tracking-[0.14em] text-text-md">
-                      attempts / invocations
+                      attempts
                     </div>
                     <div className="mt-2 text-2xl font-semibold text-text-hi">
-                      {(debuggerData?.attempts.length ?? 0) + (debuggerData?.invocations.length ?? 0)}
+                      {debuggerData?.attempts.length ?? 0}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-text-md">
+                      invocations
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-text-hi">
+                      {debuggerData?.invocations.length ?? 0}
                     </div>
                   </div>
                 </div>

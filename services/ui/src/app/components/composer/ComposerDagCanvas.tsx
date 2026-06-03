@@ -29,7 +29,7 @@ type ComposerDraftNode = {
   taskName: string;
   capabilityId: string;
   outputPath: string;
-  nodeKind?: "capability" | "control";
+  nodeKind?: "capability" | "control" | "agent";
   controlKind?: "if" | "if_else" | "switch" | "parallel" | null;
 };
 
@@ -139,7 +139,7 @@ type BlueprintPreviewNode = {
   caption?: string;
   tone: WorkflowNodeCardTone;
   capabilityId: string;
-  nodeKind?: "capability" | "control";
+  nodeKind?: "capability" | "control" | "agent";
   controlKind?: "if" | "if_else" | "switch" | "parallel" | null;
 };
 

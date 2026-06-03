@@ -173,9 +173,10 @@ export type ComposerDraftNode = {
   taskName: string;
   capabilityId: string;
   outputPath: string;
-  nodeKind?: "capability" | "control";
+  nodeKind?: "capability" | "control" | "agent";
   controlKind?: StudioControlKind | null;
   controlConfig?: StudioControlConfig | null;
+  agentDefinitionId?: string | null;
   inputBindings: Record<string, ComposerInputBinding>;
   outputs: StudioNodeOutput[];
   variables: StudioNodeVariable[];

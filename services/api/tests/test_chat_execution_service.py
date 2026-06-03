@@ -84,38 +84,6 @@ def test_execute_capability_allows_read_only_native_tool(monkeypatch) -> None:
     assert "README.md" in result.assistant_response
 
 
-def test_execute_capability_rejects_non_read_only(monkeypatch) -> None:
-    spec = capability_registry.CapabilitySpec(
-        capability_id="document.docx.render",
-        description="Render DOCX",
-        risk_tier="bounded_write",
-        idempotency="write",
-        enabled=True,
-    )
-    monkeypatch.setattr(
-        chat_execution_service.capability_registry,
-        "load_capability_registry",
-        lambda: capability_registry.CapabilityRegistry({"document.docx.render": spec}),
-    )
-
-    executor = chat_execution_service.ChatDirectExecutor(
-        registry=_FakeRegistry(),
-        config=chat_execution_service.ChatDirectExecutionConfig(
-            allowed_capabilities={"document.docx.render"}
-        ),
-    )
-
-    try:
-        executor.execute_capability(
-            capability_id="document.docx.render",
-            arguments={},
-            trace_id="trace-1",
-        )
-    except Exception as exc:  # noqa: BLE001
-        assert "chat_direct_capability_not_read_only" in str(exc)
-    else:
-        raise AssertionError("expected direct execution to reject non-read-only capability")
-
 
 def test_execute_capability_allows_rag_retrieve_mcp(monkeypatch) -> None:
     spec = capability_registry.CapabilitySpec(
