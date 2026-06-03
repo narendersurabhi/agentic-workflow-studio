@@ -32,6 +32,7 @@ from libs.tools.document_spec_llm import (
 from libs.tools.core_ops import CoreOpsHandlers
 from libs.tools import mcp_client
 from libs.tools import coder_tools
+from libs.tools import agent_tools
 
 LOGGER = logging.getLogger(__name__)
 
@@ -331,6 +332,7 @@ def _default_catalog_handlers() -> tool_catalog.ToolCatalogHandlers:
         coding_agent_generate=_coding_agent_generate,
         coding_agent_autonomous=_coding_agent_autonomous,
         coding_agent_publish_pr=_coding_agent_publish_pr,
+        agent_run=_agent_run,
         llm_generate_document_spec=_llm_generate_document_spec,
         llm_improve_document_spec=_llm_improve_document_spec,
         sanitize_document_spec=_sanitize_document_spec,
@@ -1301,6 +1303,34 @@ def _coding_agent_autonomous(payload: Dict[str, Any], provider: LLMProvider) -> 
         provider,
         post_mcp_tool_call=_post_mcp_tool_call,
         write_workspace_text_file=_write_workspace_text_file,
+    )
+
+
+def _agent_run(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int = 0) -> Dict[str, Any]:
+    def _execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        # Intercept recursive agent_run calls to thread depth through
+        if tool_name == "agent_run" or tool_name == "agent__run":
+            return _agent_run(arguments, provider, _recursion_depth=_recursion_depth + 1)
+        reg = default_registry(
+            http_fetch_enabled=True,
+            llm_enabled=True,
+            llm_provider=provider,
+        )
+        tool = reg.get(tool_name)
+        if tool is None:
+            from libs.framework.tool_runtime import ToolExecutionError as _TEE
+            raise _TEE(f"tool_not_found:{tool_name}")
+        return tool.handler(arguments)
+
+    return agent_tools.agent_run(
+        payload,
+        provider,
+        invoke_capability=lambda cap_id, args: mcp_gateway.invoke_capability(
+            cap_id,
+            args,
+            execute_tool=_execute_tool,
+        ),
+        _recursion_depth=_recursion_depth,
     )
 
 

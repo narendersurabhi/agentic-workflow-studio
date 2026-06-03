@@ -11,6 +11,7 @@ from libs.tools.document_spec_llm import register_document_spec_llm_tools
 from libs.tools.document_spec_validate import register_document_spec_tools
 from libs.tools.github_tools import register_github_tools
 from libs.tools.llm_tool_groups import (
+    register_agent_run_tool,
     register_coding_agent_tools,
     register_llm_contextual_text_tool,
     register_llm_text_tool,
@@ -34,6 +35,7 @@ class ToolCatalogHandlers:
     coding_agent_generate: Callable[[Dict[str, Any]], Dict[str, Any]]
     coding_agent_autonomous: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
     coding_agent_publish_pr: Callable[[Dict[str, Any]], Dict[str, Any]]
+    agent_run: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
     llm_generate_document_spec: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
     llm_improve_document_spec: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
     sanitize_document_spec: Callable[[dict[str, Any]], dict[str, Any]]
@@ -112,6 +114,11 @@ def register_default_tools(
             payload, provider
         ),
         handler_publish_pr=handlers.coding_agent_publish_pr,
+    )
+    register_agent_run_tool(
+        registry,
+        timeout_s=coding_agent_timeout_s,
+        handler=lambda payload, provider=llm_provider: handlers.agent_run(payload, provider),
     )
     register_document_spec_llm_tools(
         registry,

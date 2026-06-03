@@ -53,6 +53,22 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "")
+
+
+def _resolve_active_model_name() -> str:
+    provider = LLM_PROVIDER.lower()
+    if provider == "gemini":
+        return GEMINI_MODEL or OPENAI_MODEL
+    if provider == "anthropic":
+        return ANTHROPIC_MODEL or OPENAI_MODEL
+    return OPENAI_MODEL
+
+
+ACTIVE_MODEL_NAME = _resolve_active_model_name()
 OPENAI_TEMPERATURE = os.getenv("OPENAI_TEMPERATURE")
 OPENAI_MAX_OUTPUT_TOKENS = os.getenv("OPENAI_MAX_OUTPUT_TOKENS")
 SCHEMA_REGISTRY_PATH = os.getenv("SCHEMA_REGISTRY_PATH", "/app/schemas")
@@ -214,6 +230,7 @@ def execute_task_request(
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name=LLM_PROVIDER,
                 openai_model=OPENAI_MODEL,
+                active_model_name=ACTIVE_MODEL_NAME,
                 prompt_version=PROMPT_VERSION,
                 policy_version=POLICY_VERSION,
                 tool_version=TOOL_VERSION,

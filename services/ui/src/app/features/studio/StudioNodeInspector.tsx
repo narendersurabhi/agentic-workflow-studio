@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import type {
+  AgentDefinition,
   CapabilityItem,
   CapabilitySchemaField,
   ComposerDraftNode,
@@ -27,6 +28,7 @@ type StudioInspectorField = {
 type StudioNodeInspectorProps = {
   selectedDagNode: ComposerDraftNode | null;
   selectedCapability: CapabilityItem | null;
+  agentDefinitions?: AgentDefinition[];
   selectedDagNodeStatus: {
     requiredCount: number;
   } | null;
@@ -151,6 +153,7 @@ const inspectorPanelClassName =
 export default function StudioNodeInspector({
   selectedDagNode,
   selectedCapability,
+  agentDefinitions = [],
   selectedDagNodeStatus,
   inputFields,
   outputSchemaFields,
@@ -202,6 +205,10 @@ export default function StudioNodeInspector({
   }
 
   const isControlNode = selectedDagNode.nodeKind === "control";
+  const isAgentNode = selectedDagNode.nodeKind === "agent";
+  const agentDefinition = isAgentNode
+    ? agentDefinitions.find((def) => def.id === selectedDagNode.agentDefinitionId) || null
+    : null;
   const controlConfig = selectedDagNode.controlConfig || {
     expression: "",
     trueLabel: "",
@@ -299,6 +306,51 @@ export default function StudioNodeInspector({
           />
         </label>
       </div>
+
+      {isAgentNode ? (
+        <div className="mt-5 rounded-2xl border border-violet-200 bg-violet-50/70 p-3.5">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-700">
+            Agent Profile
+          </div>
+          {agentDefinition ? (
+            <div className="mt-2">
+              <div className="text-sm font-semibold text-violet-900">{agentDefinition.name}</div>
+              {agentDefinition.description ? (
+                <div className="mt-1 text-xs text-violet-800">{agentDefinition.description}</div>
+              ) : null}
+              {agentDefinition.allowed_capability_ids.length > 0 ? (
+                <div className="mt-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-600">
+                    Tools ({agentDefinition.allowed_capability_ids.length})
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {agentDefinition.allowed_capability_ids.slice(0, 6).map((id) => (
+                      <span
+                        key={id}
+                        className="rounded-full border border-violet-200 bg-violet-100 px-2 py-0.5 text-[10px] text-violet-700"
+                      >
+                        {id}
+                      </span>
+                    ))}
+                    {agentDefinition.allowed_capability_ids.length > 6 ? (
+                      <span className="rounded-full border border-violet-200 bg-violet-100 px-2 py-0.5 text-[10px] text-violet-700">
+                        +{agentDefinition.allowed_capability_ids.length - 6} more
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="mt-2 text-xs text-violet-700">
+              Agent definition not loaded. ID: {selectedDagNode.agentDefinitionId || "unknown"}
+            </div>
+          )}
+          <div className="mt-3 text-[11px] text-violet-700">
+            Instructions and tool list are injected from the agent profile at compile time.
+          </div>
+        </div>
+      ) : null}
 
       {isControlNode ? (
         <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/70 p-3.5">

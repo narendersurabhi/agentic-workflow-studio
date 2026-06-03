@@ -13,7 +13,7 @@ import ComposerStepInspector from "./components/composer/ComposerStepInspector";
 import ComposerValidationPanel from "./components/composer/ComposerValidationPanel";
 import { ThinkingState } from "./components/chat/ThinkingState";
 import FeedbackControl from "./components/feedback/FeedbackControl";
-import FeedbackInsightsPanel from "./components/feedback/FeedbackInsightsPanel";
+import ChatMessageFeedback from "./components/feedback/ChatMessageFeedback";
 import StudioWorkbenchIcon from "./features/studio/StudioWorkbenchIcon";
 import type { AdaptiveReplanStatus } from "./features/studio/types";
 import SkillCommandPalette from "./features/skills/SkillCommandPalette";
@@ -32,7 +32,6 @@ import {
   getFeedbackActorId,
   type FeedbackEntry,
   type FeedbackListResponse,
-  type FeedbackSummaryResponse,
   type FeedbackTargetType
 } from "./lib/feedback";
 
@@ -2132,7 +2131,6 @@ type WorkspaceDraftSnapshot = {
   goal?: string;
   contextJson?: string;
   priority?: number;
-  chatUseComposeContext?: boolean;
 };
 
 export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen }) {
@@ -2154,7 +2152,6 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   });
   const [priority, setPriority] = useState(0);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [events, setEvents] = useState<EventEnvelope[]>([]);
   const [demoDataDetected, setDemoDataDetected] = useState(DEMO_DATA_ENABLED);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedJobStatus, setSelectedJobStatus] = useState<string | null>(null);
@@ -2189,6 +2186,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [showSkillPalette, setShowSkillPalette] = useState(false);
+  const [showComposeSkillPalette, setShowComposeSkillPalette] = useState(false);
   const [showSaveSkillForm, setShowSaveSkillForm] = useState(false);
   const [saveSkillName, setSaveSkillName] = useState("");
   const [saveSkillDesc, setSaveSkillDesc] = useState("");
@@ -2216,20 +2214,14 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
-  const [chatUseComposeContext, setChatUseComposeContext] = useState(true);
   const [feedbackByTarget, setFeedbackByTarget] = useState<Record<string, FeedbackEntry>>({});
   const [feedbackSubmitting, setFeedbackSubmitting] = useState<Record<string, boolean>>({});
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummaryResponse | null>(null);
-  const [feedbackSummaryLoading, setFeedbackSummaryLoading] = useState(false);
-  const [feedbackSummaryError, setFeedbackSummaryError] = useState<string | null>(null);
   const [showTaskInputs, setShowTaskInputs] = useState(false);
-  const [showRecentEvents, setShowRecentEvents] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
   const [showAllJobs, setShowAllJobs] = useState(false);
   const [expandedJobGoals, setExpandedJobGoals] = useState<Set<string>>(new Set());
   const [expandedTaskInputs, setExpandedTaskInputs] = useState<Set<string>>(new Set());
-  const [expandedRecentEvents, setExpandedRecentEvents] = useState<Set<number>>(new Set());
   const [expandedMemoryGroups, setExpandedMemoryGroups] = useState<Set<string>>(new Set());
   const [expandedMemoryEntries, setExpandedMemoryEntries] = useState<
     Record<string, Set<number>>
@@ -2252,9 +2244,7 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         if (typeof draft.priority === "number" && Number.isFinite(draft.priority)) {
           setPriority(draft.priority);
         }
-        if (typeof draft.chatUseComposeContext === "boolean") {
-          setChatUseComposeContext(draft.chatUseComposeContext);
-        }
+
       } catch (_error) {
         // Ignore invalid persisted draft state and fall back to defaults.
       }
@@ -2272,11 +2262,10 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
         goal,
         contextJson,
         priority,
-        chatUseComposeContext,
       } satisfies WorkspaceDraftSnapshot)
     );
     window.localStorage.setItem(MEMORY_USER_ID_KEY, workspaceUserId);
-  }, [chatUseComposeContext, contextJson, goal, priority, workspaceDraftHydrated, workspaceUserId]);
+  }, [contextJson, goal, priority, workspaceDraftHydrated, workspaceUserId]);
 
   // Keep workspaceUserId in sync with the authenticated user
   useEffect(() => {
@@ -2413,6 +2402,8 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [isDesktop, setIsDesktop] = useState(false);
   const [hasSetInitialSidebar, setHasSetInitialSidebar] = useState(false);
   const chatTranscriptRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const composeGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const intentGraphRequestSeqRef = useRef(0);
   const demoWorkspaceDraftAppliedRef = useRef(false);
   const demoChatLoadedRef = useRef(false);
@@ -5451,7 +5442,6 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
     source.onmessage = (event) => {
       try {
         const envelope = JSON.parse(event.data) as EventEnvelope;
-        setEvents((prev) => [envelope, ...prev].slice(0, 50));
         const activeJobId = selectedJobIdRef.current;
         if (!envelope?.type) {
           return;
@@ -5486,9 +5476,6 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
     return () => source.close();
   }, []);
 
-  useEffect(() => {
-    setExpandedRecentEvents(new Set());
-  }, [events]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -6233,22 +6220,6 @@ const openTemplateModal = (template: Template) => {
     }
   };
 
-  const loadFeedbackSummary = async () => {
-    setFeedbackSummaryLoading(true);
-    setFeedbackSummaryError(null);
-    const result = await fetchJson(`${apiUrl}/feedback/summary?limit=500`);
-    if (!result.ok || !result.data || typeof result.data !== "object") {
-      setFeedbackSummaryError(result.error || "Failed to load feedback summary.");
-      setFeedbackSummaryLoading(false);
-      return;
-    }
-    setFeedbackSummary(result.data as FeedbackSummaryResponse);
-    setFeedbackSummaryLoading(false);
-  };
-
-  useEffect(() => {
-    void loadFeedbackSummary();
-  }, []);
 
   const submitFeedback = async (
     targetType: FeedbackTargetType,
@@ -6288,7 +6259,6 @@ const openTemplateModal = (template: Template) => {
         ...previous,
         [feedbackTargetKey(body.target_type, body.target_id)]: body
       }));
-      void loadFeedbackSummary();
     } catch (error) {
       setFeedbackError(error instanceof Error ? error.message : "Failed to submit feedback.");
       throw error;
@@ -6356,10 +6326,6 @@ const openTemplateModal = (template: Template) => {
       setChatError("Message is required.");
       return;
     }
-    if (chatUseComposeContext && !parsedContextForCapabilities) {
-      setChatError("Context JSON must be a valid object before sending it with chat.");
-      return;
-    }
 
     const previousSession = chatSessionRef.current;
     const optimisticSessionId = previousSession?.id || `pending-${Date.now()}`;
@@ -6392,9 +6358,7 @@ const openTemplateModal = (template: Template) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content,
-          context_json: chatUseComposeContext
-            ? parsedContextForCapabilities || withWorkspaceUserContext({})
-            : withWorkspaceUserContext({}),
+          context_json: parsedContextForCapabilities || withWorkspaceUserContext({}),
           priority
         })
       });
@@ -6945,11 +6909,11 @@ const openTemplateModal = (template: Template) => {
     },
     {
       href: "/chat",
-      eyebrow: "Workflow Chat",
-      title: "Chat-to-Workflow Assistant",
+      eyebrow: "Chat",
+      title: "Chat",
       description:
         "Describe what you need in plain language and turn it into an executable workflow.",
-      cta: "Open Assistant",
+      cta: "Open Chat",
       badge: "dialogue",
       accentClassName: "text-text-emerald-token",
       marker: "H",
@@ -7139,8 +7103,7 @@ const openTemplateModal = (template: Template) => {
   return (
     <AppShell
       activeScreen={showComposeScreen ? "compose" : "chat"}
-      title={showComposeScreen ? "Run from Prompt" : "Chat-to-Workflow Assistant"}
-      breadcrumbs={[{ label: showComposeScreen ? "Run from Prompt" : "Workflow Chat" }]}
+      title={showComposeScreen ? "Run from Prompt" : "Chat"}
     >
     <div className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
       {!useStudioSurfaceTheme ? (
@@ -8765,7 +8728,7 @@ const openTemplateModal = (template: Template) => {
       >
         <ScreenHeader
           eyebrow="AI Workflow Workspace"
-          title={showComposeScreen ? "Run from Prompt" : "Chat-to-Workflow Assistant"}
+          title={showComposeScreen ? "Run from Prompt" : "Chat"}
           description={
             showComposeScreen
               ? "Capture the goal, context, files, and requirements before starting a one-off run."
@@ -8822,21 +8785,6 @@ const openTemplateModal = (template: Template) => {
             <div className={`mt-4 grid gap-4 ${showComposeScreen && showChatScreen ? "xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" : "xl:grid-cols-1"}`}>
               {showComposeScreen ? (
               <div className={composeModePrimarySectionClassName}>
-                <div className="flex items-center justify-between">
-                  <h2 className={`text-[22px] font-semibold tracking-[-0.03em] ${showComposeScreen ? "text-text-hi" : ""}`}>Workflow Request</h2>
-                  <span className={`text-xs ${showComposeScreen ? "text-text-md" : "text-text-lo"}`}>
-                    Ready to submit
-                  </span>
-                </div>
-                <div
-                  className={`mt-3 rounded-xl px-3 py-2 text-xs ${
-                    showComposeScreen
-                      ? "border border-subtle bg-surface-1 text-text-md"
-                      : "border border-slate-100 bg-slate-50 text-text-lo"
-                  }`}
-                >
-                  Tip: Use templates for repeatable workflows. Defaults are remembered for you.
-                </div>
                 {submitError ? (
                   <div className="mt-3 text-sm text-rose-600">{submitError}</div>
                 ) : null}
@@ -8855,16 +8803,48 @@ const openTemplateModal = (template: Template) => {
                     <label className={`text-sm font-medium ${showComposeScreen ? "text-text-hi" : "text-slate-700"}`}>
                       Goal
                     </label>
-                    <input
-                      className={`mt-1 w-full rounded-xl px-3 py-2 text-sm shadow-sm ${
-                        showComposeScreen
-                          ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
-                          : "border border-slate-200 bg-white focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
-                      }`}
-                      value={goal}
-                      onChange={(event) => setGoal(event.target.value)}
-                      placeholder="Generate an implementation checklist"
-                    />
+                    <div className="relative mt-1">
+                      {showComposeSkillPalette ? (
+                        <SkillCommandPalette
+                          skills={skills}
+                          capabilities={(capabilityCatalog?.items ?? []) as SkillCapabilityItem[]}
+                          onSelectSkill={(expanded) => {
+                            setGoal(expanded);
+                            setShowComposeSkillPalette(false);
+                            setTimeout(() => composeGoalRef.current?.focus(), 0);
+                          }}
+                          onSelectCapability={(id) => {
+                            setGoal((prev) => (prev ? `${prev} ${id}` : id));
+                            setShowComposeSkillPalette(false);
+                            setTimeout(() => composeGoalRef.current?.focus(), 0);
+                          }}
+                          onClose={() => {
+                            setShowComposeSkillPalette(false);
+                            setTimeout(() => composeGoalRef.current?.focus(), 0);
+                          }}
+                        />
+                      ) : null}
+                      <textarea
+                        ref={composeGoalRef}
+                        rows={4}
+                        className={`w-full resize-none rounded-xl px-3 py-2 text-sm shadow-sm ${
+                          showComposeScreen
+                            ? "border border-subtle bg-surface-1 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
+                            : "border border-slate-200 bg-white focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                        }`}
+                        value={goal}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setGoal(value);
+                          if ((event.nativeEvent as InputEvent).data === "/") setShowComposeSkillPalette(true);
+                          else if (showComposeSkillPalette && value === "") setShowComposeSkillPalette(false);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") setShowComposeSkillPalette(false);
+                        }}
+                        placeholder="Generate an implementation checklist. Type / for Skills."
+                      />
+                    </div>
                   </div>
                   <div className={`rounded-xl px-3 py-3 ${studioSurfaceCardClassName}`}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -9547,119 +9527,79 @@ const openTemplateModal = (template: Template) => {
               ) : null}
               {showChatScreen ? (
               <div className={studioSurfacePrimarySectionClassName}>
-                <div>
-                  <h2 className="text-[22px] font-semibold tracking-[-0.03em] text-text-hi">Chat-to-Workflow Assistant</h2>
-                  <p className="mt-1 text-xs text-text-md">
-                    Chat turns plain-language requests into workflow-backed jobs when execution is needed.
-                  </p>
-                </div>
-                <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-text-md">
-                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
-                    {chatSession ? `Session ${chatSession.id.slice(0, 8)}` : "No session yet"}
-                  </span>
-                  <span className="rounded-full border border-emerald-400/20 bg-accent-emerald px-2 py-1 text-text-emerald-token">
-                    {chatSession?.active_job_id ? `Active job ${chatSession.active_job_id.slice(0, 8)}` : "Ready"}
-                  </span>
-                </div>
-                <div
-                  ref={chatTranscriptRef}
-                  className="mt-4 max-h-[26rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-[24px] border border-subtle bg-surface-1 p-4"
-                >
-                  {chatMessages.length === 0 ? (
-                    <div className="flex h-full min-h-[15rem] items-center justify-center rounded-xl border border-dashed border-subtle bg-surface-1 px-4 text-center text-sm text-text-md">
-                      Start with a plain request like “Create a DOCX from this markdown” or
-                      “Open a PR for the generated repository”.
-                    </div>
-                  ) : (
-                    <>
-                      {chatMessages.map((message) => {
-                        const isPending = Boolean(message.metadata?.pending);
-                        return (
-                          <div
-                            key={message.id}
-                            className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
-                              message.role === "user"
-                                ? "ml-auto bg-white text-slate-900"
-                                : "border border-subtle bg-surface-1 text-text-hi"
-                            } ${isPending ? "opacity-80" : ""}`}
-                          >
-                            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
-                              <div className="flex items-center gap-2">
-                                <span className={message.role === "user" ? "text-text-lo" : "text-text-md"}>
-                                  {message.role}
-                                </span>
-                                {isPending ? (
-                                  <span className="rounded-full border border-amber-400/30 bg-accent-amber px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
-                                    Pending
-                                  </span>
-                                ) : null}
-                              </div>
-                              <span className={message.role === "user" ? "text-text-lo" : "text-text-lo"}>
-                                {formatTimestamp(message.created_at)}
+                {chatMessages.length > 0 ? (
+                  <div
+                    ref={chatTranscriptRef}
+                    className="mt-4 max-h-[26rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-[24px] border border-subtle bg-surface-1 p-4"
+                  >
+                    {chatMessages.map((message) => {
+                      const isPending = Boolean(message.metadata?.pending);
+                      return (
+                        <div
+                          key={message.id}
+                          className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                            message.role === "user"
+                              ? "ml-auto bg-white text-slate-900"
+                              : "border border-subtle bg-surface-1 text-text-hi"
+                          } ${isPending ? "opacity-80" : ""}`}
+                        >
+                          <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
+                            <div className="flex items-center gap-2">
+                              <span className={message.role === "user" ? "text-text-lo" : "text-text-md"}>
+                                {message.role}
                               </span>
+                              {isPending ? (
+                                <span className="rounded-full border border-amber-400/30 bg-accent-amber px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
+                                  Pending
+                                </span>
+                              ) : null}
                             </div>
-                            <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
-                            {message.action?.clarification_questions &&
-                            message.action.clarification_questions.length > 0 ? (
-                              <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
-                                {message.action.clarification_questions.map((question, index) => (
-                                  <div key={`${message.id}-question-${index}`}>{question}</div>
-                                ))}
-                              </div>
-                            ) : null}
-                            {message.job_id ? (
-                              <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-accent-emerald px-3 py-2 text-[12px] text-text-emerald-token">
-                                <span>Job {message.job_id}</span>
-                                <button
-                                  className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
-                                  onClick={() => loadJobDetails(message.job_id || "")}
-                                >
-                                  Open
-                                </button>
-                              </div>
-                            ) : null}
-                            {message.role === "assistant" && !isPending ? (
-                              <FeedbackControl
-                                title="Was this response helpful?"
-                                reasonOptions={CHAT_FEEDBACK_REASONS}
-                                sentimentOptions={[
-                                  { value: "positive", label: "Helpful" },
-                                  { value: "negative", label: "Not helpful" }
-                                ]}
-                                existing={
-                                  feedbackByTarget[feedbackTargetKey("chat_message", message.id)] || null
-                                }
-                                submitting={
-                                  Boolean(
-                                    feedbackSubmitting[feedbackTargetKey("chat_message", message.id)]
-                                  )
-                                }
-                                onSubmit={(payload) =>
-                                  submitFeedback("chat_message", message.id, payload)
-                                }
-                              />
-                            ) : null}
+                            <span className="text-text-lo">
+                              {formatTimestamp(message.created_at)}
+                            </span>
                           </div>
-                        );
-                      })}
-                      {chatLoading ? (
-                        <ThinkingState />
-                      ) : null}
-                    </>
-                  )}
-                </div>
-                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-xs text-text-md">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 rounded border-subtle bg-transparent"
-                      checked={chatUseComposeContext}
-                      onChange={(event) => setChatUseComposeContext(event.target.checked)}
-                    />
-                    Send current Context JSON with chat turns
-                  </label>
-                  <span>{chatUseComposeContext ? "Context attached" : "Message only"}</span>
-                </div>
+                          <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
+                          {message.action?.clarification_questions &&
+                          message.action.clarification_questions.length > 0 ? (
+                            <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
+                              {message.action.clarification_questions.map((question, index) => (
+                                <div key={`${message.id}-question-${index}`}>{question}</div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {message.job_id ? (
+                            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-accent-emerald px-3 py-2 text-[12px] text-text-emerald-token">
+                              <span>Job {message.job_id}</span>
+                              <button
+                                className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
+                                onClick={() => loadJobDetails(message.job_id || "")}
+                              >
+                                Open
+                              </button>
+                            </div>
+                          ) : null}
+                          {message.role === "assistant" && !isPending ? (
+                            <ChatMessageFeedback
+                              reasonOptions={CHAT_FEEDBACK_REASONS}
+                              existing={
+                                feedbackByTarget[feedbackTargetKey("chat_message", message.id)] || null
+                              }
+                              submitting={
+                                Boolean(
+                                  feedbackSubmitting[feedbackTargetKey("chat_message", message.id)]
+                                )
+                              }
+                              onSubmit={(payload) =>
+                                submitFeedback("chat_message", message.id, payload)
+                              }
+                            />
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                    {chatLoading ? <ThinkingState /> : null}
+                  </div>
+                ) : null}
                 {chatError ? (
                   <div className="mt-3 rounded-xl border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
                     {chatError}
@@ -9684,22 +9624,28 @@ const openTemplateModal = (template: Template) => {
                         onSelectSkill={(expanded) => {
                           setChatInput(expanded);
                           setShowSkillPalette(false);
+                          setTimeout(() => chatInputRef.current?.focus(), 0);
                         }}
                         onSelectCapability={(id) => {
                           setChatInput((prev) => (prev ? `${prev} ${id}` : id));
                           setShowSkillPalette(false);
+                          setTimeout(() => chatInputRef.current?.focus(), 0);
                         }}
-                        onClose={() => setShowSkillPalette(false)}
+                        onClose={() => {
+                          setShowSkillPalette(false);
+                          setTimeout(() => chatInputRef.current?.focus(), 0);
+                        }}
                       />
                     ) : null}
                     <textarea
+                      ref={chatInputRef}
                       className="min-h-[8rem] w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
                       value={chatInput}
                       onChange={(event) => {
                         const value = event.target.value;
                         setChatInput(value);
-                        if (value === "/") setShowSkillPalette(true);
-                        else if (!value.startsWith("/")) setShowSkillPalette(false);
+                        if ((event.nativeEvent as InputEvent).data === "/") setShowSkillPalette(true);
+                        else if (showSkillPalette && value === "") setShowSkillPalette(false);
                       }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -9713,11 +9659,6 @@ const openTemplateModal = (template: Template) => {
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
-                      <div className="text-[11px] text-text-md">
-                        {chatSession?.metadata?.pending_clarification
-                          ? "Pending clarification is remembered in this session."
-                          : "Chat stays thin: it creates jobs, it does not bypass workflow controls."}
-                      </div>
                       <button
                         className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[11px] font-semibold text-text-md transition hover:bg-surface-2"
                         onClick={() => {
@@ -9772,13 +9713,6 @@ const openTemplateModal = (template: Template) => {
               ) : null}
             </div>
         </ScreenHeader>
-      <FeedbackInsightsPanel
-        summary={feedbackSummary}
-        loading={feedbackSummaryLoading}
-        error={feedbackSummaryError}
-        onRefresh={() => void loadFeedbackSummary()}
-        theme={useStudioSurfaceTheme ? "studio" : "default"}
-      />
 
         <section
           className={`animate-fade-up-delayed ${
@@ -10062,12 +9996,10 @@ const openTemplateModal = (template: Template) => {
                   {selectedPlan.tasks_summary || "Plan available."}
                 </div>
               ) : selectedJobPlanError ? (
-                <div className="text-xs text-rose-600">Plan failed: {selectedJobPlanError}</div>
+                <PlanErrorBlock message={selectedJobPlanError} />
               ) : selectedJob?.status === "failed" &&
                 typeof selectedJob.metadata?.plan_error === "string" ? (
-                <div className="text-xs text-rose-600">
-                  Plan failed: {selectedJob.metadata.plan_error}
-                </div>
+                <PlanErrorBlock message={selectedJob.metadata.plan_error} />
               ) : (
                 <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>Plan not created yet.</div>
               )}
@@ -11277,117 +11209,6 @@ const openTemplateModal = (template: Template) => {
         )}
       </section>
 
-      <section
-        className={`animate-fade-up-delayed-more rounded-2xl p-6 ${
-          useStudioSurfaceTheme
-            ? "border border-subtle bg-gradient-panel text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
-            : "border border-slate-100 bg-white shadow-sm"
-        }`}
-      >
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2
-              className={`text-[22px] font-semibold tracking-[-0.03em] ${
-                useStudioSurfaceTheme ? "text-text-hi" : "text-slate-900"
-              }`}
-            >
-              Recent Events
-            </h2>
-            <p className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
-              Live event stream snapshots.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <div
-              className={`rounded-full px-3 py-1 text-xs ${
-                useStudioSurfaceTheme
-                  ? "border border-subtle bg-surface-1 text-text-md"
-                  : "bg-slate-100 text-text-lo"
-              }`}
-            >
-              {events.length} shown
-            </div>
-            <button
-              className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
-                useStudioSurfaceTheme
-                  ? "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                  : "border-slate-200 text-text-lo hover:border-slate-300 hover:text-slate-800"
-              }`}
-              onClick={() => setShowRecentEvents((prev) => !prev)}
-            >
-              {showRecentEvents ? "Hide" : "Show"}
-            </button>
-          </div>
-        </div>
-        {showRecentEvents ? (
-          <ul className="mt-4 space-y-2 text-xs">
-            {events.map((event, index) => {
-              const isExpanded = expandedRecentEvents.has(index);
-              return (
-                <li
-                  key={index}
-                  className={`rounded-xl border px-3 py-2 ${
-                    useStudioSurfaceTheme
-                      ? "border-subtle bg-surface-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-                      : "border-slate-100 bg-slate-50"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div
-                      className={`font-medium ${
-                        useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"
-                      }`}
-                    >
-                      {event.type}
-                    </div>
-                    <button
-                      className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.2em] transition ${
-                        useStudioSurfaceTheme
-                          ? "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                          : "border-slate-200 text-text-lo hover:border-slate-300 hover:text-slate-800"
-                      }`}
-                      onClick={() =>
-                        setExpandedRecentEvents((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(index)) {
-                            next.delete(index);
-                          } else {
-                            next.add(index);
-                          }
-                          return next;
-                        })
-                      }
-                    >
-                      {isExpanded ? "Hide" : "Show"}
-                    </button>
-                  </div>
-                  {isExpanded ? (
-                    <pre
-                      className={`mt-2 whitespace-pre-wrap ${
-                        useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"
-                      }`}
-                    >
-                      {JSON.stringify(event.payload, null, 2)}
-                    </pre>
-                  ) : (
-                    <div
-                      className={`mt-2 text-[11px] ${
-                        useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"
-                      }`}
-                    >
-                      Collapsed.
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <div className={`mt-4 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
-            Hidden by default.
-          </div>
-        )}
-      </section>
       </div>
     </div>
     </AppShell>
@@ -11416,4 +11237,19 @@ export function LegacyAwareHomeContent() {
   }
 
   return <WorkspaceSurfaceContent screen="home" />;
+}
+
+
+function PlanErrorBlock({ message }: { message: string }) {
+  return (
+    <div className="mt-1 rounded-lg border border-rose-400/20 bg-accent-rose p-3">
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span className="text-xs text-text-rose-token">✕</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-text-rose-token">Plan failed</span>
+      </div>
+      <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-text-rose-token opacity-90">
+        {message}
+      </pre>
+    </div>
+  );
 }

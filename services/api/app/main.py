@@ -5648,7 +5648,7 @@ def _build_chat_route_candidates(
                     candidate_type=chat_contracts.ChatRouteCandidateType.direct_agent,
                     family=_capability_family_for_id(capability_id) or "direct",
                     risk_tier=str(spec.risk_tier or "read_only").strip() or "read_only",
-                    preconditions=["read_only_only", "allowlisted_for_api"],
+                    preconditions=["allowlisted_for_api"],
                     input_keys=[
                         str(item).strip()
                         for item in entry.get("required_inputs", [])
@@ -7772,8 +7772,6 @@ def _chat_direct_capability_spec(
     spec = registry.require(normalized_capability_id)
     if not spec.enabled:
         raise RuntimeError(f"chat_direct_capability_disabled:{normalized_capability_id}")
-    if spec.risk_tier != "read_only":
-        raise RuntimeError(f"chat_direct_capability_not_read_only:{normalized_capability_id}")
     allow_decision = capability_registry.evaluate_capability_allowlist(
         normalized_capability_id,
         RUNTIME_CONFORMANCE_SERVICE,

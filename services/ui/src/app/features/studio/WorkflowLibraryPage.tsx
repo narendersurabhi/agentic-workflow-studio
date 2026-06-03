@@ -352,9 +352,6 @@ export default function WorkflowLibraryPage() {
                   <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
                     Saved Workflows
                   </h2>
-                  <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
-                    Manage reusable workflows, versions, triggers, and published automations.
-                  </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
@@ -366,13 +363,6 @@ export default function WorkflowLibraryPage() {
                       {chip}
                     </span>
                   ))}
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-wrap items-end justify-between gap-3 rounded-[24px] border border-subtle bg-gradient-panel-mid px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="max-w-xl text-sm leading-6 text-text-md">
-                  Select a saved workflow to inspect its versions, triggers, and run history here.
-                  Open Draft and Open Version send you back to Studio with the selected record loaded.
                 </div>
               </div>
 
