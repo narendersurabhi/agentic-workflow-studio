@@ -346,10 +346,10 @@ export default function WorkflowLibraryPage() {
       <section className="relative">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
                     Saved Workflows
                   </div>
-                  <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
+                  <h2 className="mt-1 text-xl font-semibold tracking-tight text-text-hi">
                     Saved Workflows
                   </h2>
                 </div>

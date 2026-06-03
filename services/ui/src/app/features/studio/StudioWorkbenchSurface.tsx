@@ -1768,14 +1768,14 @@ export default function StudioWorkbenchSurface({
   return (
     <section className={active ? "block" : "hidden"} aria-hidden={!active}>
       <div className="relative">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
               Studio Surface
             </div>
-            <h2 className="mt-1 flex items-center gap-3 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-300/22 bg-accent-sky text-text-sky-token">
-                <StudioWorkbenchIcon kind="run" className="h-5 w-5" />
+            <h2 className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-tight text-text-hi">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl border border-sky-300/22 bg-accent-sky text-text-sky-token">
+                <StudioWorkbenchIcon kind="run" className="h-4 w-4" />
               </span>
               Agent Workbench
             </h2>
@@ -1812,7 +1812,7 @@ export default function StudioWorkbenchSurface({
           ))}
         </datalist>
 
-        <div className="studio-contrast-surface mt-4 overflow-hidden rounded-[30px] border border-subtle bg-gradient-panel-mid p-4 shadow-[0_22px_56px_rgba(15,23,42,0.16)]">
+        <div className="studio-contrast-surface mt-3 overflow-hidden rounded-[24px] border border-subtle bg-gradient-panel-mid p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14)]">
           <div className={`grid gap-4 ${catalogCollapsed ? "xl:grid-cols-[auto_minmax(0,1fr)]" : "xl:grid-cols-[240px_minmax(0,1fr)]"}`}>
             <SurfacePanel
               title={catalogCollapsed ? "" : "Catalog"}

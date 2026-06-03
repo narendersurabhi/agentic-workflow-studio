@@ -124,6 +124,8 @@ type ComposerDagCanvasProps = {
   onRunWorkflow?: () => void;
   runWorkflowPending?: boolean;
   runWorkflowDisabled?: boolean;
+  onFitToScreen?: () => void;
+  onDropCapability?: (type: "capability" | "control" | "agent", id: string, x: number, y: number) => void;
 };
 
 const toolbarButtonClassName =
@@ -475,9 +477,12 @@ export default function ComposerDagCanvas({
   onRunWorkflow,
   runWorkflowPending = false,
   runWorkflowDisabled = false,
+  onFitToScreen,
+  onDropCapability,
 }: ComposerDagCanvasProps) {
   const showEmptyBlueprint = showBlueprintPreview && visualChainNodes.length === 0;
   const [dagCanvasPanState, setDagCanvasPanState] = useState<DagCanvasPanState | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [dagCanvasPanModifierPressed, setDagCanvasPanModifierPressed] = useState(false);
   const dagCanvasPanMovedRef = useRef(false);
 
@@ -646,6 +651,15 @@ export default function ComposerDagCanvas({
             </div>
             <button
               className={toolbarButtonClassName}
+              onClick={onFitToScreen}
+              disabled={visualChainNodes.length === 0}
+              type="button"
+              title="Fit all nodes to view (F)"
+            >
+              Fit
+            </button>
+            <button
+              className={toolbarButtonClassName}
               onClick={autoLayoutDagCanvas}
               disabled={visualChainNodes.length === 0}
               type="button"
@@ -680,15 +694,39 @@ export default function ComposerDagCanvas({
       <div
         ref={dagCanvasViewportRef}
         data-composer-canvas-viewport="true"
-        className={`relative h-full overflow-auto bg-[#506478] [background-image:linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_82%_24%,rgba(125,211,252,0.08),transparent_14%),linear-gradient(180deg,rgba(24,36,49,0.2),rgba(9,16,27,0.34))] [background-size:24px_24px,24px_24px,100%_100%,100%_100%,100%_100%] ${
+        className={`relative h-full overflow-auto bg-[#506478] [background-image:linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_82%_24%,rgba(125,211,252,0.08),transparent_14%),linear-gradient(180deg,rgba(24,36,49,0.2),rgba(9,16,27,0.34))] [background-size:24px_24px,24px_24px,100%_100%,100%_100%,100%_100%] transition-[box-shadow] ${
           dagCanvasPanState ? "cursor-grabbing" : "cursor-grab"
-        }`}
+        } ${isDragOver ? "ring-2 ring-inset ring-sky-400/40" : ""}`}
         onAuxClick={(event) => {
           if (event.button === 1) {
             event.preventDefault();
           }
         }}
         onMouseDown={beginDagCanvasPan}
+        onDragOver={(event) => {
+          if (!onDropCapability) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          setIsDragOver(true);
+        }}
+        onDragLeave={() => setIsDragOver(false)}
+        onDrop={(event) => {
+          setIsDragOver(false);
+          if (!onDropCapability) return;
+          event.preventDefault();
+          try {
+            const payload = JSON.parse(event.dataTransfer.getData("text/plain")) as {
+              type: "capability" | "control" | "agent";
+              id: string;
+            };
+            const rect = event.currentTarget.getBoundingClientRect();
+            const x = (event.clientX - rect.left + event.currentTarget.scrollLeft) / (dagCanvasZoom ?? 1);
+            const y = (event.clientY - rect.top + event.currentTarget.scrollTop) / (dagCanvasZoom ?? 1);
+            onDropCapability(payload.type, payload.id, x, y);
+          } catch {
+            // ignore malformed drag data
+          }
+        }}
       >
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(191,219,254,0.08),transparent_12%),radial-gradient(circle_at_84%_22%,rgba(103,232,249,0.06),transparent_11%),radial-gradient(circle_at_50%_100%,rgba(15,23,42,0.14),transparent_40%)]" />
         <div

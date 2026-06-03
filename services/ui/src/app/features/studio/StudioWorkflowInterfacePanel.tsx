@@ -26,7 +26,7 @@ type StudioWorkflowInterfacePanelProps = {
 };
 
 const interfacePanelClassName =
-  "h-full px-3 py-3 text-text-hi [&_.border-slate-200]:border-subtle [&_.border-slate-300]:border-subtle [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-surface-1 [&_.bg-slate-100]:bg-surface-1 [&_.bg-white]:bg-surface-1 [&_.bg-sky-50]:bg-accent-sky [&_.bg-emerald-50]:bg-accent-emerald [&_.bg-rose-50]:bg-accent-rose [&_.text-slate-900]:text-text-hi [&_.text-slate-800]:text-text-hi [&_.text-slate-700]:text-text-md [&_.text-slate-600]:text-text-md [&_.text-text-lo]:text-text-lo [&_.text-sky-700]:text-text-sky-token [&_.text-emerald-700]:text-text-emerald-token [&_.text-rose-700]:text-text-rose-token [&_input]:text-text-hi [&_select]:text-text-hi [&_textarea]:text-text-hi [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-text-sky-token";
+  "h-full overflow-auto px-2.5 py-2.5 text-text-hi [&_.border-slate-200]:border-subtle [&_.border-slate-300]:border-subtle [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-surface-1 [&_.bg-slate-100]:bg-surface-1 [&_.bg-white]:bg-surface-1 [&_.bg-sky-50]:bg-accent-sky [&_.bg-emerald-50]:bg-accent-emerald [&_.bg-rose-50]:bg-accent-rose [&_.text-slate-900]:text-text-hi [&_.text-slate-800]:text-text-hi [&_.text-slate-700]:text-text-md [&_.text-slate-600]:text-text-md [&_.text-text-lo]:text-text-lo [&_.text-sky-700]:text-text-sky-token [&_.text-emerald-700]:text-text-emerald-token [&_.text-rose-700]:text-text-rose-token [&_input]:text-text-hi [&_select]:text-text-hi [&_textarea]:text-text-hi [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-text-sky-token";
 
 const workflowBindingMode = (
   binding: WorkflowBinding | null | undefined,
@@ -109,40 +109,40 @@ export default function StudioWorkflowInterfacePanel({
 }: StudioWorkflowInterfacePanelProps) {
   return (
     <section className={interfacePanelClassName}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-sky-token">
-            Workflow Inputs
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-sky-token">
+            Workflow Contract
           </div>
-          <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-text-hi">Workflow Request Contract</h2>
-          <p className="mt-1.5 max-w-3xl text-sm leading-5 text-text-md">
+          <h2 className="mt-1 text-sm font-semibold tracking-tight text-text-hi">Request Contract</h2>
+          <p className="mt-0.5 text-xs text-text-md">
             Define the information this workflow needs once, then reuse it across the steps instead
             of re-entering raw context.
           </p>
         </div>
       </div>
 
-      <div className="mt-5 space-y-5">
+      <div className="mt-2 space-y-3">
         <div>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
                 Inputs
               </div>
-              <div className="mt-1 text-xs text-text-lo">
+              <div className="text-[10px] text-text-lo">
                 External values the workflow expects at run time.
               </div>
             </div>
             <button
-              className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+              className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
               onClick={onAddInput}
             >
               Add Input
             </button>
           </div>
-          <div className="mt-3 space-y-3">
+          <div className="mt-2 space-y-2">
             {workflowInterface.inputs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
                 No workflow inputs yet.
               </div>
             ) : null}
@@ -159,34 +159,34 @@ export default function StudioWorkflowInterfacePanel({
               return (
                 <div
                   key={`workflow-input-${input.id}`}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-slate-900">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-slate-900">
                       {input.label || input.key || "Untitled input"}
                     </div>
                     <button
-                      className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] text-rose-700"
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-700"
                       onClick={() => onRemoveInput(input.id)}
                     >
                       Remove
                     </button>
                   </div>
-                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  <div className="mt-2 grid gap-2 lg:grid-cols-2">
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={input.key}
                       onChange={(event) => onUpdateInput(input.id, { key: event.target.value })}
                       placeholder="input key"
                     />
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={input.label}
                       onChange={(event) => onUpdateInput(input.id, { label: event.target.value })}
                       placeholder="label"
                     />
                     <select
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={input.valueType}
                       onChange={(event) =>
                         onUpdateInput(input.id, {
@@ -211,7 +211,7 @@ export default function StudioWorkflowInterfacePanel({
                       Required
                     </label>
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                       value={input.defaultValue || ""}
                       onChange={(event) =>
                         onUpdateInput(input.id, { defaultValue: event.target.value })
@@ -219,7 +219,7 @@ export default function StudioWorkflowInterfacePanel({
                       placeholder="default value"
                     />
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                       value={input.description || ""}
                       onChange={(event) =>
                         onUpdateInput(input.id, { description: event.target.value })
@@ -233,7 +233,7 @@ export default function StudioWorkflowInterfacePanel({
                       Binding
                     </label>
                     <select
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={bindingMode}
                       onChange={(event) =>
                         onUpdateInput(input.id, {
@@ -258,7 +258,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {inputLiteralBinding ? (
                       <input
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                         value={inputLiteralBinding.value}
                         onChange={(event) =>
                           onUpdateInput(input.id, {
@@ -272,7 +272,7 @@ export default function StudioWorkflowInterfacePanel({
                     {inputContextBinding ? (
                       <>
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           list={`workflow-input-context-${input.id}`}
                           value={inputContextBinding.path}
                           onChange={(event) =>
@@ -293,7 +293,7 @@ export default function StudioWorkflowInterfacePanel({
                     {inputMemoryBinding ? (
                       <div className="grid gap-2 sm:grid-cols-3">
                         <select
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           value={inputMemoryBinding.scope}
                           onChange={(event) =>
                           onUpdateInput(input.id, {
@@ -311,7 +311,7 @@ export default function StudioWorkflowInterfacePanel({
                           <option value="global">global</option>
                         </select>
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           value={inputMemoryBinding.name}
                           onChange={(event) =>
                           onUpdateInput(input.id, {
@@ -326,7 +326,7 @@ export default function StudioWorkflowInterfacePanel({
                           placeholder="memory name"
                         />
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           value={inputMemoryBinding.key || ""}
                           onChange={(event) =>
                           onUpdateInput(input.id, {
@@ -345,7 +345,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {inputSecretBinding ? (
                       <input
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                         value={inputSecretBinding.secretName}
                         onChange={(event) =>
                           onUpdateInput(input.id, {
@@ -363,25 +363,25 @@ export default function StudioWorkflowInterfacePanel({
         </div>
 
         <div>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
                 Variables
               </div>
-              <div className="mt-1 text-xs text-text-lo">
+              <div className="text-[10px] text-text-lo">
                 Derived values resolved once and reused across node bindings.
               </div>
             </div>
             <button
-              className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+              className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
               onClick={onAddVariable}
             >
               Add Variable
             </button>
           </div>
-          <div className="mt-3 space-y-3">
+          <div className="mt-2 space-y-2">
             {workflowInterface.variables.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
                 No workflow variables yet.
               </div>
             ) : null}
@@ -402,22 +402,22 @@ export default function StudioWorkflowInterfacePanel({
               return (
                 <div
                   key={`workflow-variable-${variable.id}`}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-slate-900">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-slate-900">
                       {variable.key || "Untitled variable"}
                     </div>
                     <button
-                      className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] text-rose-700"
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-700"
                       onClick={() => onRemoveVariable(variable.id)}
                     >
                       Remove
                     </button>
                   </div>
-                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  <div className="mt-2 grid gap-2 lg:grid-cols-2">
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={variable.key}
                       onChange={(event) =>
                         onUpdateVariable(variable.id, { key: event.target.value })
@@ -425,7 +425,7 @@ export default function StudioWorkflowInterfacePanel({
                       placeholder="variable key"
                     />
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={variable.description || ""}
                       onChange={(event) =>
                         onUpdateVariable(variable.id, { description: event.target.value })
@@ -433,7 +433,7 @@ export default function StudioWorkflowInterfacePanel({
                       placeholder="description"
                     />
                     <select
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                       value={bindingMode}
                       onChange={(event) =>
                         onUpdateVariable(variable.id, {
@@ -458,7 +458,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {variableLiteralBinding ? (
                       <input
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                         value={variableLiteralBinding.value}
                         onChange={(event) =>
                           onUpdateVariable(variable.id, {
@@ -472,7 +472,7 @@ export default function StudioWorkflowInterfacePanel({
                     {variableContextBinding ? (
                       <>
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                           list={`workflow-variable-context-${variable.id}`}
                           value={variableContextBinding.path}
                           onChange={(event) =>
@@ -496,7 +496,7 @@ export default function StudioWorkflowInterfacePanel({
                     {variableMemoryBinding ? (
                       <div className="grid gap-2 lg:col-span-2 sm:grid-cols-3">
                         <select
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           value={variableMemoryBinding.scope}
                           onChange={(event) =>
                           onUpdateVariable(variable.id, {
@@ -516,7 +516,7 @@ export default function StudioWorkflowInterfacePanel({
                           <option value="global">global</option>
                         </select>
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           value={variableMemoryBinding.name}
                           onChange={(event) =>
                           onUpdateVariable(variable.id, {
@@ -533,7 +533,7 @@ export default function StudioWorkflowInterfacePanel({
                           placeholder="memory name"
                         />
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           value={variableMemoryBinding.key || ""}
                           onChange={(event) =>
                           onUpdateVariable(variable.id, {
@@ -552,7 +552,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {variableSecretBinding ? (
                       <input
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                         value={variableSecretBinding.secretName}
                         onChange={(event) =>
                           onUpdateVariable(variable.id, {
@@ -565,7 +565,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {variableInputBinding ? (
                       <select
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                         value={variableInputBinding.inputKey}
                         onChange={(event) =>
                           onUpdateVariable(variable.id, {
@@ -589,25 +589,25 @@ export default function StudioWorkflowInterfacePanel({
         </div>
 
         <div>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-lo">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
                 Outputs
               </div>
-              <div className="mt-1 text-xs text-text-lo">
+              <div className="text-[10px] text-text-lo">
                 Public outputs you expect callers or downstream systems to consume.
               </div>
             </div>
             <button
-              className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+              className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
               onClick={onAddOutput}
             >
               Add Output
             </button>
           </div>
-          <div className="mt-3 space-y-3">
+          <div className="mt-2 space-y-2">
             {workflowInterface.outputs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-text-lo">
                 No workflow outputs yet.
               </div>
             ) : null}
@@ -635,22 +635,22 @@ export default function StudioWorkflowInterfacePanel({
               return (
                 <div
                   key={`workflow-output-${output.id}`}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-slate-900">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-slate-900">
                       {output.label || output.key || "Untitled output"}
                     </div>
                     <button
-                      className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] text-rose-700"
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-700"
                       onClick={() => onRemoveOutput(output.id)}
                     >
                       Remove
                     </button>
                   </div>
-                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  <div className="mt-2 grid gap-2 lg:grid-cols-2">
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={output.key}
                       onChange={(event) =>
                         onUpdateOutput(output.id, { key: event.target.value })
@@ -658,7 +658,7 @@ export default function StudioWorkflowInterfacePanel({
                       placeholder="output key"
                     />
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                       value={output.label}
                       onChange={(event) =>
                         onUpdateOutput(output.id, { label: event.target.value })
@@ -666,7 +666,7 @@ export default function StudioWorkflowInterfacePanel({
                       placeholder="label"
                     />
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                       value={output.description || ""}
                       onChange={(event) =>
                         onUpdateOutput(output.id, { description: event.target.value })
@@ -674,7 +674,7 @@ export default function StudioWorkflowInterfacePanel({
                       placeholder="description"
                     />
                     <select
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                       value={bindingMode}
                       onChange={(event) =>
                         onUpdateOutput(output.id, {
@@ -701,7 +701,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {outputLiteralBinding ? (
                       <input
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                         value={outputLiteralBinding.value}
                         onChange={(event) =>
                           onUpdateOutput(output.id, {
@@ -715,7 +715,7 @@ export default function StudioWorkflowInterfacePanel({
                     {outputContextBinding ? (
                       <>
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                           list={`workflow-output-context-${output.id}`}
                           value={outputContextBinding.path}
                           onChange={(event) =>
@@ -735,7 +735,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {outputInputBinding ? (
                       <select
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                         value={outputInputBinding.inputKey}
                         onChange={(event) =>
                           onUpdateOutput(output.id, {
@@ -754,7 +754,7 @@ export default function StudioWorkflowInterfacePanel({
 
                     {outputVariableBinding ? (
                       <select
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 lg:col-span-2"
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 lg:col-span-2"
                         value={outputVariableBinding.variableKey}
                         onChange={(event) =>
                           onUpdateOutput(output.id, {
@@ -777,7 +777,7 @@ export default function StudioWorkflowInterfacePanel({
                     {outputStepBinding ? (
                       <>
                         <select
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           value={outputStepBinding.sourceNodeId}
                           onChange={(event) =>
                           onUpdateOutput(output.id, {
@@ -797,7 +797,7 @@ export default function StudioWorkflowInterfacePanel({
                           ))}
                         </select>
                         <input
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900"
                           list={`workflow-output-path-${output.id}`}
                           value={outputStepBinding.sourcePath}
                           onChange={(event) =>
