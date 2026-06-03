@@ -9615,6 +9615,38 @@ const openTemplateModal = (template: Template) => {
                     Feedback error: {feedbackError}
                   </div>
                 ) : null}
+
+                {/* Active job status card — shown when chat has kicked off a job */}
+                {chatSession?.active_job_id ? (() => {
+                  const activeJob = jobs.find((j) => j.id === chatSession.active_job_id);
+                  const status = activeJob?.status ?? "running";
+                  const isTerminal = ["succeeded", "failed", "canceled", "completed", "accepted"].includes(status);
+                  const statusColor = status === "succeeded" || status === "completed" || status === "accepted"
+                    ? "border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
+                    : status === "failed" || status === "canceled"
+                    ? "border-rose-300/20 bg-accent-rose text-text-rose-token"
+                    : "border-sky-300/22 bg-accent-sky text-text-sky-token";
+                  return (
+                    <div className={`mt-3 flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${statusColor}`}>
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
+                          {isTerminal ? "Last job" : "Running job"}
+                        </span>
+                        <span className="truncate font-mono text-xs">
+                          {chatSession.active_job_id}
+                        </span>
+                        <span className="text-[11px] capitalize opacity-80">{status}</span>
+                      </div>
+                      <a
+                        href={`/observability?job=${encodeURIComponent(chatSession.active_job_id)}`}
+                        className="shrink-0 rounded-xl border border-current/30 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] opacity-90 transition hover:opacity-100"
+                      >
+                        View details
+                      </a>
+                    </div>
+                  );
+                })() : null}
+
                 <div className="mt-4 space-y-3">
                   <div className="relative">
                     {showSkillPalette ? (
@@ -9714,6 +9746,8 @@ const openTemplateModal = (template: Template) => {
             </div>
         </ScreenHeader>
 
+        {showComposeScreen && (
+        <>
         <section
           className={`animate-fade-up-delayed ${
             useStudioSurfaceTheme
@@ -11208,6 +11242,8 @@ const openTemplateModal = (template: Template) => {
           </div>
         )}
       </section>
+        </>
+        )}
 
       </div>
     </div>
