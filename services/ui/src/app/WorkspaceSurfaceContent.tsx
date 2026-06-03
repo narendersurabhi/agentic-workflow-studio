@@ -7057,6 +7057,258 @@ const openTemplateModal = (template: Template) => {
     );
   }
 
+  // ── Full-height Chat layout (Chat screen only) ────────────────────────────
+  if (showChatScreen) {
+    const activeJob = chatSession?.active_job_id
+      ? jobs.find((j) => j.id === chatSession.active_job_id)
+      : null;
+    const activeJobStatus = activeJob?.status ?? (chatSession?.active_job_id ? "running" : null);
+    const isJobTerminal = activeJobStatus
+      ? ["succeeded", "failed", "canceled", "completed", "accepted"].includes(activeJobStatus)
+      : false;
+    const jobStatusColor = !activeJobStatus
+      ? ""
+      : activeJobStatus === "succeeded" || activeJobStatus === "completed" || activeJobStatus === "accepted"
+      ? "border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
+      : activeJobStatus === "failed" || activeJobStatus === "canceled"
+      ? "border-rose-300/20 bg-accent-rose text-text-rose-token"
+      : "border-sky-300/22 bg-accent-sky text-text-sky-token";
+
+    return (
+      <AppShell activeScreen="chat" title="Chat">
+        <div className="flex h-[calc(100dvh-60px)] flex-col gap-0 overflow-hidden">
+          {/* ── Top bar ── */}
+          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-subtle px-4 py-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-text-sky-token">
+                AI Workflow Workspace
+              </div>
+              <h1 className="mt-0.5 text-lg font-semibold tracking-tight text-text-hi">Chat</h1>
+            </div>
+            <button
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={resetChatSession}
+              disabled={chatLoading}
+            >
+              New Chat
+            </button>
+          </div>
+
+          {/* ── Transcript ── */}
+          <div
+            ref={chatTranscriptRef}
+            className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+          >
+            {chatMessages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <div className="text-3xl">💬</div>
+                <p className="text-sm text-text-md">
+                  Describe what you need in plain language. Type{" "}
+                  <kbd className="rounded border border-subtle bg-surface-1 px-1.5 py-0.5 text-[11px]">/</kbd>{" "}
+                  for Skills.
+                </p>
+              </div>
+            ) : (
+              chatMessages.map((message) => {
+                const isPending = Boolean(message.metadata?.pending);
+                return (
+                  <div
+                    key={message.id}
+                    className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                      message.role === "user"
+                        ? "ml-auto bg-white text-slate-900"
+                        : "border border-subtle bg-surface-1 text-text-hi"
+                    } ${isPending ? "opacity-70" : ""}`}
+                  >
+                    <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
+                      <div className="flex items-center gap-2">
+                        <span className={message.role === "user" ? "text-slate-400" : "text-text-md"}>
+                          {message.role}
+                        </span>
+                        {isPending ? (
+                          <span className="rounded-full border border-amber-400/30 bg-accent-amber px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
+                            Pending
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="text-text-lo">{formatTimestamp(message.created_at)}</span>
+                    </div>
+                    <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
+                    {message.action?.clarification_questions &&
+                    message.action.clarification_questions.length > 0 ? (
+                      <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
+                        {message.action.clarification_questions.map((q, i) => (
+                          <div key={`${message.id}-q-${i}`}>{q}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {message.job_id ? (
+                      <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-accent-emerald px-3 py-2 text-[12px] text-text-emerald-token">
+                        <span>Job {message.job_id}</span>
+                        <a
+                          href={`/observability?job=${encodeURIComponent(message.job_id)}`}
+                          className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
+                        >
+                          View in Observability
+                        </a>
+                      </div>
+                    ) : null}
+                    {message.role === "assistant" && !isPending ? (
+                      <ChatMessageFeedback
+                        reasonOptions={CHAT_FEEDBACK_REASONS}
+                        existing={feedbackByTarget[feedbackTargetKey("chat_message", message.id)] || null}
+                        submitting={Boolean(feedbackSubmitting[feedbackTargetKey("chat_message", message.id)])}
+                        onSubmit={(payload) => submitFeedback("chat_message", message.id, payload)}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+            {chatLoading ? (
+              <div className="flex items-center gap-2 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-md max-w-[82%]">
+                <span className="inline-flex gap-1">
+                  <span className="animate-bounce delay-0">●</span>
+                  <span className="animate-bounce delay-100">●</span>
+                  <span className="animate-bounce delay-200">●</span>
+                </span>
+                <span>Thinking…</span>
+              </div>
+            ) : null}
+          </div>
+
+          {/* ── Active job card ── */}
+          {chatSession?.active_job_id ? (
+            <div className={`mx-4 mb-2 shrink-0 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5 text-sm ${jobStatusColor}`}>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
+                  {isJobTerminal ? "Last job" : "Running job"}
+                </span>
+                <span className="truncate font-mono text-xs">{chatSession.active_job_id}</span>
+                <span className="text-[11px] capitalize opacity-80">{activeJobStatus}</span>
+              </div>
+              <a
+                href={`/observability?job=${encodeURIComponent(chatSession.active_job_id)}`}
+                className="shrink-0 rounded-xl border border-current/30 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] opacity-90 transition hover:opacity-100"
+              >
+                View details
+              </a>
+            </div>
+          ) : null}
+
+          {/* ── Input bar ── */}
+          <div className="shrink-0 border-t border-subtle bg-gradient-panel px-4 py-3 space-y-2">
+            {chatError ? (
+              <div className="rounded-xl border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
+                {chatError}
+              </div>
+            ) : null}
+            {chatNotice ? (
+              <div className="rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2 text-sm text-text-sky-token">
+                {chatNotice}
+              </div>
+            ) : null}
+            {feedbackError ? (
+              <div className="rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-sm text-text-amber-token">
+                Feedback error: {feedbackError}
+              </div>
+            ) : null}
+            <div className="relative">
+              {showSkillPalette ? (
+                <SkillCommandPalette
+                  skills={skills}
+                  capabilities={(capabilityCatalog?.items ?? []) as SkillCapabilityItem[]}
+                  onSelectSkill={(expanded) => {
+                    setChatInput(expanded);
+                    setShowSkillPalette(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 0);
+                  }}
+                  onSelectCapability={(id) => {
+                    setChatInput((prev) => (prev ? `${prev} ${id}` : id));
+                    setShowSkillPalette(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 0);
+                  }}
+                  onClose={() => {
+                    setShowSkillPalette(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 0);
+                  }}
+                />
+              ) : null}
+              <textarea
+                ref={chatInputRef}
+                rows={3}
+                className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20 resize-none"
+                value={chatInput}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setChatInput(value);
+                  if ((event.nativeEvent as InputEvent).data === "/") setShowSkillPalette(true);
+                  else if (showSkillPalette && value === "") setShowSkillPalette(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    void submitChatTurn();
+                  }
+                  if (event.key === "Escape") setShowSkillPalette(false);
+                }}
+                placeholder="Ask for work in natural language. Type / for Skills. Cmd/Ctrl+Enter sends."
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <button
+                className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[11px] font-semibold text-text-md transition hover:bg-surface-2"
+                onClick={() => {
+                  setSaveSkillName("");
+                  setSaveSkillDesc("");
+                  setSaveSkillError(null);
+                  setShowSaveSkillForm((p) => !p);
+                }}
+              >
+                Save as Skill
+              </button>
+              <button
+                className="rounded-xl border border-sky-300/26 bg-accent-sky px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/40 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => void submitChatTurn()}
+                disabled={chatLoading || !chatInput.trim()}
+              >
+                {chatLoading ? "Sending…" : "Send"}
+              </button>
+            </div>
+            {showSaveSkillForm ? (
+              <div className="rounded-xl border border-subtle bg-surface-1 p-4 space-y-3">
+                <div className="text-xs font-semibold text-text-md">Save as Skill</div>
+                {saveSkillError ? <div className="text-xs text-rose-500">{saveSkillError}</div> : null}
+                <input
+                  className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
+                  placeholder="Skill name"
+                  value={saveSkillName}
+                  onChange={(e) => setSaveSkillName(e.target.value)}
+                />
+                <input
+                  className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
+                  placeholder="Description (optional)"
+                  value={saveSkillDesc}
+                  onChange={(e) => setSaveSkillDesc(e.target.value)}
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    className="rounded-lg border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-md transition hover:bg-surface-2"
+                    onClick={() => setShowSaveSkillForm(false)}
+                  >Cancel</button>
+                  <button
+                    className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-600"
+                    onClick={() => void saveCurrentAsSkill()}
+                  >Save</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+
   const useStudioSurfaceTheme = showChatScreen || showComposeScreen;
   const studioSurfacePrimarySectionClassName = useStudioSurfaceTheme
     ? "rounded-[30px] border border-subtle bg-gradient-panel p-6 text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]"
