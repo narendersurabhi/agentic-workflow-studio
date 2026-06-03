@@ -1906,7 +1906,86 @@ def _build_plan_revision_context(
             "replans_used": adaptive_status.replans_used,
             "replans_remaining": adaptive_status.replans_remaining,
         },
+        run_memory_snapshot=_run_memory_snapshot_for_revision(db, active_plan),
     )
+
+
+# Caps to keep the replanning prompt within a reasonable token budget.
+_REVISION_SNAPSHOT_FACT_LIMIT = 50
+_REVISION_SNAPSHOT_HANDOFF_LIMIT = 20
+_REVISION_SNAPSHOT_ARTIFACT_LIMIT = 30
+
+
+def _run_memory_snapshot_for_revision(
+    db: Session,
+    active_plan: PlanRecord | None,
+) -> dict[str, Any]:
+    """Assemble accumulated shared run memory for the replanner.
+
+    Returns blackboard facts, per-task output snapshots, agent handoffs, and
+    produced artifacts captured during the run so far. Best-effort: any failure
+    yields an empty snapshot so replanning never blocks on collaboration data.
+    """
+    if active_plan is None:
+        return {}
+    try:
+        job = db.query(JobRecord).filter(JobRecord.id == active_plan.job_id).first()
+        run_id = _durable_run_id(job, active_plan.job_id)
+        bundle = run_context_service.get_run_context_bundle(
+            db,
+            run_id,
+            limit=max(
+                _REVISION_SNAPSHOT_FACT_LIMIT,
+                _REVISION_SNAPSHOT_HANDOFF_LIMIT,
+                _REVISION_SNAPSHOT_ARTIFACT_LIMIT,
+            ),
+        )
+    except Exception:  # noqa: BLE001 — collaboration data is optional context
+        return {}
+
+    facts: list[dict[str, Any]] = []
+    task_snapshots: dict[str, Any] = {}
+    for entry in bundle.blackboard:
+        if entry.kind == "task_snapshot":
+            task_snapshots[entry.key or entry.id] = entry.payload
+            continue
+        facts.append(
+            {
+                "key": entry.key,
+                "kind": entry.kind,
+                "payload": entry.payload,
+                "source_agent_id": entry.source_agent_id,
+                "confidence": entry.confidence,
+            }
+        )
+
+    snapshot: dict[str, Any] = {}
+    if facts:
+        snapshot["facts"] = facts[:_REVISION_SNAPSHOT_FACT_LIMIT]
+    if task_snapshots:
+        snapshot["task_snapshots"] = task_snapshots
+    if bundle.handoffs:
+        snapshot["handoffs"] = [
+            {
+                "from_agent_id": handoff.from_agent_id,
+                "to_agent_id": handoff.to_agent_id,
+                "objective": handoff.objective,
+                "summary": handoff.summary,
+                "assumptions": handoff.assumptions,
+                "risks": handoff.risks,
+            }
+            for handoff in bundle.handoffs[-_REVISION_SNAPSHOT_HANDOFF_LIMIT:]
+        ]
+    if bundle.artifacts:
+        snapshot["artifacts"] = [
+            {
+                "path": artifact.path,
+                "artifact_type": artifact.artifact_type,
+                "task_id": artifact.task_id,
+            }
+            for artifact in bundle.artifacts[-_REVISION_SNAPSHOT_ARTIFACT_LIMIT:]
+        ]
+    return snapshot
 
 
 def _active_plan_record_for_job(

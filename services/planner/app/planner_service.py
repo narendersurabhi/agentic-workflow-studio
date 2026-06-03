@@ -88,6 +88,13 @@ def _format_revision_context_block(
         "- Treat failed_step as the broken boundary for repair and avoid repeating the same failure mode.",
         "- Prefer minimal change to the prior plan shape while keeping dependencies valid.",
     ]
+    if revision_context.run_memory_snapshot:
+        guidance.append(
+            "- run_memory_snapshot holds accumulated observations from the run so far "
+            "(facts, task_snapshots, handoffs, artifacts). Build on established facts instead "
+            "of re-deriving them, reuse listed artifacts rather than regenerating them, and "
+            "honour any assumptions/risks recorded in handoffs."
+        )
     intent_mismatch_recovery = revision_context.constraints
     if revision_context.trigger_reason == "intent_mismatch_auto_repair":
         if isinstance(intent_mismatch_recovery.get("intent_mismatch_recovery"), Mapping):

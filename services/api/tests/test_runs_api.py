@@ -19,6 +19,7 @@ from services.api.app.database import Base, SessionLocal, engine  # noqa: E402
 from services.api.app.models import (  # noqa: E402
     ExecutionRequestRecord,
     JobRecord,
+    PlanRecord,
     RunRecord,
     RunStepRecord,
     StepAttemptRecord,
@@ -190,6 +191,183 @@ def test_run_debugger_includes_execution_requests() -> None:
     assert debugger["execution_requests"]
     assert debugger["steps"][0]["execution_requests"]
     assert debugger["execution_requests"][0]["run_id"] == job["run_id"]
+
+
+def test_run_collaboration_context_indexes_blackboard_handoffs_and_artifacts() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    blackboard_response = client.post(
+        f"/runs/{run_id}/blackboard",
+        json={
+            "key": "finding:primary",
+            "kind": "finding",
+            "payload": {"summary": "Use the published workflow version."},
+            "source_agent_id": "planner-agent",
+            "visibility": "shared",
+            "confidence": 0.9,
+        },
+    )
+    assert blackboard_response.status_code == 200
+    blackboard_entry = blackboard_response.json()
+    assert blackboard_entry["run_id"] == run_id
+    assert blackboard_entry["kind"] == "finding"
+
+    handoff_response = client.post(
+        f"/runs/{run_id}/handoffs",
+        json={
+            "from_agent_id": "planner-agent",
+            "to_agent_id": "executor-agent",
+            "objective": "Execute workspace listing",
+            "summary": "Planner selected the filesystem listing capability.",
+            "inputs": {"goal": job["goal"]},
+            "outputs": {"next_step": "ListWorkspace"},
+        },
+    )
+    assert handoff_response.status_code == 200
+    handoff = handoff_response.json()
+    assert handoff["run_id"] == run_id
+    assert handoff["from_agent_id"] == "planner-agent"
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        main._store_task_result(
+            task.id,
+            {
+                "task_id": task.id,
+                "run_id": run_id,
+                "status": "completed",
+                "outputs": {
+                    "path": "artifacts/report.pdf",
+                    "summary": "Generated report",
+                },
+                "artifacts": [{"type": "document", "path": "artifacts/report.pdf"}],
+                "tool_calls": [],
+            },
+        )
+
+    artifacts_response = client.get(f"/runs/{run_id}/artifacts")
+    assert artifacts_response.status_code == 200
+    artifacts = artifacts_response.json()
+    assert [artifact for artifact in artifacts if artifact["path"] == "report.pdf"]
+
+    context_response = client.get(f"/runs/{run_id}/context")
+    assert context_response.status_code == 200
+    context = context_response.json()
+    assert context["state"]["run_id"] == run_id
+    assert any(entry["kind"] == "finding" for entry in context["blackboard"])
+    assert any(entry["kind"] == "task_snapshot" for entry in context["blackboard"])
+    assert context["handoffs"][0]["to_agent_id"] == "executor-agent"
+    assert any(artifact["path"] == "report.pdf" for artifact in context["artifacts"])
+
+    debugger_response = client.get(f"/jobs/{job['id']}/debugger")
+    assert debugger_response.status_code == 200
+    debugger = debugger_response.json()
+    assert debugger["run_state"]["run_id"] == run_id
+    assert any(entry["kind"] == "finding" for entry in debugger["blackboard"])
+    assert any(artifact["path"] == "report.pdf" for artifact in debugger["artifacts"])
+
+
+def test_task_payload_includes_run_collaboration_context() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+    client.post(
+        f"/runs/{run_id}/blackboard",
+        json={
+            "key": "decision:context",
+            "kind": "decision",
+            "payload": {"summary": "Share run context with worker payloads."},
+        },
+    )
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        payload = main._task_payload_from_record(task, correlation_id=f"corr-{uuid.uuid4()}", context={})
+
+    context = payload["context"]
+    assert context["run_state"]["run_id"] == run_id
+    assert any(entry["key"] == "decision:context" for entry in context["blackboard"])
+    assert "handoffs" in context
+    assert "artifacts" in context
+
+
+def test_revision_context_includes_run_memory_snapshot() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    client.post(
+        f"/runs/{run_id}/blackboard",
+        json={
+            "key": "finding:api_rate_limit",
+            "kind": "finding",
+            "payload": {"summary": "Upstream API caps at 100 req/min."},
+            "confidence": 0.8,
+        },
+    )
+    client.post(
+        f"/runs/{run_id}/handoffs",
+        json={
+            "from_agent_id": "researcher",
+            "to_agent_id": "writer",
+            "objective": "Draft the summary",
+            "summary": "Findings gathered; writer to compose.",
+            "assumptions": ["Rate limit respected"],
+        },
+    )
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        # Storing a task result writes a task snapshot + indexes any artifacts.
+        main._store_task_result(
+            task.id,
+            {
+                "task_id": task.id,
+                "run_id": run_id,
+                "status": "completed",
+                "outputs": {"path": "artifacts/findings.md", "summary": "Collected findings"},
+                "artifacts": [{"type": "document", "path": "artifacts/findings.md"}],
+                "tool_calls": [],
+            },
+        )
+
+    with SessionLocal() as db:
+        plan = (
+            db.query(PlanRecord)
+            .filter(PlanRecord.job_id == job["id"])
+            .order_by(PlanRecord.created_at.desc())
+            .first()
+        )
+        assert plan is not None
+        revision = main._build_plan_revision_context(
+            db,
+            metadata={},
+            active_plan=plan,
+            reason="task_failed",
+            context={},
+        )
+
+    snapshot = revision.run_memory_snapshot
+    assert snapshot, "run_memory_snapshot should be populated from shared run memory"
+    assert any(
+        fact["key"] == "finding:api_rate_limit" for fact in snapshot.get("facts", [])
+    )
+    assert snapshot.get("task_snapshots"), "task snapshots should be present"
+    assert snapshot.get("handoffs"), "handoffs should be present"
+    assert snapshot["handoffs"][0]["to_agent_id"] == "writer"
+    assert any(
+        artifact["path"] == "findings.md" for artifact in snapshot.get("artifacts", [])
+    )
+
+    # The serialized revision context (what the planner prompt receives) carries it through.
+    serialized = revision.model_dump(mode="json", exclude_none=True)
+    assert "run_memory_snapshot" in serialized
+    assert serialized["run_memory_snapshot"].get("facts")
 
 
 def test_execution_request_snapshot_captures_retry_policy_and_context_provenance() -> None:

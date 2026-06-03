@@ -920,6 +920,64 @@ type DebuggerTaskEntry = {
   };
 };
 
+type RunStateSnapshot = {
+  run_id: string;
+  job_id: string;
+  kind?: string | null;
+  status: string;
+  title?: string;
+  goal?: string;
+  step_counts?: Record<string, number>;
+  attempt_counts?: Record<string, number>;
+  latest_step_name?: string | null;
+  latest_step_status?: string | null;
+  latest_error?: string | null;
+  latest_event_at?: string | null;
+};
+
+type BlackboardEntry = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  key?: string | null;
+  kind: string;
+  payload: Record<string, unknown>;
+  source_agent_id?: string | null;
+  step_id?: string | null;
+  task_id?: string | null;
+  visibility?: string;
+  confidence?: number | null;
+  updated_at?: string;
+};
+
+type AgentHandoff = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  from_agent_id?: string | null;
+  to_agent_id?: string | null;
+  step_id?: string | null;
+  task_id?: string | null;
+  objective?: string;
+  summary?: string;
+  artifact_ids?: string[];
+  created_at?: string;
+};
+
+type RunArtifact = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  step_id?: string | null;
+  task_id?: string | null;
+  artifact_type?: string;
+  path: string;
+  storage_key?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  created_at?: string;
+};
+
 type JobDebuggerPayload = {
   job_id: string;
   job_status: string;
@@ -933,6 +991,10 @@ type JobDebuggerPayload = {
   generated_at: string;
   timeline_events_scanned: number;
   tasks: DebuggerTaskEntry[];
+  run_state?: RunStateSnapshot | null;
+  blackboard?: BlackboardEntry[];
+  handoffs?: AgentHandoff[];
+  artifacts?: RunArtifact[];
 };
 
 type CapabilityAdapter = {
@@ -5303,8 +5365,13 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
       collectArtifactPaths(result?.outputs, found);
       (result?.tool_calls || []).forEach((call) => collectArtifactPaths(call.output_or_error, found));
     });
+    (jobDebugger?.artifacts || []).forEach((artifact) => {
+      if (artifact.path) {
+        found.add(normalizeArtifactPath(artifact.path));
+      }
+    });
     return Array.from(found).sort();
-  }, [selectedTasks, taskResults]);
+  }, [jobDebugger?.artifacts, selectedTasks, taskResults]);
 
   const parsedContextForCapabilities = useMemo(() => {
     try {
@@ -10542,6 +10609,107 @@ const openTemplateModal = (template: Template) => {
                           </>
                         ) : null}
                       </div>
+                      {jobDebugger.run_state ? (
+                        <div className={`grid gap-2 rounded-lg px-3 py-2 text-[11px] md:grid-cols-3 ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                          <div>
+                            <div className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Run State</div>
+                            <div className="mt-1 font-mono text-[10px]">{jobDebugger.run_state.run_id}</div>
+                            <div className="mt-1">
+                              {jobDebugger.run_state.kind || "run"} • {jobDebugger.run_state.status}
+                            </div>
+                          </div>
+                          <div>
+                            <div className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Steps</div>
+                            <div className="mt-1">
+                              {Object.entries(jobDebugger.run_state.step_counts || {}).length > 0
+                                ? Object.entries(jobDebugger.run_state.step_counts || {})
+                                    .map(([status, count]) => `${status}: ${count}`)
+                                    .join(" • ")
+                                : "No step state yet."}
+                            </div>
+                          </div>
+                          <div>
+                            <div className={`font-semibold ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Latest</div>
+                            <div className="mt-1">
+                              {jobDebugger.run_state.latest_step_name || "No step"}{" "}
+                              {jobDebugger.run_state.latest_step_status
+                                ? `(${jobDebugger.run_state.latest_step_status})`
+                                : ""}
+                            </div>
+                            {jobDebugger.run_state.latest_error ? (
+                              <div className="mt-1 text-rose-600">{jobDebugger.run_state.latest_error}</div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                      {((jobDebugger.blackboard || []).length > 0 ||
+                        (jobDebugger.handoffs || []).length > 0 ||
+                        (jobDebugger.artifacts || []).length > 0) ? (
+                        <div className="grid gap-3 lg:grid-cols-3">
+                          <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                            <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Blackboard</div>
+                            {(jobDebugger.blackboard || []).length > 0 ? (
+                              <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                {(jobDebugger.blackboard || []).slice(0, 6).map((entry) => (
+                                  <div key={`blackboard-${entry.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="font-semibold text-slate-700">{entry.kind}</span>
+                                      <span className="font-mono text-[10px] text-slate-500">{entry.key || entry.id}</span>
+                                    </div>
+                                    <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-[10px] text-slate-600">
+                                      {JSON.stringify(entry.payload || {}, null, 2)}
+                                    </pre>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-text-lo">No blackboard entries yet.</div>
+                            )}
+                          </div>
+                          <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                            <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Handoffs</div>
+                            {(jobDebugger.handoffs || []).length > 0 ? (
+                              <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                {(jobDebugger.handoffs || []).slice(0, 6).map((handoff) => (
+                                  <div key={`handoff-${handoff.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                    <div className="font-semibold text-slate-700">
+                                      {handoff.from_agent_id || "agent"} → {handoff.to_agent_id || "next"}
+                                    </div>
+                                    <div className="mt-1 text-slate-600">
+                                      {handoff.summary || handoff.objective || "No summary."}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-text-lo">No handoffs yet.</div>
+                            )}
+                          </div>
+                          <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                            <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Artifact Index</div>
+                            {(jobDebugger.artifacts || []).length > 0 ? (
+                              <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                {(jobDebugger.artifacts || []).slice(0, 8).map((artifact) => (
+                                  <a
+                                    key={`artifact-index-${artifact.id}`}
+                                    href={downloadHrefForPath(artifact.path)}
+                                    download={artifact.path.split("/").pop() || artifact.path}
+                                    className="block rounded-md border border-cyan-200 bg-white px-2 py-2 text-cyan-700 hover:bg-cyan-50"
+                                  >
+                                    <div className="font-semibold">{artifact.path}</div>
+                                    <div className="mt-1 text-[10px] text-slate-500">
+                                      {artifact.artifact_type || "file"}
+                                      {artifact.size_bytes ? ` • ${artifact.size_bytes} bytes` : ""}
+                                    </div>
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-text-lo">No indexed artifacts yet.</div>
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
                       {debuggerActionNotice ? (
                         <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>{debuggerActionNotice}</div>
                       ) : null}

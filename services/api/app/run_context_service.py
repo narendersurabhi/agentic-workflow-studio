@@ -1,0 +1,705 @@
+from __future__ import annotations
+
+import hashlib
+import mimetypes
+import os
+import uuid
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from libs.core import models
+
+from . import memory_store
+from .models import (
+    AgentHandoffRecord,
+    ArtifactRecord,
+    MemoryRecord,
+    RunEventRecord,
+    RunRecord,
+    RunStepRecord,
+    StepAttemptRecord,
+    TaskResultRecord,
+)
+
+
+ARTIFACT_EXTENSIONS = {
+    ".csv",
+    ".docx",
+    ".html",
+    ".jpeg",
+    ".jpg",
+    ".json",
+    ".md",
+    ".pdf",
+    ".png",
+    ".pptx",
+    ".svg",
+    ".txt",
+    ".xlsx",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".zip",
+}
+ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", "/shared/artifacts")
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def get_run_record(db: Session, run_id: str) -> RunRecord | None:
+    return db.query(RunRecord).filter(RunRecord.id == run_id).first()
+
+
+def get_run_state(db: Session, run_id: str) -> models.RunStateSnapshot:
+    run_record = get_run_record(db, run_id)
+    if run_record is None:
+        raise KeyError("run_not_found")
+    steps = db.query(RunStepRecord).filter(RunStepRecord.run_id == run_id).all()
+    attempts = db.query(StepAttemptRecord).filter(StepAttemptRecord.run_id == run_id).all()
+    latest_event = (
+        db.query(RunEventRecord)
+        .filter(RunEventRecord.run_id == run_id)
+        .order_by(RunEventRecord.occurred_at.desc())
+        .first()
+    )
+    latest_step = sorted(
+        steps,
+        key=lambda step: step.updated_at or step.created_at,
+        reverse=True,
+    )[0] if steps else None
+    latest_error = _latest_error_for_run(db, run_record)
+    return models.RunStateSnapshot(
+        run_id=run_record.id,
+        job_id=run_record.job_id,
+        kind=run_record.kind,
+        status=run_record.status,
+        title=run_record.title,
+        goal=run_record.goal,
+        plan_id=run_record.plan_id,
+        workflow_run_id=run_record.workflow_run_id,
+        step_counts=_count_by_status(step.status for step in steps),
+        attempt_counts=_count_by_status(attempt.status for attempt in attempts),
+        latest_step_id=latest_step.id if latest_step is not None else None,
+        latest_step_name=latest_step.name if latest_step is not None else None,
+        latest_step_status=latest_step.status if latest_step is not None else None,
+        latest_error=latest_error,
+        latest_event_at=latest_event.occurred_at if latest_event is not None else None,
+        metadata=run_record.metadata_json or {},
+        created_at=run_record.created_at,
+        updated_at=run_record.updated_at,
+    )
+
+
+def list_blackboard_entries(
+    db: Session,
+    run_id: str,
+    *,
+    kind: str | None = None,
+    limit: int = 100,
+) -> list[models.BlackboardEntry]:
+    run_record = _require_run(db, run_id)
+    entries: list[models.BlackboardEntry] = []
+    for name in ("run_blackboard", "run_task_snapshots"):
+        records = (
+            db.query(MemoryRecord)
+            .filter(
+                MemoryRecord.name == name,
+                MemoryRecord.scope == models.MemoryScope.session.value,
+                MemoryRecord.job_id == run_record.job_id,
+            )
+            .order_by(MemoryRecord.updated_at.desc())
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+        for record in records:
+            entry = _blackboard_entry_from_memory(run_record, record)
+            if kind and entry.kind != kind:
+                continue
+            entries.append(entry)
+    entries.sort(key=lambda entry: entry.updated_at, reverse=True)
+    return entries[: max(1, min(limit, 500))]
+
+
+def create_blackboard_entry(
+    db: Session,
+    run_id: str,
+    request: models.BlackboardEntryCreate,
+) -> models.BlackboardEntry:
+    run_record = _require_run(db, run_id)
+    key = request.key or f"{request.kind}:{uuid.uuid4()}"
+    metadata = dict(request.metadata or {})
+    metadata.update(
+        {
+            "run_id": run_record.id,
+            "kind": request.kind,
+            "source_agent_id": request.source_agent_id,
+            "step_id": request.step_id,
+            "task_id": request.task_id,
+            "visibility": request.visibility,
+        }
+    )
+    if request.confidence is not None:
+        metadata["confidence"] = request.confidence
+    entry = memory_store.write_memory(
+        db,
+        models.MemoryWrite(
+            name="run_blackboard",
+            job_id=run_record.job_id,
+            key=key,
+            payload={
+                "kind": request.kind,
+                "payload": request.payload,
+                "source_agent_id": request.source_agent_id,
+                "step_id": request.step_id,
+                "task_id": request.task_id,
+                "visibility": request.visibility,
+                "confidence": request.confidence,
+            },
+            metadata=metadata,
+            ttl_seconds=request.ttl_seconds,
+        ),
+    )
+    return _blackboard_entry_from_memory_entry(run_record, entry)
+
+
+def write_task_snapshot(
+    db: Session,
+    *,
+    run_id: str,
+    step_id: str,
+    summary: Mapping[str, Any],
+    task_id: str | None = None,
+) -> models.BlackboardEntry | None:
+    run_record = get_run_record(db, run_id)
+    if run_record is None:
+        return None
+    key = f"task:{task_id or step_id}"
+    entry = memory_store.write_memory(
+        db,
+        models.MemoryWrite(
+            name="run_task_snapshots",
+            job_id=run_record.job_id,
+            key=key,
+            payload={"kind": "task_snapshot", "payload": dict(summary)},
+            metadata={
+                "run_id": run_record.id,
+                "kind": "task_snapshot",
+                "step_id": step_id,
+                "task_id": task_id or step_id,
+                "visibility": "shared",
+            },
+        ),
+    )
+    return _blackboard_entry_from_memory_entry(run_record, entry)
+
+
+def create_handoff(
+    db: Session,
+    run_id: str,
+    request: models.AgentHandoffCreate,
+) -> models.AgentHandoff:
+    run_record = _require_run(db, run_id)
+    now = utcnow()
+    record = AgentHandoffRecord(
+        id=str(uuid.uuid4()),
+        run_id=run_record.id,
+        job_id=run_record.job_id,
+        from_agent_id=_clean_optional(request.from_agent_id),
+        to_agent_id=_clean_optional(request.to_agent_id),
+        step_id=_clean_optional(request.step_id),
+        task_id=_clean_optional(request.task_id),
+        objective=request.objective,
+        summary=request.summary,
+        inputs_json=dict(request.inputs or {}),
+        outputs_json=dict(request.outputs or {}),
+        assumptions_json=list(request.assumptions or []),
+        risks_json=list(request.risks or []),
+        artifact_ids_json=list(request.artifact_ids or []),
+        metadata_json=dict(request.metadata or {}),
+        created_at=now,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return handoff_from_record(record)
+
+
+def list_handoffs(
+    db: Session,
+    run_id: str,
+    *,
+    limit: int = 100,
+) -> list[models.AgentHandoff]:
+    _require_run(db, run_id)
+    rows = (
+        db.query(AgentHandoffRecord)
+        .filter(AgentHandoffRecord.run_id == run_id)
+        .order_by(AgentHandoffRecord.created_at.asc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    return [handoff_from_record(row) for row in rows]
+
+
+def create_artifact(
+    db: Session,
+    run_id: str,
+    request: models.ArtifactCreate,
+) -> models.Artifact:
+    run_record = _require_run(db, run_id)
+    record = upsert_artifact(
+        db,
+        run_record=run_record,
+        artifact_type=request.artifact_type,
+        path=request.path,
+        step_id=request.step_id,
+        task_id=request.task_id,
+        producing_agent_id=request.producing_agent_id,
+        storage_key=request.storage_key,
+        mime_type=request.mime_type,
+        size_bytes=request.size_bytes,
+        sha256=request.sha256,
+        metadata=request.metadata,
+    )
+    db.commit()
+    db.refresh(record)
+    return artifact_from_record(record)
+
+
+def list_artifacts(
+    db: Session,
+    run_id: str,
+    *,
+    limit: int = 100,
+) -> list[models.Artifact]:
+    _require_run(db, run_id)
+    rows = (
+        db.query(ArtifactRecord)
+        .filter(ArtifactRecord.run_id == run_id)
+        .order_by(ArtifactRecord.created_at.asc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    return [artifact_from_record(row) for row in rows]
+
+
+def get_artifact(db: Session, artifact_id: str) -> models.Artifact | None:
+    record = db.query(ArtifactRecord).filter(ArtifactRecord.id == artifact_id).first()
+    return artifact_from_record(record) if record is not None else None
+
+
+def get_run_context_bundle(
+    db: Session,
+    run_id: str,
+    *,
+    limit: int = 100,
+) -> models.RunContextBundle:
+    return models.RunContextBundle(
+        state=get_run_state(db, run_id),
+        blackboard=list_blackboard_entries(db, run_id, limit=limit),
+        handoffs=list_handoffs(db, run_id, limit=limit),
+        artifacts=list_artifacts(db, run_id, limit=limit),
+    )
+
+
+def index_task_result_collaboration(
+    db: Session,
+    *,
+    run_id: str,
+    step_id: str,
+    task_id: str,
+    result: Mapping[str, Any],
+) -> list[models.Artifact]:
+    run_record = get_run_record(db, run_id)
+    if run_record is None:
+        return []
+    summary = task_result_summary(result)
+    write_task_snapshot(
+        db,
+        run_id=run_record.id,
+        step_id=step_id,
+        task_id=task_id,
+        summary=summary,
+    )
+    created: list[models.Artifact] = []
+    for candidate in artifact_candidates_from_result(result):
+        path = str(candidate.get("path") or "").strip()
+        if not path:
+            continue
+        record = upsert_artifact(
+            db,
+            run_record=run_record,
+            artifact_type=str(candidate.get("artifact_type") or "file"),
+            path=path,
+            step_id=step_id,
+            task_id=task_id,
+            producing_agent_id=_clean_optional(candidate.get("producing_agent_id")),
+            storage_key=_clean_optional(candidate.get("storage_key")),
+            mime_type=_clean_optional(candidate.get("mime_type")),
+            size_bytes=_optional_int(candidate.get("size_bytes")),
+            sha256=_clean_optional(candidate.get("sha256")),
+            metadata=dict(candidate.get("metadata") or {}),
+        )
+        created.append(artifact_from_record(record))
+    return created
+
+
+def task_result_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+    outputs = result.get("outputs") if isinstance(result, Mapping) else None
+    artifacts = result.get("artifacts") if isinstance(result, Mapping) else None
+    tool_calls = result.get("tool_calls") if isinstance(result, Mapping) else None
+    return {
+        "status": str(result.get("status") or "") if isinstance(result, Mapping) else "",
+        "output_keys": sorted(str(key) for key in outputs.keys()) if isinstance(outputs, Mapping) else [],
+        "artifact_count": len(artifacts) if isinstance(artifacts, Sequence) and not isinstance(artifacts, (str, bytes)) else 0,
+        "tool_call_count": len(tool_calls) if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes)) else 0,
+        "error": str(result.get("error") or "") if isinstance(result, Mapping) and result.get("error") else "",
+    }
+
+
+def artifact_candidates_from_result(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    artifacts = result.get("artifacts") if isinstance(result, Mapping) else None
+    if isinstance(artifacts, Sequence) and not isinstance(artifacts, (str, bytes)):
+        for artifact in artifacts:
+            if isinstance(artifact, Mapping):
+                _append_artifact_candidate(candidates, seen, artifact, source="task_artifacts")
+
+    outputs = result.get("outputs") if isinstance(result, Mapping) else None
+    _collect_artifact_paths(outputs, candidates, seen, source="outputs")
+
+    tool_calls = result.get("tool_calls") if isinstance(result, Mapping) else None
+    if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes)):
+        for call in tool_calls:
+            if not isinstance(call, Mapping):
+                continue
+            tool_name = str(call.get("tool_name") or "")
+            output = call.get("output_or_error")
+            _collect_artifact_paths(
+                output,
+                candidates,
+                seen,
+                source="tool_call",
+                metadata={"tool_name": tool_name} if tool_name else {},
+            )
+    return candidates
+
+
+def upsert_artifact(
+    db: Session,
+    *,
+    run_record: RunRecord,
+    artifact_type: str,
+    path: str,
+    step_id: str | None = None,
+    task_id: str | None = None,
+    producing_agent_id: str | None = None,
+    storage_key: str | None = None,
+    mime_type: str | None = None,
+    size_bytes: int | None = None,
+    sha256: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> ArtifactRecord:
+    normalized_path = normalize_artifact_path(path)
+    if not normalized_path:
+        raise ValueError("artifact_path_required")
+    existing = (
+        db.query(ArtifactRecord)
+        .filter(
+            ArtifactRecord.run_id == run_record.id,
+            ArtifactRecord.step_id == step_id,
+            ArtifactRecord.path == normalized_path,
+        )
+        .first()
+    )
+    stat = _artifact_file_stat(normalized_path)
+    resolved_mime_type = mime_type or mimetypes.guess_type(normalized_path)[0]
+    now = utcnow()
+    if existing is None:
+        existing = ArtifactRecord(
+            id=str(uuid.uuid4()),
+            run_id=run_record.id,
+            job_id=run_record.job_id,
+            step_id=step_id,
+            task_id=task_id,
+            producing_agent_id=producing_agent_id,
+            artifact_type=artifact_type or "file",
+            path=normalized_path,
+            storage_key=storage_key,
+            mime_type=resolved_mime_type,
+            size_bytes=size_bytes if size_bytes is not None else stat.get("size_bytes"),
+            sha256=sha256 or stat.get("sha256"),
+            metadata_json=dict(metadata or {}),
+            created_at=now,
+        )
+        db.add(existing)
+        return existing
+    existing.job_id = run_record.job_id
+    existing.task_id = task_id or existing.task_id
+    existing.producing_agent_id = producing_agent_id or existing.producing_agent_id
+    existing.artifact_type = artifact_type or existing.artifact_type
+    existing.storage_key = storage_key or existing.storage_key
+    existing.mime_type = resolved_mime_type or existing.mime_type
+    existing.size_bytes = size_bytes if size_bytes is not None else stat.get("size_bytes") or existing.size_bytes
+    existing.sha256 = sha256 or stat.get("sha256") or existing.sha256
+    existing.metadata_json = {**dict(existing.metadata_json or {}), **dict(metadata or {})}
+    return existing
+
+
+def handoff_from_record(record: AgentHandoffRecord) -> models.AgentHandoff:
+    return models.AgentHandoff(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        from_agent_id=record.from_agent_id,
+        to_agent_id=record.to_agent_id,
+        step_id=record.step_id,
+        task_id=record.task_id,
+        objective=record.objective or "",
+        summary=record.summary or "",
+        inputs=record.inputs_json or {},
+        outputs=record.outputs_json or {},
+        assumptions=record.assumptions_json or [],
+        risks=record.risks_json or [],
+        artifact_ids=record.artifact_ids_json or [],
+        metadata=record.metadata_json or {},
+        created_at=record.created_at,
+    )
+
+
+def artifact_from_record(record: ArtifactRecord) -> models.Artifact:
+    return models.Artifact(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        step_id=record.step_id,
+        task_id=record.task_id,
+        producing_agent_id=record.producing_agent_id,
+        artifact_type=record.artifact_type,
+        path=record.path,
+        storage_key=record.storage_key,
+        mime_type=record.mime_type,
+        size_bytes=record.size_bytes,
+        sha256=record.sha256,
+        metadata=record.metadata_json or {},
+        created_at=record.created_at,
+    )
+
+
+def normalize_artifact_path(value: str) -> str:
+    trimmed = str(value or "").strip().replace("\\", "/")
+    for prefix in ("/shared/artifacts/", "shared/artifacts/", "artifacts/"):
+        if trimmed.startswith(prefix):
+            trimmed = trimmed[len(prefix):]
+            break
+    if trimmed.startswith("/") or ".." in Path(trimmed).parts:
+        return ""
+    return trimmed
+
+
+def _require_run(db: Session, run_id: str) -> RunRecord:
+    run_record = get_run_record(db, run_id)
+    if run_record is None:
+        raise KeyError("run_not_found")
+    return run_record
+
+
+def _count_by_status(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _latest_error_for_run(db: Session, run_record: RunRecord) -> str | None:
+    result = (
+        db.query(TaskResultRecord)
+        .filter(TaskResultRecord.job_id == run_record.job_id)
+        .order_by(TaskResultRecord.updated_at.desc())
+        .first()
+    )
+    if result is None:
+        return None
+    return result.latest_error
+
+
+def _blackboard_entry_from_memory(
+    run_record: RunRecord,
+    record: MemoryRecord,
+) -> models.BlackboardEntry:
+    payload = record.payload if isinstance(record.payload, Mapping) else {}
+    metadata = record.metadata_json if isinstance(record.metadata_json, Mapping) else {}
+    inner_payload = payload.get("payload") if isinstance(payload.get("payload"), Mapping) else payload
+    kind = str(payload.get("kind") or metadata.get("kind") or "fact")
+    confidence = payload.get("confidence", metadata.get("confidence"))
+    return models.BlackboardEntry(
+        id=record.id,
+        run_id=str(metadata.get("run_id") or run_record.id),
+        job_id=run_record.job_id,
+        key=record.key,
+        kind=kind,
+        payload=dict(inner_payload),
+        source_agent_id=_clean_optional(payload.get("source_agent_id") or metadata.get("source_agent_id")),
+        step_id=_clean_optional(payload.get("step_id") or metadata.get("step_id")),
+        task_id=_clean_optional(payload.get("task_id") or metadata.get("task_id")),
+        visibility=str(payload.get("visibility") or metadata.get("visibility") or "shared"),
+        confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+        metadata=dict(metadata),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _blackboard_entry_from_memory_entry(
+    run_record: RunRecord,
+    entry: models.MemoryEntry,
+) -> models.BlackboardEntry:
+    payload = entry.payload if isinstance(entry.payload, Mapping) else {}
+    metadata = entry.metadata if isinstance(entry.metadata, Mapping) else {}
+    inner_payload = payload.get("payload") if isinstance(payload.get("payload"), Mapping) else payload
+    confidence = payload.get("confidence", metadata.get("confidence"))
+    return models.BlackboardEntry(
+        id=entry.id,
+        run_id=str(metadata.get("run_id") or run_record.id),
+        job_id=run_record.job_id,
+        key=entry.key,
+        kind=str(payload.get("kind") or metadata.get("kind") or "fact"),
+        payload=dict(inner_payload),
+        source_agent_id=_clean_optional(payload.get("source_agent_id") or metadata.get("source_agent_id")),
+        step_id=_clean_optional(payload.get("step_id") or metadata.get("step_id")),
+        task_id=_clean_optional(payload.get("task_id") or metadata.get("task_id")),
+        visibility=str(payload.get("visibility") or metadata.get("visibility") or "shared"),
+        confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+        metadata=dict(metadata),
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+    )
+
+
+def _append_artifact_candidate(
+    candidates: list[dict[str, Any]],
+    seen: set[str],
+    artifact: Mapping[str, Any],
+    *,
+    source: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    path = artifact.get("path") or artifact.get("output_path") or artifact.get("file_path")
+    if not isinstance(path, str) or not _looks_like_artifact_path(path):
+        return
+    normalized = normalize_artifact_path(path)
+    if not normalized or normalized in seen:
+        return
+    seen.add(normalized)
+    merged_metadata = {"source": source}
+    merged_metadata.update(dict(metadata or {}))
+    merged_metadata.update({key: value for key, value in artifact.items() if key not in {"path"}})
+    candidates.append(
+        {
+            "path": normalized,
+            "artifact_type": str(artifact.get("type") or artifact.get("artifact_type") or "file"),
+            "storage_key": artifact.get("storage_key") or artifact.get("s3_key"),
+            "mime_type": artifact.get("mime_type"),
+            "size_bytes": artifact.get("size_bytes"),
+            "sha256": artifact.get("sha256"),
+            "producing_agent_id": artifact.get("agent_id") or artifact.get("producing_agent_id"),
+            "metadata": merged_metadata,
+        }
+    )
+
+
+def _collect_artifact_paths(
+    value: Any,
+    candidates: list[dict[str, Any]],
+    seen: set[str],
+    *,
+    source: str,
+    path: str = "",
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    if isinstance(value, str):
+        lower_path = path.lower()
+        if ".tokens." in lower_path or lower_path.endswith(".result_path"):
+            return
+        _append_artifact_candidate(
+            candidates,
+            seen,
+            {"path": value, "type": "file"},
+            source=source,
+            metadata=metadata,
+        )
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for index, item in enumerate(value):
+            _collect_artifact_paths(
+                item,
+                candidates,
+                seen,
+                source=source,
+                path=f"{path}[{index}]",
+                metadata=metadata,
+            )
+        return
+    if isinstance(value, Mapping):
+        _append_artifact_candidate(candidates, seen, value, source=source, metadata=metadata)
+        for key, item in value.items():
+            _collect_artifact_paths(
+                item,
+                candidates,
+                seen,
+                source=source,
+                path=f"{path}.{key}" if path else str(key),
+                metadata=metadata,
+            )
+
+
+def _looks_like_artifact_path(value: str) -> bool:
+    normalized = normalize_artifact_path(value)
+    if not normalized or normalized.startswith(("http://", "https://")):
+        return False
+    suffix = Path(normalized).suffix.lower()
+    return suffix in ARTIFACT_EXTENSIONS
+
+
+def _artifact_file_stat(path: str) -> dict[str, Any]:
+    resolved = Path(ARTIFACTS_DIR) / path
+    try:
+        if not resolved.is_file():
+            return {}
+        size_bytes = resolved.stat().st_size
+        stat: dict[str, Any] = {"size_bytes": size_bytes}
+        if size_bytes <= 25 * 1024 * 1024:
+            digest = hashlib.sha256()
+            with resolved.open("rb") as file_obj:
+                for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            stat["sha256"] = digest.hexdigest()
+        return stat
+    except OSError:
+        return {}
+
+
+def _clean_optional(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None

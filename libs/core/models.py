@@ -305,6 +305,10 @@ class PlanRevisionContext(BaseModel):
     constraints: Dict[str, Any] = Field(default_factory=dict)
     budgets: Dict[str, Any] = Field(default_factory=dict)
     human_feedback: List[Dict[str, Any]] = Field(default_factory=list)
+    # Accumulated shared run memory at replan time: blackboard facts, per-task
+    # output snapshots, agent handoffs, and produced artifacts. Lets the
+    # replanner build on what was learned instead of only the failed step.
+    run_memory_snapshot: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Job(BaseModel):
@@ -693,6 +697,128 @@ class RunEvent(BaseModel):
     event_type: str
     payload: Dict[str, Any] = Field(default_factory=dict)
     occurred_at: datetime
+
+
+class RunStateSnapshot(BaseModel):
+    run_id: str
+    job_id: str
+    kind: Optional[str] = None
+    status: str
+    title: str = ""
+    goal: str = ""
+    plan_id: Optional[str] = None
+    workflow_run_id: Optional[str] = None
+    step_counts: Dict[str, int] = Field(default_factory=dict)
+    attempt_counts: Dict[str, int] = Field(default_factory=dict)
+    latest_step_id: Optional[str] = None
+    latest_step_name: Optional[str] = None
+    latest_step_status: Optional[str] = None
+    latest_error: Optional[str] = None
+    latest_event_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class BlackboardEntryCreate(BaseModel):
+    key: Optional[str] = None
+    kind: str = "fact"
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    source_agent_id: Optional[str] = None
+    step_id: Optional[str] = None
+    task_id: Optional[str] = None
+    visibility: str = "shared"
+    confidence: Optional[float] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    ttl_seconds: Optional[int] = None
+
+
+class BlackboardEntry(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    key: Optional[str] = None
+    kind: str = "fact"
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    source_agent_id: Optional[str] = None
+    step_id: Optional[str] = None
+    task_id: Optional[str] = None
+    visibility: str = "shared"
+    confidence: Optional[float] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentHandoffCreate(BaseModel):
+    from_agent_id: Optional[str] = None
+    to_agent_id: Optional[str] = None
+    step_id: Optional[str] = None
+    task_id: Optional[str] = None
+    objective: str = ""
+    summary: str = ""
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    outputs: Dict[str, Any] = Field(default_factory=dict)
+    assumptions: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
+    artifact_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentHandoff(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    from_agent_id: Optional[str] = None
+    to_agent_id: Optional[str] = None
+    step_id: Optional[str] = None
+    task_id: Optional[str] = None
+    objective: str = ""
+    summary: str = ""
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    outputs: Dict[str, Any] = Field(default_factory=dict)
+    assumptions: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
+    artifact_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class ArtifactCreate(BaseModel):
+    step_id: Optional[str] = None
+    task_id: Optional[str] = None
+    producing_agent_id: Optional[str] = None
+    artifact_type: str = "file"
+    path: str
+    storage_key: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    sha256: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class Artifact(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    step_id: Optional[str] = None
+    task_id: Optional[str] = None
+    producing_agent_id: Optional[str] = None
+    artifact_type: str = "file"
+    path: str
+    storage_key: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    sha256: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class RunContextBundle(BaseModel):
+    state: RunStateSnapshot
+    blackboard: List[BlackboardEntry] = Field(default_factory=list)
+    handoffs: List[AgentHandoff] = Field(default_factory=list)
+    artifacts: List[Artifact] = Field(default_factory=list)
 
 
 class FeedbackCreate(BaseModel):
