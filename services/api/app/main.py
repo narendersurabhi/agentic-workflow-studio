@@ -15621,9 +15621,16 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
                 record.latest_error = latest_error
                 record.updated_at = now
             if task is not None and job_id:
-                run_id = str(normalized_result.get("run_id") or "").strip()
-                if not run_id:
-                    run_id = _durable_run_id(job, job_id)
+                # Index collaboration against the canonical shadow run. The
+                # result's run_id is the worker's execution run id, which is not
+                # a RunRecord, so trusting it would make run lookups miss.
+                run_id = _durable_run_id(job, job_id)
+                if not (
+                    db.query(RunRecord.id).filter(RunRecord.id == run_id).first()
+                ):
+                    fallback = str(normalized_result.get("run_id") or "").strip()
+                    if fallback:
+                        run_id = fallback
                 producing_agent_id = None
                 roster = _job_agent_roster(job)
                 if roster:
@@ -16621,10 +16628,31 @@ def _sync_shadow_run_steps(
         for step in run_spec.steps
         if step.name in task_by_name
     }
-    existing = {
-        record.id: record
-        for record in db.query(RunStepRecord).filter(RunStepRecord.run_id == run_record.id).all()
+    # RunStepRecord.id == task.id is a global primary key, but a single workflow
+    # job can produce two shadow runs (the canonical run keyed to the job id and
+    # the workflow-run shadow keyed to the workflow_run id). Look up existing
+    # run-steps globally by task id — not just for this run — so the two syncs
+    # don't collide on the shared pkey. The canonical run is the owner: it
+    # takes/keeps the step rows; a non-canonical sync never inserts a duplicate
+    # nor steals steps from the canonical run.
+    synced_task_ids = {
+        task_by_name[step.name].id
+        for step in run_spec.steps
+        if step.name in task_by_name
     }
+    existing = (
+        {
+            record.id: record
+            for record in db.query(RunStepRecord)
+            .filter(RunStepRecord.id.in_(synced_task_ids))
+            .all()
+        }
+        if synced_task_ids
+        else {}
+    )
+    job_record = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    canonical_run_id = _durable_run_id(job_record, run_record.job_id)
+    is_canonical_run = run_record.id == canonical_run_id
     seen: set[str] = set()
     for step in run_spec.steps:
         task = task_by_name.get(step.name)
@@ -16632,6 +16660,11 @@ def _sync_shadow_run_steps(
             continue
         seen.add(task.id)
         record = existing.get(task.id)
+        if record is not None and record.run_id != run_record.id and not is_canonical_run:
+            # A non-canonical (workflow-run) sync: defer ownership to the run
+            # that already holds this step (the canonical run). Skip to avoid a
+            # duplicate-pkey insert; the job debugger resolves via the canonical run.
+            continue
         if record is None:
             record = RunStepRecord(
                 id=task.id,

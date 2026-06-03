@@ -418,6 +418,45 @@ def list_agents(db: Session, run_id: str) -> list[models.AgentDescriptor]:
     return [agent_from_record(row) for row in rows]
 
 
+def _collect_reported_agents(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Gather agent.run agent descriptors from a task result.
+
+    agent.run returns ``agents`` in its own output, but the worker nests that
+    under the task result's per-tool ``outputs`` and ``tool_calls`` rather than
+    promoting it to the top level. Collect from all three locations and dedupe
+    by agent_id (first occurrence wins).
+    """
+    collected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _take(candidate: Any) -> None:
+        if not isinstance(candidate, Sequence) or isinstance(candidate, (str, bytes)):
+            return
+        for entry in candidate:
+            if not isinstance(entry, Mapping):
+                continue
+            agent_id = _clean_optional(entry.get("agent_id"))
+            if agent_id is None or agent_id in seen:
+                continue
+            seen.add(agent_id)
+            collected.append(dict(entry))
+
+    _take(result.get("agents"))
+    outputs = result.get("outputs")
+    if isinstance(outputs, Mapping):
+        for value in outputs.values():
+            if isinstance(value, Mapping):
+                _take(value.get("agents"))
+    tool_calls = result.get("tool_calls")
+    if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes)):
+        for call in tool_calls:
+            if isinstance(call, Mapping):
+                output = call.get("output_or_error")
+                if isinstance(output, Mapping):
+                    _take(output.get("agents"))
+    return collected
+
+
 def materialize_dynamic_agents(
     db: Session,
     *,
@@ -434,8 +473,8 @@ def materialize_dynamic_agents(
     """
     if not isinstance(result, Mapping):
         return []
-    reported = result.get("agents")
-    if not isinstance(reported, Sequence) or isinstance(reported, (str, bytes)):
+    reported = _collect_reported_agents(result)
+    if not reported:
         return []
     registered: list[str] = []
     now = utcnow()

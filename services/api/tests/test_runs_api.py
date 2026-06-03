@@ -710,6 +710,43 @@ def test_agent_run_result_materializes_dynamic_agents_into_registry() -> None:
     assert {"agent-run-d0-aaa", "agent-run-d1-bbb"} <= {a["agent_id"] for a in context["agents"]}
 
 
+def test_dynamic_agents_materialize_from_nested_agent_run_output() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    with SessionLocal() as db:
+        task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
+        assert task is not None
+        # Real agent.run task-result shape: the agents tree is nested under the
+        # per-tool outputs (and tool_calls), not at the result top level.
+        main._store_task_result(
+            task.id,
+            {
+                "task_id": task.id,
+                "run_id": run_id,
+                "status": "completed",
+                "outputs": {
+                    "agent_run": {
+                        "result": "done",
+                        "steps_taken": 2,
+                        "agents": [
+                            {"agent_id": "agent-run-d0-orch", "role": "orchestrator", "depth": 0, "status": "done"},
+                            {"agent_id": "agent-run-d1-sub", "role": "agent", "depth": 1, "status": "done"},
+                        ],
+                    }
+                },
+                "tool_calls": [],
+            },
+        )
+
+    agents = {a["agent_id"]: a for a in client.get(f"/runs/{run_id}/agents").json()}
+    assert "agent-run-d0-orch" in agents
+    assert "agent-run-d1-sub" in agents
+    assert agents["agent-run-d0-orch"]["role"] == "orchestrator"
+    assert agents["agent-run-d1-sub"]["metadata"].get("spawned_by") == "agent.run"
+
+
 def test_spawn_agents_workflow_compiles_with_recursive_agent_run() -> None:
     from scripts.create_spawn_agents_workflow import build_spawn_agents_draft
 
