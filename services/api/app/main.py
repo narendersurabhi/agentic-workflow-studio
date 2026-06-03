@@ -18685,6 +18685,12 @@ def get_job_debugger(
         "artifacts": [
             artifact.model_dump(mode="json") for artifact in run_context.artifacts
         ] if run_context else [],
+        "agents": [
+            agent.model_dump(mode="json") for agent in run_context.agents
+        ] if run_context else [],
+        "locks": [
+            lock.model_dump(mode="json") for lock in run_context.locks
+        ] if run_context else [],
     }
 
 
@@ -18956,6 +18962,8 @@ def _run_debugger_payload(
         "blackboard": [entry.model_dump(mode="json") for entry in run_context.blackboard],
         "handoffs": [handoff.model_dump(mode="json") for handoff in run_context.handoffs],
         "artifacts": [artifact.model_dump(mode="json") for artifact in run_context.artifacts],
+        "agents": [agent.model_dump(mode="json") for agent in run_context.agents],
+        "locks": [lock.model_dump(mode="json") for lock in run_context.locks],
     }
 
 
@@ -19060,6 +19068,7 @@ def list_run_blackboard(
     run_id: str,
     kind: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
+    agent_id: str | None = Query(None, description="Requesting agent; filters private entries."),
     db: Session = Depends(get_db),
 ) -> List[models.BlackboardEntry]:
     try:
@@ -19068,6 +19077,7 @@ def list_run_blackboard(
             run_id,
             kind=kind,
             limit=limit,
+            agent_id=agent_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -19135,6 +19145,87 @@ def create_run_artifact(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/agents", response_model=List[models.AgentDescriptor])
+def list_run_agents(run_id: str, db: Session = Depends(get_db)) -> List[models.AgentDescriptor]:
+    try:
+        return run_context_service.list_agents(db, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/agents", response_model=models.AgentDescriptor)
+def register_run_agent(
+    run_id: str,
+    registration: models.AgentRegistration,
+    db: Session = Depends(get_db),
+) -> models.AgentDescriptor:
+    try:
+        return run_context_service.register_agent(db, run_id, registration)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/runs/{run_id}/agents/{agent_id}", response_model=models.AgentDescriptor)
+def update_run_agent(
+    run_id: str,
+    agent_id: str,
+    update: models.AgentStatusUpdate,
+    db: Session = Depends(get_db),
+) -> models.AgentDescriptor:
+    try:
+        return run_context_service.update_agent_status(db, run_id, agent_id, update)
+    except KeyError as exc:
+        detail = str(exc)
+        raise HTTPException(status_code=404, detail=detail) from exc
+
+
+@app.get("/runs/{run_id}/locks", response_model=List[models.AgentLock])
+def list_run_locks(
+    run_id: str,
+    include_expired: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> List[models.AgentLock]:
+    try:
+        return run_context_service.list_locks(db, run_id, include_expired=include_expired)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/locks", response_model=models.AgentLock)
+def acquire_run_lock(
+    run_id: str,
+    request: models.AgentLockRequest,
+    db: Session = Depends(get_db),
+) -> models.AgentLock:
+    try:
+        lock = run_context_service.acquire_lock(db, run_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if lock is None:
+        raise HTTPException(status_code=409, detail="resource_locked")
+    return lock
+
+
+@app.delete("/runs/{run_id}/locks/{resource}", response_model=dict)
+def release_run_lock(
+    run_id: str,
+    resource: str,
+    agent_id: str = Query(..., description="Agent that holds the lock."),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        released = run_context_service.release_lock(db, run_id, resource, agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not released:
+        raise HTTPException(status_code=409, detail="lock_not_held_by_agent")
+    return {"released": True, "resource": resource}
 
 
 @app.post("/runs/{run_id}/cancel", response_model=models.Run)

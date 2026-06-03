@@ -5,10 +5,11 @@ import mimetypes
 import os
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from libs.core import models
@@ -16,6 +17,8 @@ from libs.core import models
 from . import memory_store
 from .models import (
     AgentHandoffRecord,
+    AgentLockRecord,
+    AgentRegistryRecord,
     ArtifactRecord,
     MemoryRecord,
     RunEventRecord,
@@ -50,6 +53,15 @@ ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", "/shared/artifacts")
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _as_aware(value: datetime | None) -> datetime | None:
+    """Normalise a (possibly naive, e.g. SQLite-stored) datetime to UTC-aware."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 def get_run_record(db: Session, run_id: str) -> RunRecord | None:
@@ -102,8 +114,10 @@ def list_blackboard_entries(
     *,
     kind: str | None = None,
     limit: int = 100,
+    agent_id: str | None = None,
 ) -> list[models.BlackboardEntry]:
     run_record = _require_run(db, run_id)
+    requester = _clean_optional(agent_id)
     entries: list[models.BlackboardEntry] = []
     for name in ("run_blackboard", "run_task_snapshots"):
         records = (
@@ -121,9 +135,20 @@ def list_blackboard_entries(
             entry = _blackboard_entry_from_memory(run_record, record)
             if kind and entry.kind != kind:
                 continue
+            if not _entry_visible_to(entry, requester):
+                continue
             entries.append(entry)
     entries.sort(key=lambda entry: entry.updated_at, reverse=True)
     return entries[: max(1, min(limit, 500))]
+
+
+def _entry_visible_to(entry: models.BlackboardEntry, requester: str | None) -> bool:
+    """Private entries are only visible to their author; shared entries to all."""
+    if str(entry.visibility or "shared").strip().lower() != "private":
+        return True
+    if requester is None:
+        return False
+    return entry.source_agent_id == requester
 
 
 def create_blackboard_entry(
@@ -294,17 +319,263 @@ def get_artifact(db: Session, artifact_id: str) -> models.Artifact | None:
     return artifact_from_record(record) if record is not None else None
 
 
+# ── Agent registry ────────────────────────────────────────────────────────────
+
+
+def register_agent(
+    db: Session,
+    run_id: str,
+    request: models.AgentRegistration,
+) -> models.AgentDescriptor:
+    run_record = _require_run(db, run_id)
+    agent_id = _clean_optional(request.agent_id)
+    if agent_id is None:
+        raise ValueError("agent_id_required")
+    now = utcnow()
+    record = (
+        db.query(AgentRegistryRecord)
+        .filter(
+            AgentRegistryRecord.run_id == run_record.id,
+            AgentRegistryRecord.agent_id == agent_id,
+        )
+        .first()
+    )
+    if record is None:
+        record = AgentRegistryRecord(
+            id=str(uuid.uuid4()),
+            run_id=run_record.id,
+            job_id=run_record.job_id,
+            agent_id=agent_id,
+            role=request.role or "",
+            status=request.status or "idle",
+            assigned_task_id=_clean_optional(request.assigned_task_id),
+            capabilities_json=list(request.capabilities or []),
+            metadata_json=dict(request.metadata or {}),
+            last_heartbeat=now,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(record)
+    else:
+        record.role = request.role or record.role
+        record.status = request.status or record.status
+        if request.assigned_task_id is not None:
+            record.assigned_task_id = _clean_optional(request.assigned_task_id)
+        if request.capabilities:
+            record.capabilities_json = list(request.capabilities)
+        if request.metadata:
+            record.metadata_json = {**dict(record.metadata_json or {}), **dict(request.metadata)}
+        record.last_heartbeat = now
+        record.updated_at = now
+    db.commit()
+    db.refresh(record)
+    return agent_from_record(record)
+
+
+def update_agent_status(
+    db: Session,
+    run_id: str,
+    agent_id: str,
+    request: models.AgentStatusUpdate,
+) -> models.AgentDescriptor:
+    run_record = _require_run(db, run_id)
+    record = (
+        db.query(AgentRegistryRecord)
+        .filter(
+            AgentRegistryRecord.run_id == run_record.id,
+            AgentRegistryRecord.agent_id == agent_id,
+        )
+        .first()
+    )
+    if record is None:
+        raise KeyError("agent_not_found")
+    now = utcnow()
+    if request.status is not None:
+        record.status = request.status
+    if request.role is not None:
+        record.role = request.role
+    if request.assigned_task_id is not None:
+        record.assigned_task_id = _clean_optional(request.assigned_task_id)
+    if request.metadata:
+        record.metadata_json = {**dict(record.metadata_json or {}), **dict(request.metadata)}
+    if request.heartbeat:
+        record.last_heartbeat = now
+    record.updated_at = now
+    db.commit()
+    db.refresh(record)
+    return agent_from_record(record)
+
+
+def list_agents(db: Session, run_id: str) -> list[models.AgentDescriptor]:
+    run_record = _require_run(db, run_id)
+    rows = (
+        db.query(AgentRegistryRecord)
+        .filter(AgentRegistryRecord.run_id == run_record.id)
+        .order_by(AgentRegistryRecord.created_at.asc())
+        .all()
+    )
+    return [agent_from_record(row) for row in rows]
+
+
+def agent_from_record(record: AgentRegistryRecord) -> models.AgentDescriptor:
+    return models.AgentDescriptor(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        agent_id=record.agent_id,
+        role=record.role or "",
+        status=record.status or "idle",
+        assigned_task_id=record.assigned_task_id,
+        capabilities=list(record.capabilities_json or []),
+        metadata=dict(record.metadata_json or {}),
+        last_heartbeat=record.last_heartbeat,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+# ── Distributed locks (durable, TTL via expires_at) ────────────────────────────
+
+
+def acquire_lock(
+    db: Session,
+    run_id: str,
+    request: models.AgentLockRequest,
+) -> models.AgentLock | None:
+    """Acquire a named lock for an agent.
+
+    Returns the lock when granted (newly acquired, re-acquired by the same
+    holder, or stolen after the prior holder's TTL expired); returns None when
+    the resource is currently held by a different live agent.
+    """
+    run_record = _require_run(db, run_id)
+    resource = _clean_optional(request.resource)
+    agent_id = _clean_optional(request.agent_id)
+    if resource is None or agent_id is None:
+        raise ValueError("resource_and_agent_id_required")
+    now = utcnow()
+    ttl = max(1, int(request.ttl_seconds or 30))
+    expires_at = now + timedelta(seconds=ttl)
+    existing = (
+        db.query(AgentLockRecord)
+        .filter(
+            AgentLockRecord.run_id == run_record.id,
+            AgentLockRecord.resource == resource,
+        )
+        .first()
+    )
+    if existing is not None:
+        existing_expiry = _as_aware(existing.expires_at)
+        live = existing_expiry is None or existing_expiry > now
+        if live and existing.holder_agent_id != agent_id:
+            return None  # held by another live agent
+        # Same holder (refresh) or expired lock (steal).
+        existing.holder_agent_id = agent_id
+        existing.job_id = run_record.job_id
+        existing.acquired_at = now
+        existing.expires_at = expires_at
+        if request.metadata:
+            existing.metadata_json = {**dict(existing.metadata_json or {}), **dict(request.metadata)}
+        db.commit()
+        db.refresh(existing)
+        return lock_from_record(existing)
+    record = AgentLockRecord(
+        id=str(uuid.uuid4()),
+        run_id=run_record.id,
+        job_id=run_record.job_id,
+        resource=resource,
+        holder_agent_id=agent_id,
+        metadata_json=dict(request.metadata or {}),
+        acquired_at=now,
+        expires_at=expires_at,
+    )
+    db.add(record)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Lost the race to another agent inserting the same (run_id, resource).
+        db.rollback()
+        contender = (
+            db.query(AgentLockRecord)
+            .filter(
+                AgentLockRecord.run_id == run_record.id,
+                AgentLockRecord.resource == resource,
+            )
+            .first()
+        )
+        if contender is not None and contender.holder_agent_id == agent_id:
+            return lock_from_record(contender)
+        return None
+    db.refresh(record)
+    return lock_from_record(record)
+
+
+def release_lock(db: Session, run_id: str, resource: str, agent_id: str) -> bool:
+    run_record = _require_run(db, run_id)
+    normalized_resource = _clean_optional(resource)
+    holder = _clean_optional(agent_id)
+    if normalized_resource is None or holder is None:
+        return False
+    record = (
+        db.query(AgentLockRecord)
+        .filter(
+            AgentLockRecord.run_id == run_record.id,
+            AgentLockRecord.resource == normalized_resource,
+        )
+        .first()
+    )
+    if record is None or record.holder_agent_id != holder:
+        return False
+    db.delete(record)
+    db.commit()
+    return True
+
+
+def list_locks(db: Session, run_id: str, *, include_expired: bool = False) -> list[models.AgentLock]:
+    run_record = _require_run(db, run_id)
+    now = utcnow()
+    rows = (
+        db.query(AgentLockRecord)
+        .filter(AgentLockRecord.run_id == run_record.id)
+        .order_by(AgentLockRecord.acquired_at.asc())
+        .all()
+    )
+    locks: list[models.AgentLock] = []
+    for row in rows:
+        row_expiry = _as_aware(row.expires_at)
+        if not include_expired and row_expiry is not None and row_expiry <= now:
+            continue
+        locks.append(lock_from_record(row))
+    return locks
+
+
+def lock_from_record(record: AgentLockRecord) -> models.AgentLock:
+    return models.AgentLock(
+        id=record.id,
+        run_id=record.run_id,
+        job_id=record.job_id,
+        resource=record.resource,
+        holder_agent_id=record.holder_agent_id,
+        metadata=dict(record.metadata_json or {}),
+        acquired_at=record.acquired_at,
+        expires_at=record.expires_at,
+    )
+
+
 def get_run_context_bundle(
     db: Session,
     run_id: str,
     *,
     limit: int = 100,
+    agent_id: str | None = None,
 ) -> models.RunContextBundle:
     return models.RunContextBundle(
         state=get_run_state(db, run_id),
-        blackboard=list_blackboard_entries(db, run_id, limit=limit),
+        blackboard=list_blackboard_entries(db, run_id, limit=limit, agent_id=agent_id),
         handoffs=list_handoffs(db, run_id, limit=limit),
         artifacts=list_artifacts(db, run_id, limit=limit),
+        agents=list_agents(db, run_id),
+        locks=list_locks(db, run_id),
     )
 
 

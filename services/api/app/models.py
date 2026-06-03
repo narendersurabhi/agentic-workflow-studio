@@ -537,6 +537,42 @@ class ArtifactRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
+class AgentRegistryRecord(Base):
+    __tablename__ = "agent_registry"
+    __table_args__ = (
+        UniqueConstraint("run_id", "agent_id", name="uq_agent_registry_run_agent"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    agent_id: Mapped[str] = mapped_column(String, index=True)
+    role: Mapped[str] = mapped_column(String, default="", index=True)
+    status: Mapped[str] = mapped_column(String, default="idle", index=True)
+    assigned_task_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    capabilities_json: Mapped[List[str]] = mapped_column("capabilities", JSON, default=list)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class AgentLockRecord(Base):
+    __tablename__ = "agent_locks"
+    __table_args__ = (
+        UniqueConstraint("run_id", "resource", name="uq_agent_locks_run_resource"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    resource: Mapped[str] = mapped_column(String, index=True)
+    holder_agent_id: Mapped[str] = mapped_column(String, index=True)
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
 class EventOutboxRecord(Base):
     __tablename__ = "event_outbox"
 

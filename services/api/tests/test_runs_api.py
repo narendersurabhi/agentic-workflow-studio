@@ -370,6 +370,195 @@ def test_revision_context_includes_run_memory_snapshot() -> None:
     assert serialized["run_memory_snapshot"].get("facts")
 
 
+def test_agent_registry_register_list_and_heartbeat() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    register = client.post(
+        f"/runs/{run_id}/agents",
+        json={
+            "agent_id": "researcher-1",
+            "role": "researcher",
+            "capabilities": ["memory.read", "filesystem.workspace.list"],
+        },
+    )
+    assert register.status_code == 200
+    agent = register.json()
+    assert agent["agent_id"] == "researcher-1"
+    assert agent["status"] == "idle"
+    assert agent["last_heartbeat"] is not None
+    first_heartbeat = agent["last_heartbeat"]
+
+    # Re-register is idempotent (upsert) and refreshes heartbeat.
+    client.post(
+        f"/runs/{run_id}/agents",
+        json={"agent_id": "writer-1", "role": "writer"},
+    )
+    listing = client.get(f"/runs/{run_id}/agents")
+    assert listing.status_code == 200
+    agents = listing.json()
+    assert {a["agent_id"] for a in agents} == {"researcher-1", "writer-1"}
+
+    # Status update + heartbeat.
+    patch = client.patch(
+        f"/runs/{run_id}/agents/researcher-1",
+        json={"status": "running", "assigned_task_id": "ListWorkspace"},
+    )
+    assert patch.status_code == 200
+    updated = patch.json()
+    assert updated["status"] == "running"
+    assert updated["assigned_task_id"] == "ListWorkspace"
+    assert updated["last_heartbeat"] >= first_heartbeat
+
+    missing = client.patch(f"/runs/{run_id}/agents/nope", json={"status": "done"})
+    assert missing.status_code == 404
+
+
+def test_agent_lock_acquire_conflict_release_and_steal() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    acquire_a = client.post(
+        f"/runs/{run_id}/locks",
+        json={"resource": "shared-report", "agent_id": "agent-a", "ttl_seconds": 30},
+    )
+    assert acquire_a.status_code == 200
+    assert acquire_a.json()["holder_agent_id"] == "agent-a"
+
+    # A different agent cannot acquire the live lock.
+    conflict = client.post(
+        f"/runs/{run_id}/locks",
+        json={"resource": "shared-report", "agent_id": "agent-b", "ttl_seconds": 30},
+    )
+    assert conflict.status_code == 409
+
+    # The holder can refresh its own lock.
+    refresh = client.post(
+        f"/runs/{run_id}/locks",
+        json={"resource": "shared-report", "agent_id": "agent-a", "ttl_seconds": 60},
+    )
+    assert refresh.status_code == 200
+
+    locks = client.get(f"/runs/{run_id}/locks").json()
+    assert [lock for lock in locks if lock["resource"] == "shared-report"]
+
+    # Wrong agent cannot release.
+    bad_release = client.delete(
+        f"/runs/{run_id}/locks/shared-report", params={"agent_id": "agent-b"}
+    )
+    assert bad_release.status_code == 409
+
+    # Holder releases; resource becomes free for another agent.
+    release = client.delete(
+        f"/runs/{run_id}/locks/shared-report", params={"agent_id": "agent-a"}
+    )
+    assert release.status_code == 200
+    reacquire = client.post(
+        f"/runs/{run_id}/locks",
+        json={"resource": "shared-report", "agent_id": "agent-b", "ttl_seconds": 30},
+    )
+    assert reacquire.status_code == 200
+    assert reacquire.json()["holder_agent_id"] == "agent-b"
+
+
+def test_agent_lock_expired_lock_can_be_stolen() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    # Acquire then force-expire the lock directly in the store.
+    client.post(
+        f"/runs/{run_id}/locks",
+        json={"resource": "exclusive", "agent_id": "agent-a", "ttl_seconds": 30},
+    )
+    from services.api.app.models import AgentLockRecord
+
+    with SessionLocal() as db:
+        lock = (
+            db.query(AgentLockRecord)
+            .filter(AgentLockRecord.run_id == run_id, AgentLockRecord.resource == "exclusive")
+            .first()
+        )
+        assert lock is not None
+        lock.expires_at = datetime(2000, 1, 1, tzinfo=UTC)
+        db.commit()
+
+    # Expired lock is not listed as active and can be stolen by another agent.
+    active = client.get(f"/runs/{run_id}/locks").json()
+    assert not [lock for lock in active if lock["resource"] == "exclusive"]
+    steal = client.post(
+        f"/runs/{run_id}/locks",
+        json={"resource": "exclusive", "agent_id": "agent-b", "ttl_seconds": 30},
+    )
+    assert steal.status_code == 200
+    assert steal.json()["holder_agent_id"] == "agent-b"
+
+
+def test_blackboard_private_visibility_filtering() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    client.post(
+        f"/runs/{run_id}/blackboard",
+        json={
+            "key": "private:agent-a:scratch",
+            "kind": "note",
+            "payload": {"summary": "Agent A working notes."},
+            "source_agent_id": "agent-a",
+            "visibility": "private",
+        },
+    )
+    client.post(
+        f"/runs/{run_id}/blackboard",
+        json={
+            "key": "shared:finding",
+            "kind": "finding",
+            "payload": {"summary": "Everyone can see this."},
+            "source_agent_id": "agent-a",
+            "visibility": "shared",
+        },
+    )
+
+    # Owner sees both; another agent sees only the shared entry; anonymous sees shared.
+    owner_view = client.get(f"/runs/{run_id}/blackboard", params={"agent_id": "agent-a"}).json()
+    owner_keys = {entry["key"] for entry in owner_view}
+    assert "private:agent-a:scratch" in owner_keys
+    assert "shared:finding" in owner_keys
+
+    other_view = client.get(f"/runs/{run_id}/blackboard", params={"agent_id": "agent-b"}).json()
+    other_keys = {entry["key"] for entry in other_view}
+    assert "private:agent-a:scratch" not in other_keys
+    assert "shared:finding" in other_keys
+
+    anon_view = client.get(f"/runs/{run_id}/blackboard").json()
+    anon_keys = {entry["key"] for entry in anon_view}
+    assert "private:agent-a:scratch" not in anon_keys
+    assert "shared:finding" in anon_keys
+
+
+def test_run_context_bundle_includes_agents_and_locks() -> None:
+    job = _create_job()
+    _create_plan(job["id"])
+    run_id = job["run_id"]
+
+    client.post(f"/runs/{run_id}/agents", json={"agent_id": "critic-1", "role": "critic"})
+    client.post(
+        f"/runs/{run_id}/locks",
+        json={"resource": "doc", "agent_id": "critic-1", "ttl_seconds": 30},
+    )
+
+    context = client.get(f"/runs/{run_id}/context").json()
+    assert any(agent["agent_id"] == "critic-1" for agent in context["agents"])
+    assert any(lock["resource"] == "doc" for lock in context["locks"])
+
+    debugger = client.get(f"/jobs/{job['id']}/debugger").json()
+    assert any(agent["agent_id"] == "critic-1" for agent in debugger["agents"])
+    assert any(lock["resource"] == "doc" for lock in debugger["locks"])
+
+
 def test_execution_request_snapshot_captures_retry_policy_and_context_provenance() -> None:
     job = _create_job()
     _create_plan(job["id"])

@@ -814,11 +814,63 @@ class Artifact(BaseModel):
     created_at: datetime
 
 
+class AgentRegistration(BaseModel):
+    agent_id: str
+    role: str = ""
+    status: str = "idle"
+    assigned_task_id: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentStatusUpdate(BaseModel):
+    status: Optional[str] = None
+    assigned_task_id: Optional[str] = None
+    role: Optional[str] = None
+    heartbeat: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentDescriptor(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    agent_id: str
+    role: str = ""
+    status: str = "idle"
+    assigned_task_id: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    last_heartbeat: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentLockRequest(BaseModel):
+    resource: str
+    agent_id: str
+    ttl_seconds: int = 30
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentLock(BaseModel):
+    id: str
+    run_id: str
+    job_id: str
+    resource: str
+    holder_agent_id: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    acquired_at: datetime
+    expires_at: Optional[datetime] = None
+
+
 class RunContextBundle(BaseModel):
     state: RunStateSnapshot
     blackboard: List[BlackboardEntry] = Field(default_factory=list)
     handoffs: List[AgentHandoff] = Field(default_factory=list)
     artifacts: List[Artifact] = Field(default_factory=list)
+    agents: List[AgentDescriptor] = Field(default_factory=list)
+    locks: List[AgentLock] = Field(default_factory=list)
 
 
 class FeedbackCreate(BaseModel):

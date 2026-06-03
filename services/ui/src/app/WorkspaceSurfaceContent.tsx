@@ -978,6 +978,29 @@ type RunArtifact = {
   created_at?: string;
 };
 
+type AgentDescriptor = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  agent_id: string;
+  role?: string;
+  status?: string;
+  assigned_task_id?: string | null;
+  capabilities?: string[];
+  last_heartbeat?: string | null;
+  updated_at?: string;
+};
+
+type AgentLock = {
+  id: string;
+  run_id: string;
+  job_id: string;
+  resource: string;
+  holder_agent_id: string;
+  acquired_at?: string;
+  expires_at?: string | null;
+};
+
 type JobDebuggerPayload = {
   job_id: string;
   job_status: string;
@@ -995,6 +1018,8 @@ type JobDebuggerPayload = {
   blackboard?: BlackboardEntry[];
   handoffs?: AgentHandoff[];
   artifacts?: RunArtifact[];
+  agents?: AgentDescriptor[];
+  locks?: AgentLock[];
 };
 
 type CapabilityAdapter = {
@@ -10644,7 +10669,10 @@ const openTemplateModal = (template: Template) => {
                       ) : null}
                       {((jobDebugger.blackboard || []).length > 0 ||
                         (jobDebugger.handoffs || []).length > 0 ||
-                        (jobDebugger.artifacts || []).length > 0) ? (
+                        (jobDebugger.artifacts || []).length > 0 ||
+                        (jobDebugger.agents || []).length > 0 ||
+                        (jobDebugger.locks || []).length > 0) ? (
+                        <>
                         <div className="grid gap-3 lg:grid-cols-3">
                           <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
                             <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Blackboard</div>
@@ -10709,6 +10737,73 @@ const openTemplateModal = (template: Template) => {
                             )}
                           </div>
                         </div>
+                        {((jobDebugger.agents || []).length > 0 || (jobDebugger.locks || []).length > 0) ? (
+                          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                            <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                              <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Agents</div>
+                              {(jobDebugger.agents || []).length > 0 ? (
+                                <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                  {(jobDebugger.agents || []).map((agent) => {
+                                    const statusClass =
+                                      agent.status === "done"
+                                        ? "bg-emerald-100 text-emerald-700"
+                                        : agent.status === "failed"
+                                          ? "bg-rose-100 text-rose-700"
+                                          : agent.status === "running"
+                                            ? "bg-amber-100 text-amber-700"
+                                            : "bg-slate-100 text-slate-600";
+                                    return (
+                                      <div key={`agent-${agent.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="font-semibold text-slate-700">{agent.agent_id}</span>
+                                          <span className={`rounded-full px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] ${statusClass}`}>
+                                            {agent.status || "idle"}
+                                          </span>
+                                        </div>
+                                        <div className="mt-1 text-[10px] text-slate-500">
+                                          {agent.role || "agent"}
+                                          {agent.assigned_task_id ? ` • ${agent.assigned_task_id}` : ""}
+                                        </div>
+                                        {agent.capabilities && agent.capabilities.length > 0 ? (
+                                          <div className="mt-1 text-[10px] text-slate-400">
+                                            {agent.capabilities.slice(0, 4).join(", ")}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-text-lo">No registered agents.</div>
+                              )}
+                            </div>
+                            <div className={`rounded-lg p-3 text-[11px] ${useStudioSurfaceTheme ? "border border-subtle bg-surface-2 text-text-md" : "border border-slate-100 bg-slate-50 text-slate-600"}`}>
+                              <div className={`font-semibold uppercase tracking-[0.2em] ${useStudioSurfaceTheme ? "text-text-hi" : "text-slate-700"}`}>Active Locks</div>
+                              {(jobDebugger.locks || []).length > 0 ? (
+                                <div className="mt-2 max-h-56 space-y-2 overflow-auto">
+                                  {(jobDebugger.locks || []).map((lock) => (
+                                    <div key={`lock-${lock.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-mono font-semibold text-slate-700">{lock.resource}</span>
+                                        <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] text-indigo-700">
+                                          {lock.holder_agent_id}
+                                        </span>
+                                      </div>
+                                      {lock.expires_at ? (
+                                        <div className="mt-1 text-[10px] text-slate-500">
+                                          expires {formatTimestamp(lock.expires_at)}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-text-lo">No active locks.</div>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                        </>
                       ) : null}
                       {debuggerActionNotice ? (
                         <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>{debuggerActionNotice}</div>
