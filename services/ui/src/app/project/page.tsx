@@ -10,6 +10,7 @@ const projectCards = [
     description:
       "Manage reusable workflows, versions, triggers, and published automations.",
     cta: "Open Workflows",
+    marker: "W",
   },
   {
     href: "/studio",
@@ -18,6 +19,7 @@ const projectCards = [
     description:
       "Design reusable workflow steps, decisions, tools, and AI actions.",
     cta: "Open Studio",
+    marker: "S",
   },
 ];
 
@@ -45,57 +47,45 @@ export default function ProjectPage() {
       }
     >
       <section className="relative">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
-              Project
-            </div>
-            <h2 className="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-text-hi">
-              Workflow Management
-            </h2>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-text-md">
-              Move between saved automations and Workflow Studio for designing business workflows.
-            </p>
+        <div className="mb-4">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+            Project
           </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-              compose
-            </span>
-            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-              chat
-            </span>
-            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-              workflows
-            </span>
-            <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-              studio
-            </span>
-          </div>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight text-text-hi">
+            Workflow Management
+          </h2>
+          <p className="mt-0.5 text-xs text-text-md">
+            Move between saved automations and Workflow Studio for designing business workflows.
+          </p>
         </div>
 
-        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-3 xl:grid-cols-2">
           {projectCards.map((card) => (
             <Link
               key={card.href}
               href={card.href}
-              className="group rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28 hover:bg-gradient-panel"
+              className="group rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:border-sky-300/28"
             >
-              <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-text-sky-token">
                     {card.eyebrow}
                   </div>
-                  <h3 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
+                  <h3 className="mt-1 text-base font-semibold tracking-tight text-text-hi">
                     {card.title}
                   </h3>
                 </div>
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-xs font-semibold uppercase tracking-[0.16em] text-text-hi">
+                  {card.marker}
+                </div>
               </div>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-text-md">
+              <p className="mt-2 text-xs leading-5 text-text-md">
                 {card.description}
               </p>
-              <div className="mt-5 inline-flex items-center rounded-full border border-subtle bg-surface-1 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-surface-1">
-                {card.cta}
+              <div className="mt-3 flex items-center justify-end">
+                <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition group-hover:border-sky-300/30">
+                  {card.cta} →
+                </span>
               </div>
             </Link>
           ))}
