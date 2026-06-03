@@ -1428,6 +1428,33 @@ capabilities:
         tool_name: coding_agent_autonomous
         arg_map: {}
         enabled: true
+  - id: agent.run
+    description: Run a general-purpose agentic loop. Reasons about a goal using the configured tools and iterates until the goal is achieved or max steps is reached.
+    risk_tier: high_risk
+    idempotency: unsafe_write
+    group: agent
+    subgroup: loop
+    input_schema_ref: agent_run_capability_input
+    output_schema_ref: ""
+    tags:
+      - agent
+      - autonomous
+      - loop
+    planner_hints:
+      task_intents: [generate, io, other]
+      chat_collectible_fields: [goal]
+      chat_required_fields: [goal]
+      chat_field_questions:
+        goal: What should the agent accomplish?
+      chat_field_aliases:
+        goal: [goal, task, objective]
+    enabled: true
+    adapters:
+      - type: tool
+        server_id: local_worker
+        tool_name: agent_run
+        arg_map: {}
+        enabled: true
   - id: codegen.publish_pr
     description: Publish workspace codegen changes to GitHub by creating branch, pushing files, and opening a PR.
     risk_tier: high_risk

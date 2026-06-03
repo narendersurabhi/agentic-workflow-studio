@@ -1,6 +1,6 @@
 "use client";
 
-type WorkflowNodeKind = "capability" | "control";
+type WorkflowNodeKind = "capability" | "control" | "agent";
 type WorkflowGlyph =
   | "branch"
   | "code"
@@ -30,6 +30,7 @@ export type WorkflowNodeVisual = {
   label: string;
   stroke: string;
   tone:
+    | "agent"
     | "code"
     | "control"
     | "default"
@@ -42,6 +43,12 @@ export type WorkflowNodeVisual = {
 };
 
 const VISUAL_TONES = {
+  agent: {
+    badgeClassName: "border-violet-200 bg-violet-50 text-violet-700",
+    fill: "#ede9fe",
+    iconColor: "#5b21b6",
+    stroke: "#8b5cf6",
+  },
   control: {
     badgeClassName: "border-amber-200 bg-amber-50 text-amber-700",
     fill: "#fef3c7",
@@ -102,6 +109,12 @@ const PLATE_TONES: Record<
   WorkflowNodeVisual["tone"],
   { background: string; border: string; glyph: string; shadow: string }
 > = {
+  agent: {
+    background: "linear-gradient(180deg, #7c3aed 0%, #6d28d9 100%)",
+    border: "rgba(255,255,255,0.18)",
+    glyph: "#f5f3ff",
+    shadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
+  },
   code: {
     background: "linear-gradient(180deg, #56677f 0%, #47586f 100%)",
     border: "rgba(255,255,255,0.18)",
@@ -177,6 +190,15 @@ export const resolveWorkflowNodeVisual = (
     .map((value) => String(value || "").trim().toLowerCase())
     .filter(Boolean);
   const searchBlob = [normalizedCapability, normalizedTask, ...normalizedRequests].join(" ");
+
+  if (input.nodeKind === "agent") {
+    return {
+      ...VISUAL_TONES.agent,
+      glyph: "spark",
+      label: "Agent node",
+      tone: "agent",
+    };
+  }
 
   if (input.nodeKind === "control") {
     return {

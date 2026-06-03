@@ -6,7 +6,7 @@ import {
   WorkflowNodePlateIcon,
   resolveWorkflowNodeVisual,
 } from "../../components/workflow/WorkflowNodeIcon";
-import type { CapabilityItem, StudioControlKind } from "./types";
+import type { AgentDefinition, CapabilityItem, StudioControlKind } from "./types";
 import { getCapabilityRequiredInputs, taskNameFromCapability } from "./utils";
 
 type StudioCapabilityPaletteProps = {
@@ -16,10 +16,12 @@ type StudioCapabilityPaletteProps = {
   error: string | null;
   query: string;
   selectedGroup: string;
+  agentDefinitions?: AgentDefinition[];
   onQueryChange: (value: string) => void;
   onGroupChange: (value: string) => void;
   onAddCapability: (capabilityId: string) => void;
   onAddControl: (kind: StudioControlKind) => void;
+  onAddAgent?: (definitionId: string, definition: AgentDefinition) => void;
 };
 
 type PaletteControlItem = {
@@ -40,6 +42,12 @@ type PaletteSection =
       kind: "capability";
       title: string;
       items: CapabilityItem[];
+    }
+  | {
+      id: string;
+      kind: "agent";
+      title: string;
+      items: AgentDefinition[];
     };
 
 const inputClassName =
@@ -90,10 +98,12 @@ export default function StudioCapabilityPalette({
   error,
   query,
   selectedGroup,
+  agentDefinitions = [],
   onQueryChange,
   onGroupChange,
   onAddCapability,
   onAddControl,
+  onAddAgent,
 }: StudioCapabilityPaletteProps) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 
@@ -133,8 +143,26 @@ export default function StudioCapabilityPalette({
       .sort((left, right) => left.title.localeCompare(right.title));
   }, [capabilities]);
 
+  const visibleAgentDefinitions = useMemo(
+    () =>
+      normalizedQuery
+        ? agentDefinitions.filter((def) =>
+            [def.name, def.description || "", def.id].join(" ").toLowerCase().includes(normalizedQuery)
+          )
+        : agentDefinitions,
+    [agentDefinitions, normalizedQuery]
+  );
+
   const sections: PaletteSection[] = useMemo(() => {
     const next: PaletteSection[] = [];
+    if (visibleAgentDefinitions.length > 0) {
+      next.push({
+        id: "agents",
+        kind: "agent",
+        title: "Agents",
+        items: visibleAgentDefinitions,
+      });
+    }
     if (visibleControlNodes.length > 0) {
       next.push({
         id: "control-flow",
@@ -152,9 +180,9 @@ export default function StudioCapabilityPalette({
       });
     });
     return next;
-  }, [capabilitySections, visibleControlNodes]);
+  }, [capabilitySections, visibleAgentDefinitions, visibleControlNodes]);
 
-  const visibleNodeCount = visibleControlNodes.length + capabilities.length;
+  const visibleNodeCount = visibleAgentDefinitions.length + visibleControlNodes.length + capabilities.length;
 
   const toggleSection = (sectionId: string) => {
     setCollapsedSections((prev) => {
@@ -235,13 +263,16 @@ export default function StudioCapabilityPalette({
           {sections.map((section) => {
             const isCollapsed = collapsedSections.has(section.id);
             const isControlSection = section.kind === "control";
+            const isAgentSection = section.kind === "agent";
             return (
               <section
                 key={section.id}
                 className={`${panelClassName} ${
                   isControlSection
                     ? "border-amber-300/18 bg-[linear-gradient(180deg,rgba(120,84,24,0.22),rgba(39,50,63,0.84))]"
-                    : ""
+                    : isAgentSection
+                      ? "border-violet-300/18 bg-[linear-gradient(180deg,rgba(91,33,182,0.22),rgba(39,50,63,0.84))]"
+                      : ""
                 }`}
               >
                 <button
@@ -252,7 +283,11 @@ export default function StudioCapabilityPalette({
                   <div>
                     <div
                       className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                        isControlSection ? "text-text-amber-token" : "text-text-md"
+                        isControlSection
+                          ? "text-text-amber-token"
+                          : isAgentSection
+                            ? "text-violet-400"
+                            : "text-text-md"
                       }`}
                     >
                       {section.title}
@@ -270,88 +305,117 @@ export default function StudioCapabilityPalette({
 
                 {isCollapsed ? null : (
                   <div className="mt-3 space-y-2.5">
-                    {section.kind === "control"
+                    {section.kind === "agent"
                       ? section.items.map((item) => {
-                          const visual = resolveWorkflowNodeVisual({
-                            nodeKind: "control",
-                            controlKind: item.kind,
-                            taskName: item.title,
-                          });
+                          const visual = resolveWorkflowNodeVisual({ nodeKind: "agent" });
                           return (
                             <button
-                              key={`studio-control-${item.kind}`}
+                              key={`studio-agent-${item.id}`}
                               type="button"
                               className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1"
                               style={{
                                 borderColor: hexToRgba(visual.stroke, 0.28),
-                                background: `linear-gradient(180deg, ${hexToRgba(
-                                  visual.fill,
-                                  0.18
-                                )} 0%, rgba(26,35,46,0.58) 100%)`,
+                                background: `linear-gradient(180deg, ${hexToRgba(visual.fill, 0.18)} 0%, rgba(26,35,46,0.58) 100%)`,
                               }}
-                              onClick={() => onAddControl(item.kind)}
+                              onClick={() => onAddAgent?.(item.id, item)}
                             >
                               <WorkflowNodePlateIcon visual={visual} size={36} />
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-[13px] font-semibold text-text-hi">
-                                  {item.title}
+                                  {item.name}
                                 </div>
                                 <div className="mt-0.5 truncate text-[11px] text-text-md">
-                                  {item.description}
+                                  {item.description || item.id}
                                 </div>
                               </div>
-                              <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
+                              <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-violet-300/30 group-hover:bg-violet-900/20">
                                 +
                               </span>
                             </button>
                           );
                         })
-                      : section.items.map((item) => {
-                          const requiredInputs = getCapabilityRequiredInputs(item);
-                          const visual = resolveWorkflowNodeVisual({
-                            capabilityId: item.id,
-                            taskName: item.id,
-                          });
-                          return (
-                            <button
-                              key={`studio-capability-${item.id}`}
-                              type="button"
-                              className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1 disabled:cursor-not-allowed"
-                              style={{
-                                borderColor: hexToRgba(visual.stroke, item.enabled ? 0.26 : 0.14),
-                                background: item.enabled
-                                  ? `linear-gradient(180deg, ${hexToRgba(
-                                      visual.fill,
-                                      0.16
-                                    )} 0%, rgba(26,35,46,0.56) 100%)`
-                                  : "linear-gradient(180deg, rgba(71,85,105,0.16) 0%, rgba(26,35,46,0.44) 100%)",
-                                opacity: item.enabled ? 1 : 0.56,
-                              }}
-                              onClick={() => onAddCapability(item.id)}
-                              disabled={!item.enabled}
-                            >
-                              <WorkflowNodePlateIcon visual={visual} size={36} />
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-[13px] font-semibold text-text-hi">
-                                  {taskNameFromCapability(item.id)}
+                      : section.kind === "control"
+                        ? section.items.map((item) => {
+                            const visual = resolveWorkflowNodeVisual({
+                              nodeKind: "control",
+                              controlKind: item.kind,
+                              taskName: item.title,
+                            });
+                            return (
+                              <button
+                                key={`studio-control-${item.kind}`}
+                                type="button"
+                                className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1"
+                                style={{
+                                  borderColor: hexToRgba(visual.stroke, 0.28),
+                                  background: `linear-gradient(180deg, ${hexToRgba(
+                                    visual.fill,
+                                    0.18
+                                  )} 0%, rgba(26,35,46,0.58) 100%)`,
+                                }}
+                                onClick={() => onAddControl(item.kind)}
+                              >
+                                <WorkflowNodePlateIcon visual={visual} size={36} />
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-[13px] font-semibold text-text-hi">
+                                    {item.title}
+                                  </div>
+                                  <div className="mt-0.5 truncate text-[11px] text-text-md">
+                                    {item.description}
+                                  </div>
                                 </div>
-                                <div className="mt-0.5 truncate text-[11px] text-text-md">
-                                  {item.id}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {requiredInputs.length > 0 ? (
-                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
-                                    {requiredInputs.length} req
-                                  </span>
-                                ) : null}
                                 <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
                                   +
                                 </span>
-                              </div>
-                            </button>
-                          );
-                        })}
+                              </button>
+                            );
+                          })
+                        : section.items.map((item) => {
+                            const requiredInputs = getCapabilityRequiredInputs(item);
+                            const visual = resolveWorkflowNodeVisual({
+                              capabilityId: item.id,
+                              taskName: item.id,
+                            });
+                            return (
+                              <button
+                                key={`studio-capability-${item.id}`}
+                                type="button"
+                                className="group flex w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:border-default-theme hover:bg-surface-1 disabled:cursor-not-allowed"
+                                style={{
+                                  borderColor: hexToRgba(visual.stroke, item.enabled ? 0.26 : 0.14),
+                                  background: item.enabled
+                                    ? `linear-gradient(180deg, ${hexToRgba(
+                                        visual.fill,
+                                        0.16
+                                      )} 0%, rgba(26,35,46,0.56) 100%)`
+                                    : "linear-gradient(180deg, rgba(71,85,105,0.16) 0%, rgba(26,35,46,0.44) 100%)",
+                                  opacity: item.enabled ? 1 : 0.56,
+                                }}
+                                onClick={() => onAddCapability(item.id)}
+                                disabled={!item.enabled}
+                              >
+                                <WorkflowNodePlateIcon visual={visual} size={36} />
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-[13px] font-semibold text-text-hi">
+                                    {taskNameFromCapability(item.id)}
+                                  </div>
+                                  <div className="mt-0.5 truncate text-[11px] text-text-md">
+                                    {item.id}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {requiredInputs.length > 0 ? (
+                                    <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                                      {requiredInputs.length} req
+                                    </span>
+                                  ) : null}
+                                  <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-subtle bg-surface-1 text-lg leading-none text-text-hi transition group-hover:border-sky-300/30 group-hover:bg-accent-sky">
+                                    +
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
                   </div>
                 )}
               </section>

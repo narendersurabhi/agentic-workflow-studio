@@ -109,6 +109,7 @@ def test_execute_task_request_runs_native_tool(monkeypatch) -> None:
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -193,6 +194,7 @@ def test_execute_task_request_late_binds_secret_refs_for_native_tools(monkeypatc
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -305,6 +307,7 @@ def test_execute_task_request_runs_capability_tool(monkeypatch) -> None:
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -428,6 +431,7 @@ def test_execute_task_request_late_binds_secret_refs_for_capabilities(monkeypatc
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -514,6 +518,7 @@ def test_execute_task_request_uses_bound_native_tool_name(monkeypatch) -> None:
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -607,6 +612,7 @@ def test_execute_task_request_prefers_native_tool_for_tool_adapter_binding(
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -725,6 +731,7 @@ def test_execute_task_request_uses_bound_capability_id(monkeypatch) -> None:
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -804,6 +811,7 @@ def test_execute_task_request_skips_when_execution_gate_is_false(monkeypatch) ->
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -884,6 +892,7 @@ def test_execute_task_request_runs_when_execution_gate_is_negated(monkeypatch) -
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -963,6 +972,7 @@ def test_execute_task_request_skips_when_execution_gate_uses_workflow_variable(m
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",
@@ -1043,6 +1053,7 @@ def test_execute_task_request_skips_when_execution_gate_uses_nested_job_context(
             config=execution_service.WorkerExecutionConfig(
                 llm_provider_name="mock",
                 openai_model="",
+                active_model_name="",
                 prompt_version="test",
                 policy_version="test",
                 tool_version="test",

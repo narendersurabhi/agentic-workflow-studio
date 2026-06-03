@@ -142,6 +142,17 @@ export type CapabilitySearchResponse = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function parseApiError(err: unknown): string {
+  if (!err || typeof err !== "object") return String(err ?? "Unknown error");
+  const e = err as Record<string, unknown>;
+  if (typeof e.detail === "string") return e.detail;
+  if (typeof e.error === "string") {
+    const issues = Array.isArray(e.issues) ? (e.issues as unknown[]).map(String) : [];
+    return issues.length > 0 ? issues.join("\n") : e.error;
+  }
+  return JSON.stringify(e.detail ?? e);
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await apiFetch(`${apiUrl}${path}`, {
     method: "POST",
@@ -151,15 +162,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     let detail: string;
     try {
-      const err = await res.json();
-      detail =
-        typeof err?.detail === "string"
-          ? err.detail
-          : JSON.stringify(err?.detail ?? err);
+      detail = parseApiError(await res.json());
     } catch {
       detail = res.statusText;
     }
-    throw new Error(`${res.status}: ${detail}`);
+    throw new Error(detail);
   }
   return res.json() as Promise<T>;
 }
@@ -175,13 +182,11 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
     try {
       const err = await res.json();
       detail =
-        typeof err?.detail === "string"
-          ? err.detail
-          : JSON.stringify(err?.detail ?? err);
+        parseApiError(err);
     } catch {
       detail = res.statusText;
     }
-    throw new Error(`${res.status}: ${detail}`);
+    throw new Error(detail);
   }
   return res.json() as Promise<T>;
 }
@@ -193,13 +198,11 @@ async function getJson<T>(path: string): Promise<T> {
     try {
       const err = await res.json();
       detail =
-        typeof err?.detail === "string"
-          ? err.detail
-          : JSON.stringify(err?.detail ?? err);
+        parseApiError(err);
     } catch {
       detail = res.statusText;
     }
-    throw new Error(`${res.status}: ${detail}`);
+    throw new Error(detail);
   }
   return res.json() as Promise<T>;
 }
@@ -211,13 +214,11 @@ async function deleteJson<T>(path: string): Promise<T> {
     try {
       const err = await res.json();
       detail =
-        typeof err?.detail === "string"
-          ? err.detail
-          : JSON.stringify(err?.detail ?? err);
+        parseApiError(err);
     } catch {
       detail = res.statusText;
     }
-    throw new Error(`${res.status}: ${detail}`);
+    throw new Error(detail);
   }
   return res.json() as Promise<T>;
 }

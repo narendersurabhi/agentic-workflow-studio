@@ -59,47 +59,40 @@ export default function SkillCommandPalette({
   };
 
   const handleSkillSelect = (skill: Skill) => {
-    const expanded = expandSkill(skill, "");
-    onSelectSkill(expanded || `/${skill.name} `);
+    onSelectSkill(expandSkill(skill, "") || `/${skill.name} `);
   };
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-2xl border border-subtle bg-surface-1 shadow-[0_24px_60px_rgba(15,23,42,0.28)]">
-      <div className="flex items-center gap-2 border-b border-subtle px-4 py-3">
-        <span className="text-sm font-medium text-text-lo">/</span>
+    <div className="absolute bottom-full left-0 z-50 mb-1.5 w-max min-w-[220px] max-w-[420px] overflow-hidden rounded-xl border border-subtle bg-gradient-sidebar shadow-[0_12px_32px_rgba(15,23,42,0.32)] backdrop-blur-sm">
+      <div className="flex items-center gap-1.5 border-b border-subtle px-3 py-2">
+        <span className="text-xs text-text-lo">/</span>
         <input
           ref={inputRef}
-          className="flex-1 bg-transparent text-sm text-text-hi placeholder:text-text-lo focus:outline-none"
-          placeholder="Search skills and capabilities…"
+          className="flex-1 bg-transparent text-xs text-text-hi placeholder:text-text-lo focus:outline-none"
+          placeholder="Search skills…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <kbd className="rounded border border-subtle px-1.5 py-0.5 text-[11px] text-text-lo">esc</kbd>
+        <kbd className="rounded border border-subtle px-1 py-0.5 text-[10px] text-text-lo">esc</kbd>
       </div>
 
-      <div className="max-h-80 overflow-y-auto">
+      <div className="max-h-52 overflow-y-auto">
         {filteredSkills.length > 0 ? (
           <div>
-            <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-text-lo">
+            <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-lo">
               Skills
             </div>
             {filteredSkills.map((skill) => (
               <button
                 key={skill.id}
-                className="flex w-full items-start gap-3 px-4 py-2.5 text-left transition hover:bg-surface-2"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition hover:bg-white/10"
                 onClick={() => handleSkillSelect(skill)}
               >
-                <span className="mt-0.5 text-sm text-cyan-500">⚡</span>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-text-hi">{skill.name}</div>
-                  {skill.description ? (
-                    <div className="truncate text-xs text-text-lo">{skill.description}</div>
-                  ) : null}
-                  <div className="mt-0.5 text-[11px] text-text-lo">
-                    {skill.steps.length} step{skill.steps.length !== 1 ? "s" : ""}
-                    {skill.built_in ? " · built-in" : ""}
-                  </div>
-                </div>
+                <span className="text-[11px] text-cyan-500">⚡</span>
+                <span className="text-xs font-semibold text-text-hi">{skill.name}</span>
+                {skill.description ? (
+                  <span className="text-[11px] text-text-lo">{skill.description}</span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -107,29 +100,27 @@ export default function SkillCommandPalette({
 
         {filteredCaps.length > 0 ? (
           <div>
-            <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-text-lo">
+            <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-lo">
               Capabilities
             </div>
             {filteredCaps.slice(0, 20).map((cap) => (
               <button
                 key={cap.id}
-                className="flex w-full items-start gap-3 px-4 py-2.5 text-left transition hover:bg-surface-2"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition hover:bg-white/10"
                 onClick={() => onSelectCapability(cap.id)}
               >
-                <span className="mt-0.5 text-sm text-text-lo">◈</span>
-                <div className="min-w-0">
-                  <div className="font-mono text-xs font-semibold text-text-hi">{cap.id}</div>
-                  {cap.description ? (
-                    <div className="truncate text-xs text-text-lo">{cap.description}</div>
-                  ) : null}
-                </div>
+                <span className="text-[11px] text-text-lo">◈</span>
+                <span className="font-mono text-xs font-semibold text-text-hi">{cap.id}</span>
+                {cap.description ? (
+                  <span className="text-[11px] text-text-lo">{cap.description}</span>
+                ) : null}
               </button>
             ))}
           </div>
         ) : null}
 
         {filteredSkills.length === 0 && filteredCaps.length === 0 ? (
-          <div className="px-4 py-6 text-center text-sm text-text-lo">No results for "{query}"</div>
+          <div className="px-3 py-4 text-center text-xs text-text-lo">No results for "{query}"</div>
         ) : null}
       </div>
     </div>

@@ -24,6 +24,7 @@ from services.worker.app import capability_runtime_adapter, tool_runtime_adapter
 class WorkerExecutionConfig:
     llm_provider_name: str
     openai_model: str
+    active_model_name: str  # resolved model name for the active provider
     prompt_version: str
     policy_version: str
     tool_version: str
@@ -121,7 +122,7 @@ def execute_task_request(
             "task.attempt": task_attempt,
             "task.max_attempts": task_max_attempts,
             "model.provider": context.config.llm_provider_name,
-            "model.name": context.config.openai_model,
+            "model.name": context.config.active_model_name,
             "prompt.version": context.config.prompt_version,
             "policy.version": context.config.policy_version,
             "tool.version": context.config.tool_version,
@@ -174,7 +175,7 @@ def execute_task_request(
                     "task.attempt": task_attempt,
                     "task.max_attempts": task_max_attempts,
                     "model.provider": context.config.llm_provider_name,
-                    "model.name": context.config.openai_model,
+                    "model.name": context.config.active_model_name,
                     "prompt.version": context.config.prompt_version,
                     "policy.version": context.config.policy_version,
                     "tool.version": context.config.tool_version,
@@ -626,7 +627,7 @@ def _execute_capability_tool(
             "trace_id": trace_id,
             "idempotency_key": idempotency_key,
             "model_provider": context.config.llm_provider_name,
-            "model_name": context.config.openai_model,
+            "model_name": context.config.active_model_name,
             "prompt_version": context.config.prompt_version,
             "policy_version": context.config.policy_version,
             "tool_version": context.config.tool_version,
@@ -945,7 +946,7 @@ def _execute_native_tool(
             "trace_id": trace_id,
             "idempotency_key": idempotency_key,
             "model_provider": context.config.llm_provider_name,
-            "model_name": context.config.openai_model,
+            "model_name": context.config.active_model_name,
             "prompt_version": context.config.prompt_version,
             "policy_version": context.config.policy_version,
             "tool_version": context.config.tool_version,

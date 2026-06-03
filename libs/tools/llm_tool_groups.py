@@ -282,3 +282,54 @@ def register_coding_agent_tools(
             )
         )
 
+
+def register_agent_run_tool(
+    registry,
+    *,
+    timeout_s: int,
+    handler: PayloadHandler,
+) -> None:
+    registry.register(
+        Tool(
+            spec=ToolSpec(
+                name="agent_run",
+                description=(
+                    "Run a general-purpose agentic loop. Reasons about a goal using the "
+                    "configured tools and iterates until the goal is achieved or max steps "
+                    "is reached."
+                ),
+                usage_guidance=(
+                    "Provide 'goal' (required), optional 'instructions' (system prompt), "
+                    "'max_steps' (default 12), and 'allowed_capability_ids' (list of "
+                    "capability IDs the agent may call). Returns 'result', 'steps_taken', "
+                    "and 'tool_calls'."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "goal": {"type": "string", "minLength": 1},
+                        "instructions": {"type": "string"},
+                        "max_steps": {"type": "integer", "minimum": 1, "maximum": 32},
+                        "allowed_capability_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["goal"],
+                },
+                output_schema={
+                    "type": "object",
+                    "properties": {
+                        "result": {"type": "string"},
+                        "steps_taken": {"type": "integer"},
+                        "tool_calls": {"type": "array", "items": {"type": "object"}},
+                    },
+                    "required": ["result", "steps_taken", "tool_calls"],
+                },
+                timeout_s=timeout_s,
+                risk_level=RiskLevel.high,
+                tool_intent=ToolIntent.generate,
+            ),
+            handler=handler,
+        )
+    )

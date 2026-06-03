@@ -19,6 +19,7 @@ import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
 import StudioWorkflowInterfacePanel from "./StudioWorkflowInterfacePanel";
 import StudioNodeInspector from "./StudioNodeInspector";
 import type {
+  AgentDefinition,
   CanvasPoint,
   CapabilityCatalog,
   CapabilityItem,
@@ -1638,6 +1639,9 @@ export default function WorkflowStudio() {
   const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalog | null>(null);
   const [capabilityLoading, setCapabilityLoading] = useState(true);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [agentDefinitions, setAgentDefinitions] = useState<AgentDefinition[]>([]);
+  const [agentDefinitionsLoading, setAgentDefinitionsLoading] = useState(false);
+  const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteGroup, setPaletteGroup] = useState("all");
   const [selectedDagNodeId, setSelectedDagNodeId] = useState<string | null>(null);
@@ -1862,6 +1866,39 @@ export default function WorkflowStudio() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadAgentDefinitions = async () => {
+      setAgentDefinitionsLoading(true);
+      setAgentDefinitionsError(null);
+      try {
+        const response = await apiFetch(`${apiUrl}/agents/definitions`);
+        if (!response.ok) {
+          throw new Error(`Agent definitions request failed (${response.status}).`);
+        }
+        const data = (await response.json()) as AgentDefinition[];
+        if (!cancelled) {
+          setAgentDefinitions(Array.isArray(data) ? data : []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAgentDefinitionsError(
+            error instanceof Error ? error.message : "Failed to load agent definitions."
+          );
+          setAgentDefinitions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setAgentDefinitionsLoading(false);
+        }
+      }
+    };
+    void loadAgentDefinitions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const refreshWorkflowDefinitions = async (nextUserId?: string) => {
     setWorkflowDefinitionsLoading(true);
     setWorkflowDefinitionsError(null);
@@ -2026,6 +2063,11 @@ export default function WorkflowStudio() {
   const capabilityById = useMemo(
     () => new Map(availableCapabilities.map((item) => [item.id, item])),
     [availableCapabilities]
+  );
+
+  const agentDefinitionById = useMemo(
+    () => new Map(agentDefinitions.map((def) => [def.id, def])),
+    [agentDefinitions]
   );
 
   const paletteGroups = useMemo(
@@ -3221,6 +3263,54 @@ export default function WorkflowStudio() {
     setStudioNotice(`Added ${kind.replace("_", " ")} control node.`);
   };
 
+  const addAgentNodeToStudio = (definitionId: string, definition: AgentDefinition) => {
+    const nodeId = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setComposerDraft((prev) => {
+      const anchorNode =
+        prev.nodes.find((node) => node.id === selectedDagNodeId) || prev.nodes[prev.nodes.length - 1] || null;
+      const inputBindings: Record<string, ComposerInputBinding> = {};
+      if (definition.default_goal) {
+        inputBindings.goal = { kind: "literal", value: definition.default_goal };
+      }
+      if (definition.default_max_steps) {
+        inputBindings.max_steps = { kind: "literal", value: String(definition.default_max_steps) };
+      }
+      const newNode: ComposerDraftNode = {
+        id: nodeId,
+        taskName: uniqueTaskName(definition.name || "Agent", prev.nodes),
+        capabilityId: "agent.run",
+        outputPath: "result",
+        nodeKind: "agent",
+        agentDefinitionId: definitionId,
+        controlKind: null,
+        controlConfig: null,
+        inputBindings,
+        outputs: [],
+        variables: [],
+      };
+      const nextNodes = [...prev.nodes, newNode];
+      const nextEdges = anchorNode
+        ? [...prev.edges, { fromNodeId: anchorNode.id, toNodeId: nodeId }]
+        : prev.edges;
+      return {
+        ...prev,
+        nodes: nextNodes,
+        edges: normalizeComposerEdges(nextNodes, nextEdges),
+      };
+    });
+    setComposerNodePositions((prev) => {
+      const anchorPosition = selectedDagNodeId ? prev[selectedDagNodeId] : null;
+      return {
+        ...prev,
+        [nodeId]: anchorPosition
+          ? { x: anchorPosition.x + DAG_CANVAS_NODE_WIDTH + 64, y: anchorPosition.y }
+          : defaultDagNodePosition(Object.keys(prev).length),
+      };
+    });
+    setSelectedDagNodeId(nodeId);
+    setStudioNotice(`Added ${definition.name} agent to the workflow.`);
+  };
+
   const updateVisualChainNode = (
     nodeId: string,
     patch: Partial<Pick<ComposerDraftNode, "taskName" | "capabilityId" | "outputPath">>
@@ -3736,11 +3826,16 @@ export default function WorkflowStudio() {
     );
     const customFieldStatus = customFields.map((field) => buildFieldStatus(field, false, true));
 
-    return [
+    const allFields = [
       ...schemaFieldStatus.filter((field) => field.required),
       ...schemaFieldStatus.filter((field) => !field.required),
       ...customFieldStatus,
     ];
+    if (selectedDagNode.nodeKind === "agent") {
+      const agentExposed = new Set(["goal", "max_steps"]);
+      return allFields.filter((f) => agentExposed.has(f.field));
+    }
+    return allFields;
   }, [contextState.context, selectedCapability, selectedDagNode, visualChainNodes]);
 
   const selectedDagNodeOutputSchemaFields = useMemo(
@@ -4020,15 +4115,39 @@ export default function WorkflowStudio() {
     return {
       draft: {
         summary: composerDraft.summary || "Workflow Studio draft",
-        nodes: visualChainNodes.map((node) => ({
-          id: node.id,
-          taskName: node.taskName,
-          capabilityId: node.capabilityId,
-          nodeKind: node.nodeKind || "capability",
-          controlKind: node.controlKind || undefined,
-          controlConfig: node.controlConfig || undefined,
-          bindings: node.inputBindings,
-        })),
+        nodes: visualChainNodes.map((node) => {
+          if (node.nodeKind === "agent") {
+            const def = node.agentDefinitionId ? agentDefinitionById.get(node.agentDefinitionId) : null;
+            const expandedBindings = { ...node.inputBindings };
+            if (def) {
+              if (!expandedBindings.instructions) {
+                expandedBindings.instructions = { kind: "literal", value: def.instructions };
+              }
+              if (!expandedBindings.allowed_capability_ids) {
+                expandedBindings.allowed_capability_ids = {
+                  kind: "literal",
+                  value: JSON.stringify(def.allowed_capability_ids),
+                };
+              }
+            }
+            return {
+              id: node.id,
+              taskName: node.taskName,
+              capabilityId: "agent.run",
+              nodeKind: "capability",
+              bindings: expandedBindings,
+            };
+          }
+          return {
+            id: node.id,
+            taskName: node.taskName,
+            capabilityId: node.capabilityId,
+            nodeKind: node.nodeKind || "capability",
+            controlKind: node.controlKind || undefined,
+            controlConfig: node.controlConfig || undefined,
+            bindings: node.inputBindings,
+          };
+        }),
         edges: composerDraftEdges,
         workflowInterface,
       },
@@ -4036,6 +4155,7 @@ export default function WorkflowStudio() {
       goal: goal.trim() || undefined,
     };
   }, [
+    agentDefinitionById,
     composerDraft.summary,
     composerDraftEdges,
     contextState.context,
@@ -4096,6 +4216,7 @@ export default function WorkflowStudio() {
         nodeKind: node.nodeKind || "capability",
         controlKind: node.controlKind || undefined,
         controlConfig: node.controlConfig || undefined,
+        agentDefinitionId: node.agentDefinitionId || undefined,
         inputBindings: node.inputBindings,
         outputs: node.outputs,
         variables: node.variables,
@@ -5197,6 +5318,7 @@ export default function WorkflowStudio() {
       selectedDagNodeStatus={selectedDagNodeStatus}
       inputFields={selectedDagNodeInspectorFields}
       selectedCapability={selectedCapability}
+      agentDefinitions={agentDefinitions}
       outputSchemaFields={selectedDagNodeOutputSchemaFields}
       activeComposerIssueFocus={activeComposerIssueFocus}
       inspectorBindingRefs={inspectorBindingRefs}
@@ -6258,10 +6380,12 @@ export default function WorkflowStudio() {
                 error={capabilityError}
                 query={paletteQuery}
                 selectedGroup={paletteGroup}
+                agentDefinitions={agentDefinitions}
                 onQueryChange={setPaletteQuery}
                 onGroupChange={setPaletteGroup}
                 onAddCapability={addCapabilityNodeToStudio}
                 onAddControl={addControlNodeToStudio}
+                onAddAgent={addAgentNodeToStudio}
               />
             </div>
           ),
