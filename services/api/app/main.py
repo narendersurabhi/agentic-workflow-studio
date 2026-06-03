@@ -9018,6 +9018,21 @@ def _flatten_schema_fields(
     return fields
 
 
+def _capability_required_input_fields(
+    spec: capability_registry.CapabilitySpec,
+) -> list[str]:
+    """The declared required input field names for a capability (from its schema)."""
+    try:
+        input_schema, _ = _resolve_capability_schemas(spec, include_schemas=True)
+    except Exception:  # noqa: BLE001
+        return []
+    if isinstance(input_schema, dict):
+        required = input_schema.get("required")
+        if isinstance(required, list):
+            return [field for field in required if isinstance(field, str) and field.strip()]
+    return []
+
+
 def _resolve_capability_schemas(
     spec: capability_registry.CapabilitySpec,
     *,
@@ -12291,6 +12306,27 @@ def _build_plan_from_composer_draft(
                     "node_id": node_id,
                     "field": field_name,
                     "message": f"Unsupported binding kind: {binding_kind or '<empty>'}",
+                }
+            )
+
+        # Required-input validation: flag declared required inputs that are
+        # neither bound on the node nor available from the job context, so the
+        # Readiness Check catches them before the run fails at dispatch with a
+        # cryptic tool_inputs_invalid (e.g. agent.run with no goal).
+        for required_field in _capability_required_input_fields(capability_spec):
+            if required_field in tool_input_payload:
+                continue
+            if isinstance(job_context, Mapping) and required_field in job_context:
+                continue
+            diagnostics_errors.append(
+                {
+                    "code": "draft.required_input_missing",
+                    "node_id": node_id,
+                    "field": required_field,
+                    "message": (
+                        f"Capability '{capability_id}' requires input '{required_field}', "
+                        "but it is not set on this step. Bind it in the step inspector."
+                    ),
                 }
             )
 

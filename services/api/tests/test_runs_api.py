@@ -776,6 +776,35 @@ def test_spawn_agents_workflow_compiles_with_recursive_agent_run() -> None:
     assert "agent.run" in inputs.get("allowed_capability_ids", [])
 
 
+def test_compile_flags_agent_run_missing_required_goal() -> None:
+    # A bare agent.run node (no inputs) must be flagged by the Readiness Check
+    # before it can run and fail at dispatch with tool_inputs_invalid.
+    bare = {
+        "summary": "bare orchestrator",
+        "nodes": [
+            {
+                "id": "orchestrator",
+                "taskName": "OrchestratorAgent",
+                "capabilityId": "agent.run",
+                "bindings": {},
+            }
+        ],
+        "edges": [],
+    }
+    response = client.post("/composer/compile", json={"draft": bare, "goal": "bare"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    errors = body["diagnostics"]["errors"]
+    missing = [e for e in errors if e.get("code") == "draft.required_input_missing"]
+    assert any(e.get("field") == "goal" for e in missing), errors
+
+    # Binding the required goal clears the error.
+    bare["nodes"][0]["bindings"] = {"goal": {"kind": "literal", "value": "do the thing"}}
+    ok = client.post("/composer/compile", json={"draft": bare, "goal": "bare"}).json()
+    assert ok["valid"] is True, ok["diagnostics"]
+
+
 def test_spawn_agents_workflow_definition_round_trips() -> None:
     from scripts.create_spawn_agents_workflow import build_definition_payload
 
