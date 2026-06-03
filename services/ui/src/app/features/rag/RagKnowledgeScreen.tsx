@@ -581,14 +581,14 @@ export default function RagKnowledgeScreen() {
           </div>
         </ScreenHeader>
 
-        <div className="mt-5 grid gap-4 xl:grid-cols-[1.2fr,1fr,1fr]">
-          <section className="rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
+        <div className="mt-3 grid gap-3 xl:grid-cols-[1.2fr,1fr,1fr]">
+          <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
                   Index New
                 </div>
-                <h2 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">Manual Indexing</h2>
+                <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Manual Indexing</h2>
                 <p className="mt-2 text-sm leading-6 text-text-md">
                   Choose a source mode, attach scope, then index new content or replace the currently
                   selected document.
@@ -615,7 +615,7 @@ export default function RagKnowledgeScreen() {
               ))}
             </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label className={fieldGroupClassName}>
                 <span className={fieldLabelClassName}>Document ID</span>
                 <input
@@ -673,7 +673,7 @@ export default function RagKnowledgeScreen() {
             ) : null}
 
             {indexMode === "workspace_directory" ? (
-              <div className="mt-4 grid gap-4 md:grid-cols-[1fr,auto]">
+              <div className="mt-3 grid gap-3 md:grid-cols-[1fr,auto]">
                 <label className={fieldGroupClassName}>
                   <span className={fieldLabelClassName}>Workspace Directory</span>
                   <input
@@ -735,13 +735,13 @@ export default function RagKnowledgeScreen() {
             </div>
           </section>
 
-          <section className="rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
+          <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
                   Documents
                 </div>
-                <h2 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">Indexed Inventory</h2>
+                <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Indexed Inventory</h2>
                 <p className="mt-2 text-sm leading-6 text-text-md">
                   Review indexed documents in the active scope, then open one to inspect its stored
                   chunks.
@@ -751,7 +751,7 @@ export default function RagKnowledgeScreen() {
                 <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-md">
                   Loaded
                 </div>
-                <div className="mt-1 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
+                <div className="mt-1 text-base font-semibold tracking-tight text-text-hi">
                   {documents.length}
                 </div>
               </div>
@@ -861,13 +861,13 @@ export default function RagKnowledgeScreen() {
             </div>
           </section>
 
-          <section className="rounded-[30px] border border-subtle bg-gradient-panel p-5 shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]">
+          <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
                   Inspector
                 </div>
-                <h2 className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-text-hi">Document Details</h2>
+                <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Document Details</h2>
                 <p className="mt-2 text-sm leading-6 text-text-md">
                   Inspect document metadata and chunk payloads before you rerank or generate against
                   them.
@@ -896,7 +896,7 @@ export default function RagKnowledgeScreen() {
             ) : (
               <>
                 <div className="mt-6 rounded-3xl border border-subtle bg-surface-1 p-4">
-                  <div className="text-[26px] font-semibold tracking-[-0.03em] text-text-hi">
+                  <div className="text-base font-semibold tracking-tight text-text-hi">
                     {selectedDocument.filename || selectedDocument.document_id}
                   </div>
                   <div className="mt-2 break-all text-xs uppercase tracking-[0.14em] text-text-md">

@@ -194,7 +194,7 @@ export default function ObservabilityScreen() {
       title="Observability"
       breadcrumbs={[{ label: "Observability" }]}
     >
-      <div className="mx-auto max-w-5xl space-y-6 px-6 py-8">
+      <div className="mx-auto max-w-5xl space-y-4 px-4 py-6">
         <FeedbackInsightsPanel
           summary={feedbackSummary}
           loading={feedbackLoading}
@@ -204,7 +204,7 @@ export default function ObservabilityScreen() {
         />
 
         {/* ── Jobs ── */}
-        <section className={`rounded-2xl p-5 ${isStudio ? "border border-subtle bg-gradient-panel text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]" : "border border-slate-100 bg-white shadow-sm text-slate-900"}`}>
+        <section className={`rounded-[24px] p-4 ${isStudio ? "border border-subtle bg-gradient-panel text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]" : "border border-slate-100 bg-white shadow-sm text-slate-900"}`}>
           <div className="flex items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-semibold">Jobs</h2>
@@ -330,7 +330,7 @@ export default function ObservabilityScreen() {
         </section>
 
         {/* ── Recent Events ── */}
-        <section className={`rounded-2xl p-5 ${isStudio ? "border border-subtle bg-gradient-panel text-text-hi shadow-[0_24px_60px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.05)]" : "border border-slate-100 bg-white shadow-sm text-slate-900"}`}>
+        <section className={`rounded-[24px] p-4 ${isStudio ? "border border-subtle bg-gradient-panel text-text-hi shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]" : "border border-slate-100 bg-white shadow-sm text-slate-900"}`}>
           <div className="flex items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-semibold text-text-hi">Recent Events</h2>
