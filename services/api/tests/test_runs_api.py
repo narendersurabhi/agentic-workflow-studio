@@ -710,6 +710,55 @@ def test_agent_run_result_materializes_dynamic_agents_into_registry() -> None:
     assert {"agent-run-d0-aaa", "agent-run-d1-bbb"} <= {a["agent_id"] for a in context["agents"]}
 
 
+def test_spawn_agents_workflow_compiles_with_recursive_agent_run() -> None:
+    from scripts.create_spawn_agents_workflow import build_spawn_agents_draft
+
+    draft = build_spawn_agents_draft()
+    response = client.post(
+        "/composer/compile",
+        json={"draft": draft, "goal": draft["summary"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"], body["diagnostics"]
+
+    plan = body["plan"]
+    assert plan is not None
+    agent_tasks = [
+        task
+        for task in plan["tasks"]
+        if "agent.run" in (task.get("tool_requests") or [])
+        or "agent.run" in (task.get("tool_inputs") or {})
+    ]
+    assert agent_tasks, "expected an agent.run task in the compiled plan"
+
+    inputs = agent_tasks[0]["tool_inputs"]["agent.run"]
+    assert inputs.get("goal"), "agent.run requires a goal"
+    # The defining property of a spawn-agents workflow: the orchestrator may call
+    # agent.run itself, i.e. it can delegate to recursively-spawned sub-agents.
+    assert "agent.run" in inputs.get("allowed_capability_ids", [])
+
+
+def test_spawn_agents_workflow_definition_round_trips() -> None:
+    from scripts.create_spawn_agents_workflow import build_definition_payload
+
+    create = client.post(
+        "/workflows/definitions",
+        json=build_definition_payload(user_id="narendersurabhi"),
+    )
+    assert create.status_code == 200
+    definition = create.json()
+    assert definition["title"] == "Agent Orchestrator"
+
+    fetched = client.get(f"/workflows/definitions/{definition['id']}").json()
+    nodes = fetched["draft"]["nodes"]
+    orchestrator = next(node for node in nodes if node["capabilityId"] == "agent.run")
+    allowed = orchestrator["bindings"]["allowed_capability_ids"]["value"]
+    assert "agent.run" in allowed
+    # Note: publishing additionally requires a live worker whose agent_run tool
+    # adapter is loaded (runtime conformance) — not available in this harness.
+
+
 def test_execution_request_snapshot_captures_retry_policy_and_context_provenance() -> None:
     job = _create_job()
     _create_plan(job["id"])
