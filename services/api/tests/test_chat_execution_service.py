@@ -98,6 +98,7 @@ def test_execute_capability_allows_rag_retrieve_mcp(monkeypatch) -> None:
                 tool_name="retrieve",
             ),
         ),
+        planner_hints={"chat_response_hint": {"mode": "rag_matches", "max_items": 5, "excerpt_chars": 180}},
         enabled=True,
     )
     monkeypatch.setattr(
