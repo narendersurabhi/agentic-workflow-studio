@@ -572,7 +572,11 @@ def _build_composer_recommender_provider() -> LLMProvider | None:
 
 _composer_recommender_provider_raw = _build_composer_recommender_provider()
 _composer_recommender_provider = (
-    TimingLLMProvider(_composer_recommender_provider_raw, component="composer_recommender")
+    TimingLLMProvider(
+        _composer_recommender_provider_raw,
+        component="composer_recommender",
+        model=(COMPOSER_RECOMMENDER_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
     if _composer_recommender_provider_raw is not None
     else None
 )
@@ -608,7 +612,11 @@ def _build_intent_assess_provider() -> LLMProvider | None:
 
 _intent_assess_provider_raw = _build_intent_assess_provider()
 _intent_assess_provider = (
-    TimingLLMProvider(_intent_assess_provider_raw, component="intent_assess")
+    TimingLLMProvider(
+        _intent_assess_provider_raw,
+        component="intent_assess",
+        model=(INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
     if _intent_assess_provider_raw is not None
     else None
 )
@@ -644,7 +652,11 @@ def _build_intent_decompose_provider() -> LLMProvider | None:
 
 _intent_decompose_provider_raw = _build_intent_decompose_provider()
 _intent_decompose_provider = (
-    TimingLLMProvider(_intent_decompose_provider_raw, component="intent_decompose")
+    TimingLLMProvider(
+        _intent_decompose_provider_raw,
+        component="intent_decompose",
+        model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
     if _intent_decompose_provider_raw is not None
     else None
 )
@@ -679,6 +691,7 @@ _chat_router_provider: LLMProvider | None = (
     TimingLLMProvider(
         CachingLLMProvider(_chat_router_provider_raw, _cache_session_store),
         component="chat_router",
+        model=(CHAT_ROUTER_MODEL or LLM_MODEL_NAME or "unknown").strip(),
     )
     if _chat_router_provider_raw is not None
     else None
@@ -714,6 +727,7 @@ _chat_response_provider: LLMProvider | None = (
     TimingLLMProvider(
         CachingLLMProvider(_chat_response_provider_raw, _cache_session_store),
         component="chat_response",
+        model=(CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
     )
     if _chat_response_provider_raw is not None
     else None
@@ -4988,7 +5002,7 @@ def _route_chat_turn_legacy(
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
                     "request_id": route_request.request_id,
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
@@ -5063,7 +5077,7 @@ def _route_chat_turn_with_router(
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
                     "request_id": route_request.request_id,
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
@@ -6621,7 +6635,7 @@ def _generate_chat_response(
                 prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_response",
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
                 reasoning_effort=reasoning_effort,
             )
@@ -6693,7 +6707,7 @@ def _generate_chat_boundary_decision(
                 prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_boundary_decision",
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
