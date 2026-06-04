@@ -212,6 +212,13 @@ def persist_pending_clarification_state(
             metadata["draft_goal"] = draft_goal.strip()
         metadata["pending_clarification"] = _canonical_pending_state_payload(lifecycle)
         return True
+    if state is not None and lifecycle.state is None:
+        # state was a raw Mapping that failed Pydantic validation — log so it's
+        # visible in production rather than silently resetting mid-conversation.
+        logger.warning(
+            "chat_pending_clarification_state_parse_failed",
+            extra={"state_type": type(state).__name__},
+        )
     for key in ("draft_goal", "pending_clarification"):
         metadata.pop(key, None)
         if cleared_keys is not None:
@@ -279,10 +286,14 @@ def _clarification_lifecycle(
             [current_question_field] if current_question_field else [],
         )
     )
+    state_required_fields = _unresolved_clarification_fields(
+        [state.required_fields],
+        known_slot_values=known_slot_values,
+    )
     required_fields = tuple(
         _ordered_clarification_fields(
             profile_fields,
-            state.required_fields,
+            state_required_fields,
             [current_question_field] if current_question_field else [],
         )
     )
@@ -2016,6 +2027,38 @@ def _looks_like_pending_clarification_intent_change(
     return bool(tokens & hints.artifact_tokens) and bool(tokens & hints.action_tokens)
 
 
+def _create_job_and_action(
+    *,
+    db: Session,
+    runtime: ChatServiceRuntime,
+    resolved_goal: str,
+    merged_context: dict[str, Any],
+    assessment: Mapping[str, Any],
+    priority: Any,
+    session_metadata: dict[str, Any],
+    cleared_session_keys: set[str],
+) -> tuple[models.Job, chat_contracts.AssistantAction]:
+    job = runtime.create_job(
+        models.JobCreate(
+            goal=resolved_goal,
+            context_json=merged_context,
+            priority=priority,
+            planning_mode=models.PlanningMode.adaptive,
+        ),
+        db,
+    )
+    action = chat_contracts.AssistantAction(
+        type=chat_contracts.AssistantActionType.submit_job,
+        goal=resolved_goal,
+        job_id=job.id,
+        goal_intent_profile=dict(assessment),
+        context_json=merged_context,
+    )
+    session_metadata["active_job_id"] = job.id
+    clear_pending_clarification_state(session_metadata, cleared_keys=cleared_session_keys)
+    return job, action
+
+
 def create_session(
     db: Session,
     request: chat_contracts.ChatSessionCreate,
@@ -2192,13 +2235,17 @@ def handle_turn(
         turn_plan = fast_pending_plan
     else:
         route_context = context_service.chat_route_context_view(context_envelope)
-        turn_plan = runtime.route_turn(
-            content=content,
-            candidate_goal=candidate_goal,
-            session_metadata=session_metadata,
-            merged_context=route_context,
-            messages=chat_messages,
-        )
+        try:
+            turn_plan = runtime.route_turn(
+                content=content,
+                candidate_goal=candidate_goal,
+                session_metadata=session_metadata,
+                merged_context=route_context,
+                messages=chat_messages,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("chat_route_turn_failed", extra={"session_id": record.id})
+            turn_plan = {"type": "respond", "assistant_content": ""}
     normalized_intent_envelope = (
         dict(turn_plan.get("normalized_intent_envelope"))
         if isinstance(turn_plan.get("normalized_intent_envelope"), Mapping)
@@ -2357,59 +2404,37 @@ def handle_turn(
                     cleared_keys=cleared_session_keys,
                 )
             else:
-                created_job = runtime.create_job(
-                    models.JobCreate(
-                        goal=resolved_goal,
-                        context_json=merged_context,
-                        priority=request.priority,
-                        planning_mode=models.PlanningMode.adaptive,
-                    ),
-                    db,
+                created_job, assistant_action = _create_job_and_action(
+                    db=db,
+                    runtime=runtime,
+                    resolved_goal=resolved_goal,
+                    merged_context=merged_context,
+                    assessment=assessment,
+                    priority=request.priority,
+                    session_metadata=session_metadata,
+                    cleared_session_keys=cleared_session_keys,
                 )
                 if not assistant_content:
                     assistant_content = (
                         f"Started job {created_job.id}. "
                         "I submitted it to the normal planner and worker pipeline."
                     )
-                assistant_action = chat_contracts.AssistantAction(
-                    type=chat_contracts.AssistantActionType.submit_job,
-                    goal=resolved_goal,
-                    job_id=created_job.id,
-                    goal_intent_profile=dict(assessment),
-                    context_json=merged_context,
-                )
-                session_metadata["active_job_id"] = created_job.id
-                clear_pending_clarification_state(
-                    session_metadata,
-                    cleared_keys=cleared_session_keys,
-                )
         else:
-            created_job = runtime.create_job(
-                models.JobCreate(
-                    goal=resolved_goal,
-                    context_json=merged_context,
-                    priority=request.priority,
-                    planning_mode=models.PlanningMode.adaptive,
-                ),
-                db,
+            created_job, assistant_action = _create_job_and_action(
+                db=db,
+                runtime=runtime,
+                resolved_goal=resolved_goal,
+                merged_context=merged_context,
+                assessment=assessment,
+                priority=request.priority,
+                session_metadata=session_metadata,
+                cleared_session_keys=cleared_session_keys,
             )
             if not assistant_content:
                 assistant_content = (
                     f"Started job {created_job.id}. "
                     "I submitted it to the normal planner and worker pipeline."
                 )
-            assistant_action = chat_contracts.AssistantAction(
-                type=chat_contracts.AssistantActionType.submit_job,
-                goal=resolved_goal,
-                job_id=created_job.id,
-                goal_intent_profile=dict(assessment),
-                context_json=merged_context,
-            )
-            session_metadata["active_job_id"] = created_job.id
-            clear_pending_clarification_state(
-                session_metadata,
-                cleared_keys=cleared_session_keys,
-            )
     elif route_type == "run_workflow":
         workflow_invocation = workflow_invocation_from_context(merged_context)
         if workflow_invocation is None or not workflow_invocation.has_target():
@@ -2642,16 +2667,26 @@ def handle_turn(
     desired_title = record.title
     if desired_title == "New chat":
         desired_title = _default_session_title(resolved_goal)
-    session_metadata = _persist_chat_session_state(
-        db=db,
-        record=record,
-        desired_metadata=session_metadata,
-        desired_title=desired_title,
-        loaded_updated_at=loaded_updated_at,
-        loaded_state_version=loaded_state_version,
-        cleared_keys=cleared_session_keys,
-        runtime=runtime,
-    )
+    try:
+        session_metadata = _persist_chat_session_state(
+            db=db,
+            record=record,
+            desired_metadata=session_metadata,
+            desired_title=desired_title,
+            loaded_updated_at=loaded_updated_at,
+            loaded_state_version=loaded_state_version,
+            cleared_keys=cleared_session_keys,
+            runtime=runtime,
+        )
+    except RuntimeError:
+        logger.exception(
+            "chat_session_state_persist_failed",
+            extra={"session_id": record.id},
+        )
+        # Preserve messages even though session metadata couldn't be updated.
+        # active_job_id won't be reflected on the session until the next
+        # successful write, but the conversation record is not lost.
+        session_metadata = dict(record.metadata_json or {})
 
     assistant_message = ChatMessageRecord(
         id=runtime.make_id(),
@@ -2686,11 +2721,8 @@ def handle_turn(
                 extra={"session_id": record.id},
             )
 
-    session = get_session(db, record.id, user_id=bound_user_id or user_id)
-    if session is None:
-        raise KeyError(record.id)
     return chat_contracts.ChatTurnResponse(
-        session=session,
+        session=_session_from_record(record, [*messages, user_message, assistant_message]),
         user_message=_message_from_record(user_message),
         assistant_message=_message_from_record(assistant_message),
         job=created_job,
@@ -2771,7 +2803,12 @@ def _execution_thread_candidate_goal(
     return "\n\nUser clarification: ".join(parts)
 
 
+_CHAT_THREAD_HINTS_CACHE: ChatThreadHints | None = None
+_CHAT_THREAD_HINTS_CACHE_KEY: int | None = None
+
+
 def _chat_thread_hints() -> ChatThreadHints:
+    global _CHAT_THREAD_HINTS_CACHE, _CHAT_THREAD_HINTS_CACHE_KEY
     action_tokens = set(_BOOTSTRAP_EXECUTION_ACTION_TOKENS)
     artifact_tokens = set(_BOOTSTRAP_EXECUTION_ARTIFACT_TOKENS)
     continuation_tokens = set(_BOOTSTRAP_CONTINUATION_TOKENS)
@@ -2783,6 +2820,10 @@ def _chat_thread_hints() -> ChatThreadHints:
             artifact_tokens=frozenset(artifact_tokens),
             continuation_tokens=frozenset(continuation_tokens),
         )
+
+    cache_key = id(registry)
+    if _CHAT_THREAD_HINTS_CACHE is not None and _CHAT_THREAD_HINTS_CACHE_KEY == cache_key:
+        return _CHAT_THREAD_HINTS_CACHE
 
     for spec in registry.enabled_capabilities().values():
         artifact_tokens.update(_tokens_from_text(spec.capability_id))
@@ -2799,11 +2840,14 @@ def _chat_thread_hints() -> ChatThreadHints:
         artifact_tokens.update(_tokens_from_sequence(raw_thread_hints.get("artifact_tokens")))
         continuation_tokens.update(_tokens_from_sequence(raw_thread_hints.get("continuation_tokens")))
 
-    return ChatThreadHints(
+    result = ChatThreadHints(
         action_tokens=frozenset(action_tokens),
         artifact_tokens=frozenset(artifact_tokens),
         continuation_tokens=frozenset(continuation_tokens),
     )
+    _CHAT_THREAD_HINTS_CACHE = result
+    _CHAT_THREAD_HINTS_CACHE_KEY = cache_key
+    return result
 
 
 def _tokens_from_sequence(value: Any) -> set[str]:
@@ -3088,10 +3132,15 @@ def _normalized_user_id(value: Any) -> str:
 
 def _chat_session_access_allowed(record: ChatSessionRecord, user_id: str | None) -> bool:
     bound_user_id = _chat_session_user_id(record.metadata_json or {})
-    normalized_user_id = _normalized_user_id(user_id)
-    if not bound_user_id or not normalized_user_id:
+    if not bound_user_id:
         return True
-    return bound_user_id == normalized_user_id
+    # None means explicitly unauthenticated → open access.
+    # An empty string is not a valid identity and denies access to bound sessions
+    # so a misconfigured auth layer that passes "" instead of None is caught here.
+    if user_id is None:
+        return True
+    normalized_user_id = _normalized_user_id(user_id)
+    return bool(normalized_user_id) and bound_user_id == normalized_user_id
 
 
 def _workflow_input_question(definition: Mapping[str, Any]) -> str:

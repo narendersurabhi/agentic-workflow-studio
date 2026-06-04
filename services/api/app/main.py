@@ -18129,6 +18129,8 @@ def create_chat_message(
         raise HTTPException(status_code=404, detail="chat_session_not_found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="chat_session_state_conflict") from exc
 
 
 def _raise_feedback_http_error(exc: ValueError) -> None:
