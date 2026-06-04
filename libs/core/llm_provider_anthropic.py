@@ -57,6 +57,9 @@ class AnthropicProvider(LLMProvider):
         session = CacheSessionRef(provider="anthropic")
         return self.generate_cached(blocks, session, request)
 
+    # Maps reasoning_effort values to Anthropic thinking budget_tokens.
+    _THINKING_BUDGETS: Dict[str, int] = {"low": 1024, "high": 10000}
+
     def generate_cached(
         self,
         blocks: List[PromptBlock],
@@ -68,6 +71,10 @@ class AnthropicProvider(LLMProvider):
         STATIC and RUN blocks get ``cache_control: {"type": "ephemeral"}``.
         Anthropic caches the longest matching prefix — the last cache-control marker
         in the message is the effective cache boundary.
+
+        When request.reasoning_effort is "low" or "high", extended thinking is
+        enabled with a mapped budget_tokens value. Temperature is omitted in that
+        case (Anthropic requirement).
         """
         content: List[Dict[str, Any]] = []
         for block in blocks:
@@ -81,11 +88,19 @@ class AnthropicProvider(LLMProvider):
         if not content:
             raise LLMProviderError("AnthropicProvider: no non-empty prompt blocks")
 
+        thinking_enabled = (
+            request.reasoning_effort is not None
+            and request.reasoning_effort != "none"
+        )
+        budget = self._THINKING_BUDGETS.get(request.reasoning_effort or "", 0)
+
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "max_tokens": request.max_output_tokens or self.max_output_tokens,
             "messages": [{"role": "user", "content": content}],
         }
+        if thinking_enabled and budget:
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
         if request.system_prompt:
             kwargs["system"] = [
                 {
@@ -94,9 +109,11 @@ class AnthropicProvider(LLMProvider):
                     "cache_control": {"type": "ephemeral"},
                 }
             ]
-        temp = request.temperature if request.temperature is not None else self.temperature
-        if temp is not None:
-            kwargs["temperature"] = temp
+        # Temperature must be omitted when extended thinking is enabled.
+        if not thinking_enabled:
+            temp = request.temperature if request.temperature is not None else self.temperature
+            if temp is not None:
+                kwargs["temperature"] = temp
 
         try:
             response = self.client.messages.create(**kwargs)
