@@ -279,6 +279,10 @@ CHAT_CLARIFICATION_NORMALIZER_CONFIDENCE_THRESHOLD = max(
 CHAT_RESPONSE_MODE = os.getenv("CHAT_RESPONSE_MODE", "answer_or_handoff").strip().lower()
 if CHAT_RESPONSE_MODE not in {"answer_only", "answer_or_handoff"}:
     CHAT_RESPONSE_MODE = "answer_or_handoff"
+CHAT_RESPONSE_REASONING_EFFORT_THRESHOLD = max(
+    0.0,
+    min(1.0, float(os.getenv("CHAT_RESPONSE_REASONING_EFFORT_THRESHOLD", "0.70"))),
+)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com").strip()
 OPENAI_TIMEOUT_S = float(os.getenv("OPENAI_TIMEOUT_S", "30"))
@@ -6533,6 +6537,27 @@ def _build_chat_boundary_decision_prompt(
     return json.dumps(payload, ensure_ascii=True)
 
 
+def _response_reasoning_effort(turn_plan: Mapping[str, Any]) -> str | None:
+    """Derive reasoning_effort for the chat response LLM call from turn plan signals.
+
+    Escalates to "high" when the router or boundary model signals low confidence
+    or used a fallback path — cases where deeper reasoning improves response quality.
+    Returns None (provider default) for clear, high-confidence turns.
+    """
+    profile = turn_plan.get("goal_intent_profile") or {}
+    if isinstance(profile, Mapping) and profile.get("low_confidence"):
+        return "high"
+    boundary = turn_plan.get("boundary_decision") or {}
+    if isinstance(boundary, Mapping):
+        bd_conf = boundary.get("confidence")
+        if isinstance(bd_conf, (int, float)) and bd_conf < CHAT_RESPONSE_REASONING_EFFORT_THRESHOLD:
+            return "high"
+    routing = turn_plan.get("routing_decision") or {}
+    if isinstance(routing, Mapping) and routing.get("fallback_used"):
+        return "high"
+    return None
+
+
 def _generate_chat_response(
     *,
     content: str,
@@ -6541,6 +6566,7 @@ def _generate_chat_response(
     messages: Sequence[chat_contracts.ChatMessage] | None,
     fallback_response: str,
     session_metadata: Mapping[str, Any] | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
     if _chat_response_provider is None:
         return fallback_response
@@ -6575,6 +6601,7 @@ def _generate_chat_response(
                     "component": "chat_response",
                     **({"job_id": chat_session_id} if chat_session_id else {}),
                 },
+                reasoning_effort=reasoning_effort,
             )
         )
     except Exception:  # noqa: BLE001
@@ -6809,6 +6836,7 @@ def _finalize_chat_turn_plan(
         messages=messages,
         fallback_response=fallback_response or _fallback_chat_response(content),
         session_metadata=session_metadata,
+        reasoning_effort=_response_reasoning_effort(finalized),
     )
     return finalized
 
