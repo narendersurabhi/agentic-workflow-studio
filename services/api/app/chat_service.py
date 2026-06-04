@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 import logging
 import re
 from typing import Any, Callable, Sequence
@@ -123,6 +124,222 @@ class ClarificationLifecycle:
 
     def next_question(self) -> str | None:
         return self.current_question or (self.questions[0] if self.questions else None)
+
+
+# ─── Focused runtime interfaces ───────────────────────────────────────────────
+# ChatServiceRuntime remains the external interface (used by main.py).
+# ChatRuntime and AgentRuntime are narrower views used internally by the
+# pipeline stages so each executor only depends on what it actually needs.
+
+@dataclass(frozen=True)
+class ChatRuntime:
+    """Owns a single synchronous turn: classify, respond, optionally spawn work."""
+    route_turn: Callable[..., dict[str, Any]]
+    utcnow: Callable[[], datetime]
+    make_id: Callable[[], str]
+    normalize_submit_context: Callable[..., "ChatSubmitNormalizationResult | None"] | None = None
+    is_chat_only_correction: Callable[[str], bool] | None = None
+    defer_pending_clarification_mapping: bool = False
+
+
+@dataclass(frozen=True)
+class AgentRuntime:
+    """Owns job-scoped operations that outlive a single chat turn."""
+    create_job: Callable[[models.JobCreate, Session], models.Job]
+    run_workflow: Callable[..., models.WorkflowRunResult]
+    inspect_workflow: Callable[..., "ChatWorkflowInspection"]
+    run_direct_capability: Callable[..., "ChatDirectRunResult"]
+
+
+def _decompose_runtime(runtime: ChatServiceRuntime) -> tuple[ChatRuntime, AgentRuntime]:
+    """Split a ChatServiceRuntime into its two focused sub-interfaces."""
+    chat = ChatRuntime(
+        route_turn=runtime.route_turn,
+        utcnow=runtime.utcnow,
+        make_id=runtime.make_id,
+        normalize_submit_context=runtime.normalize_submit_context,
+        is_chat_only_correction=runtime.is_chat_only_correction,
+        defer_pending_clarification_mapping=runtime.defer_pending_clarification_mapping,
+    )
+    agent = AgentRuntime(
+        create_job=runtime.create_job,
+        run_workflow=runtime.run_workflow,
+        inspect_workflow=runtime.inspect_workflow,
+        run_direct_capability=runtime.run_direct_capability,
+    )
+    return chat, agent
+
+
+# ─── Typed turn plans ─────────────────────────────────────────────────────────
+# The LLM router currently returns dict[str, Any]. These dataclasses give each
+# route type an explicit contract so executors don't silently miss fields.
+
+@dataclass(frozen=True)
+class AskClarificationPlan:
+    resolved_goal: str
+    questions: list[str]
+    question_queue: list[str]
+    assessment: dict[str, Any]
+    context_json: dict[str, Any]
+    pending_state: dict[str, Any]
+    assistant_content: str = ""
+    normalized_intent_envelope: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class SubmitJobPlan:
+    resolved_goal: str
+    merged_context: dict[str, Any]
+    assessment: dict[str, Any]
+    assistant_content: str = ""
+    normalization: ChatSubmitNormalizationResult | None = None
+
+
+@dataclass(frozen=True)
+class RunWorkflowPlan:
+    resolved_goal: str
+    merged_context: dict[str, Any]
+    assessment: dict[str, Any]
+    assistant_content: str = ""
+
+
+@dataclass(frozen=True)
+class ToolCallPlan:
+    resolved_goal: str
+    capability_id: str
+    arguments: dict[str, Any]
+    merged_context: dict[str, Any]
+    assessment: dict[str, Any]
+    assistant_content: str = ""
+
+
+@dataclass(frozen=True)
+class RespondPlan:
+    resolved_goal: str
+    merged_context: dict[str, Any]
+    assessment: dict[str, Any]
+    assistant_content: str = ""
+    clear_pending_clarification: bool = False
+    boundary_decision: dict[str, Any] | None = None
+    routing_decision: dict[str, Any] | None = None
+
+
+TurnPlan = (
+    AskClarificationPlan
+    | SubmitJobPlan
+    | RunWorkflowPlan
+    | ToolCallPlan
+    | RespondPlan
+)
+
+
+# ─── Turn context and result ───────────────────────────────────────────────────
+
+@dataclass
+class TurnContext:
+    """All state assembled before routing; passed unchanged through executors."""
+    db: Session
+    record: ChatSessionRecord
+    request: chat_contracts.ChatTurnRequest
+    content: str
+    session_metadata: dict[str, Any]
+    context_envelope: Any
+    merged_context: dict[str, Any]
+    candidate_goal: str
+    chat_messages: list[chat_contracts.ChatMessage]
+    messages: list[ChatMessageRecord]
+    loaded_updated_at: Any
+    loaded_state_version: int
+    cleared_session_keys: set[str]
+    bound_user_id: str
+    now: datetime
+    chat: ChatRuntime
+    agent: AgentRuntime
+    had_pending_clarification: bool = False
+    had_pending_workflow_input: bool = False
+    restarted_pending_clarification: bool = False
+    exit_pending_to_chat: bool = False
+    pre_route_normalization: ChatSubmitNormalizationResult | None = None
+    clarification_mapping: dict[str, Any] | None = None
+
+
+@dataclass
+class TurnResult:
+    """What an executor produces; consumed by _persist_turn and _build_turn_response."""
+    assistant_content: str
+    assistant_action: chat_contracts.AssistantAction
+    created_job: models.Job | None = None
+    workflow_run: models.WorkflowRun | None = None
+    direct_output: dict[str, Any] | None = None
+    boundary_decision: dict[str, Any] | None = None
+    routing_decision: dict[str, Any] | None = None
+
+
+# ─── Clarification state machine ──────────────────────────────────────────────
+# Replaces the _clarification_lifecycle blob computation for new code paths.
+# Existing ClarificationLifecycle functions are kept for callers not yet migrated.
+
+class ClarificationPhase(str, Enum):
+    idle = "idle"
+    collecting = "collecting"
+    ready = "ready"
+
+
+@dataclass(frozen=True)
+class SlotQuestion:
+    field: str
+    question: str
+
+
+@dataclass(frozen=True)
+class ClarificationSession:
+    phase: ClarificationPhase
+    goal: str
+    collected: dict[str, Any]
+    queue: tuple[SlotQuestion, ...]
+    frame: dict[str, Any] = field(default_factory=dict)
+
+
+def clarification_begin(
+    goal: str,
+    questions: list[SlotQuestion],
+    frame: dict[str, Any] | None = None,
+) -> ClarificationSession:
+    """Start a new clarification flow for goal, collecting the given slots in order."""
+    return ClarificationSession(
+        phase=ClarificationPhase.collecting if questions else ClarificationPhase.ready,
+        goal=goal,
+        collected={},
+        queue=tuple(questions),
+        frame=dict(frame or {}),
+    )
+
+
+def clarification_answer(
+    session: ClarificationSession,
+    field: str,
+    value: Any,
+) -> ClarificationSession:
+    """Record a slot answer and advance the queue."""
+    updated_collected = {**session.collected, field: value}
+    remaining = tuple(q for q in session.queue if q.field != field)
+    return ClarificationSession(
+        phase=ClarificationPhase.ready if not remaining else ClarificationPhase.collecting,
+        goal=session.goal,
+        collected=updated_collected,
+        queue=remaining,
+        frame=session.frame,
+    )
+
+
+def clarification_is_complete(session: ClarificationSession) -> bool:
+    """True when all required slots are collected."""
+    return session.phase == ClarificationPhase.ready
+
+
+def clarification_next_question(session: ClarificationSession) -> SlotQuestion | None:
+    """Return the next unanswered slot question, or None if complete."""
+    return session.queue[0] if session.queue else None
 
 
 def _submit_normalization_failure_questions(
@@ -2027,6 +2244,708 @@ def _looks_like_pending_clarification_intent_change(
     return bool(tokens & hints.artifact_tokens) and bool(tokens & hints.action_tokens)
 
 
+# ─── Turn pipeline ─────────────────────────────────────────────────────────────
+
+
+def _build_turn_context(
+    db: Session,
+    session_id: str,
+    request: chat_contracts.ChatTurnRequest,
+    *,
+    chat: ChatRuntime,
+    agent: AgentRuntime,
+    user_id: str | None,
+) -> TurnContext:
+    """Validate session access, assemble all pre-routing state, and return TurnContext."""
+    record = db.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
+    if record is None:
+        raise KeyError(session_id)
+    if not _chat_session_access_allowed(record, user_id):
+        raise KeyError(session_id)
+
+    content = str(request.content or "").strip()
+    if not content:
+        raise ValueError("content_required")
+
+    now = chat.utcnow()
+    session_metadata = dict(record.metadata_json or {})
+    session_metadata["_chat_session_id"] = record.id
+    loaded_updated_at = record.updated_at
+    loaded_state_version = _session_state_version(session_metadata)
+    cleared_session_keys: set[str] = set()
+
+    bound_user_id = _normalized_user_id(user_id) or _chat_session_user_id(session_metadata)
+    if bound_user_id and not _chat_session_user_id(session_metadata):
+        session_metadata[_INTERNAL_CHAT_USER_ID_KEY] = bound_user_id
+
+    # Detect pending clarification state before any mapping
+    pending_lifecycle = clarification_lifecycle_from_metadata(session_metadata)
+    pending_state = pending_lifecycle.state if pending_lifecycle.active else None
+    had_pending_clarification = pending_state is not None
+    had_pending_workflow_input = isinstance(session_metadata.get("pending_workflow_input"), Mapping)
+    exit_pending_to_chat = bool(
+        pending_state is not None
+        and chat.is_chat_only_correction is not None
+        and chat.is_chat_only_correction(content)
+    )
+
+    restarted_pending_clarification = False
+    if _looks_like_pending_clarification_intent_change(content, pending_state=pending_state):
+        restarted_pending_clarification = True
+        clear_pending_clarification_state(session_metadata, include_workflow_input=True)
+
+    # Build context
+    session_context = _sanitize_chat_context(_coerce_context_json(session_metadata.get("context_json")))
+    turn_context_json = _sanitize_chat_context(
+        _prepare_turn_context(request.context_json, session_metadata=session_metadata, content=content)
+    )
+    messages = _message_records_for_session(db, record.id)
+    chat_messages = [_message_from_record(m) for m in messages]
+    candidate_goal = (
+        content.strip()
+        if restarted_pending_clarification
+        else _candidate_goal(content, session_metadata, messages=chat_messages,
+                             is_chat_only_correction=chat.is_chat_only_correction)
+    )
+    context_envelope = context_service.build_chat_context_envelope(
+        db=db,
+        goal=candidate_goal,
+        session_metadata=session_metadata,
+        session_context=session_context,
+        turn_context=turn_context_json,
+        user_id=bound_user_id,
+    )
+    merged_context = context_service.chat_submit_context_view(context_envelope)
+
+    # Apply pending clarification slot mapping (may update goal / context)
+    pending_state_before_mapping = _parse_pending_clarification_state(session_metadata)
+    (
+        candidate_goal,
+        context_envelope,
+        merged_context,
+        session_metadata,
+        pre_route_normalization,
+    ) = _apply_pending_clarification_mapping(
+        db=db,
+        runtime=ChatServiceRuntime(
+            route_turn=chat.route_turn,
+            run_direct_capability=agent.run_direct_capability,
+            create_job=agent.create_job,
+            run_workflow=agent.run_workflow,
+            inspect_workflow=agent.inspect_workflow,
+            utcnow=chat.utcnow,
+            make_id=chat.make_id,
+            normalize_submit_context=chat.normalize_submit_context,
+            is_chat_only_correction=chat.is_chat_only_correction,
+            defer_pending_clarification_mapping=chat.defer_pending_clarification_mapping,
+        ),
+        goal=candidate_goal,
+        content=content,
+        session_metadata=session_metadata,
+        merged_context=merged_context,
+        context_envelope=context_envelope,
+        user_id=bound_user_id,
+        messages=chat_messages,
+    )
+    pending_state_after_mapping = _parse_pending_clarification_state(session_metadata)
+    clarification_mapping = _clarification_mapping_metadata(
+        before_state=pending_state_before_mapping,
+        after_state=pending_state_after_mapping,
+        normalization=pre_route_normalization,
+        restarted=restarted_pending_clarification,
+    )
+
+    return TurnContext(
+        db=db,
+        record=record,
+        request=request,
+        content=content,
+        session_metadata=session_metadata,
+        context_envelope=context_envelope,
+        merged_context=merged_context,
+        candidate_goal=candidate_goal,
+        chat_messages=chat_messages,
+        messages=messages,
+        loaded_updated_at=loaded_updated_at,
+        loaded_state_version=loaded_state_version,
+        cleared_session_keys=cleared_session_keys,
+        bound_user_id=bound_user_id,
+        now=now,
+        chat=chat,
+        agent=agent,
+        had_pending_clarification=had_pending_clarification,
+        had_pending_workflow_input=had_pending_workflow_input,
+        restarted_pending_clarification=restarted_pending_clarification,
+        exit_pending_to_chat=exit_pending_to_chat,
+        pre_route_normalization=pre_route_normalization,
+        clarification_mapping=clarification_mapping,
+    )
+
+
+def _classify_turn(ctx: TurnContext) -> TurnPlan:
+    """Route the turn: try fast-path first, then LLM router, then convert to typed plan."""
+    fast = _pending_clarification_fast_turn_plan(
+        candidate_goal=ctx.candidate_goal,
+        session_metadata=ctx.session_metadata,
+        normalization=ctx.pre_route_normalization,
+        had_pending_clarification=ctx.had_pending_clarification,
+        had_pending_workflow_input=ctx.had_pending_workflow_input,
+        restarted=ctx.restarted_pending_clarification,
+        exit_pending_to_chat=ctx.exit_pending_to_chat,
+    )
+    if fast is not None:
+        turn_dict = fast
+    else:
+        route_context = context_service.chat_route_context_view(ctx.context_envelope)
+        try:
+            turn_dict = ctx.chat.route_turn(
+                content=ctx.content,
+                candidate_goal=ctx.candidate_goal,
+                session_metadata=ctx.session_metadata,
+                merged_context=route_context,
+                messages=ctx.chat_messages,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("chat_route_turn_failed", extra={"session_id": ctx.record.id})
+            turn_dict = {"type": "respond", "assistant_content": ""}
+
+    return _plan_from_turn_dict(turn_dict, ctx)
+
+
+def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPlan:
+    """Convert the raw router dict into a typed TurnPlan, applying context updates."""
+    # Persist normalized intent envelope into session
+    normalized_intent_envelope: dict[str, Any] | None = (
+        dict(turn_dict.get("normalized_intent_envelope"))
+        if isinstance(turn_dict.get("normalized_intent_envelope"), Mapping)
+        else None
+    )
+    if normalized_intent_envelope:
+        ctx.session_metadata["normalized_intent_envelope"] = normalized_intent_envelope
+
+    assessment = workflow_contracts.dump_goal_intent_profile(turn_dict.get("goal_intent_profile")) or {}
+    route_type = str(turn_dict.get("type") or "").strip().lower() or "respond"
+    resolved_goal = str(turn_dict.get("resolved_goal") or ctx.candidate_goal or "").strip() or ctx.content
+    assistant_content = str(turn_dict.get("assistant_content") or "").strip()
+
+    # Apply any context updates the router returned
+    context_json_updates = (
+        dict(turn_dict.get("context_json_updates"))
+        if isinstance(turn_dict.get("context_json_updates"), Mapping)
+        else {}
+    )
+    merged_context = ctx.merged_context
+    context_envelope = ctx.context_envelope
+    if context_json_updates:
+        context_envelope = context_service.update_chat_context_envelope(
+            context_envelope, goal=resolved_goal, context_json=context_json_updates,
+        )
+        merged_context = context_service.chat_submit_context_view(context_envelope)
+        ctx.context_envelope = context_envelope
+        ctx.merged_context = merged_context
+
+    boundary_decision: dict[str, Any] | None = (
+        dict(turn_dict.get("boundary_decision"))
+        if isinstance(turn_dict.get("boundary_decision"), Mapping)
+        else None
+    )
+    routing_decision: dict[str, Any] | None = (
+        dict(turn_dict.get("routing_decision"))
+        if isinstance(turn_dict.get("routing_decision"), Mapping)
+        else None
+    )
+
+    if route_type == "ask_clarification":
+        question_queue = [
+            str(q).strip()
+            for q in turn_dict.get("clarification_questions", assessment.get("questions", []))
+            if isinstance(q, str) and q.strip()
+        ]
+        questions = _active_clarification_questions(question_queue)
+        pending_state = _pending_clarification_state(
+            resolved_goal=resolved_goal,
+            questions=question_queue,
+            assessment=assessment,
+            session_metadata=ctx.session_metadata,
+            context_json=merged_context,
+            normalized_intent_envelope=normalized_intent_envelope,
+            latest_user_answer=ctx.content,
+        )
+        return AskClarificationPlan(
+            resolved_goal=resolved_goal,
+            questions=questions,
+            question_queue=question_queue,
+            assessment=assessment,
+            context_json=merged_context,
+            pending_state=pending_state,
+            assistant_content=assistant_content or ("\n".join(questions) if questions else ""),
+            normalized_intent_envelope=normalized_intent_envelope,
+        )
+
+    if route_type == "submit_job":
+        return SubmitJobPlan(
+            resolved_goal=resolved_goal,
+            merged_context=merged_context,
+            assessment=assessment,
+            assistant_content=assistant_content,
+            normalization=ctx.pre_route_normalization,
+        )
+
+    if route_type == "run_workflow":
+        return RunWorkflowPlan(
+            resolved_goal=resolved_goal,
+            merged_context=merged_context,
+            assessment=assessment,
+            assistant_content=assistant_content,
+        )
+
+    if route_type == "tool_call":
+        raw_args = turn_dict.get("arguments")
+        return ToolCallPlan(
+            resolved_goal=resolved_goal,
+            capability_id=str(turn_dict.get("capability_id") or "").strip(),
+            arguments=dict(raw_args) if isinstance(raw_args, Mapping) else {},
+            merged_context=merged_context,
+            assessment=assessment,
+            assistant_content=assistant_content,
+        )
+
+    return RespondPlan(
+        resolved_goal=resolved_goal,
+        merged_context=merged_context,
+        assessment=assessment,
+        assistant_content=assistant_content,
+        clear_pending_clarification=bool(turn_dict.get("clear_pending_clarification")),
+        boundary_decision=boundary_decision,
+        routing_decision=routing_decision,
+    )
+
+
+def _execute_turn(plan: TurnPlan, ctx: TurnContext) -> TurnResult:
+    """Dispatch to the executor for the given plan type."""
+    if isinstance(plan, AskClarificationPlan):
+        return _execute_ask_clarification(plan, ctx)
+    if isinstance(plan, SubmitJobPlan):
+        return _execute_submit_job(plan, ctx)
+    if isinstance(plan, RunWorkflowPlan):
+        return _execute_run_workflow(plan, ctx)
+    if isinstance(plan, ToolCallPlan):
+        return _execute_tool_call(plan, ctx)
+    return _execute_respond(plan, ctx)  # type: ignore[arg-type]
+
+
+def _execute_ask_clarification(plan: AskClarificationPlan, ctx: TurnContext) -> TurnResult:
+    questions = plan.questions or _active_clarification_questions(plan.question_queue)
+    content = plan.assistant_content or ("\n".join(questions) if questions else "What should I do next?")
+    persist_pending_clarification_state(
+        ctx.session_metadata,
+        state=plan.pending_state,
+        draft_goal=plan.resolved_goal,
+        cleared_keys=ctx.cleared_session_keys,
+    )
+    return TurnResult(
+        assistant_content=content,
+        assistant_action=chat_contracts.AssistantAction(
+            type=chat_contracts.AssistantActionType.ask_clarification,
+            goal=plan.resolved_goal,
+            clarification_questions=questions,
+            goal_intent_profile=dict(plan.assessment),
+            context_json=plan.context_json,
+        ),
+    )
+
+
+def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
+    normalization = plan.normalization
+    if normalization is None and ctx.chat.normalize_submit_context is not None:
+        try:
+            normalization = ctx.chat.normalize_submit_context(
+                db=ctx.db,
+                goal=plan.resolved_goal,
+                content=ctx.content,
+                session_metadata=ctx.session_metadata,
+                merged_context=plan.merged_context,
+                context_envelope=ctx.context_envelope,
+                user_id=ctx.bound_user_id,
+                messages=ctx.chat_messages,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("chat_submit_normalization_failed", extra={"session_id": ctx.record.id})
+            fallback_questions = _submit_normalization_failure_questions(
+                session_metadata=ctx.session_metadata, assessment=plan.assessment,
+            )
+            normalization = ChatSubmitNormalizationResult(
+                goal=plan.resolved_goal,
+                clarification_questions=fallback_questions,
+                requires_blocking_clarification=True,
+                goal_intent_profile={
+                    **dict(plan.assessment),
+                    "needs_clarification": True,
+                    "requires_blocking_clarification": True,
+                    "questions": fallback_questions,
+                },
+            )
+
+    resolved_goal = plan.resolved_goal
+    merged_context = plan.merged_context
+    assessment = plan.assessment
+
+    if normalization is not None:
+        if isinstance(normalization.context_json, Mapping) and normalization.context_json:
+            ctx.context_envelope = context_service.update_chat_context_envelope(
+                ctx.context_envelope, goal=resolved_goal, context_json=normalization.context_json,
+            )
+            merged_context = context_service.chat_submit_context_view(ctx.context_envelope)
+        if isinstance(normalization.goal, str) and normalization.goal.strip():
+            resolved_goal = normalization.goal.strip()
+            ctx.context_envelope = context_service.update_chat_context_envelope(
+                ctx.context_envelope, goal=resolved_goal,
+            )
+        if isinstance(normalization.goal_intent_profile, Mapping) and normalization.goal_intent_profile:
+            assessment = dict(normalization.goal_intent_profile)
+
+        clarification_question_queue = [
+            str(q).strip() for q in normalization.clarification_questions
+            if isinstance(q, str) and q.strip()
+        ]
+        if normalization.requires_blocking_clarification and not clarification_question_queue:
+            clarification_question_queue = _submit_normalization_failure_questions(
+                session_metadata=ctx.session_metadata, assessment=assessment,
+            )
+        clarification_questions = _active_clarification_questions(clarification_question_queue)
+        if clarification_questions or normalization.requires_blocking_clarification:
+            content = "\n".join(clarification_questions or clarification_question_queue)
+            persist_pending_clarification_state(
+                ctx.session_metadata,
+                state=_pending_clarification_state(
+                    resolved_goal=resolved_goal,
+                    questions=clarification_question_queue,
+                    assessment=assessment,
+                    session_metadata=ctx.session_metadata,
+                    context_json=merged_context,
+                    normalized_intent_envelope=ctx.session_metadata.get("normalized_intent_envelope"),
+                    latest_user_answer=ctx.content,
+                ),
+                draft_goal=resolved_goal,
+                cleared_keys=ctx.cleared_session_keys,
+            )
+            return TurnResult(
+                assistant_content=content,
+                assistant_action=chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.ask_clarification,
+                    goal=resolved_goal,
+                    clarification_questions=clarification_questions,
+                    goal_intent_profile=dict(assessment),
+                    context_json=merged_context,
+                ),
+            )
+
+    job, action = _create_job_and_action(
+        db=ctx.db,
+        runtime=ChatServiceRuntime(
+            route_turn=ctx.chat.route_turn,
+            run_direct_capability=ctx.agent.run_direct_capability,
+            create_job=ctx.agent.create_job,
+            run_workflow=ctx.agent.run_workflow,
+            inspect_workflow=ctx.agent.inspect_workflow,
+            utcnow=ctx.chat.utcnow,
+            make_id=ctx.chat.make_id,
+        ),
+        resolved_goal=resolved_goal,
+        merged_context=merged_context,
+        assessment=assessment,
+        priority=ctx.request.priority,
+        session_metadata=ctx.session_metadata,
+        cleared_session_keys=ctx.cleared_session_keys,
+    )
+    content = plan.assistant_content or (
+        f"Started job {job.id}. I submitted it to the normal planner and worker pipeline."
+    )
+    return TurnResult(assistant_content=content, assistant_action=action, created_job=job)
+
+
+def _execute_run_workflow(plan: RunWorkflowPlan, ctx: TurnContext) -> TurnResult:
+    workflow_invocation = workflow_invocation_from_context(plan.merged_context)
+    if workflow_invocation is None or not workflow_invocation.has_target():
+        question = (
+            "Which published workflow should I run? Provide workflow_trigger_id, "
+            "workflow_version_id, or workflow_definition_id in context_json."
+        )
+        workflow_assessment = {
+            **dict(plan.assessment),
+            "needs_clarification": True,
+            "requires_blocking_clarification": True,
+            "questions": [question],
+        }
+        persist_pending_clarification_state(
+            ctx.session_metadata,
+            state=_pending_clarification_state(
+                resolved_goal=plan.resolved_goal,
+                questions=[question],
+                assessment=workflow_assessment,
+                session_metadata=ctx.session_metadata,
+                context_json=plan.merged_context,
+                normalized_intent_envelope=ctx.session_metadata.get("normalized_intent_envelope"),
+                latest_user_answer=ctx.content,
+            ),
+            draft_goal=plan.resolved_goal,
+            cleared_keys=ctx.cleared_session_keys,
+        )
+        return TurnResult(
+            assistant_content=plan.assistant_content or question,
+            assistant_action=chat_contracts.AssistantAction(
+                type=chat_contracts.AssistantActionType.ask_clarification,
+                goal=plan.resolved_goal,
+                clarification_questions=[question],
+                goal_intent_profile=dict(plan.assessment),
+                context_json=plan.merged_context,
+            ),
+        )
+
+    try:
+        workflow_inspection = ctx.agent.inspect_workflow(
+            db=ctx.db,
+            workflow_trigger_id=workflow_invocation.trigger_id,
+            workflow_version_id=workflow_invocation.version_id,
+            workflow_definition_id=workflow_invocation.definition_id,
+            inputs=workflow_invocation.inputs,
+            context_json=workflow_invocation.context_json,
+        )
+        if workflow_inspection.missing_inputs:
+            next_input = workflow_inspection.missing_inputs[0]
+            question = _workflow_input_question(next_input)
+            workflow_assessment = {
+                **dict(plan.assessment),
+                "needs_clarification": True,
+                "requires_blocking_clarification": True,
+                "questions": [question],
+            }
+            persist_pending_clarification_state(
+                ctx.session_metadata,
+                state=_pending_clarification_state(
+                    resolved_goal=plan.resolved_goal,
+                    questions=[question],
+                    assessment=workflow_assessment,
+                    session_metadata=ctx.session_metadata,
+                    context_json=plan.merged_context,
+                    normalized_intent_envelope=ctx.session_metadata.get("normalized_intent_envelope"),
+                    latest_user_answer=ctx.content,
+                ),
+                draft_goal=plan.resolved_goal,
+                cleared_keys=ctx.cleared_session_keys,
+            )
+            ctx.session_metadata["pending_workflow_input"] = dict(next_input)
+            return TurnResult(
+                assistant_content=plan.assistant_content or question,
+                assistant_action=chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.ask_clarification,
+                    goal=plan.resolved_goal,
+                    clarification_questions=[question],
+                    goal_intent_profile=dict(plan.assessment),
+                    context_json=plan.merged_context,
+                ),
+            )
+
+        workflow_result = ctx.agent.run_workflow(
+            db=ctx.db,
+            workflow_trigger_id=workflow_invocation.trigger_id,
+            workflow_version_id=workflow_invocation.version_id,
+            workflow_definition_id=workflow_invocation.definition_id,
+            inputs=workflow_invocation.inputs,
+            context_json=workflow_invocation.context_json,
+            metadata={**workflow_invocation.metadata, "chat_session_id": ctx.record.id},
+            idempotency_key=workflow_invocation.idempotency_key,
+            priority=ctx.request.priority,
+        )
+        created_job = workflow_result.job
+        workflow_run = workflow_result.workflow_run
+        ctx.session_metadata["active_job_id"] = created_job.id
+        ctx.session_metadata["active_workflow_run_id"] = workflow_run.id
+        ctx.session_metadata["active_workflow_definition_id"] = workflow_run.definition_id
+        ctx.session_metadata["active_workflow_version_id"] = workflow_run.version_id
+        if workflow_run.trigger_id:
+            ctx.session_metadata["active_workflow_trigger_id"] = workflow_run.trigger_id
+        else:
+            ctx.session_metadata.pop("active_workflow_trigger_id", None)
+            ctx.cleared_session_keys.add("active_workflow_trigger_id")
+        clear_pending_clarification_state(
+            ctx.session_metadata,
+            cleared_keys=ctx.cleared_session_keys,
+            include_workflow_input=True,
+        )
+        content = plan.assistant_content or (
+            f"Started workflow run {workflow_run.id}. Job {created_job.id} is queued."
+        )
+        return TurnResult(
+            assistant_content=content,
+            assistant_action=chat_contracts.AssistantAction(
+                type=chat_contracts.AssistantActionType.run_workflow,
+                goal=plan.resolved_goal,
+                job_id=created_job.id,
+                workflow_run_id=workflow_run.id,
+                workflow_definition_id=workflow_run.definition_id,
+                workflow_version_id=workflow_run.version_id,
+                workflow_trigger_id=workflow_run.trigger_id,
+                goal_intent_profile=dict(plan.assessment),
+                context_json=plan.merged_context,
+            ),
+            created_job=created_job,
+            workflow_run=workflow_run,
+        )
+    except Exception as exc:  # noqa: BLE001
+        content = f"I could not start that published workflow from chat. Workflow invocation failed: {exc}"
+        return TurnResult(
+            assistant_content=content,
+            assistant_action=chat_contracts.AssistantAction(
+                type=chat_contracts.AssistantActionType.respond,
+                goal=plan.resolved_goal,
+                goal_intent_profile=dict(plan.assessment),
+                context_json=plan.merged_context,
+            ),
+        )
+
+
+def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
+    arguments = _enrich_memory_arguments(plan.capability_id, plan.arguments, plan.merged_context)
+    try:
+        direct_result = ctx.agent.run_direct_capability(
+            db=ctx.db,
+            chat_session_id=ctx.record.id,
+            goal=plan.resolved_goal,
+            capability_id=plan.capability_id,
+            arguments=arguments,
+            context_json=plan.merged_context,
+            priority=ctx.request.priority,
+        )
+        created_job = direct_result.job
+        if direct_result.error:
+            content = (
+                f"I could not complete that directly in chat. One-step run failed: {direct_result.error}"
+            )
+            return TurnResult(
+                assistant_content=content,
+                assistant_action=chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.respond,
+                    goal=plan.resolved_goal,
+                    job_id=created_job.id,
+                    goal_intent_profile=dict(plan.assessment),
+                    context_json=plan.merged_context,
+                ),
+                created_job=created_job,
+            )
+        direct_output = (
+            dict(direct_result.output) if isinstance(direct_result.output, Mapping) else None
+        )
+        content = str(direct_result.assistant_response or plan.assistant_content).strip()
+        clear_pending_clarification_state(
+            ctx.session_metadata,
+            cleared_keys=ctx.cleared_session_keys,
+            include_workflow_input=True,
+        )
+        return TurnResult(
+            assistant_content=content,
+            assistant_action=chat_contracts.AssistantAction(
+                type=chat_contracts.AssistantActionType.tool_call,
+                goal=plan.resolved_goal,
+                job_id=created_job.id,
+                capability_id=direct_result.capability_id or plan.capability_id or None,
+                tool_name=direct_result.tool_name,
+                goal_intent_profile=dict(plan.assessment),
+                context_json=plan.merged_context,
+            ),
+            created_job=created_job,
+            direct_output=direct_output,
+        )
+    except Exception as exc:  # noqa: BLE001
+        content = f"I could not complete that directly in chat. One-step run failed: {exc}"
+        return TurnResult(
+            assistant_content=content,
+            assistant_action=chat_contracts.AssistantAction(
+                type=chat_contracts.AssistantActionType.respond,
+                goal=plan.resolved_goal,
+                goal_intent_profile=dict(plan.assessment),
+                context_json=plan.merged_context,
+            ),
+        )
+
+
+def _execute_respond(plan: RespondPlan, ctx: TurnContext) -> TurnResult:
+    if plan.clear_pending_clarification:
+        clear_pending_clarification_state(
+            ctx.session_metadata,
+            cleared_keys=ctx.cleared_session_keys,
+            include_workflow_input=True,
+        )
+    return TurnResult(
+        assistant_content=plan.assistant_content,
+        assistant_action=chat_contracts.AssistantAction(
+            type=chat_contracts.AssistantActionType.respond,
+            goal=plan.resolved_goal,
+            goal_intent_profile=dict(plan.assessment),
+            context_json=plan.merged_context,
+        ),
+        boundary_decision=plan.boundary_decision,
+        routing_decision=plan.routing_decision,
+    )
+
+
+def _persist_turn(
+    db: Session,
+    ctx: TurnContext,
+    result: TurnResult,
+    user_message: ChatMessageRecord,
+    assistant_message: ChatMessageRecord,
+) -> dict[str, Any]:
+    """Persist session state and commit both messages; return the saved metadata."""
+    if ctx.restarted_pending_clarification:
+        for key in ("draft_goal", "pending_clarification", "pending_workflow_input"):
+            if key not in ctx.session_metadata:
+                ctx.cleared_session_keys.add(key)
+
+    context_envelope = context_service.update_chat_context_envelope(
+        ctx.context_envelope, goal=_resolved_goal_from_result(result),
+        context_json=ctx.merged_context,
+    )
+    ctx.merged_context = context_service.chat_submit_context_view(context_envelope)
+    ctx.session_metadata["context_json"] = ctx.merged_context
+
+    desired_title = ctx.record.title
+    if desired_title == "New chat":
+        desired_title = _default_session_title(_resolved_goal_from_result(result))
+
+    try:
+        saved_metadata = _persist_chat_session_state(
+            db=db,
+            record=ctx.record,
+            desired_metadata=ctx.session_metadata,
+            desired_title=desired_title,
+            loaded_updated_at=ctx.loaded_updated_at,
+            loaded_state_version=ctx.loaded_state_version,
+            cleared_keys=ctx.cleared_session_keys,
+            runtime=ChatServiceRuntime(
+                route_turn=ctx.chat.route_turn,
+                run_direct_capability=ctx.agent.run_direct_capability,
+                create_job=ctx.agent.create_job,
+                run_workflow=ctx.agent.run_workflow,
+                inspect_workflow=ctx.agent.inspect_workflow,
+                utcnow=ctx.chat.utcnow,
+                make_id=ctx.chat.make_id,
+            ),
+        )
+    except RuntimeError:
+        logger.exception("chat_session_state_persist_failed", extra={"session_id": ctx.record.id})
+        saved_metadata = dict(ctx.record.metadata_json or {})
+
+    db.add(user_message)
+    db.add(assistant_message)
+    db.commit()
+    return saved_metadata
+
+
+def _resolved_goal_from_result(result: TurnResult) -> str:
+    return str(result.assistant_action.goal or "").strip()
+
+
 def _create_job_and_action(
     *,
     db: Session,
@@ -2117,616 +3036,68 @@ def handle_turn(
     runtime: ChatServiceRuntime,
     user_id: str | None = None,
 ) -> chat_contracts.ChatTurnResponse:
-    record = db.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
-    if record is None:
-        raise KeyError(session_id)
-    if not _chat_session_access_allowed(record, user_id):
-        raise KeyError(session_id)
+    chat, agent = _decompose_runtime(runtime)
 
-    content = str(request.content or "").strip()
-    if not content:
-        raise ValueError("content_required")
-
-    now = runtime.utcnow()
-    session_metadata = dict(record.metadata_json or {})
-    # Expose the session ID so downstream LLM calls can pass it as job_id
-    # in metadata, enabling CachingLLMProvider to route through generate_cached().
-    session_metadata["_chat_session_id"] = record.id
-    loaded_updated_at = record.updated_at
-    loaded_state_version = _session_state_version(session_metadata)
-    cleared_session_keys: set[str] = set()
-    bound_user_id = _normalized_user_id(user_id) or _chat_session_user_id(session_metadata)
-    if bound_user_id and not _chat_session_user_id(session_metadata):
-        session_metadata[_INTERNAL_CHAT_USER_ID_KEY] = bound_user_id
-    restarted_pending_clarification = False
-    pending_lifecycle = clarification_lifecycle_from_metadata(session_metadata)
-    pending_state = pending_lifecycle.state if pending_lifecycle.active else None
-    pending_state_before_mapping = pending_state
-    had_pending_clarification_before_mapping = pending_state_before_mapping is not None
-    had_pending_workflow_input = isinstance(session_metadata.get("pending_workflow_input"), Mapping)
-    exit_pending_to_chat = bool(
-        pending_state_before_mapping is not None
-        and runtime.is_chat_only_correction is not None
-        and runtime.is_chat_only_correction(content)
-    )
-    if _looks_like_pending_clarification_intent_change(
-        content,
-        pending_state=pending_state,
-    ):
-        restarted_pending_clarification = True
-        clear_pending_clarification_state(
-            session_metadata,
-            include_workflow_input=True,
-        )
-    session_context = _sanitize_chat_context(_coerce_context_json(session_metadata.get("context_json")))
-    turn_context = _prepare_turn_context(
-        request.context_json,
-        session_metadata=session_metadata,
-        content=content,
-    )
-    turn_context = _sanitize_chat_context(turn_context)
-    messages = _message_records_for_session(db, record.id)
-    chat_messages = [_message_from_record(message) for message in messages]
-    candidate_goal = (
-        content.strip()
-        if restarted_pending_clarification
-        else _candidate_goal(
-            content,
-            session_metadata,
-            messages=chat_messages,
-            is_chat_only_correction=runtime.is_chat_only_correction,
-        )
-    )
-    context_envelope = context_service.build_chat_context_envelope(
-        db=db,
-        goal=candidate_goal,
-        session_metadata=session_metadata,
-        session_context=session_context,
-        turn_context=turn_context,
-        user_id=bound_user_id,
-    )
-    merged_context = context_service.chat_submit_context_view(context_envelope)
+    ctx = _build_turn_context(db, session_id, request, chat=chat, agent=agent, user_id=user_id)
 
     user_message = ChatMessageRecord(
-        id=runtime.make_id(),
-        session_id=record.id,
+        id=chat.make_id(),
+        session_id=ctx.record.id,
         role=chat_contracts.ChatRole.user.value,
-        content=content,
-        metadata_json={"context_json": turn_context} if turn_context else {},
+        content=ctx.content,
+        metadata_json=(
+            {"context_json": _sanitize_chat_context(
+                _prepare_turn_context(request.context_json,
+                                     session_metadata=ctx.session_metadata,
+                                     content=ctx.content)
+            )}
+        ),
         action_json=None,
         job_id=None,
-        created_at=now,
+        created_at=ctx.now,
     )
-    pre_route_normalization: ChatSubmitNormalizationResult | None = None
-    (
-        candidate_goal,
-        context_envelope,
-        merged_context,
-        session_metadata,
-        pre_route_normalization,
-    ) = _apply_pending_clarification_mapping(
-        db=db,
-        runtime=runtime,
-        goal=candidate_goal,
-        content=content,
-        session_metadata=session_metadata,
-        merged_context=merged_context,
-        context_envelope=context_envelope,
-        user_id=bound_user_id,
-        messages=chat_messages,
-    )
-    pending_state_after_mapping = _parse_pending_clarification_state(session_metadata)
-    clarification_mapping = _clarification_mapping_metadata(
-        before_state=pending_state_before_mapping,
-        after_state=pending_state_after_mapping,
-        normalization=pre_route_normalization,
-        restarted=restarted_pending_clarification,
-    )
-    fast_pending_plan = _pending_clarification_fast_turn_plan(
-        candidate_goal=candidate_goal,
-        session_metadata=session_metadata,
-        normalization=pre_route_normalization,
-        had_pending_clarification=had_pending_clarification_before_mapping,
-        had_pending_workflow_input=had_pending_workflow_input,
-        restarted=restarted_pending_clarification,
-        exit_pending_to_chat=exit_pending_to_chat,
-    )
-    if fast_pending_plan is not None:
-        turn_plan = fast_pending_plan
-    else:
-        route_context = context_service.chat_route_context_view(context_envelope)
-        try:
-            turn_plan = runtime.route_turn(
-                content=content,
-                candidate_goal=candidate_goal,
-                session_metadata=session_metadata,
-                merged_context=route_context,
-                messages=chat_messages,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("chat_route_turn_failed", extra={"session_id": record.id})
-            turn_plan = {"type": "respond", "assistant_content": ""}
-    normalized_intent_envelope = (
-        dict(turn_plan.get("normalized_intent_envelope"))
-        if isinstance(turn_plan.get("normalized_intent_envelope"), Mapping)
-        else None
-    )
-    if normalized_intent_envelope:
-        session_metadata["normalized_intent_envelope"] = normalized_intent_envelope
-    assessment = workflow_contracts.dump_goal_intent_profile(
-        turn_plan.get("goal_intent_profile")
-    ) or {}
-    boundary_decision = (
-        dict(turn_plan.get("boundary_decision"))
-        if isinstance(turn_plan.get("boundary_decision"), Mapping)
-        else None
-    )
-    routing_decision = (
-        dict(turn_plan.get("routing_decision"))
-        if isinstance(turn_plan.get("routing_decision"), Mapping)
-        else None
-    )
-    route_type = str(turn_plan.get("type") or "").strip().lower() or "respond"
-    resolved_goal = str(turn_plan.get("resolved_goal") or candidate_goal or "").strip()
-    if not resolved_goal:
-        resolved_goal = content
-    context_json_updates = (
-        dict(turn_plan.get("context_json_updates"))
-        if isinstance(turn_plan.get("context_json_updates"), Mapping)
-        else {}
-    )
-    if context_json_updates:
-        context_envelope = context_service.update_chat_context_envelope(
-            context_envelope,
-            goal=resolved_goal,
-            context_json=context_json_updates,
-        )
-        merged_context = context_service.chat_submit_context_view(context_envelope)
-    assistant_content = str(turn_plan.get("assistant_content") or "").strip()
 
-    assistant_action: chat_contracts.AssistantAction
-    created_job: models.Job | None = None
-    direct_output: dict[str, Any] | None = None
-    workflow_run: models.WorkflowRun | None = None
+    plan: TurnPlan = _classify_turn(ctx)
+    result: TurnResult = _execute_turn(plan, ctx)
 
-    if route_type == "ask_clarification":
-        question_queue = [
-            str(question).strip()
-            for question in turn_plan.get("clarification_questions", assessment.get("questions", []))
-            if isinstance(question, str) and question.strip()
-        ]
-        questions = _active_clarification_questions(question_queue)
-        if questions and not assistant_content:
-            assistant_content = "\n".join(questions)
-        assistant_action = chat_contracts.AssistantAction(
-            type=chat_contracts.AssistantActionType.ask_clarification,
-            goal=resolved_goal,
-            clarification_questions=questions,
-            goal_intent_profile=dict(assessment),
-            context_json=merged_context,
-        )
-        persist_pending_clarification_state(
-            session_metadata,
-            state=_pending_clarification_state(
-                resolved_goal=resolved_goal,
-                questions=question_queue,
-                assessment=assessment,
-                session_metadata=session_metadata,
-                context_json=merged_context,
-                normalized_intent_envelope=normalized_intent_envelope,
-                latest_user_answer=content,
-            ),
-            draft_goal=resolved_goal,
-            cleared_keys=cleared_session_keys,
-        )
-    elif route_type == "submit_job":
-        normalization = pre_route_normalization
-        if normalization is None and runtime.normalize_submit_context is not None:
-            try:
-                normalization = runtime.normalize_submit_context(
-                    db=db,
-                    goal=resolved_goal,
-                    content=content,
-                    session_metadata=session_metadata,
-                    merged_context=merged_context,
-                    context_envelope=context_envelope,
-                    user_id=bound_user_id,
-                    messages=chat_messages,
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "chat_submit_normalization_failed",
-                    extra={"session_id": record.id},
-                )
-                fallback_questions = _submit_normalization_failure_questions(
-                    session_metadata=session_metadata,
-                    assessment=assessment,
-                )
-                normalization = ChatSubmitNormalizationResult(
-                    goal=resolved_goal,
-                    clarification_questions=fallback_questions,
-                    requires_blocking_clarification=True,
-                    goal_intent_profile={
-                        **dict(assessment),
-                        "needs_clarification": True,
-                        "requires_blocking_clarification": True,
-                        "questions": fallback_questions,
-                    },
-                )
-        if normalization is not None:
-            if isinstance(normalization.context_json, Mapping) and normalization.context_json:
-                context_envelope = context_service.update_chat_context_envelope(
-                    context_envelope,
-                    goal=resolved_goal,
-                    context_json=normalization.context_json,
-                )
-                merged_context = context_service.chat_submit_context_view(context_envelope)
-            if isinstance(normalization.goal, str) and normalization.goal.strip():
-                resolved_goal = normalization.goal.strip()
-                context_envelope = context_service.update_chat_context_envelope(
-                    context_envelope,
-                    goal=resolved_goal,
-                )
-            if isinstance(normalization.goal_intent_profile, Mapping) and normalization.goal_intent_profile:
-                assessment = dict(normalization.goal_intent_profile)
-            clarification_question_queue = [
-                str(question).strip()
-                for question in normalization.clarification_questions
-                if isinstance(question, str) and question.strip()
-            ]
-            if normalization.requires_blocking_clarification and not clarification_question_queue:
-                clarification_question_queue = _submit_normalization_failure_questions(
-                    session_metadata=session_metadata,
-                    assessment=assessment,
-                )
-            clarification_questions = _active_clarification_questions(clarification_question_queue)
-            if clarification_questions or normalization.requires_blocking_clarification:
-                assistant_content = "\n".join(clarification_questions or clarification_question_queue)
-                assistant_action = chat_contracts.AssistantAction(
-                    type=chat_contracts.AssistantActionType.ask_clarification,
-                    goal=resolved_goal,
-                    clarification_questions=clarification_questions,
-                    goal_intent_profile=dict(assessment),
-                    context_json=merged_context,
-                )
-                persist_pending_clarification_state(
-                    session_metadata,
-                    state=_pending_clarification_state(
-                        resolved_goal=resolved_goal,
-                        questions=clarification_question_queue,
-                        assessment=assessment,
-                        session_metadata=session_metadata,
-                        context_json=merged_context,
-                        normalized_intent_envelope=normalized_intent_envelope,
-                        latest_user_answer=content,
-                    ),
-                    draft_goal=resolved_goal,
-                    cleared_keys=cleared_session_keys,
-                )
-            else:
-                created_job, assistant_action = _create_job_and_action(
-                    db=db,
-                    runtime=runtime,
-                    resolved_goal=resolved_goal,
-                    merged_context=merged_context,
-                    assessment=assessment,
-                    priority=request.priority,
-                    session_metadata=session_metadata,
-                    cleared_session_keys=cleared_session_keys,
-                )
-                if not assistant_content:
-                    assistant_content = (
-                        f"Started job {created_job.id}. "
-                        "I submitted it to the normal planner and worker pipeline."
-                    )
-        else:
-            created_job, assistant_action = _create_job_and_action(
-                db=db,
-                runtime=runtime,
-                resolved_goal=resolved_goal,
-                merged_context=merged_context,
-                assessment=assessment,
-                priority=request.priority,
-                session_metadata=session_metadata,
-                cleared_session_keys=cleared_session_keys,
-            )
-            if not assistant_content:
-                assistant_content = (
-                    f"Started job {created_job.id}. "
-                    "I submitted it to the normal planner and worker pipeline."
-                )
-    elif route_type == "run_workflow":
-        workflow_invocation = workflow_invocation_from_context(merged_context)
-        if workflow_invocation is None or not workflow_invocation.has_target():
-            question = (
-                "Which published workflow should I run? Provide workflow_trigger_id, "
-                "workflow_version_id, or workflow_definition_id in context_json."
-            )
-            if not assistant_content:
-                assistant_content = question
-            assistant_action = chat_contracts.AssistantAction(
-                type=chat_contracts.AssistantActionType.ask_clarification,
-                goal=resolved_goal,
-                clarification_questions=[question],
-                goal_intent_profile=dict(assessment),
-                context_json=merged_context,
-            )
-            workflow_assessment = {
-                **dict(assessment),
-                "needs_clarification": True,
-                "requires_blocking_clarification": True,
-                "questions": [question],
-            }
-            persist_pending_clarification_state(
-                session_metadata,
-                state=_pending_clarification_state(
-                    resolved_goal=resolved_goal,
-                    questions=[question],
-                    assessment=workflow_assessment,
-                    session_metadata=session_metadata,
-                    context_json=merged_context,
-                    normalized_intent_envelope=normalized_intent_envelope,
-                    latest_user_answer=content,
-                ),
-                draft_goal=resolved_goal,
-                cleared_keys=cleared_session_keys,
-            )
-        else:
-            try:
-                workflow_inspection = runtime.inspect_workflow(
-                    db=db,
-                    workflow_trigger_id=workflow_invocation.trigger_id,
-                    workflow_version_id=workflow_invocation.version_id,
-                    workflow_definition_id=workflow_invocation.definition_id,
-                    inputs=workflow_invocation.inputs,
-                    context_json=workflow_invocation.context_json,
-                )
-                if workflow_inspection.missing_inputs:
-                    next_input = workflow_inspection.missing_inputs[0]
-                    question = _workflow_input_question(next_input)
-                    if not assistant_content:
-                        assistant_content = question
-                    assistant_action = chat_contracts.AssistantAction(
-                        type=chat_contracts.AssistantActionType.ask_clarification,
-                        goal=resolved_goal,
-                        clarification_questions=[question],
-                        goal_intent_profile=dict(assessment),
-                        context_json=merged_context,
-                    )
-                    workflow_assessment = {
-                        **dict(assessment),
-                        "needs_clarification": True,
-                        "requires_blocking_clarification": True,
-                        "questions": [question],
-                    }
-                    persist_pending_clarification_state(
-                        session_metadata,
-                        state=_pending_clarification_state(
-                            resolved_goal=resolved_goal,
-                            questions=[question],
-                            assessment=workflow_assessment,
-                            session_metadata=session_metadata,
-                            context_json=merged_context,
-                            normalized_intent_envelope=normalized_intent_envelope,
-                            latest_user_answer=content,
-                        ),
-                        draft_goal=resolved_goal,
-                        cleared_keys=cleared_session_keys,
-                    )
-                    session_metadata["pending_workflow_input"] = dict(next_input)
-                else:
-                    workflow_result = runtime.run_workflow(
-                        db=db,
-                        workflow_trigger_id=workflow_invocation.trigger_id,
-                        workflow_version_id=workflow_invocation.version_id,
-                        workflow_definition_id=workflow_invocation.definition_id,
-                        inputs=workflow_invocation.inputs,
-                        context_json=workflow_invocation.context_json,
-                        metadata={
-                            **workflow_invocation.metadata,
-                            "chat_session_id": record.id,
-                        },
-                        idempotency_key=workflow_invocation.idempotency_key,
-                        priority=request.priority,
-                    )
-                    created_job = workflow_result.job
-                    workflow_run = workflow_result.workflow_run
-                    if not assistant_content:
-                        assistant_content = (
-                            f"Started workflow run {workflow_run.id}. "
-                            f"Job {created_job.id} is queued."
-                        )
-                    assistant_action = chat_contracts.AssistantAction(
-                        type=chat_contracts.AssistantActionType.run_workflow,
-                        goal=resolved_goal,
-                        job_id=created_job.id,
-                        workflow_run_id=workflow_run.id,
-                        workflow_definition_id=workflow_run.definition_id,
-                        workflow_version_id=workflow_run.version_id,
-                        workflow_trigger_id=workflow_run.trigger_id,
-                        goal_intent_profile=dict(assessment),
-                        context_json=merged_context,
-                    )
-                    session_metadata["active_job_id"] = created_job.id
-                    session_metadata["active_workflow_run_id"] = workflow_run.id
-                    session_metadata["active_workflow_definition_id"] = workflow_run.definition_id
-                    session_metadata["active_workflow_version_id"] = workflow_run.version_id
-                    if workflow_run.trigger_id:
-                        session_metadata["active_workflow_trigger_id"] = workflow_run.trigger_id
-                    else:
-                        session_metadata.pop("active_workflow_trigger_id", None)
-                        cleared_session_keys.add("active_workflow_trigger_id")
-                    clear_pending_clarification_state(
-                        session_metadata,
-                        cleared_keys=cleared_session_keys,
-                        include_workflow_input=True,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                assistant_content = (
-                    "I could not start that published workflow from chat. "
-                    f"Workflow invocation failed: {exc}"
-                )
-                assistant_action = chat_contracts.AssistantAction(
-                    type=chat_contracts.AssistantActionType.respond,
-                    goal=resolved_goal,
-                    goal_intent_profile=dict(assessment),
-                    context_json=merged_context,
-                )
-    elif route_type == "tool_call":
-        capability_id = str(turn_plan.get("capability_id") or "").strip()
-        arguments = (
-            dict(turn_plan.get("arguments"))
-            if isinstance(turn_plan.get("arguments"), Mapping)
-            else {}
-        )
-        arguments = _enrich_memory_arguments(capability_id, arguments, merged_context)
-        try:
-            direct_result = runtime.run_direct_capability(
-                db=db,
-                chat_session_id=record.id,
-                goal=resolved_goal,
-                capability_id=capability_id,
-                arguments=arguments,
-                context_json=merged_context,
-                priority=request.priority,
-            )
-            created_job = direct_result.job
-            if direct_result.error:
-                assistant_content = (
-                    "I could not complete that directly in chat. "
-                    f"One-step run failed: {direct_result.error}"
-                )
-                assistant_action = chat_contracts.AssistantAction(
-                    type=chat_contracts.AssistantActionType.respond,
-                    goal=resolved_goal,
-                    job_id=created_job.id,
-                    goal_intent_profile=dict(assessment),
-                    context_json=merged_context,
-                )
-            else:
-                direct_output = (
-                    dict(direct_result.output)
-                    if isinstance(direct_result.output, Mapping)
-                    else None
-                )
-                assistant_content = str(
-                    direct_result.assistant_response or assistant_content
-                ).strip()
-                assistant_action = chat_contracts.AssistantAction(
-                    type=chat_contracts.AssistantActionType.tool_call,
-                    goal=resolved_goal,
-                    job_id=created_job.id,
-                    capability_id=direct_result.capability_id or capability_id or None,
-                    tool_name=direct_result.tool_name,
-                    goal_intent_profile=dict(assessment),
-                    context_json=merged_context,
-                )
-                clear_pending_clarification_state(
-                    session_metadata,
-                    cleared_keys=cleared_session_keys,
-                    include_workflow_input=True,
-                )
-        except Exception as exc:  # noqa: BLE001
-            assistant_content = (
-                "I could not complete that directly in chat. "
-                f"One-step run failed: {exc}"
-            )
-            assistant_action = chat_contracts.AssistantAction(
-                type=chat_contracts.AssistantActionType.respond,
-                goal=resolved_goal,
-                goal_intent_profile=dict(assessment),
-                context_json=merged_context,
-            )
-    else:
-        assistant_action = chat_contracts.AssistantAction(
-            type=chat_contracts.AssistantActionType.respond,
-            goal=resolved_goal,
-            goal_intent_profile=dict(assessment),
-            context_json=merged_context,
-        )
-        if bool(turn_plan.get("clear_pending_clarification")):
-            clear_pending_clarification_state(
-                session_metadata,
-                cleared_keys=cleared_session_keys,
-                include_workflow_input=True,
-            )
-    if restarted_pending_clarification:
-        for key in ("draft_goal", "pending_clarification", "pending_workflow_input"):
-            if key not in session_metadata:
-                cleared_session_keys.add(key)
-    if not assistant_content:
-        assistant_content = "What should I do next?"
-
-    context_envelope = context_service.update_chat_context_envelope(
-        context_envelope,
-        goal=resolved_goal,
-        context_json=merged_context,
-    )
-    merged_context = context_service.chat_submit_context_view(context_envelope)
-    session_metadata["context_json"] = merged_context
-    desired_title = record.title
-    if desired_title == "New chat":
-        desired_title = _default_session_title(resolved_goal)
-    try:
-        session_metadata = _persist_chat_session_state(
-            db=db,
-            record=record,
-            desired_metadata=session_metadata,
-            desired_title=desired_title,
-            loaded_updated_at=loaded_updated_at,
-            loaded_state_version=loaded_state_version,
-            cleared_keys=cleared_session_keys,
-            runtime=runtime,
-        )
-    except RuntimeError:
-        logger.exception(
-            "chat_session_state_persist_failed",
-            extra={"session_id": record.id},
-        )
-        # Preserve messages even though session metadata couldn't be updated.
-        # active_job_id won't be reflected on the session until the next
-        # successful write, but the conversation record is not lost.
-        session_metadata = dict(record.metadata_json or {})
+    if not result.assistant_content:
+        result.assistant_content = "What should I do next?"
 
     assistant_message = ChatMessageRecord(
-        id=runtime.make_id(),
-        session_id=record.id,
+        id=chat.make_id(),
+        session_id=ctx.record.id,
         role=chat_contracts.ChatRole.assistant.value,
-        content=assistant_content,
+        content=result.assistant_content,
         metadata_json=_assistant_metadata(
-            assessment,
-            direct_output,
-            workflow_run,
-            boundary_decision=boundary_decision,
-            clarification_mapping=clarification_mapping,
-            routing_decision=routing_decision,
+            result.assistant_action.goal_intent_profile or {},
+            result.direct_output,
+            result.workflow_run,
+            boundary_decision=result.boundary_decision,
+            clarification_mapping=ctx.clarification_mapping,
+            routing_decision=result.routing_decision,
         ),
-        action_json=assistant_action.model_dump(mode="json", exclude_none=True),
-        job_id=created_job.id if created_job is not None else None,
-        created_at=runtime.utcnow(),
+        action_json=result.assistant_action.model_dump(mode="json", exclude_none=True),
+        job_id=result.created_job.id if result.created_job is not None else None,
+        created_at=chat.utcnow(),
     )
-    db.add(user_message)
-    db.add(assistant_message)
-    db.commit()
-    if bound_user_id:
+
+    _persist_turn(db, ctx, result, user_message, assistant_message)
+
+    if ctx.bound_user_id:
         try:
             memory_profile_service.apply_user_profile_updates_from_text(
-                db,
-                user_id=bound_user_id,
-                content=content,
+                db, user_id=ctx.bound_user_id, content=ctx.content,
             )
         except Exception:  # noqa: BLE001
-            logger.exception(
-                "chat_profile_memory_persist_failed",
-                extra={"session_id": record.id},
-            )
+            logger.exception("chat_profile_memory_persist_failed",
+                             extra={"session_id": ctx.record.id})
 
     return chat_contracts.ChatTurnResponse(
-        session=_session_from_record(record, [*messages, user_message, assistant_message]),
+        session=_session_from_record(ctx.record, [*ctx.messages, user_message, assistant_message]),
         user_message=_message_from_record(user_message),
         assistant_message=_message_from_record(assistant_message),
-        job=created_job,
-        workflow_run=workflow_run,
+        job=result.created_job,
+        workflow_run=result.workflow_run,
     )
 
 
