@@ -7,17 +7,42 @@ import structlog
 
 
 def configure_logging(service_name: str) -> None:
-    logging.basicConfig(level=logging.INFO)
-    structlog.configure(
+    shared_processors = [
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+    ]
+
+    # Route stdlib logging records through structlog's JSON renderer.
+    # This makes logger.info("event", extra={...}) emit a JSON line that
+    # includes all extra fields alongside the event name.
+    formatter = structlog.stdlib.ProcessorFormatter(
         processors=[
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.add_log_level,
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             structlog.processors.JSONRenderer(),
         ],
-        logger_factory=structlog.stdlib.LoggerFactory(),
+        foreign_pre_chain=shared_processors,
     )
-    logger = structlog.get_logger(service=service_name)
-    logger.info("logging_configured")
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    structlog.configure(
+        processors=[
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    structlog.get_logger(service=service_name).info("logging_configured")
 
 
 def log_event(logger: structlog.BoundLogger, event_type: str, payload: Dict[str, Any]) -> None:

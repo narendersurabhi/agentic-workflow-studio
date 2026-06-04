@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import logging
 import time
 from typing import List, Optional
+
+import structlog
 
 from libs.core.llm_provider import (
     CacheSessionRef,
@@ -12,7 +13,7 @@ from libs.core.llm_provider import (
     PromptBlock,
 )
 
-logger = logging.getLogger("llm.timing")
+logger = structlog.get_logger("llm.timing")
 
 
 class TimingLLMProvider(LLMProvider):
@@ -72,7 +73,7 @@ class TimingLLMProvider(LLMProvider):
     ) -> None:
         meta = request.metadata or {}
         cache_hit = response.cached_input_tokens > 0
-        extra: dict = {
+        fields: dict = {
             "component": self._component,
             "model": self._model,
             "latency_ms": round(elapsed_s * 1000, 3),
@@ -89,5 +90,5 @@ class TimingLLMProvider(LLMProvider):
         }
         for key in ("job_id", "session_id", "task_id", "step_id"):
             if key in meta:
-                extra[key] = meta[key]
-        logger.info("llm_call_latency", extra=extra)
+                fields[key] = meta[key]
+        logger.info("llm_call_latency", **fields)
