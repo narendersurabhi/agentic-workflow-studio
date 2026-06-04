@@ -1066,12 +1066,15 @@ class RetrieverService:
 
 
 def build_service_from_env() -> RetrieverService:
+    from .timing import TimingTextEmbedder, TimingVectorDatabase  # lazy to avoid circular import
     config = RetrieverServiceConfig.from_env()
-    embedder = build_embedder_from_config(config)
-    vector_db = QdrantClient(
-        base_url=config.qdrant_url,
-        api_key=config.qdrant_api_key,
-        timeout_s=config.qdrant_timeout_s,
+    embedder = TimingTextEmbedder(build_embedder_from_config(config))
+    vector_db = TimingVectorDatabase(
+        QdrantClient(
+            base_url=config.qdrant_url,
+            api_key=config.qdrant_api_key,
+            timeout_s=config.qdrant_timeout_s,
+        )
     )
     return RetrieverService(config=config, embedder=embedder, vector_db=vector_db)
 

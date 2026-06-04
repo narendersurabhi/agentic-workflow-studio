@@ -57,6 +57,7 @@ from libs.core.llm_provider import (
     resolve_provider,
 )
 from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
+from libs.core.llm_provider_timing import TimingLLMProvider
 from .database import Base, SessionLocal, engine
 from .models import (
     AgentDefinitionRecord,
@@ -569,7 +570,12 @@ def _build_composer_recommender_provider() -> LLMProvider | None:
         return None
 
 
-_composer_recommender_provider = _build_composer_recommender_provider()
+_composer_recommender_provider_raw = _build_composer_recommender_provider()
+_composer_recommender_provider = (
+    TimingLLMProvider(_composer_recommender_provider_raw, component="composer_recommender")
+    if _composer_recommender_provider_raw is not None
+    else None
+)
 
 
 def _build_intent_assess_provider() -> LLMProvider | None:
@@ -600,7 +606,12 @@ def _build_intent_assess_provider() -> LLMProvider | None:
         return None
 
 
-_intent_assess_provider = _build_intent_assess_provider()
+_intent_assess_provider_raw = _build_intent_assess_provider()
+_intent_assess_provider = (
+    TimingLLMProvider(_intent_assess_provider_raw, component="intent_assess")
+    if _intent_assess_provider_raw is not None
+    else None
+)
 
 
 def _build_intent_decompose_provider() -> LLMProvider | None:
@@ -631,7 +642,12 @@ def _build_intent_decompose_provider() -> LLMProvider | None:
         return None
 
 
-_intent_decompose_provider = _build_intent_decompose_provider()
+_intent_decompose_provider_raw = _build_intent_decompose_provider()
+_intent_decompose_provider = (
+    TimingLLMProvider(_intent_decompose_provider_raw, component="intent_decompose")
+    if _intent_decompose_provider_raw is not None
+    else None
+)
 
 
 def _build_chat_router_provider() -> LLMProvider | None:
@@ -660,7 +676,10 @@ def _build_chat_router_provider() -> LLMProvider | None:
 
 _chat_router_provider_raw = _build_chat_router_provider()
 _chat_router_provider: LLMProvider | None = (
-    CachingLLMProvider(_chat_router_provider_raw, _cache_session_store)
+    TimingLLMProvider(
+        CachingLLMProvider(_chat_router_provider_raw, _cache_session_store),
+        component="chat_router",
+    )
     if _chat_router_provider_raw is not None
     else None
 )
@@ -692,7 +711,10 @@ def _build_chat_response_provider() -> LLMProvider | None:
 
 _chat_response_provider_raw = _build_chat_response_provider()
 _chat_response_provider: LLMProvider | None = (
-    CachingLLMProvider(_chat_response_provider_raw, _cache_session_store)
+    TimingLLMProvider(
+        CachingLLMProvider(_chat_response_provider_raw, _cache_session_store),
+        component="chat_response",
+    )
     if _chat_response_provider_raw is not None
     else None
 )

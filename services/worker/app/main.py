@@ -28,6 +28,7 @@ from libs.core import (
     tracing as core_tracing,
 )
 from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
+from libs.core.llm_provider_timing import TimingLLMProvider
 from libs.core.memory_client import MemoryClient
 from services.worker.app.memory_semantics import (
     apply_memory_defaults,
@@ -188,8 +189,11 @@ if LLM_ENABLED:
         catalog_json = capability_registry.load_capability_catalog_json()
         return hashlib.sha256(catalog_json.encode()).hexdigest()
 
-    LLM_PROVIDER_INSTANCE = CachingLLMProvider(
-        _base_provider, _CACHE_SESSION_STORE, catalog_hash_fn=_current_catalog_hash
+    LLM_PROVIDER_INSTANCE = TimingLLMProvider(
+        CachingLLMProvider(
+            _base_provider, _CACHE_SESSION_STORE, catalog_hash_fn=_current_catalog_hash
+        ),
+        component="worker",
     )
 
 

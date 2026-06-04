@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import logging
+import time
+from typing import List, Optional
+
+from libs.core.llm_provider import (
+    CacheSessionRef,
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    PromptBlock,
+)
+
+logger = logging.getLogger("llm.timing")
+
+
+class TimingLLMProvider(LLMProvider):
+    """Provider wrapper that logs latency and token counts for every LLM call.
+
+    Sits outermost in the provider stack (outside CachingLLMProvider) so it
+    measures the full round-trip including cache lookup overhead.
+
+    Emits a structured log line per call:
+        component, latency_ms, reasoning_effort,
+        input_tokens, cached_input_tokens, output_tokens, cache_hit (bool)
+
+    Usage:
+        provider = TimingLLMProvider(
+            CachingLLMProvider(raw_provider, session_store),
+            component="chat_response",
+        )
+    """
+
+    def __init__(self, inner: LLMProvider, component: str) -> None:
+        self._inner = inner
+        self._component = component
+
+    def generate_request(self, request: LLMRequest) -> LLMResponse:
+        started = time.perf_counter()
+        response = self._inner.generate_request(request)
+        self._log(request, response, time.perf_counter() - started)
+        return response
+
+    def generate_cached(
+        self,
+        blocks: List[PromptBlock],
+        session: CacheSessionRef,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        started = time.perf_counter()
+        response = self._inner.generate_cached(blocks, session, request)
+        self._log(request, response, time.perf_counter() - started)
+        return response
+
+    def open_cache_session(
+        self, job_id: str, static_blocks: List[PromptBlock]
+    ) -> CacheSessionRef:
+        return self._inner.open_cache_session(job_id, static_blocks)
+
+    def close_cache_session(self, ref: CacheSessionRef) -> None:
+        self._inner.close_cache_session(ref)
+
+    def _log(
+        self,
+        request: LLMRequest,
+        response: LLMResponse,
+        elapsed_s: float,
+    ) -> None:
+        cache_hit = response.cached_input_tokens > 0
+        logger.info(
+            "llm_call_latency",
+            extra={
+                "component": self._component,
+                "latency_ms": round(elapsed_s * 1000, 3),
+                "reasoning_effort": request.reasoning_effort,
+                "input_tokens": response.input_tokens,
+                "cached_input_tokens": response.cached_input_tokens,
+                "output_tokens": response.output_tokens,
+                "cache_hit": cache_hit,
+                "cache_hit_ratio": round(
+                    response.cached_input_tokens / response.input_tokens, 3
+                )
+                if response.input_tokens
+                else 0.0,
+            },
+        )
