@@ -55,6 +55,10 @@ class LLMRequest:
     metadata: Optional[Dict[str, Any]] = None
     # Structured blocks; if set, overrides prompt for providers that support them.
     prompt_blocks: Optional[List[PromptBlock]] = None
+    # Per-turn reasoning budget: "none" | "low" | "high".
+    # Providers map this to their native mechanism (Anthropic thinking budget,
+    # OpenAI reasoning effort). None means provider default (no thinking).
+    reasoning_effort: Optional[str] = None
 
 
 class LLMProviderError(Exception):
@@ -411,6 +415,19 @@ def resolve_provider(
             timeout_s=timeout_s or 30.0,
             max_retries=max_retries or 0,
             provider_label="Gemini",
+        )
+    if name in {"bedrock-anthropic", "bedrock_anthropic"}:
+        from libs.core.llm_provider_bedrock import BedrockAnthropicProvider  # lazy import
+        bedrock_model_id = os.getenv("BEDROCK_MODEL_ID") or model
+        bedrock_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+        if not bedrock_model_id:
+            raise ValueError("BEDROCK_MODEL_ID is required when LLM_PROVIDER=bedrock-anthropic")
+        return BedrockAnthropicProvider(
+            model_id=bedrock_model_id,
+            region=bedrock_region,
+            max_output_tokens=int(max_output_tokens or os.getenv("BEDROCK_MAX_OUTPUT_TOKENS") or 8192),
+            temperature=temperature,
+            timeout_s=timeout_s or 60.0,
         )
     if name in {"openai_compatible", "openai-chat", "chat_completions"}:
         if not api_key:
