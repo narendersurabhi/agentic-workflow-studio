@@ -36,6 +36,7 @@ from libs.core import (
     events,
     feedback_eval,
     intent_contract,
+    llm_provider,
     logging as core_logging,
     mcp_gateway,
     models,
@@ -259,6 +260,8 @@ LLM_PROVIDER_NAME = os.getenv("LLM_PROVIDER", "").strip()
 LLM_MODEL_NAME = (
     os.getenv("GEMINI_MODEL", "")
     if LLM_PROVIDER_NAME.lower() == "gemini"
+    else os.getenv("BEDROCK_MODEL_ID", "")
+    if LLM_PROVIDER_NAME.lower() in {"bedrock-anthropic", "bedrock_anthropic"}
     else os.getenv("OPENAI_MODEL", "")
 ).strip()
 CHAT_ROUTER_MODEL = os.getenv("CHAT_ROUTER_MODEL", "").strip()
@@ -572,7 +575,11 @@ def _build_composer_recommender_provider() -> LLMProvider | None:
 
 _composer_recommender_provider_raw = _build_composer_recommender_provider()
 _composer_recommender_provider = (
-    TimingLLMProvider(_composer_recommender_provider_raw, component="composer_recommender")
+    TimingLLMProvider(
+        _composer_recommender_provider_raw,
+        component="composer_recommender",
+        model=(COMPOSER_RECOMMENDER_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
     if _composer_recommender_provider_raw is not None
     else None
 )
@@ -608,7 +615,11 @@ def _build_intent_assess_provider() -> LLMProvider | None:
 
 _intent_assess_provider_raw = _build_intent_assess_provider()
 _intent_assess_provider = (
-    TimingLLMProvider(_intent_assess_provider_raw, component="intent_assess")
+    TimingLLMProvider(
+        _intent_assess_provider_raw,
+        component="intent_assess",
+        model=(INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
     if _intent_assess_provider_raw is not None
     else None
 )
@@ -644,7 +655,11 @@ def _build_intent_decompose_provider() -> LLMProvider | None:
 
 _intent_decompose_provider_raw = _build_intent_decompose_provider()
 _intent_decompose_provider = (
-    TimingLLMProvider(_intent_decompose_provider_raw, component="intent_decompose")
+    TimingLLMProvider(
+        _intent_decompose_provider_raw,
+        component="intent_decompose",
+        model=(INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
     if _intent_decompose_provider_raw is not None
     else None
 )
@@ -679,6 +694,7 @@ _chat_router_provider: LLMProvider | None = (
     TimingLLMProvider(
         CachingLLMProvider(_chat_router_provider_raw, _cache_session_store),
         component="chat_router",
+        model=(CHAT_ROUTER_MODEL or LLM_MODEL_NAME or "unknown").strip(),
     )
     if _chat_router_provider_raw is not None
     else None
@@ -714,6 +730,7 @@ _chat_response_provider: LLMProvider | None = (
     TimingLLMProvider(
         CachingLLMProvider(_chat_response_provider_raw, _cache_session_store),
         component="chat_response",
+        model=(CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
     )
     if _chat_response_provider_raw is not None
     else None
@@ -3651,21 +3668,6 @@ def _classify_chat_request_intent(content: str) -> str | None:
     return intent_id or None
 
 
-def _fallback_chat_response(content: str) -> str:
-    lowered = str(content or "").strip().lower()
-    capability_catalog_response = _capability_discovery_chat_response(content)
-    if capability_catalog_response:
-        return capability_catalog_response
-    if lowered in {"hi", "hello", "hey"}:
-        return "I can chat, answer questions, and create workflows when execution is needed."
-    if lowered in {"thanks", "thank you"}:
-        return "You can keep chatting here, or ask me to create a workflow when you want work executed."
-    return (
-        "I can answer questions directly here, and when you want work executed I can turn that into "
-        "a workflow and submit a job."
-    )
-
-
 def _is_capability_discovery_request(content: str) -> bool:
     lowered = str(content or "").strip().lower()
     if not lowered:
@@ -4118,35 +4120,6 @@ def _hybrid_chat_capability_matches(
     return ranked
 
 
-def _capability_discovery_chat_response(content: str) -> str:
-    if not _is_capability_discovery_request(content):
-        return ""
-    capabilities = _chat_visible_capabilities()
-    scope_query, scoped_capabilities = _scoped_chat_visible_capabilities(content, capabilities)
-
-    if scoped_capabilities:
-        header = f"Available capabilities for this assistant ({len(scoped_capabilities)}):"
-        if scope_query:
-            header = (
-                f"Available capabilities related to '{scope_query}' for this assistant "
-                f"({len(scoped_capabilities)}):"
-            )
-        lines = [
-            header,
-        ]
-        for capability_id, spec in scoped_capabilities:
-            description = str(spec.description or "").strip()
-            if description:
-                lines.append(f"- {capability_id}: {description}")
-            else:
-                lines.append(f"- {capability_id}")
-        return "\n".join(lines)
-
-    if scope_query:
-        return f"No capabilities related to '{scope_query}' are currently available for this assistant."
-    return "No capabilities are currently available for this assistant."
-
-
 def _conversational_chat_fast_path_envelope(
     *,
     goal: str,
@@ -4323,11 +4296,7 @@ def _chat_response_turn_plan(
 ) -> dict[str, Any]:
     resolved_goal = str(goal or "").strip()
     normalized = _conversational_chat_fast_path_envelope(goal=goal, source=source)
-    resolved_assistant_content = (
-        _capability_discovery_chat_response(resolved_goal)
-        or str(assistant_content or "").strip()
-        or _fallback_chat_response(resolved_goal)
-    )
+    resolved_assistant_content = str(assistant_content or "").strip()
     return {
         "type": "respond",
         "assistant_content": resolved_assistant_content,
@@ -4339,7 +4308,7 @@ def _chat_response_turn_plan(
         ),
         "resolved_goal": resolved_goal,
         "clear_pending_clarification": clear_pending_clarification,
-        "response_generated": True,
+        "response_generated": bool(resolved_assistant_content),
     }
 
 
@@ -4383,11 +4352,11 @@ def _chat_clarification_turn_plan(
         assessment["blocking_slots"] = []
         assessment["clarification_mode"] = source
 
-    resolved_assistant_content = (
-        str(assistant_content or "").strip()
-        or "\n".join(normalized_questions)
-        or "I still need the remaining required details before I can continue."
+    resolved_assistant_content = str(assistant_content or "").strip() or "\n".join(
+        normalized_questions
     )
+    if not resolved_assistant_content:
+        raise llm_provider.LLMUnavailableError("chat_clarification_response_empty")
     return {
         "type": "ask_clarification",
         "assistant_content": resolved_assistant_content,
@@ -4395,96 +4364,6 @@ def _chat_clarification_turn_plan(
         "goal_intent_profile": assessment,
         "resolved_goal": resolved_goal,
     }
-
-
-def _chat_boundary_failure_response(
-    *,
-    content: str,
-    candidate_goal: str,
-    session_metadata: Mapping[str, Any] | None = None,
-    merged_context: Mapping[str, Any] | None = None,
-    pending_clarification: bool,
-) -> dict[str, Any]:
-    if pending_clarification:
-        fallback = _chat_clarification_turn_plan(
-            goal=candidate_goal,
-            clarification_questions=[
-                "Do you want to continue the current workflow request, or should I answer here in chat instead?"
-            ],
-            session_metadata=session_metadata,
-            source="chat_boundary_meta_clarification",
-        )
-        assessment = dict(fallback.get("goal_intent_profile") or {})
-        assessment["source"] = "chat_boundary_fallback"
-        assessment["routing_fallback_reason"] = "boundary_decision_failed"
-        assessment["pending_clarification"] = True
-        fallback["goal_intent_profile"] = (
-            workflow_contracts.dump_goal_intent_profile(assessment) or assessment
-        )
-        fallback["routing_decision"] = chat_contracts.ChatRouteDecision(
-            route=str(fallback.get("type") or "").strip().lower(),
-            fallback_used=True,
-            fallback_reason="boundary_decision_failed",
-            reason_codes=["boundary_decision_failed"],
-            assistant_response=str(fallback.get("assistant_content") or "").strip(),
-            missing_inputs=list(assessment.get("missing_slots") or []),
-            clarification_questions=list(fallback.get("clarification_questions") or []),
-        ).model_dump(mode="json", exclude_none=True)
-        return fallback
-    fallback = _chat_response_turn_plan(
-        goal=content.strip() or candidate_goal,
-        assistant_content=_fallback_chat_response(content),
-    )
-    assessment = dict(fallback.get("goal_intent_profile") or {})
-    assessment["source"] = "chat_boundary_fallback"
-    assessment["routing_fallback_reason"] = "boundary_decision_failed"
-    fallback["goal_intent_profile"] = (
-        workflow_contracts.dump_goal_intent_profile(assessment) or assessment
-    )
-    fallback["routing_decision"] = chat_contracts.ChatRouteDecision(
-        route=str(fallback.get("type") or "").strip().lower(),
-        fallback_used=True,
-        fallback_reason="boundary_decision_failed",
-        reason_codes=["boundary_decision_failed"],
-        assistant_response=str(fallback.get("assistant_content") or "").strip(),
-        missing_inputs=list(assessment.get("missing_slots") or []),
-        clarification_questions=list(fallback.get("clarification_questions") or []),
-    ).model_dump(mode="json", exclude_none=True)
-    return fallback
-
-
-def _chat_router_failure_response(
-    *,
-    content: str,
-    candidate_goal: str,
-    session_metadata: Mapping[str, Any] | None = None,
-    merged_context: Mapping[str, Any] | None = None,
-    pending_clarification: bool,
-) -> dict[str, Any]:
-    fallback = _fallback_chat_turn_route(
-        content=content,
-        candidate_goal=candidate_goal,
-        session_metadata=session_metadata,
-        merged_context=merged_context,
-    )
-    assessment = dict(fallback.get("goal_intent_profile") or {})
-    assessment["source"] = "chat_router_fallback"
-    assessment["routing_fallback_reason"] = "chat_router_failed"
-    if pending_clarification:
-        assessment["pending_clarification"] = True
-    fallback["goal_intent_profile"] = (
-        workflow_contracts.dump_goal_intent_profile(assessment) or assessment
-    )
-    fallback["routing_decision"] = chat_contracts.ChatRouteDecision(
-        route=str(fallback.get("type") or "").strip().lower(),
-        fallback_used=True,
-        fallback_reason="chat_router_failed",
-        reason_codes=["chat_router_failed"],
-        assistant_response=str(fallback.get("assistant_content") or "").strip(),
-        missing_inputs=list(assessment.get("missing_slots") or []),
-        clarification_questions=list(fallback.get("clarification_questions") or []),
-    ).model_dump(mode="json", exclude_none=True)
-    return fallback
 
 
 def _goal_intent_segments_from_metadata(metadata: Mapping[str, Any] | None) -> list[dict[str, Any]]:
@@ -4730,12 +4609,6 @@ def _route_chat_turn(
     merged_context: Mapping[str, Any] | None,
     messages: Sequence[chat_contracts.ChatMessage] | None,
 ) -> dict[str, Any]:
-    active_job_confirmation = _active_job_confirmation_turn_plan(
-        content=content,
-        session_metadata=session_metadata,
-    )
-    if active_job_confirmation is not None:
-        return active_job_confirmation
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
     if CHAT_RESPONSE_MODE != "answer_or_handoff":
         return _route_chat_turn_legacy(
@@ -4761,62 +4634,64 @@ def _route_chat_turn(
         messages=messages,
     )
     if boundary is None:
-        return _chat_boundary_failure_response(
-            content=content,
-            candidate_goal=candidate_goal,
-            session_metadata=session_metadata,
-            merged_context=merged_context,
-            pending_clarification=pending_clarification,
-        )
+        raise llm_provider.LLMUnavailableError("chat_boundary_decision_unavailable")
     boundary = _postprocess_chat_boundary_decision(boundary, content=content)
     _record_chat_boundary_decision_metrics(boundary)
     decision = boundary.decision
     if decision == chat_contracts.ChatBoundaryDecisionType.chat_reply:
-        return _attach_chat_boundary_decision(
+        turn_plan = _finalize_chat_turn_plan(
             _chat_response_turn_plan(
                 goal=content.strip(),
-                assistant_content=boundary.assistant_response or _fallback_chat_response(content),
+                assistant_content=boundary.assistant_response or "",
             ),
-            boundary,
+            content=content,
+            candidate_goal=candidate_goal,
+            merged_context=merged_context,
+            messages=messages,
+            session_metadata=session_metadata,
         )
+        return _attach_chat_boundary_decision(turn_plan, boundary)
     if decision == chat_contracts.ChatBoundaryDecisionType.exit_pending_to_chat:
-        return _attach_chat_boundary_decision(
+        turn_plan = _finalize_chat_turn_plan(
             _chat_response_turn_plan(
                 goal=content.strip(),
-                assistant_content=boundary.assistant_response or _fallback_chat_response(content),
+                assistant_content=boundary.assistant_response or "",
                 clear_pending_clarification=True,
             ),
-            boundary,
+            content=content,
+            candidate_goal=candidate_goal,
+            merged_context=merged_context,
+            messages=messages,
+            session_metadata=session_metadata,
         )
+        return _attach_chat_boundary_decision(turn_plan, boundary)
     if decision == chat_contracts.ChatBoundaryDecisionType.meta_clarification:
         if pending_clarification:
+            if not str(boundary.assistant_response or "").strip():
+                raise llm_provider.LLMUnavailableError("chat_boundary_meta_clarification_empty")
             return _attach_chat_boundary_decision(
                 _chat_clarification_turn_plan(
                     goal=candidate_goal,
-                    clarification_questions=[
-                        boundary.assistant_response
-                        or (
-                            "Do you want to continue the current workflow request, or should I answer "
-                            "here in chat instead?"
-                        )
-                    ],
+                    clarification_questions=[boundary.assistant_response],
                     session_metadata=session_metadata,
                     source="chat_boundary_meta_clarification",
                 ),
                 boundary,
             )
-        return _attach_chat_boundary_decision(
+        turn_plan = _finalize_chat_turn_plan(
             _chat_response_turn_plan(
                 goal=content.strip(),
                 assistant_content=boundary.assistant_response
-                or (
-                    "Do you want to continue the current workflow request, or should I answer "
-                    "here in chat instead?"
-                ),
+                or "",
                 source="chat_boundary_meta_clarification",
             ),
-            boundary,
+            content=content,
+            candidate_goal=candidate_goal,
+            merged_context=merged_context,
+            messages=messages,
+            session_metadata=session_metadata,
         )
+        return _attach_chat_boundary_decision(turn_plan, boundary)
     if decision in {
         chat_contracts.ChatBoundaryDecisionType.execution_request,
         chat_contracts.ChatBoundaryDecisionType.continue_pending,
@@ -4836,13 +4711,7 @@ def _route_chat_turn(
             router_turn_plan,
             boundary,
         )
-    return _chat_boundary_failure_response(
-        content=content,
-        candidate_goal=candidate_goal,
-        session_metadata=session_metadata,
-        merged_context=merged_context,
-        pending_clarification=pending_clarification,
-    )
+    raise llm_provider.LLMUnavailableError("chat_boundary_decision_unavailable")
 
 
 def _attach_chat_boundary_decision(
@@ -4923,12 +4792,6 @@ def _route_chat_turn_legacy(
     merged_context: Mapping[str, Any] | None,
     messages: Sequence[chat_contracts.ChatMessage] | None,
 ) -> dict[str, Any]:
-    fallback = _fallback_chat_turn_route(
-        content=content,
-        candidate_goal=candidate_goal,
-        session_metadata=session_metadata,
-        merged_context=merged_context,
-    )
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
     workflow_invocation = chat_service.workflow_invocation_from_context(merged_context)
     exit_pending_to_chat = (
@@ -4944,7 +4807,7 @@ def _route_chat_turn_legacy(
     )
     if not should_use_router:
         return _finalize_chat_turn_plan(
-            fallback,
+            {"type": "respond", "assistant_content": ""},
             content=content,
             candidate_goal=candidate_goal,
             merged_context=merged_context,
@@ -4952,14 +4815,7 @@ def _route_chat_turn_legacy(
             session_metadata=session_metadata,
         )
     if _chat_router_provider is None:
-        return _finalize_chat_turn_plan(
-            fallback,
-            content=content,
-            candidate_goal=candidate_goal,
-            merged_context=merged_context,
-            messages=messages,
-            session_metadata=session_metadata,
-        )
+        raise llm_provider.LLMUnavailableError("chat_router_provider_unavailable")
     try:
         stripped_context = {
             k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
@@ -4988,7 +4844,7 @@ def _route_chat_turn_legacy(
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
                     "request_id": route_request.request_id,
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
@@ -5005,16 +4861,13 @@ def _route_chat_turn_legacy(
             messages=messages,
             session_metadata=session_metadata,
         )
-    except Exception:  # noqa: BLE001
+    except llm_provider.LLMUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001
         logger.exception("chat_router_failed")
-        return _finalize_chat_turn_plan(
-            fallback,
-            content=content,
-            candidate_goal=candidate_goal,
-            merged_context=merged_context,
-            messages=messages,
-            session_metadata=session_metadata,
-        )
+        if llm_provider.is_llm_unavailable_error(exc):
+            raise llm_provider.LLMUnavailableError(str(exc)) from exc
+        raise llm_provider.LLMUnavailableError("chat_router_failed") from exc
 
 
 def _route_chat_turn_with_router(
@@ -5026,15 +4879,8 @@ def _route_chat_turn_with_router(
     messages: Sequence[chat_contracts.ChatMessage] | None,
 ) -> dict[str, Any]:
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
-    workflow_invocation = chat_service.workflow_invocation_from_context(merged_context)
     if _chat_router_provider is None:
-        return _chat_router_failure_response(
-            content=content,
-            candidate_goal=candidate_goal,
-            session_metadata=session_metadata,
-            merged_context=merged_context,
-            pending_clarification=pending_clarification,
-        )
+        raise llm_provider.LLMUnavailableError("chat_router_provider_unavailable")
     try:
         stripped_context = {
             k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
@@ -5063,7 +4909,7 @@ def _route_chat_turn_with_router(
                     "component": "chat_router",
                     "pending_clarification": str(pending_clarification).lower(),
                     "request_id": route_request.request_id,
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
@@ -5080,145 +4926,13 @@ def _route_chat_turn_with_router(
             messages=messages,
             session_metadata=session_metadata,
         )
-    except Exception:  # noqa: BLE001
+    except llm_provider.LLMUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001
         logger.exception("chat_router_failed")
-        return _chat_router_failure_response(
-            content=content,
-            candidate_goal=candidate_goal,
-            session_metadata=session_metadata,
-            merged_context=merged_context,
-            pending_clarification=pending_clarification,
-        )
-
-
-def _fallback_chat_turn_route(
-    *,
-    content: str,
-    candidate_goal: str,
-    session_metadata: Mapping[str, Any] | None,
-    merged_context: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
-    workflow_invocation = chat_service.workflow_invocation_from_context(merged_context)
-    exit_pending_to_chat = (
-        pending_clarification
-        and workflow_invocation is None
-        and _looks_like_chat_only_correction(content)
-    )
-    if exit_pending_to_chat:
-        normalized = _conversational_chat_fast_path_envelope(goal=content.strip())
-        return {
-            "type": "respond",
-            "assistant_content": _fallback_chat_response(content),
-            "clarification_questions": [],
-            "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(normalized.profile)
-            or {},
-            "normalized_intent_envelope": (
-                workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
-            ),
-            "clear_pending_clarification": True,
-        }
-    if not pending_clarification and workflow_invocation is None and _looks_like_conversational_turn(content):
-        normalized = _conversational_chat_fast_path_envelope(goal=candidate_goal)
-        return {
-            "type": "respond",
-            "assistant_content": _fallback_chat_response(content),
-            "clarification_questions": [],
-            "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(normalized.profile)
-            or {},
-            "normalized_intent_envelope": (
-                workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
-            ),
-        }
-    normalized = _normalize_goal_intent(candidate_goal)
-    assessment = _chat_route_goal_intent_profile(normalized.profile, goal=candidate_goal)
-    context_satisfied_fields = [
-        field
-        for field in list(assessment.missing_slots or []) + list(assessment.blocking_slots or [])
-        if _context_has_clarification_value(merged_context or {}, field)
-    ]
-    if context_satisfied_fields:
-        remaining_missing = [
-            field for field in assessment.missing_slots if field not in context_satisfied_fields
-        ]
-        remaining_blocking = [
-            field for field in assessment.blocking_slots if field not in context_satisfied_fields
-        ]
-        assessment = assessment.model_copy(
-            update={
-                "missing_slots": remaining_missing,
-                "blocking_slots": remaining_blocking,
-                "needs_clarification": bool(remaining_missing or remaining_blocking),
-                "requires_blocking_clarification": bool(remaining_missing or remaining_blocking),
-                "questions": [
-                    question
-                    for question in assessment.questions
-                    if not any(
-                        _clarification_question_targets_field(question, field, candidate_goal)
-                        for field in context_satisfied_fields
-                    )
-                ],
-            }
-        )
-    assessment_json = workflow_contracts.dump_goal_intent_profile(assessment) or {}
-    normalized_json = workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
-    active_target = (
-        _active_execution_target_for_chat(
-            normalized=normalized,
-            session_metadata=session_metadata,
-            merged_context=merged_context,
-        )
-        if pending_clarification
-        else None
-    )
-    if pending_clarification or not _looks_like_conversational_turn(content):
-        if workflow_invocation is not None:
-            return {
-                "type": "run_workflow",
-                "assistant_content": "",
-                "clarification_questions": [],
-                "goal_intent_profile": assessment_json,
-                "normalized_intent_envelope": normalized_json,
-            }
-        if bool(assessment.requires_blocking_clarification):
-            scoped_fields = (
-                list(active_target.unresolved_fields or active_target.required_fields)
-                if active_target is not None
-                else []
-            )
-            questions = _chat_submit_clarification_questions(
-                normalized,
-                goal=candidate_goal,
-                unresolved_fields=scoped_fields,
-                scoped_fields=scoped_fields,
-            )
-            if not questions:
-                questions = [
-                    str(question).strip()
-                    for question in assessment.questions
-                    if isinstance(question, str) and question.strip()
-                ]
-            return {
-                "type": "ask_clarification",
-                "assistant_content": "\n".join(questions) if questions else "What should I do next?",
-                "clarification_questions": questions,
-                "goal_intent_profile": assessment_json,
-                "normalized_intent_envelope": normalized_json,
-            }
-        return {
-            "type": "submit_job",
-            "assistant_content": "",
-            "clarification_questions": [],
-            "goal_intent_profile": assessment_json,
-            "normalized_intent_envelope": normalized_json,
-        }
-    return {
-        "type": "respond",
-        "assistant_content": _fallback_chat_response(content),
-        "clarification_questions": [],
-        "goal_intent_profile": assessment_json,
-        "normalized_intent_envelope": normalized_json,
-    }
+        if llm_provider.is_llm_unavailable_error(exc):
+            raise llm_provider.LLMUnavailableError(str(exc)) from exc
+        raise llm_provider.LLMUnavailableError("chat_router_failed") from exc
 
 
 def _chat_route_request_id(*, content: str, candidate_goal: str, pending_clarification: bool) -> str:
@@ -6591,7 +6305,7 @@ def _generate_chat_response(
     reasoning_effort: str | None = None,
 ) -> str:
     if _chat_response_provider is None:
-        return fallback_response
+        raise llm_provider.LLMUnavailableError("chat_response_provider_unavailable")
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     system_prompt = (
         "You are the conversational assistant for an agent platform. "
@@ -6621,16 +6335,20 @@ def _generate_chat_response(
                 prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_response",
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
                 reasoning_effort=reasoning_effort,
             )
         )
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        if llm_provider.is_llm_unavailable_error(exc):
+            raise llm_provider.LLMUnavailableError(str(exc)) from exc
         logger.exception("chat_response_generation_failed")
-        return fallback_response
+        raise llm_provider.LLMUnavailableError("chat_response_generation_failed") from exc
     generated = str(response.content or "").strip()
-    return generated or fallback_response
+    if not generated:
+        raise llm_provider.LLMUnavailableError("chat_response_empty")
+    return generated
 
 
 def _generate_chat_boundary_decision(
@@ -6642,8 +6360,10 @@ def _generate_chat_boundary_decision(
     messages: Sequence[chat_contracts.ChatMessage] | None,
     fallback_response: str | None = None,
 ) -> chat_contracts.ChatBoundaryDecision | None:
-    if CHAT_RESPONSE_MODE != "answer_or_handoff" or _chat_response_provider is None:
+    if CHAT_RESPONSE_MODE != "answer_or_handoff":
         return None
+    if _chat_response_provider is None:
+        raise llm_provider.LLMUnavailableError("chat_response_provider_unavailable")
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     boundary_evidence = _build_chat_boundary_evidence(
         content=content,
@@ -6693,13 +6413,17 @@ def _generate_chat_boundary_decision(
                 prompt_blocks=prompt_blocks,
                 metadata={
                     "component": "chat_boundary_decision",
-                    **({"job_id": chat_session_id} if chat_session_id else {}),
+                    **({"session_id": chat_session_id} if chat_session_id else {}),
                 },
             )
         )
-    except Exception:  # noqa: BLE001
+    except llm_provider.LLMUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001
         logger.exception("chat_boundary_decision_failed")
-        return None
+        if llm_provider.is_llm_unavailable_error(exc):
+            raise llm_provider.LLMUnavailableError(str(exc)) from exc
+        raise llm_provider.LLMUnavailableError("chat_boundary_decision_failed") from exc
     try:
         decision = chat_contracts.ChatBoundaryDecision.model_validate(
             {
@@ -6713,8 +6437,8 @@ def _generate_chat_boundary_decision(
                 "evidence": boundary_evidence.model_dump(mode="json", exclude_none=True),
             }
         )
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001
+        raise llm_provider.LLMUnavailableError("chat_boundary_decision_invalid") from exc
     return decision
 
 
@@ -6798,13 +6522,7 @@ def _postprocess_chat_boundary_decision(
         return boundary.model_copy(
             update={
                 "decision": chat_contracts.ChatBoundaryDecisionType.meta_clarification,
-                "assistant_response": (
-                    boundary.assistant_response
-                    or (
-                        "Do you want to continue the current workflow request, "
-                        "or should I answer here in chat instead?"
-                    )
-                ),
+                "assistant_response": boundary.assistant_response,
                 "reason_code": "pending_clarification_ambiguous",
             }
         )
@@ -6845,21 +6563,17 @@ def _finalize_chat_turn_plan(
         return finalized
     if bool(finalized.get("response_generated")):
         return finalized
-    capability_catalog_response = _capability_discovery_chat_response(content)
-    if capability_catalog_response:
-        finalized["assistant_content"] = capability_catalog_response
-        finalized["response_generated"] = True
-        return finalized
     fallback_response = str(finalized.get("assistant_content") or "").strip()
     finalized["assistant_content"] = _generate_chat_response(
         content=content,
         candidate_goal=candidate_goal,
         merged_context=merged_context,
         messages=messages,
-        fallback_response=fallback_response or _fallback_chat_response(content),
+        fallback_response=fallback_response,
         session_metadata=session_metadata,
         reasoning_effort=_response_reasoning_effort(finalized),
     )
+    finalized["response_generated"] = True
     return finalized
 
 
@@ -7151,8 +6865,6 @@ def _normalize_chat_route(
             ]
     if route == "ask_clarification" and not assistant_response:
         assistant_response = "\n".join(clarification_questions)
-    if route == "respond" and not assistant_response:
-        assistant_response = _fallback_chat_response(content)
     if route in {"respond", "tool_call", "run_workflow"}:
         blocking_slots = []
         missing_slots = []
@@ -7216,7 +6928,7 @@ def _normalize_chat_route(
         "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(assessment) or {},
         "resolved_goal": candidate_goal,
         "context_json_updates": workflow_context_updates,
-        "response_generated": bool(route == "respond" and assistant_response),
+        "response_generated": False,
         "routing_decision": chat_contracts.ChatRouteDecision(
             route=route,
             confidence=round(confidence, 3),
@@ -7830,10 +7542,6 @@ def _normalize_chat_submit_context(
                 + list(refreshed_normalized.profile.questions)
             )
             if isinstance(question, str) and question.strip()
-        ]
-    if requires_blocking_clarification and not clarification_questions:
-        clarification_questions = [
-            "I still need the remaining required details before I can submit this request."
         ]
     if not context_updates and not clarification_questions:
         return None
@@ -18114,7 +17822,11 @@ def create_chat_message(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="chat_session_not_found") from exc
     except ValueError as exc:
+        if str(exc) == "chat_llm_unavailable":
+            raise HTTPException(status_code=503, detail="chat_llm_unavailable") from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="chat_session_state_conflict") from exc
 
 
 def _raise_feedback_http_error(exc: ValueError) -> None:

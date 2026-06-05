@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import logging
 import time
 from typing import List, Optional
+
+import structlog
 
 from libs.core.llm_provider import (
     CacheSessionRef,
@@ -12,7 +13,7 @@ from libs.core.llm_provider import (
     PromptBlock,
 )
 
-logger = logging.getLogger("llm.timing")
+logger = structlog.get_logger("llm.timing")
 
 
 class TimingLLMProvider(LLMProvider):
@@ -22,19 +23,22 @@ class TimingLLMProvider(LLMProvider):
     measures the full round-trip including cache lookup overhead.
 
     Emits a structured log line per call:
-        component, latency_ms, reasoning_effort,
-        input_tokens, cached_input_tokens, output_tokens, cache_hit (bool)
+        component, model, latency_ms, reasoning_effort,
+        input_tokens, cached_input_tokens, output_tokens, cache_hit (bool),
+        plus any of job_id/session_id/task_id/step_id present in request.metadata.
 
     Usage:
         provider = TimingLLMProvider(
             CachingLLMProvider(raw_provider, session_store),
             component="chat_response",
+            model="claude-3-5-sonnet-20241022",
         )
     """
 
-    def __init__(self, inner: LLMProvider, component: str) -> None:
+    def __init__(self, inner: LLMProvider, component: str, model: str = "unknown") -> None:
         self._inner = inner
         self._component = component
+        self._model = model
 
     def generate_request(self, request: LLMRequest) -> LLMResponse:
         started = time.perf_counter()
@@ -67,21 +71,24 @@ class TimingLLMProvider(LLMProvider):
         response: LLMResponse,
         elapsed_s: float,
     ) -> None:
+        meta = request.metadata or {}
         cache_hit = response.cached_input_tokens > 0
-        logger.info(
-            "llm_call_latency",
-            extra={
-                "component": self._component,
-                "latency_ms": round(elapsed_s * 1000, 3),
-                "reasoning_effort": request.reasoning_effort,
-                "input_tokens": response.input_tokens,
-                "cached_input_tokens": response.cached_input_tokens,
-                "output_tokens": response.output_tokens,
-                "cache_hit": cache_hit,
-                "cache_hit_ratio": round(
-                    response.cached_input_tokens / response.input_tokens, 3
-                )
-                if response.input_tokens
-                else 0.0,
-            },
-        )
+        fields: dict = {
+            "component": self._component,
+            "model": self._model,
+            "latency_ms": round(elapsed_s * 1000, 3),
+            "reasoning_effort": request.reasoning_effort,
+            "input_tokens": response.input_tokens,
+            "cached_input_tokens": response.cached_input_tokens,
+            "output_tokens": response.output_tokens,
+            "cache_hit": cache_hit,
+            "cache_hit_ratio": round(
+                response.cached_input_tokens / response.input_tokens, 3
+            )
+            if response.input_tokens
+            else 0.0,
+        }
+        for key in ("job_id", "session_id", "task_id", "step_id"):
+            if key in meta:
+                fields[key] = meta[key]
+        logger.info("llm_call_latency", **fields)

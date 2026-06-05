@@ -25,10 +25,19 @@ class ProviderConfig:
 
     @classmethod
     def from_env(cls) -> ProviderConfig:
+        provider_name = os.getenv("LLM_PROVIDER", "mock")
+        normalized_provider = provider_name.strip().lower()
+        model = os.getenv("OPENAI_MODEL", "")
+        if normalized_provider == "gemini":
+            model = os.getenv("GEMINI_MODEL", "") or model
+        elif normalized_provider == "anthropic":
+            model = os.getenv("ANTHROPIC_MODEL", "") or model
+        elif normalized_provider in {"bedrock-anthropic", "bedrock_anthropic"}:
+            model = os.getenv("BEDROCK_MODEL_ID", "") or model
         return cls(
-            provider_name=os.getenv("LLM_PROVIDER", "mock"),
+            provider_name=provider_name,
             api_key=os.getenv("OPENAI_API_KEY", ""),
-            model=os.getenv("OPENAI_MODEL", ""),
+            model=model,
             base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com"),
             temperature=_parse_optional_float(os.getenv("OPENAI_TEMPERATURE")),
             max_output_tokens=_parse_optional_int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS")),

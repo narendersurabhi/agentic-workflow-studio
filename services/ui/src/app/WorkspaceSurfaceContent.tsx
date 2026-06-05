@@ -60,6 +60,8 @@ const DAG_CANVAS_SNAP = 8;
 const DAG_CANVAS_MIN_WIDTH = 960;
 const DAG_CANVAS_MIN_HEIGHT = 460;
 const AUTO_TEMPLATE_KEYS = new Set(["today", "today_pretty"]);
+const CHAT_LLM_UNAVAILABLE_MESSAGE =
+  "Chat is not available because the LLM provider is unavailable. Check the provider configuration or retry after quota/rate limits recover.";
 const TEMPLATE_INPUT_DEFAULTS: Record<string, string> = {
   run_iterative_improve: "false",
   generate_document: "false"
@@ -106,6 +108,27 @@ const formatTimestamp = (value?: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+};
+
+const chatSendErrorMessage = (status: number, text: string) => {
+  let detail = "";
+  if (text.trim()) {
+    try {
+      const body = JSON.parse(text) as { detail?: unknown };
+      if (typeof body.detail === "string") {
+        detail = body.detail;
+      }
+    } catch {
+      detail = text.trim();
+    }
+  }
+  if (status === 503 && detail === "chat_llm_unavailable") {
+    return CHAT_LLM_UNAVAILABLE_MESSAGE;
+  }
+  if (detail) {
+    return `Failed to send chat message (${status}): ${detail}`;
+  }
+  return `Failed to send chat message (${status}).`;
 };
 
 const ARTIFACT_EXTENSIONS = [".docx", ".pdf", ".md", ".txt", ".json", ".csv"];
@@ -6466,11 +6489,7 @@ const openTemplateModal = (template: Template) => {
       });
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(
-          text
-            ? `Failed to send chat message (${response.status}): ${text}`
-            : `Failed to send chat message (${response.status}).`
-        );
+        throw new Error(chatSendErrorMessage(response.status, text));
       }
       const body = (await response.json()) as ChatTurnResponse;
       setChatSession(body.session);

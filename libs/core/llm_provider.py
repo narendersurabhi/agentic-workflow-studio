@@ -59,10 +59,47 @@ class LLMRequest:
     # Providers map this to their native mechanism (Anthropic thinking budget,
     # OpenAI reasoning effort). None means provider default (no thinking).
     reasoning_effort: Optional[str] = None
+    # When True, providers that support it will add response_format=json_object
+    # to force structured JSON output. Used by generate_request_json_object.
+    json_mode: bool = False
 
 
 class LLMProviderError(Exception):
     pass
+
+
+class LLMUnavailableError(LLMProviderError):
+    """Raised when the LLM service is temporarily unavailable (quota, rate limit, network)."""
+    pass
+
+
+_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def is_llm_unavailable_error(exc: BaseException) -> bool:
+    if isinstance(exc, LLMUnavailableError):
+        return True
+    if isinstance(exc, HTTPError):
+        return int(exc.code) in _RETRYABLE_HTTP_STATUS_CODES
+    msg = str(exc).lower()
+    return any(tok in msg for tok in (
+        "429", "500", "502", "503", "504",
+        "quota", "insufficient_quota", "rate_limit", "rate limit",
+        "resource_exhausted", "too many requests",
+        "service unavailable", "temporarily unavailable",
+        "upstream unavailable", "overloaded", "over capacity",
+        "timeout", "timed out", "deadline exceeded",
+        "connection error", "connection refused", "connection reset",
+        "network", "dns",
+    ))
+
+
+def _is_llm_unavailable_error(exc: BaseException) -> bool:
+    return is_llm_unavailable_error(exc)
+
+
+def _llm_unavailable(provider_label: str, detail: object) -> LLMUnavailableError:
+    return LLMUnavailableError(f"{provider_label} unavailable: {detail}")
 
 
 class LLMProvider:
@@ -76,6 +113,9 @@ class LLMProvider:
         return self.generate_request_json_object(LLMRequest(prompt=prompt))
 
     def generate_request_json_object(self, request: LLMRequest) -> Dict[str, Any]:
+        if not request.json_mode:
+            from dataclasses import replace
+            request = replace(request, json_mode=True)
         response = self.generate_request(request)
         return parse_json_object(response.content)
 
@@ -189,13 +229,15 @@ class OpenAIProvider(LLMProvider):
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
+                if _is_retryable_http_error(exc.code) or is_llm_unavailable_error(exc) or is_llm_unavailable_error(Exception(detail)):
+                    raise _llm_unavailable("OpenAI API", detail) from exc
                 raise LLMProviderError(f"OpenAI API error: {detail}") from exc
             except (URLError, TimeoutError) as exc:
                 if attempt < attempts - 1:
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
-                raise LLMProviderError(f"OpenAI API connection error: {exc}") from exc
+                raise _llm_unavailable("OpenAI API", exc) from exc
         raise LLMProviderError("OpenAI API request failed after retries")
 
     def _build_payload(self, request: LLMRequest) -> Dict[str, Any]:
@@ -286,13 +328,15 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
+                if _is_retryable_http_error(exc.code) or is_llm_unavailable_error(exc) or is_llm_unavailable_error(Exception(detail)):
+                    raise _llm_unavailable(f"{self.provider_label} API", detail) from exc
                 raise LLMProviderError(f"{self.provider_label} API error: {detail}") from exc
             except (URLError, TimeoutError) as exc:
                 if attempt < attempts - 1:
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
-                raise LLMProviderError(f"{self.provider_label} API connection error: {exc}") from exc
+                raise _llm_unavailable(f"{self.provider_label} API", exc) from exc
         raise LLMProviderError(f"{self.provider_label} API request failed after retries")
 
     def generate_cached(
@@ -329,6 +373,8 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             payload["temperature"] = request.temperature
         if request.max_output_tokens is not None:
             payload["max_tokens"] = request.max_output_tokens
+        if request.json_mode:
+            payload["response_format"] = {"type": "json_object"}
         if request.metadata and "generativelanguage.googleapis.com" not in self.base_url:
             payload["metadata"] = {
                 str(key): str(value) for key, value in request.metadata.items()
@@ -418,8 +464,14 @@ def resolve_provider(
         )
     if name in {"bedrock-anthropic", "bedrock_anthropic"}:
         from libs.core.llm_provider_bedrock import BedrockAnthropicProvider  # lazy import
-        bedrock_model_id = os.getenv("BEDROCK_MODEL_ID") or model
+        bedrock_model_id = model or os.getenv("BEDROCK_MODEL_ID")
         bedrock_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+        bedrock_verify_ssl = os.getenv("BEDROCK_VERIFY_SSL", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         if not bedrock_model_id:
             raise ValueError("BEDROCK_MODEL_ID is required when LLM_PROVIDER=bedrock-anthropic")
         return BedrockAnthropicProvider(
@@ -428,6 +480,7 @@ def resolve_provider(
             max_output_tokens=int(max_output_tokens or os.getenv("BEDROCK_MAX_OUTPUT_TOKENS") or 8192),
             temperature=temperature,
             timeout_s=timeout_s or 60.0,
+            verify_ssl=bedrock_verify_ssl,
         )
     if name in {"openai_compatible", "openai-chat", "chat_completions"}:
         if not api_key:
@@ -514,7 +567,7 @@ def _is_unsupported_temperature_error(detail: str) -> bool:
 
 
 def _is_retryable_http_error(status_code: int) -> bool:
-    return status_code in {429, 500, 502, 503, 504}
+    return status_code in _RETRYABLE_HTTP_STATUS_CODES
 
 
 def extract_json_object_text(text: str) -> str:

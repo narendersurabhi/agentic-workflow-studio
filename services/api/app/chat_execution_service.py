@@ -149,8 +149,116 @@ def _tool_name_for_capability(spec: capability_registry.CapabilitySpec) -> str:
     return spec.adapters[0].tool_name
 
 
-def tool_name_for_capability(spec: capability_registry.CapabilitySpec) -> str:
-    return _tool_name_for_capability(spec)
+# Public alias kept for callers outside this module.
+tool_name_for_capability = _tool_name_for_capability
+
+
+def _render_hint(
+    output: dict[str, Any],
+    hint: dict[str, Any],
+    *,
+    max_preview_chars: int,
+) -> str | None:
+    """Apply a spec-driven chat_response_hint to output. Returns None when hint doesn't match."""
+    mode = str(hint.get("mode") or "").strip()
+
+    if mode == "list":
+        items = output.get(str(hint.get("items_field") or "items"))
+        if not isinstance(items, list):
+            return None
+        label_fields: list[str] = hint.get("label_fields") or ["name"]
+        max_items = int(hint.get("max_items") or 10)
+        prefix = str(hint.get("prefix") or "Items:")
+        labels = [
+            next((str(item.get(f) or "").strip() for f in label_fields if str(item.get(f) or "").strip()), "")
+            for item in items[:max_items]
+            if isinstance(item, dict)
+        ]
+        labels = [l for l in labels if l]
+        if not labels:
+            return None
+        return prefix + "\n" + "\n".join(f"- {l}" for l in labels)
+
+    if mode == "entries":
+        entries = output.get(str(hint.get("entries_field") or "entries"))
+        label_fields = hint.get("label_fields") or ["path"]
+        max_items = int(hint.get("max_items") or 20)
+        prefix = str(hint.get("prefix") or "Entries:")
+        empty = str(hint.get("empty_message") or "No entries found.")
+        if not isinstance(entries, list):
+            return None
+        labels = [
+            next((str(e.get(f) or "").strip() for f in label_fields if str(e.get(f) or "").strip()), "")
+            for e in entries[:max_items]
+            if isinstance(e, dict)
+        ]
+        labels = [l for l in labels if l]
+        return (prefix + "\n" + "\n".join(f"- {l}" for l in labels)) if labels else empty
+
+    if mode == "text":
+        content = output.get(str(hint.get("content_field") or "content"))
+        if not isinstance(content, str):
+            return None
+        preview = content[:max_preview_chars]
+        return preview if len(content) <= max_preview_chars else f"{preview}\n\n[truncated]"
+
+    if mode == "search_matches":
+        matches = output.get(str(hint.get("matches_field") or "matches"))
+        max_items = int(hint.get("max_items") or 10)
+        if not isinstance(matches, list):
+            return None
+        if not matches:
+            return "No matches found."
+        lines: list[str] = []
+        for match in matches[:max_items]:
+            if not isinstance(match, dict):
+                continue
+            path = str(match.get("path") or "").strip()
+            line_num = match.get("line")
+            text = str(match.get("text") or "").strip()
+            loc = f"{path}:{line_num}" if path and line_num is not None else path or "match"
+            lines.append(f"- {loc} {text}".rstrip())
+        return ("Matches:\n" + "\n".join(lines)) if lines else "No matches found."
+
+    if mode == "json_preview":
+        entries_fields: list[str] = hint.get("entries_fields") or ["entries", "matches"]
+        max_items = int(hint.get("max_items") or 5)
+        entries = next(
+            (output.get(f) for f in entries_fields if isinstance(output.get(f), list)),
+            None,
+        )
+        if not isinstance(entries, list) or not entries:
+            return None
+        return json.dumps(entries[:max_items], ensure_ascii=True, indent=2)[:max_preview_chars]
+
+    if mode == "rag_matches":
+        matches = output.get("matches")
+        max_items = int(hint.get("max_items") or 5)
+        excerpt_chars = int(hint.get("excerpt_chars") or 180)
+        if not isinstance(matches, list):
+            return None
+        if not matches:
+            return "No matches found."
+        lines = []
+        for match in matches[:max_items]:
+            if not isinstance(match, dict):
+                continue
+            label = (
+                str(match.get("source_uri") or "").strip()
+                or str(match.get("document_id") or "").strip()
+                or "match"
+            )
+            score = match.get("score")
+            text = str(match.get("text") or "").strip()
+            pfx = f"- {label} (score {score:.3f})" if isinstance(score, (int, float)) else f"- {label}"
+            if text:
+                excerpt = text[:excerpt_chars]
+                lines.append(f"{pfx}: {excerpt}{'...' if len(text) > excerpt_chars else ''}")
+            else:
+                lines.append(pfx)
+        return ("Retrieved matches:\n" + "\n".join(lines)) if lines else "No matches found."
+
+    return None
 
 
 def _format_chat_direct_result(
@@ -159,90 +267,23 @@ def _format_chat_direct_result(
     *,
     max_preview_chars: int,
 ) -> str:
-    if capability_id == "github.repo.list":
-        items = output.get("items")
-        if isinstance(items, list) and items:
-            names = [
-                str(item.get("full_name") or item.get("name") or "").strip()
-                for item in items
-                if isinstance(item, dict)
-            ]
-            names = [name for name in names if name]
-            if names:
-                return "Repositories:\n" + "\n".join(f"- {name}" for name in names[:10])
-    if capability_id == "github.branch.list":
-        items = output.get("items")
-        if isinstance(items, list) and items:
-            names = [
-                str(item.get("name") or "").strip()
-                for item in items
-                if isinstance(item, dict)
-            ]
-            names = [name for name in names if name]
-            if names:
-                return "Branches:\n" + "\n".join(f"- {name}" for name in names[:15])
-    if capability_id in {"filesystem.workspace.list", "filesystem.artifacts.list"}:
-        entries = output.get("entries")
-        if isinstance(entries, list):
-            paths = [
-                str(item.get("path") or "").strip()
-                for item in entries
-                if isinstance(item, dict)
-            ]
-            paths = [path for path in paths if path]
-            if paths:
-                return "Entries:\n" + "\n".join(f"- {path}" for path in paths[:20])
-            return "No entries found."
-    if capability_id in {"filesystem.workspace.read_text", "filesystem.artifacts.read_text"}:
-        content = output.get("content")
-        if isinstance(content, str):
-            preview = content[:max_preview_chars]
-            return preview if len(content) <= max_preview_chars else f"{preview}\n\n[truncated]"
-    if capability_id == "filesystem.artifacts.search_text":
-        matches = output.get("matches")
-        if isinstance(matches, list) and matches:
-            lines: list[str] = []
-            for match in matches[:10]:
-                if not isinstance(match, dict):
-                    continue
-                path = str(match.get("path") or "").strip()
-                line = match.get("line")
-                text = str(match.get("text") or "").strip()
-                prefix = f"{path}:{line}" if path and line is not None else path or "match"
-                lines.append(f"- {prefix} {text}".rstrip())
-            if lines:
-                return "Matches:\n" + "\n".join(lines)
-            return "No matches found."
-    if capability_id in {"memory.read", "memory.semantic.search"}:
-        entries = output.get("entries") or output.get("matches")
-        if isinstance(entries, list) and entries:
-            preview = json.dumps(entries[:5], ensure_ascii=True, indent=2)
-            return preview[:max_preview_chars]
-    if capability_id == "rag.retrieve":
-        matches = output.get("matches")
-        if isinstance(matches, list) and matches:
-            lines: list[str] = []
-            for match in matches[:5]:
-                if not isinstance(match, dict):
-                    continue
-                source_uri = str(match.get("source_uri") or "").strip()
-                document_id = str(match.get("document_id") or "").strip()
-                score = match.get("score")
-                text = str(match.get("text") or "").strip()
-                label = source_uri or document_id or "match"
-                if isinstance(score, (int, float)):
-                    prefix = f"- {label} (score {score:.3f})"
-                else:
-                    prefix = f"- {label}"
-                if text:
-                    excerpt = text[:180]
-                    suffix = "..." if len(text) > 180 else ""
-                    lines.append(f"{prefix}: {excerpt}{suffix}")
-                else:
-                    lines.append(prefix)
-            if lines:
-                return "Retrieved matches:\n" + "\n".join(lines)
-            return "No matches found."
+    """Format a capability output for display in chat.
+
+    Tries the spec-driven chat_response_hint from the capability registry first;
+    falls back to a generic JSON dump. Adding a new capability to the allow-list
+    only requires a chat_response_hint in capability_registry.yaml — no code here.
+    """
+    try:
+        registry = capability_registry.load_capability_registry()
+        spec = registry.get(capability_id)
+        if spec is not None:
+            hint = spec.planner_hints.get("chat_response_hint")
+            if isinstance(hint, dict):
+                rendered = _render_hint(output, hint, max_preview_chars=max_preview_chars)
+                if rendered is not None:
+                    return rendered
+    except Exception:  # noqa: BLE001
+        pass
 
     rendered = json.dumps(output, ensure_ascii=True, indent=2, default=str)
     if len(rendered) > max_preview_chars:

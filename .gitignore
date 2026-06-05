@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+.DS_Store
+*.db
 .venv/
 node_modules/
 .next/
@@ -31,7 +33,7 @@ templates/
 ./templates
 ./workspace
 scripts/largest_paths_cleanup.sh
-./test.db
+/test.db
 ./text.md
 ./tmp
 

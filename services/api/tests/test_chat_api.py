@@ -11,7 +11,7 @@ os.environ["JOB_RECOVERY_ENABLED"] = "false"
 os.environ["POLICY_GATE_ENABLED"] = "false"
 os.environ["CAPABILITY_MODE"] = "enabled"
 
-from libs.core import models  # noqa: E402
+from libs.core import llm_provider, models  # noqa: E402
 from libs.core import capability_registry as cap_registry  # noqa: E402
 from services.api.app import chat_service, main, memory_profile_service  # noqa: E402
 from services.api.app.database import Base, SessionLocal, engine  # noqa: E402
@@ -25,6 +25,177 @@ main.CHAT_ROUTING_MODE = "response_first"
 main._chat_router_provider = None
 main._chat_response_provider = None
 main._chat_pending_correction_provider = None
+
+
+def _llm_request_text(request: llm_provider.LLMRequest) -> str:
+    parts = [str(request.prompt or "")]
+    parts.extend(str(block.text or "") for block in request.prompt_blocks or [])
+    return "\n".join(part for part in parts if part)
+
+
+def _llm_dynamic_prompt(request: llm_provider.LLMRequest) -> str:
+    if request.prompt_blocks:
+        return str(request.prompt_blocks[-1].text or "")
+    return str(request.prompt or "")
+
+
+def _llm_json_payload(request: llm_provider.LLMRequest) -> dict:
+    prompt = _llm_dynamic_prompt(request).strip()
+    if not prompt:
+        return {}
+    start = prompt.find("{")
+    if start > 0:
+        prompt = prompt[start:]
+    return json.loads(prompt)
+
+
+def _default_capability_response(content: str) -> str:
+    if not main._is_capability_discovery_request(content):
+        return ""
+    capabilities = main._chat_visible_capabilities()
+    scope_query, scoped_capabilities = main._scoped_chat_visible_capabilities(content, capabilities)
+    if scoped_capabilities:
+        header = f"Available capabilities for this assistant ({len(scoped_capabilities)}):"
+        if scope_query:
+            header = (
+                f"Available capabilities related to '{scope_query}' for this assistant "
+                f"({len(scoped_capabilities)}):"
+            )
+        lines = [header]
+        for capability_id, spec in scoped_capabilities:
+            description = str(spec.description or "").strip()
+            lines.append(f"- {capability_id}: {description}" if description else f"- {capability_id}")
+        return "\n".join(lines)
+    if scope_query:
+        return f"No capabilities related to '{scope_query}' are currently available for this assistant."
+    return "No capabilities are currently available for this assistant."
+
+
+class _DefaultChatResponseProvider:
+    def generate_request(self, request):
+        payload = _llm_json_payload(request)
+        content = str(payload.get("current_user_message") or "").strip()
+        context_json = dict(payload.get("context_json") or {})
+        active_job_id = str(context_json.get("active_job_id") or context_json.get("job_id") or "").strip()
+        if active_job_id:
+            return type("_Response", (), {"content": f"Job {active_job_id} is already active."})()
+        capability_response = _default_capability_response(content)
+        if capability_response:
+            return type("_Response", (), {"content": capability_response})()
+        if "prefer" in content.lower():
+            return type("_Response", (), {"content": "Got it."})()
+        return type("_Response", (), {"content": "I can help you create workflows."})()
+
+    def generate_request_json_object(self, request):
+        payload = _llm_json_payload(request)
+        content = str(payload.get("current_user_message") or "").strip()
+        lowered = content.lower()
+        evidence = dict(payload.get("boundary_evidence") or {})
+        if evidence.get("pending_clarification"):
+            if "skip" in lowered or "don't need" in lowered or "answer here" in lowered:
+                return {
+                    "decision": "exit_pending_to_chat",
+                    "assistant_response": "Here is the direct chat answer.",
+                    "confidence": 0.9,
+                }
+            if lowered.endswith("?") or "clarify" in lowered:
+                return {
+                    "decision": "meta_clarification",
+                    "assistant_response": (
+                        "Do you want to continue the current workflow request, "
+                        "or should I answer here in chat instead?"
+                    ),
+                    "confidence": 0.9,
+                }
+            return {
+                "decision": "continue_pending",
+                "assistant_response": "",
+                "confidence": 0.9,
+            }
+        if (
+            evidence.get("conversation_mode_hint") == "execution_oriented"
+            or evidence.get("execution_signal_strength") in {"strong", "moderate"}
+        ):
+            return {
+                "decision": "execution_request",
+                "assistant_response": "",
+                "confidence": 0.9,
+            }
+        return {
+            "decision": "chat_reply",
+            "assistant_response": "I can help you create workflows.",
+            "confidence": 0.9,
+        }
+
+
+class _DefaultChatRouterProvider:
+    def generate_request_json_object(self, request):
+        payload = _llm_json_payload(request)
+        content = str(payload.get("current_user_message") or "").strip()
+        lowered = content.lower()
+        route_request = dict(payload.get("route_request") or {})
+        context_json = dict(route_request.get("context_json") or {})
+        workflow_context = dict(route_request.get("workflow_context") or {})
+        session_state = dict(route_request.get("session_state") or {})
+        pending_clarification = bool(session_state.get("pending_clarification"))
+        target_available = bool(workflow_context.get("target_available"))
+        if target_available or any(
+            context_json.get(key)
+            for key in (
+                "workflow_trigger_id",
+                "workflow_version_id",
+                "workflow_definition_id",
+            )
+        ):
+            return {
+                "route": "run_workflow",
+                "assistant_response": "",
+                "intent": "io",
+                "risk_level": "bounded_write",
+                "confidence": 0.95,
+            }
+        if pending_clarification and (
+            any(token in lowered for token in ("pdf", "docx", "markdown", "json"))
+            or context_json.get("path")
+        ):
+            return {
+                "route": "submit_job",
+                "assistant_response": "",
+                "intent": "generate",
+                "risk_level": "bounded_write",
+                "confidence": 0.95,
+                "output_format": "pdf" if "pdf" in lowered else "docx" if "docx" in lowered else None,
+            }
+        if any(token in lowered for token in ("generate", "render", "create", "deployment report", "document")):
+            if any(token in lowered for token in ("pdf", "docx", "markdown", "json")) or context_json.get("path"):
+                return {
+                    "route": "submit_job",
+                    "assistant_response": "",
+                    "intent": "generate",
+                    "risk_level": "bounded_write",
+                    "confidence": 0.95,
+                    "output_format": "pdf" if "pdf" in lowered else "docx" if "docx" in lowered else None,
+                }
+            return {
+                "route": "ask_clarification",
+                "assistant_response": "What output format do you need?",
+                "intent": "generate",
+                "risk_level": "bounded_write",
+                "confidence": 0.9,
+                "missing_inputs": ["output_format"],
+                "clarification_questions": ["What output format do you need?"],
+            }
+        return {
+            "route": "respond",
+            "assistant_response": "I can help you create workflows.",
+            "intent": "other",
+            "risk_level": "read_only",
+            "confidence": 0.9,
+        }
+
+
+main._chat_router_provider = _DefaultChatRouterProvider()
+main._chat_response_provider = _DefaultChatResponseProvider()
 
 
 def _metric_value(metrics_text: str, metric_name: str, labels: dict[str, str] | None = None) -> float:
@@ -52,7 +223,15 @@ def test_create_chat_session() -> None:
     assert body["active_job_id"] is None
 
 
-def test_chat_turn_can_respond_without_creating_job() -> None:
+def test_chat_turn_can_respond_without_creating_job(monkeypatch) -> None:
+    class _Responder:
+        def generate_request(self, request):
+            assert request.metadata["component"] == "chat_response"
+            return type("_Response", (), {"content": "I can help you create workflows."})()
+
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODE", "answer_only")
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(main, "_chat_response_provider", _Responder())
     session = client.post("/chat/sessions", json={}).json()
 
     response = client.post(
@@ -66,6 +245,84 @@ def test_chat_turn_can_respond_without_creating_job() -> None:
     assert body["assistant_message"]["action"]["type"] == "respond"
     assert "workflow" in body["assistant_message"]["content"].lower()
     assert "pending_clarification" not in body["session"]["metadata"]
+
+
+def test_chat_turn_returns_503_when_required_router_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODE", "answer_or_handoff")
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "always_router")
+    monkeypatch.setattr(main, "_chat_router_provider", None)
+    monkeypatch.setattr(main, "_chat_response_provider", None)
+    session = client.post("/chat/sessions", json={}).json()
+
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "hello", "context_json": {}, "priority": 0},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "chat_llm_unavailable"
+    session_response = client.get(f"/chat/sessions/{session['id']}")
+    assert session_response.json()["messages"] == []
+
+
+def test_chat_turn_returns_503_when_router_llm_is_unavailable(monkeypatch) -> None:
+    class _Router:
+        def generate_request_json_object(self, request):
+            raise llm_provider.LLMProviderError("quota exceeded: too many requests")
+
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODE", "answer_or_handoff")
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "always_router")
+    monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    monkeypatch.setattr(main, "_chat_response_provider", None)
+    session = client.post("/chat/sessions", json={}).json()
+
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "hello", "context_json": {}, "priority": 0},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "chat_llm_unavailable"
+
+
+def test_chat_turn_returns_503_when_response_llm_is_unavailable(monkeypatch) -> None:
+    class _Responder:
+        def generate_request(self, request):
+            raise llm_provider.LLMProviderError("upstream timeout")
+
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODE", "answer_only")
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(main, "_chat_router_provider", None)
+    monkeypatch.setattr(main, "_chat_response_provider", _Responder())
+    session = client.post("/chat/sessions", json={}).json()
+
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "Can you explain the architecture?", "context_json": {}, "priority": 0},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "chat_llm_unavailable"
+
+
+def test_chat_turn_returns_503_when_boundary_llm_is_unavailable(monkeypatch) -> None:
+    class _Responder:
+        def generate_request_json_object(self, request):
+            raise llm_provider.LLMProviderError("rate limit")
+
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODE", "answer_or_handoff")
+    monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
+    monkeypatch.setattr(main, "_chat_router_provider", None)
+    monkeypatch.setattr(main, "_chat_response_provider", _Responder())
+    session = client.post("/chat/sessions", json={}).json()
+
+    response = client.post(
+        f"/chat/sessions/{session['id']}/messages",
+        json={"content": "hello", "context_json": {}, "priority": 0},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "chat_llm_unavailable"
 
 
 def test_chat_turn_lists_available_capabilities_when_asked(monkeypatch) -> None:
@@ -441,7 +698,7 @@ def test_chat_turn_uses_vector_intent_detection_for_fuzzy_github_scope(monkeypat
     assert "filesystem.workspace.list" not in body["assistant_message"]["content"]
 
 
-def test_chat_turn_capability_discovery_overrides_llm_chat_reply(monkeypatch) -> None:
+def test_chat_turn_capability_discovery_does_not_override_llm_chat_reply(monkeypatch) -> None:
     capability = cap_registry.CapabilitySpec(
         capability_id="github.repo.list",
         description="List repositories for a user or organization.",
@@ -455,11 +712,11 @@ def test_chat_turn_capability_discovery_overrides_llm_chat_reply(monkeypatch) ->
 
     class _BoundaryResponder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
+            assert request.metadata["component"] == "chat_boundary_decision"
             return {"decision": "chat_reply", "assistant_response": "Generic chat reply."}
 
         def generate_request(self, request):
-            raise AssertionError("chat generation should not run for deterministic capability discovery")
+            raise AssertionError("boundary model response should be used directly")
 
     monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
     monkeypatch.setattr(main.capability_registry, "resolve_capability_mode", lambda: "enabled")
@@ -488,8 +745,7 @@ def test_chat_turn_capability_discovery_overrides_llm_chat_reply(monkeypatch) ->
     assert response.status_code == 200
     body = response.json()
     assert body["assistant_message"]["action"]["type"] == "respond"
-    assert "Available capabilities for this assistant (1):" in body["assistant_message"]["content"]
-    assert "Generic chat reply." not in body["assistant_message"]["content"]
+    assert body["assistant_message"]["content"] == "Generic chat reply."
 
 
 def test_chat_turn_can_request_clarification_for_ambiguous_workflow() -> None:
@@ -3212,7 +3468,7 @@ def test_chat_turn_document_content_answer_stays_on_document_flow(
     )
 
 
-def test_chat_turn_keeps_submit_in_clarification_when_submit_normalization_throws(
+def test_chat_turn_returns_503_when_submit_normalization_throws(
     monkeypatch,
 ) -> None:
     class _Router:
@@ -3269,14 +3525,8 @@ def test_chat_turn_keeps_submit_in_clarification_when_submit_normalization_throw
         json={"content": "Create a deployment report", "context_json": {}, "priority": 0},
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["job"] is None
-    assert body["assistant_message"]["action"]["type"] == "ask_clarification"
-    assert "remaining required details" in body["assistant_message"]["content"].lower()
-    assert body["session"]["metadata"]["pending_clarification"]["questions"] == [
-        "I still need the remaining required details before I can submit this request."
-    ]
+    assert response.status_code == 503
+    assert response.json()["detail"] == "chat_llm_unavailable"
 
 
 def test_chat_turn_preserves_original_goal_and_filename_across_clarification_turns(
@@ -3350,7 +3600,7 @@ def test_chat_turn_preserves_original_goal_and_filename_across_clarification_tur
 
     class _Normalizer:
         def generate_request_json_object(self, request):
-            payload = json.loads(request.prompt)
+            payload = json.loads(_llm_dynamic_prompt(request))
             capability_id = payload["capability_id"]
             goal = payload["goal_with_clarifications"]
             if capability_id == "document.spec.generate":
@@ -3550,7 +3800,7 @@ def test_chat_submit_normalization_uses_prior_chat_turns_to_fill_document_slots(
 
     class _Normalizer:
         def generate_request_json_object(self, request):
-            payload = json.loads(request.prompt)
+            payload = json.loads(_llm_dynamic_prompt(request))
             history = payload["conversation_history"]
             combined = " ".join(entry["content"] for entry in history).lower()
             capability_id = payload["capability_id"]
@@ -3764,7 +4014,7 @@ def test_chat_turn_normalizes_using_selected_github_capability_contract(monkeypa
     class _Router:
         def generate_request_json_object(self, request):
             calls["count"] += 1
-            if "authentication failures in private repos" not in request.prompt:
+            if "authentication failures in private repos" not in _llm_request_text(request):
                 return {
                     "route": "ask_clarification",
                     "assistant_response": "What GitHub issues should I search for?",
@@ -3977,7 +4227,7 @@ def test_chat_turn_can_run_published_workflow_by_trigger_reference() -> None:
 def test_chat_turn_can_use_llm_router_for_conversational_reply(monkeypatch) -> None:
     class _Router:
         def generate_request_json_object(self, request):
-            assert "current_user_message" in request.prompt
+            assert "current_user_message" in _llm_request_text(request)
             return {
                 "route": "respond",
                 "assistant_response": "This stays in chat.",
@@ -3986,8 +4236,14 @@ def test_chat_turn_can_use_llm_router_for_conversational_reply(monkeypatch) -> N
                 "confidence": 0.93,
             }
 
+    class _Responder:
+        def generate_request(self, request):
+            assert request.metadata["component"] == "chat_response"
+            return type("_Response", (), {"content": "Response model keeps this in chat."})()
+
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "always_router")
     monkeypatch.setattr(main, "_chat_router_provider", _Router())
+    monkeypatch.setattr(main, "_chat_response_provider", _Responder())
     session = client.post("/chat/sessions", json={}).json()
 
     response = client.post(
@@ -3999,13 +4255,13 @@ def test_chat_turn_can_use_llm_router_for_conversational_reply(monkeypatch) -> N
     body = response.json()
     assert body["job"] is None
     assert body["assistant_message"]["action"]["type"] == "respond"
-    assert body["assistant_message"]["content"] == "This stays in chat."
+    assert body["assistant_message"]["content"] == "Response model keeps this in chat."
 
 
 def test_chat_turn_uses_separate_response_provider_for_conversational_reply(monkeypatch) -> None:
     class _Router:
         def generate_request_json_object(self, request):
-            assert "current_user_message" in request.prompt
+            assert "current_user_message" in _llm_request_text(request)
             return {
                 "route": "respond",
                 "assistant_response": "Router fallback response.",
@@ -4016,8 +4272,8 @@ def test_chat_turn_uses_separate_response_provider_for_conversational_reply(monk
 
     class _Responder:
         def generate_request(self, request):
-            assert request.metadata == {"component": "chat_response"}
-            assert "current_user_message" in request.prompt
+            assert request.metadata["component"] == "chat_response"
+            assert "current_user_message" in _llm_request_text(request)
             return type("_Response", (), {"content": "Response model answer."})()
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
@@ -4049,7 +4305,7 @@ def test_chat_turn_response_first_skips_router_for_conversational_turn(monkeypat
 
     class _Responder:
         def generate_request(self, request):
-            assert request.metadata == {"component": "chat_response"}
+            assert request.metadata["component"] == "chat_response"
             return type("_Response", (), {"content": "Direct response model answer."})()
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
@@ -4089,8 +4345,8 @@ def test_chat_turn_response_first_treats_discussion_request_as_conversational(mo
 
     class _Responder:
         def generate_request(self, request):
-            assert request.metadata == {"component": "chat_response"}
-            assert "discuss about kubernetes" in request.prompt.lower()
+            assert request.metadata["component"] == "chat_response"
+            assert "discuss about kubernetes" in _llm_request_text(request).lower()
             return type("_Response", (), {"content": "Let's discuss Kubernetes."})()
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
@@ -4126,8 +4382,8 @@ def test_chat_turn_response_first_answer_or_handoff_answers_without_router(monke
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
-            assert "current_user_message" in request.prompt
+            assert request.metadata["component"] == "chat_boundary_decision"
+            assert "current_user_message" in _llm_request_text(request)
             return {
                 "decision": "chat_reply",
                 "assistant_response": "Direct answer-or-handoff response.",
@@ -4167,8 +4423,8 @@ def test_chat_turn_response_first_answer_or_handoff_keeps_interview_practice_in_
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
-            assert "practice interview questions and answers" in request.prompt.lower()
+            assert request.metadata["component"] == "chat_boundary_decision"
+            assert "practice interview questions and answers" in _llm_request_text(request).lower()
             return {
                 "decision": "chat_reply",
                 "assistant_response": "Great — let's practice Applied AI Engineer interview questions.",
@@ -4224,7 +4480,7 @@ def test_chat_turn_response_first_answer_or_handoff_can_escalate_to_router(monke
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
+            assert request.metadata["component"] == "chat_boundary_decision"
             return {"decision": "execution_request", "assistant_response": ""}
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
@@ -4254,10 +4510,10 @@ def test_chat_turn_response_first_answer_or_handoff_can_escalate_to_router(monke
         assert body["job"] is None
 
 
-def test_chat_turn_response_first_boundary_failure_uses_chat_fallback(monkeypatch) -> None:
+def test_chat_turn_response_first_boundary_failure_returns_503(monkeypatch) -> None:
     class _FailingResponder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
+            assert request.metadata["component"] == "chat_boundary_decision"
             raise main.LLMProviderError("boundary provider failed")
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
@@ -4271,18 +4527,11 @@ def test_chat_turn_response_first_boundary_failure_uses_chat_fallback(monkeypatc
         json={"content": "Create a document on Kubernetes", "context_json": {}, "priority": 0},
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["job"] is None
-    assert body["assistant_message"]["action"]["type"] == "respond"
-    assert body["assistant_message"]["metadata"]["goal_intent_profile"]["source"] == "chat_boundary_fallback"
-    assert (
-        body["assistant_message"]["metadata"]["goal_intent_profile"]["routing_fallback_reason"]
-        == "boundary_decision_failed"
-    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "chat_llm_unavailable"
 
 
-def test_chat_turn_response_first_router_failure_preserves_execution_fallback(monkeypatch) -> None:
+def test_chat_turn_response_first_router_failure_returns_503(monkeypatch) -> None:
     class _Router:
         def generate_request_json_object(self, request):
             assert request.metadata["component"] == "chat_router"
@@ -4290,7 +4539,7 @@ def test_chat_turn_response_first_router_failure_preserves_execution_fallback(mo
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
+            assert request.metadata["component"] == "chat_boundary_decision"
             return {"decision": "execution_request", "assistant_response": ""}
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
@@ -4304,14 +4553,8 @@ def test_chat_turn_response_first_router_failure_preserves_execution_fallback(mo
         json={"content": "Create a document on Kubernetes", "context_json": {}, "priority": 0},
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["assistant_message"]["action"]["type"] in {"submit_job", "ask_clarification"}
-    assert body["assistant_message"]["metadata"]["goal_intent_profile"]["source"] == "chat_router_fallback"
-    assert (
-        body["assistant_message"]["metadata"]["goal_intent_profile"]["routing_fallback_reason"]
-        == "chat_router_failed"
-    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "chat_llm_unavailable"
 
 
 def test_chat_turn_invalid_run_workflow_without_target_asks_for_reference(monkeypatch) -> None:
@@ -5030,8 +5273,8 @@ def test_chat_boundary_uses_semantic_capability_evidence_and_persists_decision(
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
-            payload = json.loads(request.prompt)
+            assert request.metadata["component"] == "chat_boundary_decision"
+            payload = json.loads(_llm_dynamic_prompt(request))
             evidence = payload["boundary_evidence"]
             assert evidence["conversation_mode_hint"] == "execution_oriented"
             assert any(
@@ -5223,7 +5466,7 @@ def test_chat_boundary_overrides_chat_reply_when_execution_signal_is_strong(
 
     class _Responder:
         def generate_request_json_object(self, request):
-            payload = json.loads(request.prompt)
+            payload = json.loads(_llm_dynamic_prompt(request))
             evidence = payload["boundary_evidence"]
             assert evidence["execution_signal_strength"] == "strong"
             assert evidence["top_family_score"] == 1.73
@@ -5325,7 +5568,7 @@ def test_chat_boundary_overrides_chat_reply_to_continue_pending_for_clarificatio
 
     class _Responder:
         def generate_request_json_object(self, request):
-            payload = json.loads(request.prompt)
+            payload = json.loads(_llm_dynamic_prompt(request))
             evidence = payload["boundary_evidence"]
             assert evidence["pending_clarification"] is True
             assert evidence["likely_clarification_answer"] is True
@@ -5389,7 +5632,7 @@ def test_chat_boundary_clears_stale_pending_clarification_for_execution_oriented
 
     class _Responder:
         def generate_request_json_object(self, request):
-            payload = json.loads(request.prompt)
+            payload = json.loads(_llm_dynamic_prompt(request))
             evidence = payload["boundary_evidence"]
             assert evidence["pending_clarification"] is False
             assert evidence["likely_clarification_answer"] is False
@@ -5456,7 +5699,7 @@ def test_chat_boundary_coerces_non_pending_meta_clarification_back_to_execution(
 
     class _Responder:
         def generate_request_json_object(self, request):
-            payload = json.loads(request.prompt)
+            payload = json.loads(_llm_dynamic_prompt(request))
             evidence = payload["boundary_evidence"]
             assert evidence["pending_clarification"] is False
             assert evidence["needs_clarification"] is True
@@ -5515,7 +5758,7 @@ def test_chat_boundary_missing_document_output_format_cannot_fall_back_to_respon
 
     class _Responder:
         def generate_request_json_object(self, request):
-            payload = json.loads(request.prompt)
+            payload = json.loads(_llm_dynamic_prompt(request))
             evidence = payload["boundary_evidence"]
             assert evidence["pending_clarification"] is False
             assert evidence["needs_clarification"] is True
@@ -5701,8 +5944,8 @@ def test_chat_turn_exits_pending_clarification_when_user_requests_chat_only_resp
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
-            assert "don't need a document" in request.prompt.lower()
+            assert request.metadata["component"] == "chat_boundary_decision"
+            assert "don't need a document" in _llm_request_text(request).lower()
             return {
                 "decision": "exit_pending_to_chat",
                 "assistant_response": "Here are my thoughts on Kubernetes.",
@@ -5755,8 +5998,8 @@ def test_chat_turn_exits_pending_clarification_for_semantic_chat_only_correction
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
-            assert "skip the workflow and answer here" in request.prompt.lower()
+            assert request.metadata["component"] == "chat_boundary_decision"
+            assert "skip the workflow and answer here" in _llm_request_text(request).lower()
             return {
                 "decision": "exit_pending_to_chat",
                 "assistant_response": "Here is the direct chat answer.",
@@ -5900,7 +6143,7 @@ def test_chat_turn_pending_meta_clarification_uses_ask_clarification_path(
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
+            assert request.metadata["component"] == "chat_boundary_decision"
             return {
                 "decision": "meta_clarification",
                 "assistant_response": (
@@ -6029,7 +6272,7 @@ def test_chat_turn_response_first_still_uses_router_for_execution_turn(monkeypat
 
     class _Responder:
         def generate_request_json_object(self, request):
-            assert request.metadata == {"component": "chat_boundary_decision"}
+            assert request.metadata["component"] == "chat_boundary_decision"
             return {"decision": "execution_request", "assistant_response": ""}
 
     normalize_calls = {"count": 0}
@@ -6082,7 +6325,7 @@ def test_chat_turn_response_first_still_uses_router_for_execution_turn(monkeypat
 def test_chat_turn_tool_call_does_not_use_chat_response_provider(monkeypatch) -> None:
     class _Router:
         def generate_request_json_object(self, request):
-            assert "direct_capabilities" in request.prompt
+            assert "direct_capabilities" in _llm_request_text(request)
             return {
                 "route": "tool_call",
                 "assistant_response": "",
@@ -6137,7 +6380,7 @@ def test_chat_turn_tool_call_does_not_use_chat_response_provider(monkeypatch) ->
 def test_chat_turn_executes_direct_capability_as_synchronous_one_step_run(monkeypatch) -> None:
     class _Router:
         def generate_request_json_object(self, request):
-            assert "direct_capabilities" in request.prompt
+            assert "direct_capabilities" in _llm_request_text(request)
             return {
                 "route": "tool_call",
                 "assistant_response": "",
