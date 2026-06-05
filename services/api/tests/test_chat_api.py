@@ -23,6 +23,7 @@ client = TestClient(main.app)
 main.CHAT_RESPONSE_MODE = "answer_only"
 main.CHAT_ROUTING_MODE = "response_first"
 main._chat_router_provider = None
+main._chat_boundary_provider = None
 main._chat_response_provider = None
 main._chat_pending_correction_provider = None
 
@@ -6254,6 +6255,98 @@ def test_build_chat_clarification_normalizer_provider_prefers_dedicated_model(
 
     assert provider is not None
     assert captured == {"provider_name": "openai", "model": "gpt-5-nano"}
+
+
+def test_build_chat_boundary_provider_prefers_dedicated_model(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _resolve_provider(provider_name, **kwargs):
+        captured["provider_name"] = provider_name
+        captured["model"] = kwargs.get("model") or ""
+        captured["max_output_tokens"] = kwargs.get("max_output_tokens")
+        return object()
+
+    monkeypatch.setattr(main, "LLM_PROVIDER_NAME", "bedrock")
+    monkeypatch.setattr(main, "_CHAT_BOUNDARY_MODEL_NAME", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    monkeypatch.setattr(main, "CHAT_BOUNDARY_MAX_OUTPUT_TOKENS", 384)
+    monkeypatch.setattr(main, "resolve_provider", _resolve_provider)
+
+    provider = main._build_chat_boundary_provider()
+
+    assert provider is not None
+    assert captured == {
+        "provider_name": "bedrock",
+        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "max_output_tokens": 384,
+    }
+
+
+def test_build_api_tool_registry_llm_provider_skips_mock(monkeypatch) -> None:
+    monkeypatch.setattr(main, "LLM_PROVIDER_NAME", "mock")
+
+    assert main._build_api_tool_registry_llm_provider() is None
+
+
+def test_build_api_tool_registry_llm_provider_uses_configured_provider(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    class _Provider(llm_provider.LLMProvider):
+        pass
+
+    provider = _Provider()
+
+    def _resolve_provider(provider_name, **kwargs):
+        captured["provider_name"] = provider_name
+        captured["model"] = kwargs.get("model") or ""
+        return provider
+
+    monkeypatch.setattr(main, "LLM_PROVIDER_NAME", "bedrock")
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODEL", "us.anthropic.claude-sonnet-4-6")
+    monkeypatch.setattr(main, "LLM_MODEL_NAME", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    monkeypatch.setattr(main, "resolve_provider", _resolve_provider)
+
+    assert main._build_api_tool_registry_llm_provider() is provider
+    assert captured == {
+        "provider_name": "bedrock",
+        "model": "us.anthropic.claude-sonnet-4-6",
+    }
+
+
+def test_chat_boundary_decision_uses_boundary_provider(monkeypatch) -> None:
+    calls = {"boundary": 0}
+
+    class _BoundaryProvider:
+        def generate_request_json_object(self, request):
+            calls["boundary"] += 1
+            assert request.metadata["component"] == "chat_boundary_decision"
+            assert "under 80 words" in _llm_request_text(request)
+            return {
+                "decision": "chat_reply",
+                "confidence": 0.95,
+                "assistant_response": "Short answer.",
+                "reason_code": "test",
+            }
+
+    class _ResponseProvider:
+        def generate_request_json_object(self, request):
+            raise AssertionError("boundary decision should not use response provider")
+
+    monkeypatch.setattr(main, "CHAT_RESPONSE_MODE", "answer_or_handoff")
+    monkeypatch.setattr(main, "_chat_boundary_provider", _BoundaryProvider())
+    monkeypatch.setattr(main, "_chat_response_provider", _ResponseProvider())
+
+    decision = main._generate_chat_boundary_decision(
+        content="hello",
+        candidate_goal="hello",
+        session_metadata={},
+        merged_context={},
+        messages=[],
+    )
+
+    assert decision is not None
+    assert decision.decision.value == "chat_reply"
+    assert decision.assistant_response == "Short answer."
+    assert calls == {"boundary": 1}
 
 
 def test_chat_turn_response_first_still_uses_router_for_execution_turn(monkeypatch) -> None:

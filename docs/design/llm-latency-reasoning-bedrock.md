@@ -10,11 +10,12 @@ Chat latency and reasoning depth are traded once — at config time — by picki
 
 ### Per-role model split
 
-`services/api/app/main.py` builds five independent `LLMProvider` instances from env vars:
+`services/api/app/main.py` builds independent `LLMProvider` instances from env vars:
 
 | Role | Env var | Notes |
 |---|---|---|
 | Turn router | `CHAT_ROUTER_MODEL` | cheap classification |
+| Boundary decision | `CHAT_BOUNDARY_MODEL` | cheap front-door classify-and-short-answer path |
 | Response generation | `CHAT_RESPONSE_MODEL` | user-facing |
 | Pending correction | `CHAT_PENDING_CORRECTION_MODEL` | has `"heuristic"` bypass mode |
 | Intent decompose | `INTENT_DECOMPOSE_MODEL` | |
@@ -90,6 +91,10 @@ LLM_PROVIDER=bedrock-anthropic
 BEDROCK_MODEL_ID=us.anthropic.claude-3-5-haiku-20241022-v1:0
 AWS_REGION=us-east-1
 BEDROCK_MAX_OUTPUT_TOKENS=8192
+BEDROCK_VERIFY_SSL=false
+CHAT_BOUNDARY_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+CHAT_BOUNDARY_MAX_OUTPUT_TOKENS=384
+CHAT_RESPONSE_MAX_OUTPUT_TOKENS=768
 ```
 
 Per-role override follows the same pattern: `CHAT_ROUTER_MODEL`, `CHAT_RESPONSE_MODEL`, etc. continue to work as model IDs passed to the Bedrock provider.

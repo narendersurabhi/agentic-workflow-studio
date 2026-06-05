@@ -58,8 +58,10 @@ class BedrockAnthropicProvider(LLMProvider):
                 "boto3 package is required for BedrockAnthropicProvider: pip install boto3"
             )
         self.model_id = model_id
+        self.region = region
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
+        self.verify_ssl = verify_ssl
         self.client = _boto3.client(
             "bedrock-runtime",
             region_name=region,
@@ -68,6 +70,13 @@ class BedrockAnthropicProvider(LLMProvider):
                 connect_timeout=timeout_s,
                 read_timeout=timeout_s,
             ),
+        )
+
+    def _error_context(self) -> str:
+        return (
+            f"model_id={self.model_id}, "
+            f"region={self.region}, "
+            f"verify_ssl={str(self.verify_ssl).lower()}"
         )
 
     def generate_request(self, request: LLMRequest) -> LLMResponse:
@@ -93,7 +102,9 @@ class BedrockAnthropicProvider(LLMProvider):
             content.append({"type": "text", "text": block.text})
 
         if not content:
-            raise LLMProviderError("BedrockAnthropicProvider: no non-empty prompt blocks")
+            raise LLMProviderError(
+                f"BedrockAnthropicProvider no non-empty prompt blocks ({self._error_context()})"
+            )
 
         thinking_enabled = (
             request.reasoning_effort is not None
@@ -126,8 +137,12 @@ class BedrockAnthropicProvider(LLMProvider):
             response_body = json.loads(raw["body"].read())
         except Exception as exc:
             if is_llm_unavailable_error(exc):
-                raise LLMUnavailableError(f"Bedrock API unavailable: {exc}") from exc
-            raise LLMProviderError(f"Bedrock API error: {exc}") from exc
+                raise LLMUnavailableError(
+                    f"Bedrock API unavailable ({self._error_context()}): {exc}"
+                ) from exc
+            raise LLMProviderError(
+                f"Bedrock API error ({self._error_context()}): {exc}"
+            ) from exc
 
         text = "".join(
             block.get("text", "")
@@ -135,7 +150,9 @@ class BedrockAnthropicProvider(LLMProvider):
             if block.get("type") == "text"
         )
         if not text:
-            raise LLMProviderError("Bedrock API returned empty output")
+            raise LLMProviderError(
+                f"Bedrock API returned empty output ({self._error_context()})"
+            )
 
         usage = response_body.get("usage", {})
         return LLMResponse(

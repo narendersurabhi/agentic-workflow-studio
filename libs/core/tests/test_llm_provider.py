@@ -215,6 +215,8 @@ def test_resolve_provider_supports_gemini_env(monkeypatch) -> None:
 def test_resolve_provider_bedrock_prefers_explicit_role_model(monkeypatch) -> None:
     from libs.core import llm_provider_bedrock
 
+    verify_values: list[bool] = []
+
     def _fake_init(
         self,
         model_id,
@@ -224,10 +226,12 @@ def test_resolve_provider_bedrock_prefers_explicit_role_model(monkeypatch) -> No
         timeout_s=60.0,
         verify_ssl=True,
     ):
-        del region, max_output_tokens, temperature, timeout_s, verify_ssl
+        del region, max_output_tokens, temperature, timeout_s
+        verify_values.append(verify_ssl)
         self.model_id = model_id
 
     monkeypatch.setenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+    monkeypatch.setenv("BEDROCK_VERIFY_SSL", "false")
     monkeypatch.setattr(
         llm_provider_bedrock.BedrockAnthropicProvider,
         "__init__",
@@ -241,6 +245,65 @@ def test_resolve_provider_bedrock_prefers_explicit_role_model(monkeypatch) -> No
 
     assert isinstance(provider, llm_provider_bedrock.BedrockAnthropicProvider)
     assert provider.model_id == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    alias_provider = llm_provider_module.resolve_provider(
+        "bedrock",
+        model="us.anthropic.claude-sonnet-4-6",
+    )
+
+    assert isinstance(alias_provider, llm_provider_bedrock.BedrockAnthropicProvider)
+    assert alias_provider.model_id == "us.anthropic.claude-sonnet-4-6"
+    assert verify_values == [False, False]
+
+
+def test_resolve_provider_rejects_unknown_provider() -> None:
+    try:
+        llm_provider_module.resolve_provider("bedrok", model="test-model")
+    except ValueError as exc:
+        assert "Unsupported LLM provider" in str(exc)
+        assert "bedrok" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError")
+
+
+def test_bedrock_provider_error_includes_model_and_region(monkeypatch) -> None:
+    from libs.core import llm_provider_bedrock
+
+    class _FakeBedrockRuntime:
+        def invoke_model(self, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            raise RuntimeError("AccessDeniedException: model is marked as Legacy")
+
+    class _FakeBoto3:
+        class session:
+            @staticmethod
+            def Config(**kwargs):  # type: ignore[no-untyped-def]
+                return kwargs
+
+        @staticmethod
+        def client(*args, **kwargs):  # type: ignore[no-untyped-def]
+            del args, kwargs
+            return _FakeBedrockRuntime()
+
+    monkeypatch.setattr(llm_provider_bedrock, "_BOTO3_AVAILABLE", True)
+    monkeypatch.setattr(llm_provider_bedrock, "_boto3", _FakeBoto3)
+
+    provider = llm_provider_bedrock.BedrockAnthropicProvider(
+        model_id="us.anthropic.claude-sonnet-4-6",
+        region="us-east-1",
+        verify_ssl=False,
+    )
+
+    try:
+        provider.generate_request(LLMRequest(prompt="hello"))
+    except LLMProviderError as exc:
+        message = str(exc)
+        assert "model_id=us.anthropic.claude-sonnet-4-6" in message
+        assert "region=us-east-1" in message
+        assert "verify_ssl=false" in message
+        assert "Legacy" in message
+    else:  # pragma: no cover
+        raise AssertionError("Expected LLMProviderError")
 
 
 def test_resolve_provider_supports_openai_compatible_endpoint() -> None:
@@ -351,6 +414,9 @@ def test_openai_provider_keeps_non_retryable_http_error_as_provider_error(monkey
 def test_unavailable_text_classifier_matches_quota_and_timeout() -> None:
     assert llm_provider_module.is_llm_unavailable_error(Exception("quota exceeded"))
     assert llm_provider_module.is_llm_unavailable_error(Exception("upstream timeout"))
+    assert not llm_provider_module.is_llm_unavailable_error(
+        Exception("SSL validation failed: unable to get local issuer certificate")
+    )
     assert not llm_provider_module.is_llm_unavailable_error(Exception("invalid request"))
 
 
