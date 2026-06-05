@@ -4851,11 +4851,17 @@ def _route_chat_turn(
         chat_contracts.ChatBoundaryDecisionType.continue_pending,
     }:
         _prefetch_thread.join(timeout=5.0)  # 5 s cap; falls back to sync build if exceeded
+    # When the SSE streaming callback is active, never reuse the boundary's inline
+    # response — always go through _generate_chat_response so tokens flow through
+    # the queue and the client sees progressive streaming.  On the non-streaming
+    # path the one-call optimisation (boundary generates the response inline) is
+    # preserved.
+    _stream_active = getattr(_stream_callback_local, "callback", None) is not None
     if decision == chat_contracts.ChatBoundaryDecisionType.chat_reply:
         turn_plan = _finalize_chat_turn_plan(
             _chat_response_turn_plan(
                 goal=content.strip(),
-                assistant_content=boundary.assistant_response or "",
+                assistant_content="" if _stream_active else (boundary.assistant_response or ""),
             ),
             content=content,
             candidate_goal=candidate_goal,
@@ -4868,7 +4874,7 @@ def _route_chat_turn(
         turn_plan = _finalize_chat_turn_plan(
             _chat_response_turn_plan(
                 goal=content.strip(),
-                assistant_content=boundary.assistant_response or "",
+                assistant_content="" if _stream_active else (boundary.assistant_response or ""),
                 clear_pending_clarification=True,
             ),
             content=content,
