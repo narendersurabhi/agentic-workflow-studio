@@ -4749,6 +4749,28 @@ def _route_chat_turn(
             merged_context=merged_context,
             messages=messages,
         )
+
+    # Speculative pre-fetch: build the route request (intent normalization + capability
+    # search) in a background thread while the boundary LLM call runs on the main thread.
+    # If the boundary decides execution_request/continue_pending the result is ready
+    # immediately; otherwise the work is discarded (low cost — boundary is the gating call).
+    _prefetch_result: list[chat_contracts.ChatRouteRequest | None] = [None]
+
+    def _prefetch_route_request() -> None:
+        try:
+            _prefetch_result[0] = _build_chat_route_request(
+                content=content,
+                candidate_goal=candidate_goal,
+                session_metadata=session_metadata,
+                merged_context=merged_context,
+                messages=messages,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # fall through — _route_chat_turn_with_router will build it synchronously
+
+    _prefetch_thread = threading.Thread(target=_prefetch_route_request, daemon=True)
+    _prefetch_thread.start()
+
     boundary = _generate_chat_boundary_decision(
         content=content,
         candidate_goal=candidate_goal,
@@ -4756,6 +4778,8 @@ def _route_chat_turn(
         merged_context=merged_context,
         messages=messages,
     )
+    _prefetch_thread.join()  # should already be done; wait at most a few ms
+
     if boundary is None:
         raise llm_provider.LLMUnavailableError("chat_boundary_decision_unavailable")
     boundary = _postprocess_chat_boundary_decision(boundary, content=content)
@@ -4826,6 +4850,7 @@ def _route_chat_turn(
                 session_metadata=session_metadata,
                 merged_context=merged_context,
                 messages=messages,
+                prefetched_route_request=_prefetch_result[0],
             ),
             boundary=boundary,
             candidate_goal=candidate_goal,
@@ -5000,6 +5025,7 @@ def _route_chat_turn_with_router(
     session_metadata: Mapping[str, Any] | None,
     merged_context: Mapping[str, Any] | None,
     messages: Sequence[chat_contracts.ChatMessage] | None,
+    prefetched_route_request: chat_contracts.ChatRouteRequest | None = None,
 ) -> dict[str, Any]:
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
     if _chat_router_provider is None:
@@ -5008,7 +5034,7 @@ def _route_chat_turn_with_router(
         stripped_context = {
             k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
         }
-        route_request = _build_chat_route_request(
+        route_request = prefetched_route_request or _build_chat_route_request(
             content=content,
             candidate_goal=candidate_goal,
             session_metadata=session_metadata,
