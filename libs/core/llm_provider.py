@@ -466,6 +466,12 @@ def resolve_provider(
         from libs.core.llm_provider_bedrock import BedrockAnthropicProvider  # lazy import
         bedrock_model_id = model or os.getenv("BEDROCK_MODEL_ID")
         bedrock_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+        bedrock_verify_ssl = os.getenv("BEDROCK_VERIFY_SSL", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         if not bedrock_model_id:
             raise ValueError("BEDROCK_MODEL_ID is required when LLM_PROVIDER=bedrock-anthropic")
         return BedrockAnthropicProvider(
@@ -474,6 +480,7 @@ def resolve_provider(
             max_output_tokens=int(max_output_tokens or os.getenv("BEDROCK_MAX_OUTPUT_TOKENS") or 8192),
             temperature=temperature,
             timeout_s=timeout_s or 60.0,
+            verify_ssl=bedrock_verify_ssl,
         )
     if name in {"openai_compatible", "openai-chat", "chat_completions"}:
         if not api_key:

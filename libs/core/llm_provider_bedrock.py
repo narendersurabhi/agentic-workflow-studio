@@ -51,6 +51,7 @@ class BedrockAnthropicProvider(LLMProvider):
         max_output_tokens: int = 8192,
         temperature: Optional[float] = None,
         timeout_s: float = 60.0,
+        verify_ssl: bool = True,
     ) -> None:
         if not _BOTO3_AVAILABLE:
             raise LLMProviderError(
@@ -62,6 +63,7 @@ class BedrockAnthropicProvider(LLMProvider):
         self.client = _boto3.client(
             "bedrock-runtime",
             region_name=region,
+            verify=verify_ssl,
             config=_boto3.session.Config(  # type: ignore[attr-defined]
                 connect_timeout=timeout_s,
                 read_timeout=timeout_s,

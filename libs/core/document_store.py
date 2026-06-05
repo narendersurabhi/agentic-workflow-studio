@@ -25,6 +25,15 @@ def _s3_prefix() -> str:
     return os.getenv("DOCUMENT_STORE_S3_PREFIX", "").strip().strip("/")
 
 
+def _s3_verify_ssl() -> bool:
+    return os.getenv("DOCUMENT_STORE_S3_VERIFY_SSL", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
 def _s3_key_for_path(relative_path: str) -> str:
     prefix = _s3_prefix()
     return f"{prefix}/{relative_path}" if prefix else relative_path
@@ -75,6 +84,7 @@ def _s3_client():
         kwargs["endpoint_url"] = endpoint
     if region:
         kwargs["region_name"] = region
+    kwargs["verify"] = _s3_verify_ssl()
     return boto3.client("s3", **kwargs)
 
 
@@ -108,4 +118,3 @@ def download_artifact_bytes(path: str) -> bytes:
     if body is None:
         raise DocumentStoreError("artifact body missing")
     return body.read()
-
