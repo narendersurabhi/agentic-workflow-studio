@@ -230,6 +230,8 @@ class ChatBoundaryDecision(BaseModel):
     confidence: float | None = None
     assistant_response: str = ""
     reason_code: str | None = None
+    complexity: str = ""
+    requires_sonnet: bool = False
     evidence: ChatBoundaryEvidence | None = None
 
 
