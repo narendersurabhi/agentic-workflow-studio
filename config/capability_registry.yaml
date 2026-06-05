@@ -18,6 +18,12 @@ capabilities:
         query: What exact search query should I use?
       chat_field_aliases:
         query: [query, github_query]
+      chat_response_hint:
+        mode: list
+        items_field: items
+        label_fields: [full_name, name]
+        max_items: 10
+        prefix: "Repositories:"
     enabled: true
     adapters:
       - type: mcp
@@ -157,6 +163,13 @@ capabilities:
       - github
       - branch
       - list
+    planner_hints:
+      chat_response_hint:
+        mode: list
+        items_field: items
+        label_fields: [name]
+        max_items: 15
+        prefix: "Branches:"
     enabled: true
     adapters:
       - type: mcp
@@ -289,6 +302,14 @@ capabilities:
       - filesystem
       - artifacts
       - list
+    planner_hints:
+      chat_response_hint:
+        mode: entries
+        entries_field: entries
+        label_fields: [path]
+        max_items: 20
+        prefix: "Entries:"
+        empty_message: "No entries found."
     enabled: true
     adapters:
       - type: tool
@@ -309,6 +330,10 @@ capabilities:
       - artifacts
       - read
       - text
+    planner_hints:
+      chat_response_hint:
+        mode: text
+        content_field: content
     enabled: true
     adapters:
       - type: tool
@@ -368,6 +393,14 @@ capabilities:
       - filesystem
       - workspace
       - list
+    planner_hints:
+      chat_response_hint:
+        mode: entries
+        entries_field: entries
+        label_fields: [path]
+        max_items: 20
+        prefix: "Entries:"
+        empty_message: "No entries found."
     enabled: true
     adapters:
       - type: tool
@@ -388,6 +421,10 @@ capabilities:
       - workspace
       - read
       - text
+    planner_hints:
+      chat_response_hint:
+        mode: text
+        content_field: content
     enabled: true
     adapters:
       - type: tool
@@ -428,6 +465,11 @@ capabilities:
       - artifacts
       - search
       - text
+    planner_hints:
+      chat_response_hint:
+        mode: search_matches
+        matches_field: matches
+        max_items: 10
     enabled: true
     adapters:
       - type: tool
@@ -608,6 +650,11 @@ capabilities:
       - read
       - pointer
       - context
+    planner_hints:
+      chat_response_hint:
+        mode: json_preview
+        entries_fields: [entries, matches]
+        max_items: 5
     enabled: true
     adapters:
       - type: tool
@@ -668,6 +715,11 @@ capabilities:
       - semantic
       - knowledge
       - search
+    planner_hints:
+      chat_response_hint:
+        mode: json_preview
+        entries_fields: [entries, matches]
+        max_items: 5
     enabled: true
     adapters:
       - type: tool
@@ -689,6 +741,11 @@ capabilities:
       - vector-db
       - qdrant
       - grounding
+    planner_hints:
+      chat_response_hint:
+        mode: rag_matches
+        max_items: 5
+        excerpt_chars: 180
     enabled: true
     adapters:
       - type: mcp

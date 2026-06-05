@@ -19,7 +19,7 @@ This is a strong fit for internal operations automation, onboarding flows, docum
 
 ## What Prospective Clients Are Buying
 
-Clients are buying a product-ready AI workflow platform that can be tailored to their process, data sources, tools, and governance requirements.
+Clients are buying a product-ready AI workflow platform that can be configured for their process, data sources, tools, and governance requirements.
 
 The value is not just AI text generation. The value is the full working surface around it:
 
@@ -213,7 +213,7 @@ Deliver the configured implementation, screenshots, documentation, walkthrough, 
 Depending on scope, a typical delivery can include:
 
 - configured product codebase
-- tailored workflow implementations
+- configured workflow implementations
 - integrated request and chat surfaces
 - knowledge and memory setup
 - example runs and demo data
@@ -246,4 +246,4 @@ If you are evaluating this product for your business, the best next step is to d
 - who will use it
 - what a successful output looks like
 
-From there, the platform can be tailored into a client-specific implementation plan.
+From there, the platform can be configured into a client-specific implementation plan.

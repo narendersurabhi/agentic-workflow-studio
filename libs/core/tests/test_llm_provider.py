@@ -11,6 +11,7 @@ from libs.core.llm_provider import (
     LLMProviderError,
     LLMRequest,
     LLMResponse,
+    LLMUnavailableError,
     OpenAIChatCompletionsProvider,
     OpenAIProvider,
     parse_json_object,
@@ -208,6 +209,36 @@ def test_resolve_provider_supports_gemini_env(monkeypatch) -> None:
     assert provider.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
 
 
+def test_resolve_provider_bedrock_prefers_explicit_role_model(monkeypatch) -> None:
+    from libs.core import llm_provider_bedrock
+
+    def _fake_init(
+        self,
+        model_id,
+        region="us-east-1",
+        max_output_tokens=8192,
+        temperature=None,
+        timeout_s=60.0,
+    ):
+        del region, max_output_tokens, temperature, timeout_s
+        self.model_id = model_id
+
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-6")
+    monkeypatch.setattr(
+        llm_provider_bedrock.BedrockAnthropicProvider,
+        "__init__",
+        _fake_init,
+    )
+
+    provider = llm_provider_module.resolve_provider(
+        "bedrock-anthropic",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+    )
+
+    assert isinstance(provider, llm_provider_bedrock.BedrockAnthropicProvider)
+    assert provider.model_id == "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
 def test_resolve_provider_supports_openai_compatible_endpoint() -> None:
     provider = llm_provider_module.resolve_provider(
         "openai_compatible",
@@ -246,6 +277,77 @@ def test_openai_provider_retries_retryable_connection_error(monkeypatch) -> None
 
     assert response.content == '{"ok":true}'
     assert sleeps == [1]
+
+
+def test_openai_provider_maps_exhausted_retryable_http_error_to_unavailable(monkeypatch) -> None:
+    def _fake_urlopen(request, timeout=0):  # type: ignore[no-untyped-def]
+        del request, timeout
+        raise HTTPError(
+            url="https://api.openai.com/v1/responses",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"service unavailable"}}'),
+        )
+
+    monkeypatch.setattr(llm_provider_module, "urlopen", _fake_urlopen)
+
+    provider = OpenAIProvider(api_key="test-key", model="gpt-4.1-mini")
+
+    try:
+        provider.generate("hello")
+    except LLMUnavailableError as exc:
+        assert "OpenAI API unavailable" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected LLMUnavailableError")
+
+
+def test_openai_provider_maps_exhausted_connection_error_to_unavailable(monkeypatch) -> None:
+    def _fake_urlopen(request, timeout=0):  # type: ignore[no-untyped-def]
+        del request, timeout
+        raise URLError("connection refused")
+
+    monkeypatch.setattr(llm_provider_module, "urlopen", _fake_urlopen)
+
+    provider = OpenAIProvider(api_key="test-key", model="gpt-4.1-mini")
+
+    try:
+        provider.generate("hello")
+    except LLMUnavailableError as exc:
+        assert "OpenAI API unavailable" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected LLMUnavailableError")
+
+
+def test_openai_provider_keeps_non_retryable_http_error_as_provider_error(monkeypatch) -> None:
+    def _fake_urlopen(request, timeout=0):  # type: ignore[no-untyped-def]
+        del request, timeout
+        raise HTTPError(
+            url="https://api.openai.com/v1/responses",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"invalid request"}}'),
+        )
+
+    monkeypatch.setattr(llm_provider_module, "urlopen", _fake_urlopen)
+
+    provider = OpenAIProvider(api_key="test-key", model="gpt-4.1-mini")
+
+    try:
+        provider.generate("hello")
+    except LLMUnavailableError:  # pragma: no cover
+        raise AssertionError("Expected non-retryable errors to remain LLMProviderError")
+    except LLMProviderError as exc:
+        assert "OpenAI API error" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected LLMProviderError")
+
+
+def test_unavailable_text_classifier_matches_quota_and_timeout() -> None:
+    assert llm_provider_module.is_llm_unavailable_error(Exception("quota exceeded"))
+    assert llm_provider_module.is_llm_unavailable_error(Exception("upstream timeout"))
+    assert not llm_provider_module.is_llm_unavailable_error(Exception("invalid request"))
 
 
 def test_openai_provider_raises_for_empty_output(monkeypatch) -> None:

@@ -9,6 +9,7 @@ from typing import Any, Callable
 import redis
 
 from libs.core import events, llm_provider, logging as core_logging, models, run_specs, tool_bootstrap
+from libs.core.llm_provider_timing import TimingLLMProvider
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,7 @@ def build_redis_client(config: PlannerRuntimeConfig) -> redis.Redis:
 def resolve_execution_context(config: PlannerRuntimeConfig) -> PlannerExecutionContext:
     provider: llm_provider.LLMProvider | None = None
     if config.planner_mode == "llm":
-        provider = llm_provider.resolve_provider(
+        raw_provider = llm_provider.resolve_provider(
             config.llm_provider_name,
             api_key=config.openai_api_key,
             model=config.openai_model,
@@ -56,6 +57,11 @@ def resolve_execution_context(config: PlannerRuntimeConfig) -> PlannerExecutionC
             max_output_tokens=config.openai_max_output_tokens,
             timeout_s=config.openai_timeout_s,
             max_retries=config.openai_max_retries,
+        )
+        provider = TimingLLMProvider(
+            raw_provider,
+            component="planner",
+            model=(config.openai_model or "unknown").strip(),
         )
         registry = tool_bootstrap.build_default_registry(
             http_fetch_enabled=False,

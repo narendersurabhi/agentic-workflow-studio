@@ -13,12 +13,14 @@ except ImportError:
 
 from libs.core.llm_provider import (
     CacheSessionRef,
+    LLMUnavailableError,
     LLMProvider,
     LLMProviderError,
     LLMRequest,
     LLMResponse,
     PromptBlock,
     Stability,
+    is_llm_unavailable_error,
 )
 
 
@@ -49,6 +51,7 @@ class BedrockAnthropicProvider(LLMProvider):
         max_output_tokens: int = 8192,
         temperature: Optional[float] = None,
         timeout_s: float = 60.0,
+        verify_ssl: bool = True,
     ) -> None:
         if not _BOTO3_AVAILABLE:
             raise LLMProviderError(
@@ -60,6 +63,7 @@ class BedrockAnthropicProvider(LLMProvider):
         self.client = _boto3.client(
             "bedrock-runtime",
             region_name=region,
+            verify=verify_ssl,
             config=_boto3.session.Config(  # type: ignore[attr-defined]
                 connect_timeout=timeout_s,
                 read_timeout=timeout_s,
@@ -121,6 +125,8 @@ class BedrockAnthropicProvider(LLMProvider):
             )
             response_body = json.loads(raw["body"].read())
         except Exception as exc:
+            if is_llm_unavailable_error(exc):
+                raise LLMUnavailableError(f"Bedrock API unavailable: {exc}") from exc
             raise LLMProviderError(f"Bedrock API error: {exc}") from exc
 
         text = "".join(

@@ -12,12 +12,14 @@ except ImportError:
 
 from libs.core.llm_provider import (
     CacheSessionRef,
+    LLMUnavailableError,
     LLMProvider,
     LLMProviderError,
     LLMRequest,
     LLMResponse,
     PromptBlock,
     Stability,
+    is_llm_unavailable_error,
 )
 
 
@@ -118,6 +120,8 @@ class AnthropicProvider(LLMProvider):
         try:
             response = self.client.messages.create(**kwargs)
         except Exception as exc:
+            if is_llm_unavailable_error(exc):
+                raise LLMUnavailableError(f"Anthropic API unavailable: {exc}") from exc
             raise LLMProviderError(f"Anthropic API error: {exc}") from exc
 
         text = "".join(

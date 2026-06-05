@@ -49,6 +49,13 @@ def build_bootstrap_from_env(
     llm_provider_name = env.get("LLM_PROVIDER", "mock")
     openai_api_key = env.get("OPENAI_API_KEY", "")
     openai_model = env.get("OPENAI_MODEL", "")
+    normalized_provider = llm_provider_name.strip().lower()
+    if normalized_provider == "gemini":
+        openai_model = env.get("GEMINI_MODEL", "") or openai_model
+    elif normalized_provider == "anthropic":
+        openai_model = env.get("ANTHROPIC_MODEL", "") or openai_model
+    elif normalized_provider in {"bedrock-anthropic", "bedrock_anthropic"}:
+        openai_model = env.get("BEDROCK_MODEL_ID", "") or openai_model
     openai_base_url = env.get("OPENAI_BASE_URL", "https://api.openai.com")
     openai_temperature = parse_optional_float(env.get("OPENAI_TEMPERATURE"))
     openai_max_output_tokens = parse_optional_int(env.get("OPENAI_MAX_OUTPUT_TOKENS"))
