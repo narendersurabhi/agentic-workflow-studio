@@ -825,6 +825,12 @@ _chat_response_provider: LLMProvider | None = (
     else None
 )
 
+# Thread-local storage for the optional streaming callback set by the SSE endpoint.
+# When set, _generate_chat_response yields tokens via this callable in addition to
+# returning the full text. Each request runs in its own thread (FastAPI sync workers),
+# so the thread-local is safely isolated per request.
+_stream_callback_local: threading.local = threading.local()
+
 
 def _build_chat_pending_correction_provider() -> LLMProvider | None:
     if CHAT_PENDING_CORRECTION_MODE == "heuristic":
@@ -6445,24 +6451,31 @@ def _generate_chat_response(
         ),
         merged_context=merged_context,
     )
+    llm_request = LLMRequest(
+        prompt="",
+        prompt_blocks=prompt_blocks,
+        metadata={
+            "component": "chat_response",
+            **({"session_id": chat_session_id} if chat_session_id else {}),
+        },
+        reasoning_effort=reasoning_effort,
+    )
+    stream_cb = getattr(_stream_callback_local, "callback", None)
     try:
-        response = _chat_response_provider.generate_request(
-            LLMRequest(
-                prompt="",
-                prompt_blocks=prompt_blocks,
-                metadata={
-                    "component": "chat_response",
-                    **({"session_id": chat_session_id} if chat_session_id else {}),
-                },
-                reasoning_effort=reasoning_effort,
-            )
-        )
+        if stream_cb is not None:
+            chunks: list[str] = []
+            for chunk in _chat_response_provider.stream_request(llm_request):
+                stream_cb(chunk)
+                chunks.append(chunk)
+            generated = "".join(chunks).strip()
+        else:
+            response = _chat_response_provider.generate_request(llm_request)
+            generated = str(response.content or "").strip()
     except Exception as exc:  # noqa: BLE001
         if llm_provider.is_llm_unavailable_error(exc):
             raise llm_provider.LLMUnavailableError(str(exc)) from exc
         logger.exception("chat_response_generation_failed")
         raise llm_provider.LLMUnavailableError("chat_response_generation_failed") from exc
-    generated = str(response.content or "").strip()
     if not generated:
         raise llm_provider.LLMUnavailableError("chat_response_empty")
     return generated
@@ -17953,6 +17966,80 @@ def create_chat_message(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail="chat_session_state_conflict") from exc
+
+
+@app.post("/chat/sessions/{session_id}/messages/stream")
+def create_chat_message_stream(
+    session_id: str,
+    request: chat_contracts.ChatTurnRequest,
+    raw_request: Request,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """SSE endpoint that streams the assistant reply token-by-token.
+
+    Events:
+      data: {"type": "token", "text": "<chunk>"}   — one per LLM output chunk
+      data: {"type": "done", "session": ..., ...}   — final ChatTurnResponse payload
+      data: {"type": "error", "message": "..."}     — if the turn fails
+    """
+    import queue as _queue
+
+    user_id = _chat_authenticated_user_id(raw_request)
+    chunk_queue: _queue.Queue[tuple[str, object]] = _queue.Queue()
+    final_result: list[chat_contracts.ChatTurnResponse | None] = [None]
+    error_result: list[Exception | None] = [None]
+
+    def _stream_callback(text: str) -> None:
+        chunk_queue.put(("token", text))
+
+    def _run_turn() -> None:
+        _stream_callback_local.callback = _stream_callback
+        try:
+            final_result[0] = chat_service.handle_turn(
+                db,
+                session_id,
+                request,
+                runtime=_chat_runtime(),
+                user_id=user_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error_result[0] = exc
+        finally:
+            _stream_callback_local.callback = None
+            chunk_queue.put(("done", None))
+
+    worker = threading.Thread(target=_run_turn, daemon=True)
+    worker.start()
+
+    def _generate() -> Generator[str, None, None]:
+        while True:
+            kind, payload = chunk_queue.get()
+            if kind == "token":
+                yield f"data: {json.dumps({'type': 'token', 'text': payload})}\n\n"
+            elif kind == "done":
+                worker.join()
+                exc = error_result[0]
+                if exc is not None:
+                    if isinstance(exc, KeyError):
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'chat_session_not_found'})}\n\n"
+                    elif isinstance(exc, RuntimeError):
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'chat_session_state_conflict'})}\n\n"
+                    elif isinstance(exc, llm_provider.LLMUnavailableError):
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'chat_llm_unavailable'})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                elif final_result[0] is not None:
+                    yield f"data: {json.dumps({'type': 'done', **final_result[0].model_dump(mode='json')})}\n\n"
+                break
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _raise_feedback_http_error(exc: ValueError) -> None:
