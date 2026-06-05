@@ -68,6 +68,40 @@ class LLMProviderError(Exception):
     pass
 
 
+class LLMUnavailableError(LLMProviderError):
+    """Raised when the LLM service is temporarily unavailable (quota, rate limit, network)."""
+    pass
+
+
+_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def is_llm_unavailable_error(exc: BaseException) -> bool:
+    if isinstance(exc, LLMUnavailableError):
+        return True
+    if isinstance(exc, HTTPError):
+        return int(exc.code) in _RETRYABLE_HTTP_STATUS_CODES
+    msg = str(exc).lower()
+    return any(tok in msg for tok in (
+        "429", "500", "502", "503", "504",
+        "quota", "insufficient_quota", "rate_limit", "rate limit",
+        "resource_exhausted", "too many requests",
+        "service unavailable", "temporarily unavailable",
+        "upstream unavailable", "overloaded", "over capacity",
+        "timeout", "timed out", "deadline exceeded",
+        "connection error", "connection refused", "connection reset",
+        "network", "dns",
+    ))
+
+
+def _is_llm_unavailable_error(exc: BaseException) -> bool:
+    return is_llm_unavailable_error(exc)
+
+
+def _llm_unavailable(provider_label: str, detail: object) -> LLMUnavailableError:
+    return LLMUnavailableError(f"{provider_label} unavailable: {detail}")
+
+
 class LLMProvider:
     def generate(self, prompt: str) -> LLMResponse:  # pragma: no cover - interface
         return self.generate_request(LLMRequest(prompt=prompt))
@@ -195,13 +229,15 @@ class OpenAIProvider(LLMProvider):
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
+                if _is_retryable_http_error(exc.code) or is_llm_unavailable_error(exc) or is_llm_unavailable_error(Exception(detail)):
+                    raise _llm_unavailable("OpenAI API", detail) from exc
                 raise LLMProviderError(f"OpenAI API error: {detail}") from exc
             except (URLError, TimeoutError) as exc:
                 if attempt < attempts - 1:
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
-                raise LLMProviderError(f"OpenAI API connection error: {exc}") from exc
+                raise _llm_unavailable("OpenAI API", exc) from exc
         raise LLMProviderError("OpenAI API request failed after retries")
 
     def _build_payload(self, request: LLMRequest) -> Dict[str, Any]:
@@ -292,13 +328,15 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
+                if _is_retryable_http_error(exc.code) or is_llm_unavailable_error(exc) or is_llm_unavailable_error(Exception(detail)):
+                    raise _llm_unavailable(f"{self.provider_label} API", detail) from exc
                 raise LLMProviderError(f"{self.provider_label} API error: {detail}") from exc
             except (URLError, TimeoutError) as exc:
                 if attempt < attempts - 1:
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
-                raise LLMProviderError(f"{self.provider_label} API connection error: {exc}") from exc
+                raise _llm_unavailable(f"{self.provider_label} API", exc) from exc
         raise LLMProviderError(f"{self.provider_label} API request failed after retries")
 
     def generate_cached(
@@ -426,7 +464,7 @@ def resolve_provider(
         )
     if name in {"bedrock-anthropic", "bedrock_anthropic"}:
         from libs.core.llm_provider_bedrock import BedrockAnthropicProvider  # lazy import
-        bedrock_model_id = os.getenv("BEDROCK_MODEL_ID") or model
+        bedrock_model_id = model or os.getenv("BEDROCK_MODEL_ID")
         bedrock_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
         if not bedrock_model_id:
             raise ValueError("BEDROCK_MODEL_ID is required when LLM_PROVIDER=bedrock-anthropic")
@@ -522,7 +560,7 @@ def _is_unsupported_temperature_error(detail: str) -> bool:
 
 
 def _is_retryable_http_error(status_code: int) -> bool:
-    return status_code in {429, 500, 502, 503, 504}
+    return status_code in _RETRYABLE_HTTP_STATUS_CODES
 
 
 def extract_json_object_text(text: str) -> str:

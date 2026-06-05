@@ -10,7 +10,7 @@ from typing import Any, Callable, Sequence
 
 from sqlalchemy.orm import Session
 
-from libs.core import capability_registry, chat_contracts, intent_contract, models, workflow_contracts
+from libs.core import capability_registry, chat_contracts, intent_contract, llm_provider, models, workflow_contracts
 
 from . import chat_clarification_normalizer, context_service, memory_profile_service
 from .models import ChatMessageRecord, ChatSessionRecord
@@ -363,10 +363,6 @@ def _submit_normalization_failure_questions(
         for raw_question in assessment.get("questions") or []:
             _append(raw_question)
 
-    if not questions:
-        questions.append(
-            "I still need the remaining required details before I can submit this request."
-        )
     return questions
 
 
@@ -2383,31 +2379,23 @@ def _build_turn_context(
 
 
 def _classify_turn(ctx: TurnContext) -> TurnPlan:
-    """Route the turn: try fast-path first, then LLM router, then convert to typed plan."""
-    fast = _pending_clarification_fast_turn_plan(
-        candidate_goal=ctx.candidate_goal,
-        session_metadata=ctx.session_metadata,
-        normalization=ctx.pre_route_normalization,
-        had_pending_clarification=ctx.had_pending_clarification,
-        had_pending_workflow_input=ctx.had_pending_workflow_input,
-        restarted=ctx.restarted_pending_clarification,
-        exit_pending_to_chat=ctx.exit_pending_to_chat,
-    )
-    if fast is not None:
-        turn_dict = fast
-    else:
-        route_context = context_service.chat_route_context_view(ctx.context_envelope)
-        try:
-            turn_dict = ctx.chat.route_turn(
-                content=ctx.content,
-                candidate_goal=ctx.candidate_goal,
-                session_metadata=ctx.session_metadata,
-                merged_context=route_context,
-                messages=ctx.chat_messages,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("chat_route_turn_failed", extra={"session_id": ctx.record.id})
-            turn_dict = {"type": "respond", "assistant_content": ""}
+    """Route the turn through the chat LLM and convert the raw dict into a typed plan."""
+    route_context = context_service.chat_route_context_view(ctx.context_envelope)
+    try:
+        turn_dict = ctx.chat.route_turn(
+            content=ctx.content,
+            candidate_goal=ctx.candidate_goal,
+            session_metadata=ctx.session_metadata,
+            merged_context=route_context,
+            messages=ctx.chat_messages,
+        )
+    except llm_provider.LLMUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("chat_route_turn_failed", extra={"session_id": ctx.record.id})
+        if llm_provider.is_llm_unavailable_error(exc):
+            raise llm_provider.LLMUnavailableError(str(exc)) from exc
+        raise llm_provider.LLMUnavailableError("chat_route_turn_failed") from exc
 
     return _plan_from_turn_dict(turn_dict, ctx)
 
@@ -2536,7 +2524,9 @@ def _execute_turn(plan: TurnPlan, ctx: TurnContext) -> TurnResult:
 
 def _execute_ask_clarification(plan: AskClarificationPlan, ctx: TurnContext) -> TurnResult:
     questions = plan.questions or _active_clarification_questions(plan.question_queue)
-    content = plan.assistant_content or ("\n".join(questions) if questions else "What should I do next?")
+    content = plan.assistant_content or ("\n".join(questions) if questions else "")
+    if not content:
+        raise llm_provider.LLMUnavailableError("chat_clarification_response_empty")
     persist_pending_clarification_state(
         ctx.session_metadata,
         state=plan.pending_state,
@@ -2569,22 +2559,13 @@ def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
                 user_id=ctx.bound_user_id,
                 messages=ctx.chat_messages,
             )
-        except Exception:  # noqa: BLE001
+        except llm_provider.LLMUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
             logger.exception("chat_submit_normalization_failed", extra={"session_id": ctx.record.id})
-            fallback_questions = _submit_normalization_failure_questions(
-                session_metadata=ctx.session_metadata, assessment=plan.assessment,
-            )
-            normalization = ChatSubmitNormalizationResult(
-                goal=plan.resolved_goal,
-                clarification_questions=fallback_questions,
-                requires_blocking_clarification=True,
-                goal_intent_profile={
-                    **dict(plan.assessment),
-                    "needs_clarification": True,
-                    "requires_blocking_clarification": True,
-                    "questions": fallback_questions,
-                },
-            )
+            if llm_provider.is_llm_unavailable_error(exc):
+                raise llm_provider.LLMUnavailableError(str(exc)) from exc
+            raise llm_provider.LLMUnavailableError("chat_submit_normalization_failed") from exc
 
     resolved_goal = plan.resolved_goal
     merged_context = plan.merged_context
@@ -2612,6 +2593,8 @@ def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
             clarification_question_queue = _submit_normalization_failure_questions(
                 session_metadata=ctx.session_metadata, assessment=assessment,
             )
+        if normalization.requires_blocking_clarification and not clarification_question_queue:
+            raise llm_provider.LLMUnavailableError("chat_submit_clarification_empty")
         clarification_questions = _active_clarification_questions(clarification_question_queue)
         if clarification_questions or normalization.requires_blocking_clarification:
             content = "\n".join(clarification_questions or clarification_question_queue)
@@ -3057,11 +3040,16 @@ def handle_turn(
         created_at=ctx.now,
     )
 
-    plan: TurnPlan = _classify_turn(ctx)
-    result: TurnResult = _execute_turn(plan, ctx)
+    try:
+        plan: TurnPlan = _classify_turn(ctx)
+        result: TurnResult = _execute_turn(plan, ctx)
+    except llm_provider.LLMUnavailableError as exc:
+        logger.warning("chat_llm_unavailable", extra={"session_id": ctx.record.id, "reason": str(exc)[:120]})
+        raise ValueError("chat_llm_unavailable") from exc
 
     if not result.assistant_content:
-        result.assistant_content = "What should I do next?"
+        logger.warning("chat_llm_empty_response", extra={"session_id": ctx.record.id})
+        raise ValueError("chat_llm_unavailable")
 
     assistant_message = ChatMessageRecord(
         id=chat.make_id(),

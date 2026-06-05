@@ -13,12 +13,14 @@ except ImportError:
 
 from libs.core.llm_provider import (
     CacheSessionRef,
+    LLMUnavailableError,
     LLMProvider,
     LLMProviderError,
     LLMRequest,
     LLMResponse,
     PromptBlock,
     Stability,
+    is_llm_unavailable_error,
 )
 
 
@@ -121,6 +123,8 @@ class BedrockAnthropicProvider(LLMProvider):
             )
             response_body = json.loads(raw["body"].read())
         except Exception as exc:
+            if is_llm_unavailable_error(exc):
+                raise LLMUnavailableError(f"Bedrock API unavailable: {exc}") from exc
             raise LLMProviderError(f"Bedrock API error: {exc}") from exc
 
         text = "".join(
