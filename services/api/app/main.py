@@ -266,6 +266,14 @@ LLM_MODEL_NAME = (
 CHAT_ROUTER_MODEL = os.getenv("CHAT_ROUTER_MODEL", "").strip()
 CHAT_BOUNDARY_MODEL = os.getenv("CHAT_BOUNDARY_MODEL", "").strip()
 CHAT_RESPONSE_MODEL = os.getenv("CHAT_RESPONSE_MODEL", "").strip()
+CHAT_DEEP_RESPONSE_MODEL = os.getenv("CHAT_DEEP_RESPONSE_MODEL", "").strip()
+CHAT_DEEP_RESPONSE_MAX_OUTPUT_TOKENS = max(
+    0,
+    int(os.getenv("CHAT_DEEP_RESPONSE_MAX_OUTPUT_TOKENS", "2048") or "2048"),
+)
+CHAT_SONNET_ESCALATION_ENABLED = (
+    os.getenv("CHAT_SONNET_ESCALATION_ENABLED", "false").lower() == "true"
+)
 CHAT_PENDING_CORRECTION_MODEL = os.getenv("CHAT_PENDING_CORRECTION_MODEL", "").strip()
 CHAT_CLARIFICATION_NORMALIZER_ENABLED = (
     os.getenv("CHAT_CLARIFICATION_NORMALIZER_ENABLED", "true").lower() == "true"
@@ -822,6 +830,45 @@ _chat_response_provider: LLMProvider | None = (
         model=(CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
     )
     if _chat_response_provider_raw is not None
+    else None
+)
+
+
+def _build_chat_deep_response_provider() -> LLMProvider | None:
+    if not CHAT_SONNET_ESCALATION_ENABLED:
+        return None
+    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
+    if not provider_name or provider_name == "mock":
+        return None
+    model_name = (CHAT_DEEP_RESPONSE_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "").strip()
+    if not model_name:
+        return None
+    try:
+        return resolve_provider(
+            provider_name,
+            api_key=OPENAI_API_KEY or None,
+            model=model_name,
+            base_url=OPENAI_BASE_URL or None,
+            max_output_tokens=CHAT_DEEP_RESPONSE_MAX_OUTPUT_TOKENS or None,
+            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
+            max_retries=max(0, OPENAI_MAX_RETRIES),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "chat_deep_response_provider_init_failed",
+            extra={"provider": provider_name, "model": model_name},
+        )
+        return None
+
+
+_chat_deep_response_provider_raw = _build_chat_deep_response_provider()
+_chat_deep_response_provider: LLMProvider | None = (
+    TimingLLMProvider(
+        CachingLLMProvider(_chat_deep_response_provider_raw, _cache_session_store),
+        component="chat_deep_response",
+        model=(CHAT_DEEP_RESPONSE_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
+    if _chat_deep_response_provider_raw is not None
     else None
 )
 
@@ -6437,9 +6484,17 @@ def _build_chat_boundary_decision_prompt(
                 "chat_reply | execution_request | continue_pending | "
                 "exit_pending_to_chat | meta_clarification"
             ),
-            "assistant_response": "string",
+            "assistant_response": (
+                "string — fill for chat_reply/exit_pending_to_chat/meta_clarification; "
+                "leave empty when requires_sonnet=true"
+            ),
             "confidence": "0..1",
             "reason_code": "string",
+            "complexity": "simple | medium | high",
+            "requires_sonnet": (
+                "bool — true only when the user explicitly asks for deep reasoning, "
+                "architecture review, code review, or thorough multi-part analysis"
+            ),
         },
     }
     return json.dumps(payload, ensure_ascii=True)
@@ -6475,9 +6530,24 @@ def _generate_chat_response(
     fallback_response: str,
     session_metadata: Mapping[str, Any] | None = None,
     reasoning_effort: str | None = None,
+    deep_response: bool = False,
 ) -> str:
-    if _chat_response_provider is None:
+    # Pick the provider: Sonnet escalation when requested + enabled + available,
+    # otherwise fall through to the standard (Haiku) response provider.
+    sonnet_used = (
+        deep_response
+        and CHAT_SONNET_ESCALATION_ENABLED
+        and _chat_deep_response_provider is not None
+    )
+    if deep_response and not sonnet_used:
+        logger.info(
+            "sonnet_escalation_disabled_fallback",
+            extra={"reason": "escalation_disabled_or_provider_unavailable"},
+        )
+    provider = _chat_deep_response_provider if sonnet_used else _chat_response_provider
+    if provider is None:
         raise llm_provider.LLMUnavailableError("chat_response_provider_unavailable")
+    component = "chat_deep_response" if sonnet_used else "chat_response"
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     system_prompt = (
         "You are the conversational assistant for an agent platform. "
@@ -6504,7 +6574,8 @@ def _generate_chat_response(
         prompt="",
         prompt_blocks=prompt_blocks,
         metadata={
-            "component": "chat_response",
+            "component": component,
+            "sonnet_used": sonnet_used,
             **({"session_id": chat_session_id} if chat_session_id else {}),
         },
         reasoning_effort=reasoning_effort,
@@ -6513,12 +6584,12 @@ def _generate_chat_response(
     try:
         if stream_cb is not None:
             chunks: list[str] = []
-            for chunk in _chat_response_provider.stream_request(llm_request):
+            for chunk in provider.stream_request(llm_request):
                 stream_cb(chunk)
                 chunks.append(chunk)
             generated = "".join(chunks).strip()
         else:
-            response = _chat_response_provider.generate_request(llm_request)
+            response = provider.generate_request(llm_request)
             generated = str(response.content or "").strip()
     except Exception as exc:  # noqa: BLE001
         if llm_provider.is_llm_unavailable_error(exc):
@@ -6583,6 +6654,10 @@ def _generate_chat_boundary_decision(
         "Answer factual and conversational questions directly in assistant_response. "
         "execution_signal_strength='strong' is a signal, not a mandate — if the user is asking HOW to do "
         "something or asking a question ABOUT a capability, that is still chat_reply. "
+        "Set requires_sonnet=true only when the user explicitly asks for deep reasoning, architecture "
+        "review, thorough code review, or multi-part detailed analysis — e.g. phrases like 'in detail', "
+        "'comprehensive', 'deep dive', 'thoroughly review', 'analyze architecture'. "
+        "When requires_sonnet=true, leave assistant_response empty. "
         "When pending_clarification is true: "
         "if boundary_evidence.likely_clarification_answer is true, prefer decision='continue_pending'. "
         "use decision='continue_pending' if the user is answering the pending clarification or wants to continue that request; "
@@ -6633,15 +6708,22 @@ def _generate_chat_boundary_decision(
             raise llm_provider.LLMUnavailableError(str(exc)) from exc
         raise llm_provider.LLMUnavailableError("chat_boundary_decision_failed") from exc
     try:
+        _requires_sonnet = bool(parsed.get("requires_sonnet"))
         decision = chat_contracts.ChatBoundaryDecision.model_validate(
             {
                 "decision": parsed.get("decision") or parsed.get("type"),
                 "confidence": parsed.get("confidence"),
                 "assistant_response": (
-                    str(parsed.get("assistant_response") or "").strip()
-                    or str(fallback_response or "").strip()
+                    ""
+                    if _requires_sonnet
+                    else (
+                        str(parsed.get("assistant_response") or "").strip()
+                        or str(fallback_response or "").strip()
+                    )
                 ),
                 "reason_code": parsed.get("reason_code"),
+                "complexity": str(parsed.get("complexity") or "").strip().lower(),
+                "requires_sonnet": _requires_sonnet,
                 "evidence": boundary_evidence.model_dump(mode="json", exclude_none=True),
             }
         )
@@ -6756,6 +6838,10 @@ def _finalize_chat_turn_plan(
     if bool(finalized.get("response_generated")):
         return finalized
     fallback_response = str(finalized.get("assistant_content") or "").strip()
+    boundary_decision = finalized.get("boundary_decision") or {}
+    deep_response = bool(
+        isinstance(boundary_decision, Mapping) and boundary_decision.get("requires_sonnet")
+    )
     finalized["assistant_content"] = _generate_chat_response(
         content=content,
         candidate_goal=candidate_goal,
@@ -6764,6 +6850,7 @@ def _finalize_chat_turn_plan(
         fallback_response=fallback_response,
         session_metadata=session_metadata,
         reasoning_effort=_response_reasoning_effort(finalized),
+        deep_response=deep_response,
     )
     finalized["response_generated"] = True
     return finalized
