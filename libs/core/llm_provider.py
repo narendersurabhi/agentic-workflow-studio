@@ -59,6 +59,9 @@ class LLMRequest:
     # Providers map this to their native mechanism (Anthropic thinking budget,
     # OpenAI reasoning effort). None means provider default (no thinking).
     reasoning_effort: Optional[str] = None
+    # When True, providers that support it will add response_format=json_object
+    # to force structured JSON output. Used by generate_request_json_object.
+    json_mode: bool = False
 
 
 class LLMProviderError(Exception):
@@ -76,6 +79,9 @@ class LLMProvider:
         return self.generate_request_json_object(LLMRequest(prompt=prompt))
 
     def generate_request_json_object(self, request: LLMRequest) -> Dict[str, Any]:
+        if not request.json_mode:
+            from dataclasses import replace
+            request = replace(request, json_mode=True)
         response = self.generate_request(request)
         return parse_json_object(response.content)
 
@@ -329,6 +335,8 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             payload["temperature"] = request.temperature
         if request.max_output_tokens is not None:
             payload["max_tokens"] = request.max_output_tokens
+        if request.json_mode:
+            payload["response_format"] = {"type": "json_object"}
         if request.metadata and "generativelanguage.googleapis.com" not in self.base_url:
             payload["metadata"] = {
                 str(key): str(value) for key, value in request.metadata.items()
