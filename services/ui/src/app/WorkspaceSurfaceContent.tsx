@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import AppShell from "./components/AppShell";
 import ComposerDagCanvas from "./components/composer/ComposerDagCanvas";
 import ScreenHeader, {
@@ -722,6 +723,54 @@ type ChatAssistantAction = {
   goal_intent_profile?: Record<string, unknown>;
   context_json?: Record<string, unknown>;
 };
+
+function MarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  if (!content) return null;
+  // During streaming show plain text to avoid flicker from partial parse trees
+  // (e.g. unclosed code fences).  Once the turn is complete, render as markdown.
+  if (streaming) {
+    return <span className="whitespace-pre-wrap break-words">{content}</span>;
+  }
+  return (
+    <ReactMarkdown
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+        h1: ({ children }) => <h1 className="mb-2 mt-3 text-base font-bold">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-1.5 mt-3 text-sm font-bold">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-1 mt-2 text-sm font-semibold">{children}</h3>,
+        ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        code: ({ children, className }) => {
+          const isBlock = className?.startsWith("language-");
+          return isBlock ? (
+            <code className="block overflow-x-auto rounded-lg bg-black/30 px-3 py-2 font-mono text-[12px] leading-relaxed">
+              {children}
+            </code>
+          ) : (
+            <code className="rounded bg-black/25 px-1 py-0.5 font-mono text-[12px]">{children}</code>
+          );
+        },
+        pre: ({ children }) => <pre className="mb-2 mt-1">{children}</pre>,
+        blockquote: ({ children }) => (
+          <blockquote className="mb-2 border-l-2 border-text-lo pl-3 text-text-md italic">
+            {children}
+          </blockquote>
+        ),
+        a: ({ href, children }) => (
+          <a href={href} className="text-sky-400 underline hover:text-sky-300" target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        ),
+        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+        hr: () => <hr className="my-3 border-subtle" />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
 
 type ChatMessage = {
   id: string;
@@ -7305,7 +7354,12 @@ const openTemplateModal = (template: Template) => {
                       </div>
                       <span className="text-text-lo">{formatTimestamp(message.created_at)}</span>
                     </div>
-                    <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
+                    <div className="mt-2">
+                      <MarkdownContent
+                        content={message.content}
+                        streaming={Boolean(message.metadata?.streaming)}
+                      />
+                    </div>
                     {message.action?.clarification_questions &&
                     message.action.clarification_questions.length > 0 ? (
                       <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
@@ -9982,7 +10036,12 @@ const openTemplateModal = (template: Template) => {
                               {formatTimestamp(message.created_at)}
                             </span>
                           </div>
-                          <div className="mt-2 whitespace-pre-wrap break-words">{message.content}</div>
+                          <div className="mt-2">
+                      <MarkdownContent
+                        content={message.content}
+                        streaming={Boolean(message.metadata?.streaming)}
+                      />
+                    </div>
                           {message.action?.clarification_questions &&
                           message.action.clarification_questions.length > 0 ? (
                             <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
