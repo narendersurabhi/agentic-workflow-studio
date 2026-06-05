@@ -3369,8 +3369,16 @@ def _looks_like_chat_only_correction(content: str) -> bool:
         if CHAT_PENDING_CORRECTION_MODE == "hybrid" and confidence < 0.7:
             return False
         return llm_result
-    except Exception:  # noqa: BLE001
-        logger.exception("chat_pending_correction_classification_failed")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "chat_pending_correction_classification_failed",
+            extra={
+                "provider": LLM_PROVIDER_NAME,
+                "model": CHAT_PENDING_CORRECTION_MODEL or LLM_MODEL_NAME,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:500],
+            },
+        )
         return False
 
 
@@ -3891,8 +3899,16 @@ def _ensure_chat_capability_vector_index(
                 },
                 timeout_s=CHAT_CAPABILITY_VECTOR_TIMEOUT_S,
             )
-        except Exception:  # noqa: BLE001
-            logger.exception("chat_capability_vector_index_sync_failed")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "chat_capability_vector_index_sync_failed",
+                extra={
+                    "collection": CHAT_CAPABILITY_VECTOR_COLLECTION,
+                    "namespace": namespace,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                },
+            )
             return None
         _cleanup_stale_chat_capability_vector_namespaces(namespace)
         _chat_capability_vector_synced_namespace = namespace
@@ -6420,7 +6436,15 @@ def _generate_chat_boundary_decision(
     except llm_provider.LLMUnavailableError:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("chat_boundary_decision_failed")
+        logger.exception(
+            "chat_boundary_decision_failed",
+            extra={
+                "provider": LLM_PROVIDER_NAME,
+                "model": CHAT_RESPONSE_MODEL or LLM_MODEL_NAME,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:500],
+            },
+        )
         if llm_provider.is_llm_unavailable_error(exc):
             raise llm_provider.LLMUnavailableError(str(exc)) from exc
         raise llm_provider.LLMUnavailableError("chat_boundary_decision_failed") from exc
