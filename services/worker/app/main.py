@@ -66,7 +66,7 @@ def _resolve_active_model_name() -> str:
         return GEMINI_MODEL or OPENAI_MODEL
     if provider == "anthropic":
         return ANTHROPIC_MODEL or OPENAI_MODEL
-    if provider in {"bedrock-anthropic", "bedrock_anthropic"}:
+    if provider in {"bedrock", "bedrock-anthropic", "bedrock_anthropic"}:
         return os.getenv("BEDROCK_MODEL_ID", "") or OPENAI_MODEL
     return OPENAI_MODEL
 
@@ -175,16 +175,22 @@ _METRICS_SERVER_STARTED = False
 _CACHE_SESSION_STORE: CacheSessionStore | None = None
 LLM_PROVIDER_INSTANCE = None
 if LLM_ENABLED:
-    _base_provider = llm_provider.resolve_provider(
-        LLM_PROVIDER,
-        api_key=OPENAI_API_KEY,
-        model=ACTIVE_MODEL_NAME,
-        base_url=OPENAI_BASE_URL,
-        temperature=_parse_optional_float(OPENAI_TEMPERATURE),
-        max_output_tokens=_parse_optional_int(OPENAI_MAX_OUTPUT_TOKENS),
-        timeout_s=_parse_optional_float(OPENAI_TIMEOUT_S),
-        max_retries=_parse_optional_int(OPENAI_MAX_RETRIES),
-    )
+    try:
+        _base_provider = llm_provider.resolve_provider(
+            LLM_PROVIDER,
+            api_key=OPENAI_API_KEY,
+            model=ACTIVE_MODEL_NAME,
+            base_url=OPENAI_BASE_URL,
+            temperature=_parse_optional_float(OPENAI_TEMPERATURE),
+            max_output_tokens=_parse_optional_int(OPENAI_MAX_OUTPUT_TOKENS),
+            timeout_s=_parse_optional_float(OPENAI_TIMEOUT_S),
+            max_retries=_parse_optional_int(OPENAI_MAX_RETRIES),
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"Worker LLM provider init failed (LLM_PROVIDER={LLM_PROVIDER!r}, "
+            f"model={ACTIVE_MODEL_NAME!r}): {exc}"
+        ) from exc
     _CACHE_SESSION_STORE = CacheSessionStore(redis_client)
 
     def _current_catalog_hash() -> str:

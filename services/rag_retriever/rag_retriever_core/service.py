@@ -273,7 +273,7 @@ class RetrieverServiceConfig:
                 or os.getenv("AWS_DEFAULT_REGION", "").strip()
                 or "us-east-1"
             ),
-            embedding_verify_ssl=_bool_with_default(rag_bedrock_verify_raw, True),
+            embedding_verify_ssl=_bool_with_default(rag_bedrock_verify_raw, False),
             embedding_dimensions=embedding_dimensions,
             embedding_normalize=_bool_with_default(
                 os.getenv("RAG_BEDROCK_EMBEDDING_NORMALIZE"),
@@ -385,7 +385,14 @@ class BedrockTitanEmbeddingClient:
             except json.JSONDecodeError as exc:
                 raise RetrieverError("embedding_bedrock_invalid_json", status_code=502) from exc
             except Exception as exc:  # noqa: BLE001
-                raise RetrieverError(f"embedding_bedrock_error:{exc}", status_code=502) from exc
+                raise RetrieverError(
+                    "embedding_bedrock_error:"
+                    f"model={self.model}:"
+                    f"region={self.region or 'us-east-1'}:"
+                    f"verify_ssl={str(self.verify_ssl).lower()}:"
+                    f"{exc}",
+                    status_code=502,
+                ) from exc
 
             vector = data.get("embedding") if isinstance(data, dict) else None
             if not isinstance(vector, list) or not vector:

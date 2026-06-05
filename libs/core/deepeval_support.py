@@ -501,15 +501,21 @@ def run_deepeval_cases(
 
         def load_model(self) -> llm_provider.LLMProvider:
             if self._provider is None:
-                self._provider = llm_provider.resolve_provider(
-                    self._settings.judge_provider,
-                    api_key=self._settings.judge_api_key,
-                    model=self._settings.judge_model,
-                    base_url=self._settings.judge_base_url,
-                    max_output_tokens=1024,
-                    timeout_s=60.0,
-                    max_retries=1,
-                )
+                try:
+                    self._provider = llm_provider.resolve_provider(
+                        self._settings.judge_provider,
+                        api_key=self._settings.judge_api_key,
+                        model=self._settings.judge_model,
+                        base_url=self._settings.judge_base_url,
+                        max_output_tokens=1024,
+                        timeout_s=60.0,
+                        max_retries=1,
+                    )
+                except ValueError as exc:
+                    raise llm_provider.LLMProviderError(
+                        f"deepeval judge provider init failed "
+                        f"(provider={self._settings.judge_provider!r}): {exc}"
+                    ) from exc
             return self._provider
 
         def generate(self, prompt: str, schema: Any | None = None) -> Any:
