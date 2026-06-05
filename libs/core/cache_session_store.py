@@ -114,7 +114,8 @@ class CachingLLMProvider(LLMProvider):
         self._catalog_hash_fn = catalog_hash_fn
 
     def generate_request(self, request: LLMRequest) -> LLMResponse:
-        job_id = (request.metadata or {}).get("job_id")
+        metadata = request.metadata or {}
+        job_id = metadata.get("job_id") or metadata.get("session_id")
         if not job_id:
             return self._inner.generate_request(request)
         session = self._store.load(job_id)

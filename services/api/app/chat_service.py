@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import logging
+import os
 import re
 from typing import Any, Callable, Sequence
 
@@ -46,6 +47,8 @@ _BOOTSTRAP_EXECUTION_ARTIFACT_TOKENS = {"document", "repo", "repository", "file"
 _BOOTSTRAP_CONTINUATION_TOKENS = {"yes", "no", "use", "create", "start"}
 _OUTPUT_FORMAT_TOKENS = {"pdf", "docx", "markdown", "json", "word"}
 _TONE_TOKENS = {"practical", "formal", "conversational", "executive", "technical", "concise"}
+
+CHAT_HISTORY_CONTEXT_LIMIT = max(1, int(os.getenv("CHAT_HISTORY_CONTEXT_LIMIT", "50") or "50"))
 
 
 @dataclass(frozen=True)
@@ -3228,12 +3231,14 @@ def _tokens_from_text(value: str) -> set[str]:
 
 
 def _message_records_for_session(db: Session, session_id: str) -> list[ChatMessageRecord]:
-    return (
+    records = (
         db.query(ChatMessageRecord)
         .filter(ChatMessageRecord.session_id == session_id)
-        .order_by(ChatMessageRecord.created_at.asc(), ChatMessageRecord.id.asc())
+        .order_by(ChatMessageRecord.created_at.desc(), ChatMessageRecord.id.desc())
+        .limit(CHAT_HISTORY_CONTEXT_LIMIT)
         .all()
     )
+    return sorted(records, key=lambda m: (m.created_at, m.id))
 
 
 def _coerce_context_json(value: Any) -> dict[str, Any]:
