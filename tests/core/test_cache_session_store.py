@@ -198,6 +198,18 @@ class TestCachingLLMProvider:
         assert len(inner.generate_request_calls) == 1
         assert len(inner.generate_cached_calls) == 0
 
+    def test_routes_to_generate_cached_via_session_id(self) -> None:
+        inner = _FixedProvider()
+        store = self._store_with_session("chat-session-42")
+        provider = CachingLLMProvider(inner, store)
+
+        req = LLMRequest(prompt="hello", metadata={"component": "chat_router", "session_id": "chat-session-42"})
+        resp = provider.generate_request(req)
+
+        assert resp.cached_input_tokens == 8
+        assert len(inner.generate_cached_calls) == 1
+        assert len(inner.generate_request_calls) == 0
+
     def test_falls_back_when_no_session_in_redis(self) -> None:
         inner = _FixedProvider()
         store = CacheSessionStore(_FakeRedis())
