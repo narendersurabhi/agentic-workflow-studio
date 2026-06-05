@@ -6415,7 +6415,11 @@ def _build_chat_boundary_decision_prompt(
         ],
         "context_json": dict(merged_context or {}),
         "boundary_evidence": (
-            boundary_evidence.model_dump(mode="json", exclude_none=True)
+            boundary_evidence.model_dump(
+                mode="json",
+                exclude_none=True,
+                exclude={"conversation_mode_hint"},
+            )
             if boundary_evidence is not None
             else {}
         ),
@@ -6539,6 +6543,23 @@ def _generate_chat_boundary_decision(
         return None
     if _chat_boundary_provider is None:
         raise llm_provider.LLMUnavailableError("chat_boundary_provider_unavailable")
+    # Fast-exit: skip capability search + LLM boundary call for messages the heuristic
+    # can confidently classify as conversational (no workflow tokens, no pending state).
+    # The heuristic rejects messages containing workflow tokens first, so this is safe.
+    _quick_lifecycle = chat_service.clarification_lifecycle_from_metadata(session_metadata)
+    if not _quick_lifecycle.active and _looks_like_conversational_turn(content):
+        return chat_contracts.ChatBoundaryDecision(
+            decision=chat_contracts.ChatBoundaryDecisionType.chat_reply,
+            assistant_response="",
+            confidence=1.0,
+            reason_code="conversational_fast_exit",
+            evidence=chat_contracts.ChatBoundaryEvidence(
+                goal=str(candidate_goal or "").strip(),
+                conversation_mode_hint="conversational",
+                pending_clarification=False,
+                execution_signal_strength="none",
+            ),
+        )
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     boundary_evidence = _build_chat_boundary_evidence(
         content=content,
@@ -6551,23 +6572,24 @@ def _generate_chat_boundary_decision(
         "Choose exactly one bounded decision and return JSON only. "
         "User profile, conversation history, and capability candidates are provided above in "
         "<user_profile>, <history>, and <candidates> XML sections when available. "
-        "Use boundary_evidence as grounding. "
-        "Strong executable capability-family evidence or an execution-oriented intent should push you toward execution_request unless the user is clearly asking for discussion only. "
-        "A conversational hint alone is not enough to override strong executable evidence. "
-        "If boundary_evidence.execution_signal_strength is 'strong' and conversation_mode_hint is not 'conversational', do not choose chat_reply unless the user explicitly asks for discussion, explanation, brainstorming, tutoring, or interview practice only. "
-        "EXCEPTION — factual knowledge questions: geography, history, science, definitions, general knowledge (e.g. 'what is the capital of France', 'who invented the telephone', 'when was WWII', 'which planet is largest') are ALWAYS chat_reply. "
-        "Answer factual questions directly in assistant_response. Never route factual questions to execution_request or ask for output format. "
+        "Use boundary_evidence as grounding — specifically execution_signal_strength and top_capabilities. "
         "When pending_clarification is false: "
-        "use decision='chat_reply' for normal conversation, explanation, discussion, advice, tutoring, coaching, quizzes, interview practice, roleplay, brainstorming, or any other back-and-forth chat experience. "
-        "Use decision='execution_request' only when the user wants tools, system actions, file changes, workflow execution, job submission, artifact creation, repository or environment inspection, or automation. "
+        "use decision='execution_request' only when the user clearly wants the system to DO something — "
+        "run tools, execute automation, submit a job, make file changes, interact with infrastructure, "
+        "or invoke a workflow. "
+        "Use decision='chat_reply' for everything else: factual questions, knowledge questions, "
+        "explanation, discussion, advice, tutoring, coaching, quizzes, roleplay, brainstorming, "
+        "or any other conversational exchange. "
+        "Answer factual and conversational questions directly in assistant_response. "
+        "execution_signal_strength='strong' is a signal, not a mandate — if the user is asking HOW to do "
+        "something or asking a question ABOUT a capability, that is still chat_reply. "
         "When pending_clarification is true: "
-        "If boundary_evidence.likely_clarification_answer is true, prefer decision='continue_pending'. "
-        "use decision='continue_pending' if the user is answering the existing workflow clarification or wants to continue that request; "
-        "use decision='exit_pending_to_chat' if the user wants to stop the workflow path and just get a normal chat answer; "
-        "use decision='meta_clarification' if it is ambiguous whether they want to continue the pending workflow or return to normal chat. "
+        "if boundary_evidence.likely_clarification_answer is true, prefer decision='continue_pending'. "
+        "use decision='continue_pending' if the user is answering the pending clarification or wants to continue that request; "
+        "use decision='exit_pending_to_chat' if the user explicitly wants to abandon the workflow and get a chat answer; "
+        "use decision='meta_clarification' if it is ambiguous whether they want to continue or return to chat. "
         "For chat_reply, exit_pending_to_chat, and meta_clarification, include assistant_response. "
-        "Keep assistant_response concise, normally under 80 words. "
-        "Do not choose execution_request just because the user wants a structured conversation or repeated turns."
+        "Keep assistant_response concise, normally under 80 words."
     )
     stripped_context = {
         k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
@@ -6634,29 +6656,15 @@ def _postprocess_chat_boundary_decision(
     content: str,
 ) -> chat_contracts.ChatBoundaryDecision:
     evidence = boundary.evidence or chat_contracts.ChatBoundaryEvidence()
-    if (
-        not evidence.pending_clarification
-        and boundary.decision == chat_contracts.ChatBoundaryDecisionType.chat_reply
-        and evidence.conversation_mode_hint == "execution_oriented"
-        and evidence.execution_signal_strength == "strong"
-    ):
-        return boundary.model_copy(
-            update={
-                "decision": chat_contracts.ChatBoundaryDecisionType.execution_request,
-                "assistant_response": "",
-                "reason_code": "execution_signal_override",
-            }
-        )
+    # Non-pending meta_clarification: resolve to execution_request only when the
+    # capability signal is strong, otherwise trust the model's conversational intent.
     if (
         not evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.meta_clarification
     ):
         if (
-            evidence.conversation_mode_hint != "conversational"
-            and (
-                evidence.needs_clarification
-                or evidence.execution_signal_strength in {"moderate", "strong"}
-            )
+            evidence.needs_clarification
+            and evidence.execution_signal_strength == "strong"
         ):
             return boundary.model_copy(
                 update={
@@ -6671,6 +6679,8 @@ def _postprocess_chat_boundary_decision(
                 "reason_code": "non_pending_meta_clarification_chat_override",
             }
         )
+    # Pending + likely clarification answer: override to continue_pending regardless
+    # of what the model said.
     if (
         evidence.pending_clarification
         and evidence.likely_clarification_answer
@@ -6687,6 +6697,9 @@ def _postprocess_chat_boundary_decision(
                 "reason_code": "clarification_answer_override",
             }
         )
+    # Pending + chat_reply: the model thinks it's chat but we're in pending state.
+    # Explicit chat-only corrections exit the pending flow; everything else is
+    # genuinely ambiguous — surface as meta_clarification so the caller can ask.
     if (
         evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.chat_reply
@@ -6696,14 +6709,6 @@ def _postprocess_chat_boundary_decision(
                 update={
                     "decision": chat_contracts.ChatBoundaryDecisionType.exit_pending_to_chat,
                     "reason_code": "explicit_chat_only_correction",
-                }
-            )
-        if evidence.conversation_mode_hint != "conversational":
-            return boundary.model_copy(
-                update={
-                    "decision": chat_contracts.ChatBoundaryDecisionType.continue_pending,
-                    "assistant_response": "",
-                    "reason_code": "pending_clarification_state_preservation",
                 }
             )
         return boundary.model_copy(
