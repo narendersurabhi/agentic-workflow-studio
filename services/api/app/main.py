@@ -4778,13 +4778,22 @@ def _route_chat_turn(
         merged_context=merged_context,
         messages=messages,
     )
-    _prefetch_thread.join()  # should already be done; wait at most a few ms
 
     if boundary is None:
         raise llm_provider.LLMUnavailableError("chat_boundary_decision_unavailable")
     boundary = _postprocess_chat_boundary_decision(boundary, content=content)
     _record_chat_boundary_decision_metrics(boundary)
     decision = boundary.decision
+
+    # Only block on the pre-fetch result for execution turns that will use the router.
+    # On chat_reply / clarification turns the daemon thread finishes on its own —
+    # joining unconditionally was the regression (it added the full intent-LLM latency
+    # to every chat-reply turn, causing 15 s+ delays).
+    if decision in {
+        chat_contracts.ChatBoundaryDecisionType.execution_request,
+        chat_contracts.ChatBoundaryDecisionType.continue_pending,
+    }:
+        _prefetch_thread.join(timeout=5.0)  # 5 s cap; falls back to sync build if exceeded
     if decision == chat_contracts.ChatBoundaryDecisionType.chat_reply:
         turn_plan = _finalize_chat_turn_plan(
             _chat_response_turn_plan(
