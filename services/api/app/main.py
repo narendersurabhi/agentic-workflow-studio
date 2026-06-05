@@ -3341,9 +3341,18 @@ def _looks_like_conversational_turn(content: str) -> bool:
         "can you help me understand",
         "why ",
         "what is ",
+        "what's ",
+        "whats ",
         "what are ",
+        "what was ",
+        "what were ",
         "how does ",
         "how do ",
+        "how did ",
+        "how many ",
+        "how much ",
+        "how long ",
+        "how old ",
         "can you explain",
         "explain ",
     )
@@ -3378,6 +3387,7 @@ def _looks_like_conversational_turn(content: str) -> bool:
         r"\b(?:practice|mock|roleplay|coach me for|quiz me on)\b.{0,120}\b(?:interview|questions|answers)\b",
         r"\b(?:ask me (?:a )?question|ask me questions one by one|i will type the answer)\b",
         r"\b(?:interview practice|mock interview|practice interview questions)\b",
+        r"^(?:who(?:'?s)?|where(?:'?s)?|when(?:'?s)?|which)\s+[a-z]",
     )
     if any(re.search(pattern, lowered) for pattern in conversational_patterns):
         return True
@@ -6545,6 +6555,8 @@ def _generate_chat_boundary_decision(
         "Strong executable capability-family evidence or an execution-oriented intent should push you toward execution_request unless the user is clearly asking for discussion only. "
         "A conversational hint alone is not enough to override strong executable evidence. "
         "If boundary_evidence.execution_signal_strength is 'strong' and conversation_mode_hint is not 'conversational', do not choose chat_reply unless the user explicitly asks for discussion, explanation, brainstorming, tutoring, or interview practice only. "
+        "EXCEPTION — factual knowledge questions: geography, history, science, definitions, general knowledge (e.g. 'what is the capital of France', 'who invented the telephone', 'when was WWII', 'which planet is largest') are ALWAYS chat_reply. "
+        "Answer factual questions directly in assistant_response. Never route factual questions to execution_request or ask for output format. "
         "When pending_clarification is false: "
         "use decision='chat_reply' for normal conversation, explanation, discussion, advice, tutoring, coaching, quizzes, interview practice, roleplay, brainstorming, or any other back-and-forth chat experience. "
         "Use decision='execution_request' only when the user wants tools, system actions, file changes, workflow execution, job submission, artifact creation, repository or environment inspection, or automation. "
@@ -6626,6 +6638,7 @@ def _postprocess_chat_boundary_decision(
         not evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.chat_reply
         and evidence.conversation_mode_hint == "execution_oriented"
+        and evidence.execution_signal_strength == "strong"
     ):
         return boundary.model_copy(
             update={
