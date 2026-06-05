@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 try:
     import anthropic as _anthropic_sdk
@@ -138,6 +138,56 @@ class AnthropicProvider(LLMProvider):
             cached_input_tokens=getattr(usage, "cache_read_input_tokens", 0),
             cache_creation_tokens=getattr(usage, "cache_creation_input_tokens", 0),
         )
+
+    def stream_request(self, request: LLMRequest) -> Iterator[str]:
+        """Stream response tokens via Anthropic Messages streaming API."""
+        blocks = request.prompt_blocks or [PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)]
+        content: List[Dict[str, Any]] = []
+        for block in blocks:
+            if not block.text:
+                continue
+            entry: Dict[str, Any] = {"type": "text", "text": block.text}
+            if block.stability in (Stability.STATIC, Stability.RUN):
+                entry["cache_control"] = {"type": "ephemeral"}
+            content.append(entry)
+
+        if not content:
+            raise LLMProviderError("AnthropicProvider: no non-empty prompt blocks")
+
+        thinking_enabled = (
+            request.reasoning_effort is not None
+            and request.reasoning_effort != "none"
+        )
+        budget = self._THINKING_BUDGETS.get(request.reasoning_effort or "", 0)
+
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": request.max_output_tokens or self.max_output_tokens,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if thinking_enabled and budget:
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        if request.system_prompt:
+            kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": request.system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        if not thinking_enabled:
+            temp = request.temperature if request.temperature is not None else self.temperature
+            if temp is not None:
+                kwargs["temperature"] = temp
+
+        try:
+            with self.client.messages.stream(**kwargs) as stream:
+                for text in stream.text_stream:
+                    yield text
+        except Exception as exc:
+            if is_llm_unavailable_error(exc):
+                raise LLMUnavailableError(f"Anthropic API unavailable: {exc}") from exc
+            raise LLMProviderError(f"Anthropic API error: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Session lifecycle (inline caching — no separate resource to manage)

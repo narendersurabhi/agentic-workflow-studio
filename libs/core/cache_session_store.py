@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Iterator, List, Optional
 
 from libs.core.llm_provider import (
     CacheSessionRef,
@@ -145,6 +145,9 @@ class CachingLLMProvider(LLMProvider):
         request: LLMRequest,
     ) -> LLMResponse:
         return self._inner.generate_cached(blocks, session, request)
+
+    def stream_request(self, request: LLMRequest) -> Iterator[str]:
+        return self._inner.stream_request(request)
 
     def open_cache_session(
         self, job_id: str, static_blocks: List[PromptBlock]

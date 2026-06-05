@@ -6478,28 +6478,102 @@ const openTemplateModal = (template: Template) => {
         session = await createChatSession();
         setChatSession(appendChatMessage(session, { ...optimisticMessage, session_id: session.id }));
       }
-      const response = await apiFetch(`${apiUrl}/chat/sessions/${encodeURIComponent(session.id)}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content,
-          context_json: parsedContextForCapabilities || withWorkspaceUserContext({}),
-          priority
-        })
-      });
+
+      // Append an empty assistant bubble immediately so the user sees activity.
+      const streamingMsgId = `streaming-${Date.now()}`;
+      const resolvedSessionId = session.id;
+      setChatSession((current) =>
+        current
+          ? appendChatMessage(current, {
+              id: streamingMsgId,
+              session_id: resolvedSessionId,
+              role: "assistant",
+              content: "",
+              created_at: new Date().toISOString(),
+              metadata: { streaming: true },
+              action: null,
+              job_id: null,
+            })
+          : current
+      );
+
+      const response = await apiFetch(
+        `${apiUrl}/chat/sessions/${encodeURIComponent(session.id)}/messages/stream`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content,
+            context_json: parsedContextForCapabilities || withWorkspaceUserContext({}),
+            priority,
+          }),
+        }
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(chatSendErrorMessage(response.status, text));
       }
-      const body = (await response.json()) as ChatTurnResponse;
-      setChatSession(body.session);
-      void loadChatFeedback(body.session.id);
-      if (body.job?.id) {
-        setChatLoading(false);
-        void refreshChatJobViews(body.job.id);
-        return;
+
+      // Parse the SSE stream.
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamedText = "";
+
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const dataStr = line.slice(6).trim();
+          if (!dataStr) continue;
+          type SSEEvent = {
+            type: string;
+            text?: string;
+            message?: string;
+            session?: ChatSession;
+            job?: Job | null;
+            workflow_run?: Record<string, unknown> | null;
+            user_message?: ChatMessage;
+            assistant_message?: ChatMessage;
+          };
+          let event: SSEEvent;
+          try {
+            event = JSON.parse(dataStr) as SSEEvent;
+          } catch {
+            continue;
+          }
+          if (event.type === "token" && event.text) {
+            streamedText += event.text;
+            const captured = streamedText;
+            setChatSession((current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === streamingMsgId ? { ...m, content: captured } : m
+                    ),
+                  }
+                : current
+            );
+          } else if (event.type === "done" && event.session) {
+            setChatSession(event.session);
+            void loadChatFeedback(event.session.id);
+            if (event.job?.id) {
+              setChatLoading(false);
+              void refreshChatJobViews(event.job.id);
+              return;
+            }
+            setChatNotice(null);
+            break outer;
+          } else if (event.type === "error") {
+            throw new Error(event.message ?? "chat_error");
+          }
+        }
       }
-      setChatNotice(null);
     } catch (error) {
       setChatSession(previousSession);
       setChatInput((current) => (current.trim() ? current : content));

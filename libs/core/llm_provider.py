@@ -5,7 +5,7 @@ import json
 import os
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import time
@@ -219,6 +219,10 @@ class LLMProvider:
             json_mode=request.json_mode,
         )
         return self.generate_request(merged)
+
+    def stream_request(self, request: LLMRequest) -> Iterator[str]:
+        """Stream response tokens. Default falls back to returning the full response as one chunk."""
+        yield self.generate_request(request).content
 
 
 class MockLLMProvider(LLMProvider):
