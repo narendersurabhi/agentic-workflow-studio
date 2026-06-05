@@ -834,6 +834,17 @@ def test_config_from_env_supports_bedrock_embeddings(monkeypatch) -> None:
     assert config.qdrant_vector_size == 1024
 
 
+def test_config_from_env_defaults_bedrock_embedding_ssl_verify_to_false(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_PROVIDER", "bedrock")
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+    monkeypatch.delenv("BEDROCK_VERIFY_SSL", raising=False)
+    monkeypatch.delenv("RAG_BEDROCK_VERIFY_SSL", raising=False)
+
+    config = RetrieverServiceConfig.from_env()
+
+    assert config.embedding_verify_ssl is False
+
+
 def test_build_embedder_from_config_supports_bedrock() -> None:
     config = _config()
     bedrock_config = RetrieverServiceConfig(
@@ -892,3 +903,34 @@ def test_bedrock_titan_embedding_client_invokes_runtime(monkeypatch) -> None:
     body = json.loads(calls[1]["body"])
     assert body == {"inputText": "hello", "normalize": True, "dimensions": 1024}
     assert calls[1]["modelId"] == "amazon.titan-embed-text-v2:0"
+
+
+def test_bedrock_titan_embedding_error_includes_model_and_region(monkeypatch) -> None:
+    class _FakeBedrockRuntime:
+        def invoke_model(self, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            raise RuntimeError("AccessDeniedException: model access denied")
+
+    fake_boto3 = SimpleNamespace(
+        client=lambda service_name, **kwargs: _FakeBedrockRuntime(),
+        session=SimpleNamespace(Config=lambda **kwargs: {"config": kwargs}),
+    )
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    embedder = BedrockTitanEmbeddingClient(
+        model="amazon.titan-embed-text-v2:0",
+        region="us-east-2",
+        timeout_s=15.0,
+        verify_ssl=False,
+        dimensions=1024,
+        normalize=True,
+    )
+
+    try:
+        embedder.embed_texts(["hello"])
+    except RetrieverError as exc:
+        assert "model=amazon.titan-embed-text-v2:0" in exc.detail
+        assert "region=us-east-2" in exc.detail
+        assert "verify_ssl=false" in exc.detail
+        assert "model access denied" in exc.detail
+    else:  # pragma: no cover
+        raise AssertionError("Expected RetrieverError")

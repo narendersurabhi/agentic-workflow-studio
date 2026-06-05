@@ -474,6 +474,8 @@ def resolve_provider(
     max_retries: Optional[int] = None,
 ) -> LLMProvider:
     name = (provider_name or "mock").lower()
+    if name == "mock":
+        return MockLLMProvider()
     if name == "openai":
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
@@ -523,11 +525,11 @@ def resolve_provider(
             max_retries=max_retries or 0,
             provider_label="Gemini",
         )
-    if name in {"bedrock-anthropic", "bedrock_anthropic"}:
+    if name in {"bedrock", "bedrock-anthropic", "bedrock_anthropic"}:
         from libs.core.llm_provider_bedrock import BedrockAnthropicProvider  # lazy import
         bedrock_model_id = model or os.getenv("BEDROCK_MODEL_ID")
         bedrock_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
-        bedrock_verify_ssl = os.getenv("BEDROCK_VERIFY_SSL", "true").strip().lower() not in {
+        bedrock_verify_ssl = os.getenv("BEDROCK_VERIFY_SSL", "false").strip().lower() not in {
             "0",
             "false",
             "no",
@@ -560,7 +562,10 @@ def resolve_provider(
             max_retries=max_retries or 0,
             provider_label="OpenAI-compatible",
         )
-    return MockLLMProvider()
+    raise ValueError(
+        f"Unsupported LLM provider '{provider_name}'. "
+        "Expected one of: mock, openai, openai_compatible, gemini, anthropic, bedrock-anthropic."
+    )
 
 
 def _extract_output_text(response: Dict[str, Any]) -> str:

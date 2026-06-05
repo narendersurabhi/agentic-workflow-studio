@@ -52,7 +52,6 @@ from libs.core.llm_provider import (
     LLMProvider,
     LLMProviderError,
     LLMRequest,
-    MockLLMProvider,
     PromptBlock,
     Stability,
     resolve_provider,
@@ -265,6 +264,7 @@ LLM_MODEL_NAME = (
     else os.getenv("OPENAI_MODEL", "")
 ).strip()
 CHAT_ROUTER_MODEL = os.getenv("CHAT_ROUTER_MODEL", "").strip()
+CHAT_BOUNDARY_MODEL = os.getenv("CHAT_BOUNDARY_MODEL", "").strip()
 CHAT_RESPONSE_MODEL = os.getenv("CHAT_RESPONSE_MODEL", "").strip()
 CHAT_PENDING_CORRECTION_MODEL = os.getenv("CHAT_PENDING_CORRECTION_MODEL", "").strip()
 CHAT_CLARIFICATION_NORMALIZER_ENABLED = (
@@ -286,6 +286,18 @@ if CHAT_RESPONSE_MODE not in {"answer_only", "answer_or_handoff"}:
 CHAT_RESPONSE_REASONING_EFFORT_THRESHOLD = max(
     0.0,
     min(1.0, float(os.getenv("CHAT_RESPONSE_REASONING_EFFORT_THRESHOLD", "0.70"))),
+)
+CHAT_ROUTER_MAX_OUTPUT_TOKENS = max(
+    64,
+    int(os.getenv("CHAT_ROUTER_MAX_OUTPUT_TOKENS", "512") or "512"),
+)
+CHAT_BOUNDARY_MAX_OUTPUT_TOKENS = max(
+    64,
+    int(os.getenv("CHAT_BOUNDARY_MAX_OUTPUT_TOKENS", "384") or "384"),
+)
+CHAT_RESPONSE_MAX_OUTPUT_TOKENS = max(
+    0,
+    int(os.getenv("CHAT_RESPONSE_MAX_OUTPUT_TOKENS", "0") or "0"),
 )
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com").strip()
@@ -537,10 +549,37 @@ TASK_OUTPUT_KEY_PREFIX = "task_output:"
 TASK_RESULT_KEY_PREFIX = "task_result:"
 CHAT_DIRECT_SYNC_WORKER_CONSUMER = "api.chat_sync"
 
+
+def _build_api_tool_registry_llm_provider() -> LLMProvider | None:
+    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
+    if not provider_name or provider_name == "mock":
+        return None
+    model_name = (CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "").strip()
+    if not model_name:
+        return None
+    try:
+        return resolve_provider(
+            provider_name,
+            api_key=OPENAI_API_KEY or None,
+            model=model_name,
+            base_url=OPENAI_BASE_URL or None,
+            max_output_tokens=CHAT_RESPONSE_MAX_OUTPUT_TOKENS or None,
+            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
+            max_retries=max(0, OPENAI_MAX_RETRIES),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "api_tool_registry_llm_provider_init_failed",
+            extra={"provider": provider_name, "model": model_name},
+        )
+        return None
+
+
+_api_tool_registry_llm_provider = _build_api_tool_registry_llm_provider()
 _tool_spec_registry = tool_bootstrap.build_default_registry(
     http_fetch_enabled=False,
-    llm_enabled=True,
-    llm_provider=MockLLMProvider(),
+    llm_enabled=_api_tool_registry_llm_provider is not None,
+    llm_provider=_api_tool_registry_llm_provider,
     service_name="api",
 )
 TOOL_INPUT_SCHEMAS = {spec.name: spec.input_schema for spec in _tool_spec_registry.list_specs()}
@@ -678,6 +717,7 @@ def _build_chat_router_provider() -> LLMProvider | None:
             api_key=OPENAI_API_KEY or None,
             model=model_name,
             base_url=OPENAI_BASE_URL or None,
+            max_output_tokens=CHAT_ROUTER_MAX_OUTPUT_TOKENS,
             timeout_s=max(1.0, OPENAI_TIMEOUT_S),
             max_retries=max(0, OPENAI_MAX_RETRIES),
         )
@@ -701,6 +741,51 @@ _chat_router_provider: LLMProvider | None = (
 )
 
 
+_CHAT_BOUNDARY_MODEL_NAME = (
+    CHAT_BOUNDARY_MODEL
+    or CHAT_ROUTER_MODEL
+    or CHAT_RESPONSE_MODEL
+    or LLM_MODEL_NAME
+    or ""
+).strip()
+
+
+def _build_chat_boundary_provider() -> LLMProvider | None:
+    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
+    if not provider_name or provider_name == "mock":
+        return None
+    if not _CHAT_BOUNDARY_MODEL_NAME:
+        return None
+    try:
+        return resolve_provider(
+            provider_name,
+            api_key=OPENAI_API_KEY or None,
+            model=_CHAT_BOUNDARY_MODEL_NAME,
+            base_url=OPENAI_BASE_URL or None,
+            max_output_tokens=CHAT_BOUNDARY_MAX_OUTPUT_TOKENS,
+            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
+            max_retries=max(0, OPENAI_MAX_RETRIES),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "chat_boundary_provider_init_failed",
+            extra={"provider": provider_name, "model": _CHAT_BOUNDARY_MODEL_NAME},
+        )
+        return None
+
+
+_chat_boundary_provider_raw = _build_chat_boundary_provider()
+_chat_boundary_provider: LLMProvider | None = (
+    TimingLLMProvider(
+        CachingLLMProvider(_chat_boundary_provider_raw, _cache_session_store),
+        component="chat_boundary_decision",
+        model=_CHAT_BOUNDARY_MODEL_NAME or "unknown",
+    )
+    if _chat_boundary_provider_raw is not None
+    else None
+)
+
+
 def _build_chat_response_provider() -> LLMProvider | None:
     provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
     if not provider_name or provider_name == "mock":
@@ -714,6 +799,7 @@ def _build_chat_response_provider() -> LLMProvider | None:
             api_key=OPENAI_API_KEY or None,
             model=model_name,
             base_url=OPENAI_BASE_URL or None,
+            max_output_tokens=CHAT_RESPONSE_MAX_OUTPUT_TOKENS or None,
             timeout_s=max(1.0, OPENAI_TIMEOUT_S),
             max_retries=max(0, OPENAI_MAX_RETRIES),
         )
@@ -6378,8 +6464,8 @@ def _generate_chat_boundary_decision(
 ) -> chat_contracts.ChatBoundaryDecision | None:
     if CHAT_RESPONSE_MODE != "answer_or_handoff":
         return None
-    if _chat_response_provider is None:
-        raise llm_provider.LLMUnavailableError("chat_response_provider_unavailable")
+    if _chat_boundary_provider is None:
+        raise llm_provider.LLMUnavailableError("chat_boundary_provider_unavailable")
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     boundary_evidence = _build_chat_boundary_evidence(
         content=content,
@@ -6405,6 +6491,7 @@ def _generate_chat_boundary_decision(
         "use decision='exit_pending_to_chat' if the user wants to stop the workflow path and just get a normal chat answer; "
         "use decision='meta_clarification' if it is ambiguous whether they want to continue the pending workflow or return to normal chat. "
         "For chat_reply, exit_pending_to_chat, and meta_clarification, include assistant_response. "
+        "Keep assistant_response concise, normally under 80 words. "
         "Do not choose execution_request just because the user wants a structured conversation or repeated turns."
     )
     stripped_context = {
@@ -6423,7 +6510,7 @@ def _generate_chat_boundary_decision(
         merged_context=merged_context,
     )
     try:
-        parsed = _chat_response_provider.generate_request_json_object(
+        parsed = _chat_boundary_provider.generate_request_json_object(
             LLMRequest(
                 prompt="",
                 prompt_blocks=prompt_blocks,
@@ -6440,7 +6527,7 @@ def _generate_chat_boundary_decision(
             "chat_boundary_decision_failed",
             extra={
                 "provider": LLM_PROVIDER_NAME,
-                "model": CHAT_RESPONSE_MODEL or LLM_MODEL_NAME,
+                "model": CHAT_BOUNDARY_MODEL or CHAT_ROUTER_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME,
                 "error_type": type(exc).__name__,
                 "error": str(exc)[:500],
             },
