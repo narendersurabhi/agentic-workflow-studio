@@ -266,6 +266,14 @@ LLM_MODEL_NAME = (
 CHAT_ROUTER_MODEL = os.getenv("CHAT_ROUTER_MODEL", "").strip()
 CHAT_BOUNDARY_MODEL = os.getenv("CHAT_BOUNDARY_MODEL", "").strip()
 CHAT_RESPONSE_MODEL = os.getenv("CHAT_RESPONSE_MODEL", "").strip()
+CHAT_DEEP_RESPONSE_MODEL = os.getenv("CHAT_DEEP_RESPONSE_MODEL", "").strip()
+CHAT_DEEP_RESPONSE_MAX_OUTPUT_TOKENS = max(
+    0,
+    int(os.getenv("CHAT_DEEP_RESPONSE_MAX_OUTPUT_TOKENS", "2048") or "2048"),
+)
+CHAT_SONNET_ESCALATION_ENABLED = (
+    os.getenv("CHAT_SONNET_ESCALATION_ENABLED", "false").lower() == "true"
+)
 CHAT_PENDING_CORRECTION_MODEL = os.getenv("CHAT_PENDING_CORRECTION_MODEL", "").strip()
 CHAT_CLARIFICATION_NORMALIZER_ENABLED = (
     os.getenv("CHAT_CLARIFICATION_NORMALIZER_ENABLED", "true").lower() == "true"
@@ -822,6 +830,45 @@ _chat_response_provider: LLMProvider | None = (
         model=(CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
     )
     if _chat_response_provider_raw is not None
+    else None
+)
+
+
+def _build_chat_deep_response_provider() -> LLMProvider | None:
+    if not CHAT_SONNET_ESCALATION_ENABLED:
+        return None
+    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
+    if not provider_name or provider_name == "mock":
+        return None
+    model_name = (CHAT_DEEP_RESPONSE_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "").strip()
+    if not model_name:
+        return None
+    try:
+        return resolve_provider(
+            provider_name,
+            api_key=OPENAI_API_KEY or None,
+            model=model_name,
+            base_url=OPENAI_BASE_URL or None,
+            max_output_tokens=CHAT_DEEP_RESPONSE_MAX_OUTPUT_TOKENS or None,
+            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
+            max_retries=max(0, OPENAI_MAX_RETRIES),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "chat_deep_response_provider_init_failed",
+            extra={"provider": provider_name, "model": model_name},
+        )
+        return None
+
+
+_chat_deep_response_provider_raw = _build_chat_deep_response_provider()
+_chat_deep_response_provider: LLMProvider | None = (
+    TimingLLMProvider(
+        CachingLLMProvider(_chat_deep_response_provider_raw, _cache_session_store),
+        component="chat_deep_response",
+        model=(CHAT_DEEP_RESPONSE_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+    )
+    if _chat_deep_response_provider_raw is not None
     else None
 )
 
@@ -3341,9 +3388,18 @@ def _looks_like_conversational_turn(content: str) -> bool:
         "can you help me understand",
         "why ",
         "what is ",
+        "what's ",
+        "whats ",
         "what are ",
+        "what was ",
+        "what were ",
         "how does ",
         "how do ",
+        "how did ",
+        "how many ",
+        "how much ",
+        "how long ",
+        "how old ",
         "can you explain",
         "explain ",
     )
@@ -3378,6 +3434,7 @@ def _looks_like_conversational_turn(content: str) -> bool:
         r"\b(?:practice|mock|roleplay|coach me for|quiz me on)\b.{0,120}\b(?:interview|questions|answers)\b",
         r"\b(?:ask me (?:a )?question|ask me questions one by one|i will type the answer)\b",
         r"\b(?:interview practice|mock interview|practice interview questions)\b",
+        r"^(?:who(?:'?s)?|where(?:'?s)?|when(?:'?s)?|which)\s+[a-z]",
     )
     if any(re.search(pattern, lowered) for pattern in conversational_patterns):
         return True
@@ -6405,7 +6462,11 @@ def _build_chat_boundary_decision_prompt(
         ],
         "context_json": dict(merged_context or {}),
         "boundary_evidence": (
-            boundary_evidence.model_dump(mode="json", exclude_none=True)
+            boundary_evidence.model_dump(
+                mode="json",
+                exclude_none=True,
+                exclude={"conversation_mode_hint"},
+            )
             if boundary_evidence is not None
             else {}
         ),
@@ -6423,9 +6484,17 @@ def _build_chat_boundary_decision_prompt(
                 "chat_reply | execution_request | continue_pending | "
                 "exit_pending_to_chat | meta_clarification"
             ),
-            "assistant_response": "string",
+            "assistant_response": (
+                "string — fill for chat_reply/exit_pending_to_chat/meta_clarification; "
+                "leave empty when requires_sonnet=true"
+            ),
             "confidence": "0..1",
             "reason_code": "string",
+            "complexity": "simple | medium | high",
+            "requires_sonnet": (
+                "bool — true only when the user explicitly asks for deep reasoning, "
+                "architecture review, code review, or thorough multi-part analysis"
+            ),
         },
     }
     return json.dumps(payload, ensure_ascii=True)
@@ -6461,9 +6530,24 @@ def _generate_chat_response(
     fallback_response: str,
     session_metadata: Mapping[str, Any] | None = None,
     reasoning_effort: str | None = None,
+    deep_response: bool = False,
 ) -> str:
-    if _chat_response_provider is None:
+    # Pick the provider: Sonnet escalation when requested + enabled + available,
+    # otherwise fall through to the standard (Haiku) response provider.
+    sonnet_used = (
+        deep_response
+        and CHAT_SONNET_ESCALATION_ENABLED
+        and _chat_deep_response_provider is not None
+    )
+    if deep_response and not sonnet_used:
+        logger.info(
+            "sonnet_escalation_disabled_fallback",
+            extra={"reason": "escalation_disabled_or_provider_unavailable"},
+        )
+    provider = _chat_deep_response_provider if sonnet_used else _chat_response_provider
+    if provider is None:
         raise llm_provider.LLMUnavailableError("chat_response_provider_unavailable")
+    component = "chat_deep_response" if sonnet_used else "chat_response"
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     system_prompt = (
         "You are the conversational assistant for an agent platform. "
@@ -6490,7 +6574,8 @@ def _generate_chat_response(
         prompt="",
         prompt_blocks=prompt_blocks,
         metadata={
-            "component": "chat_response",
+            "component": component,
+            "sonnet_used": sonnet_used,
             **({"session_id": chat_session_id} if chat_session_id else {}),
         },
         reasoning_effort=reasoning_effort,
@@ -6499,12 +6584,12 @@ def _generate_chat_response(
     try:
         if stream_cb is not None:
             chunks: list[str] = []
-            for chunk in _chat_response_provider.stream_request(llm_request):
+            for chunk in provider.stream_request(llm_request):
                 stream_cb(chunk)
                 chunks.append(chunk)
             generated = "".join(chunks).strip()
         else:
-            response = _chat_response_provider.generate_request(llm_request)
+            response = provider.generate_request(llm_request)
             generated = str(response.content or "").strip()
     except Exception as exc:  # noqa: BLE001
         if llm_provider.is_llm_unavailable_error(exc):
@@ -6529,6 +6614,23 @@ def _generate_chat_boundary_decision(
         return None
     if _chat_boundary_provider is None:
         raise llm_provider.LLMUnavailableError("chat_boundary_provider_unavailable")
+    # Fast-exit: skip capability search + LLM boundary call for messages the heuristic
+    # can confidently classify as conversational (no workflow tokens, no pending state).
+    # The heuristic rejects messages containing workflow tokens first, so this is safe.
+    _quick_lifecycle = chat_service.clarification_lifecycle_from_metadata(session_metadata)
+    if not _quick_lifecycle.active and _looks_like_conversational_turn(content):
+        return chat_contracts.ChatBoundaryDecision(
+            decision=chat_contracts.ChatBoundaryDecisionType.chat_reply,
+            assistant_response="",
+            confidence=1.0,
+            reason_code="conversational_fast_exit",
+            evidence=chat_contracts.ChatBoundaryEvidence(
+                goal=str(candidate_goal or "").strip(),
+                conversation_mode_hint="conversational",
+                pending_clarification=False,
+                execution_signal_strength="none",
+            ),
+        )
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     boundary_evidence = _build_chat_boundary_evidence(
         content=content,
@@ -6541,21 +6643,28 @@ def _generate_chat_boundary_decision(
         "Choose exactly one bounded decision and return JSON only. "
         "User profile, conversation history, and capability candidates are provided above in "
         "<user_profile>, <history>, and <candidates> XML sections when available. "
-        "Use boundary_evidence as grounding. "
-        "Strong executable capability-family evidence or an execution-oriented intent should push you toward execution_request unless the user is clearly asking for discussion only. "
-        "A conversational hint alone is not enough to override strong executable evidence. "
-        "If boundary_evidence.execution_signal_strength is 'strong' and conversation_mode_hint is not 'conversational', do not choose chat_reply unless the user explicitly asks for discussion, explanation, brainstorming, tutoring, or interview practice only. "
+        "Use boundary_evidence as grounding — specifically execution_signal_strength and top_capabilities. "
         "When pending_clarification is false: "
-        "use decision='chat_reply' for normal conversation, explanation, discussion, advice, tutoring, coaching, quizzes, interview practice, roleplay, brainstorming, or any other back-and-forth chat experience. "
-        "Use decision='execution_request' only when the user wants tools, system actions, file changes, workflow execution, job submission, artifact creation, repository or environment inspection, or automation. "
+        "use decision='execution_request' only when the user clearly wants the system to DO something — "
+        "run tools, execute automation, submit a job, make file changes, interact with infrastructure, "
+        "or invoke a workflow. "
+        "Use decision='chat_reply' for everything else: factual questions, knowledge questions, "
+        "explanation, discussion, advice, tutoring, coaching, quizzes, roleplay, brainstorming, "
+        "or any other conversational exchange. "
+        "Answer factual and conversational questions directly in assistant_response. "
+        "execution_signal_strength='strong' is a signal, not a mandate — if the user is asking HOW to do "
+        "something or asking a question ABOUT a capability, that is still chat_reply. "
+        "Set requires_sonnet=true only when the user explicitly asks for deep reasoning, architecture "
+        "review, thorough code review, or multi-part detailed analysis — e.g. phrases like 'in detail', "
+        "'comprehensive', 'deep dive', 'thoroughly review', 'analyze architecture'. "
+        "When requires_sonnet=true, leave assistant_response empty. "
         "When pending_clarification is true: "
-        "If boundary_evidence.likely_clarification_answer is true, prefer decision='continue_pending'. "
-        "use decision='continue_pending' if the user is answering the existing workflow clarification or wants to continue that request; "
-        "use decision='exit_pending_to_chat' if the user wants to stop the workflow path and just get a normal chat answer; "
-        "use decision='meta_clarification' if it is ambiguous whether they want to continue the pending workflow or return to normal chat. "
+        "if boundary_evidence.likely_clarification_answer is true, prefer decision='continue_pending'. "
+        "use decision='continue_pending' if the user is answering the pending clarification or wants to continue that request; "
+        "use decision='exit_pending_to_chat' if the user explicitly wants to abandon the workflow and get a chat answer; "
+        "use decision='meta_clarification' if it is ambiguous whether they want to continue or return to chat. "
         "For chat_reply, exit_pending_to_chat, and meta_clarification, include assistant_response. "
-        "Keep assistant_response concise, normally under 80 words. "
-        "Do not choose execution_request just because the user wants a structured conversation or repeated turns."
+        "Keep assistant_response concise, normally under 80 words."
     )
     stripped_context = {
         k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
@@ -6599,15 +6708,22 @@ def _generate_chat_boundary_decision(
             raise llm_provider.LLMUnavailableError(str(exc)) from exc
         raise llm_provider.LLMUnavailableError("chat_boundary_decision_failed") from exc
     try:
+        _requires_sonnet = bool(parsed.get("requires_sonnet"))
         decision = chat_contracts.ChatBoundaryDecision.model_validate(
             {
                 "decision": parsed.get("decision") or parsed.get("type"),
                 "confidence": parsed.get("confidence"),
                 "assistant_response": (
-                    str(parsed.get("assistant_response") or "").strip()
-                    or str(fallback_response or "").strip()
+                    ""
+                    if _requires_sonnet
+                    else (
+                        str(parsed.get("assistant_response") or "").strip()
+                        or str(fallback_response or "").strip()
+                    )
                 ),
                 "reason_code": parsed.get("reason_code"),
+                "complexity": str(parsed.get("complexity") or "").strip().lower(),
+                "requires_sonnet": _requires_sonnet,
                 "evidence": boundary_evidence.model_dump(mode="json", exclude_none=True),
             }
         )
@@ -6622,28 +6738,15 @@ def _postprocess_chat_boundary_decision(
     content: str,
 ) -> chat_contracts.ChatBoundaryDecision:
     evidence = boundary.evidence or chat_contracts.ChatBoundaryEvidence()
-    if (
-        not evidence.pending_clarification
-        and boundary.decision == chat_contracts.ChatBoundaryDecisionType.chat_reply
-        and evidence.conversation_mode_hint == "execution_oriented"
-    ):
-        return boundary.model_copy(
-            update={
-                "decision": chat_contracts.ChatBoundaryDecisionType.execution_request,
-                "assistant_response": "",
-                "reason_code": "execution_signal_override",
-            }
-        )
+    # Non-pending meta_clarification: resolve to execution_request only when the
+    # capability signal is strong, otherwise trust the model's conversational intent.
     if (
         not evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.meta_clarification
     ):
         if (
-            evidence.conversation_mode_hint != "conversational"
-            and (
-                evidence.needs_clarification
-                or evidence.execution_signal_strength in {"moderate", "strong"}
-            )
+            evidence.needs_clarification
+            and evidence.execution_signal_strength == "strong"
         ):
             return boundary.model_copy(
                 update={
@@ -6658,6 +6761,8 @@ def _postprocess_chat_boundary_decision(
                 "reason_code": "non_pending_meta_clarification_chat_override",
             }
         )
+    # Pending + likely clarification answer: override to continue_pending regardless
+    # of what the model said.
     if (
         evidence.pending_clarification
         and evidence.likely_clarification_answer
@@ -6674,6 +6779,9 @@ def _postprocess_chat_boundary_decision(
                 "reason_code": "clarification_answer_override",
             }
         )
+    # Pending + chat_reply: the model thinks it's chat but we're in pending state.
+    # Explicit chat-only corrections exit the pending flow; everything else is
+    # genuinely ambiguous — surface as meta_clarification so the caller can ask.
     if (
         evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.chat_reply
@@ -6683,14 +6791,6 @@ def _postprocess_chat_boundary_decision(
                 update={
                     "decision": chat_contracts.ChatBoundaryDecisionType.exit_pending_to_chat,
                     "reason_code": "explicit_chat_only_correction",
-                }
-            )
-        if evidence.conversation_mode_hint != "conversational":
-            return boundary.model_copy(
-                update={
-                    "decision": chat_contracts.ChatBoundaryDecisionType.continue_pending,
-                    "assistant_response": "",
-                    "reason_code": "pending_clarification_state_preservation",
                 }
             )
         return boundary.model_copy(
@@ -6738,6 +6838,10 @@ def _finalize_chat_turn_plan(
     if bool(finalized.get("response_generated")):
         return finalized
     fallback_response = str(finalized.get("assistant_content") or "").strip()
+    boundary_decision = finalized.get("boundary_decision") or {}
+    deep_response = bool(
+        isinstance(boundary_decision, Mapping) and boundary_decision.get("requires_sonnet")
+    )
     finalized["assistant_content"] = _generate_chat_response(
         content=content,
         candidate_goal=candidate_goal,
@@ -6746,6 +6850,7 @@ def _finalize_chat_turn_plan(
         fallback_response=fallback_response,
         session_metadata=session_metadata,
         reasoning_effort=_response_reasoning_effort(finalized),
+        deep_response=deep_response,
     )
     finalized["response_generated"] = True
     return finalized
