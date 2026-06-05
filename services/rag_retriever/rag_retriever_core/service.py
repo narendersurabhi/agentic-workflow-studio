@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import functools
 import hashlib
 import json
 import os
@@ -338,6 +339,20 @@ class OpenAIEmbeddingClient:
         return vectors
 
 
+@functools.lru_cache(maxsize=8)
+def _cached_bedrock_runtime_client(region: str, verify_ssl: bool, timeout_s: float) -> Any:
+    import boto3  # lazy — may not be installed in all deployments
+    return boto3.client(
+        "bedrock-runtime",
+        region_name=region or "us-east-1",
+        verify=verify_ssl,
+        config=boto3.session.Config(
+            connect_timeout=timeout_s,
+            read_timeout=timeout_s,
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class BedrockTitanEmbeddingClient:
     model: str
@@ -353,19 +368,11 @@ class BedrockTitanEmbeddingClient:
         if not self.model:
             raise RetrieverError("embedding_model_missing", status_code=503)
         try:
-            import boto3
+            client = _cached_bedrock_runtime_client(
+                self.region or "us-east-1", self.verify_ssl, self.timeout_s
+            )
         except ImportError as exc:
             raise RetrieverError("embedding_bedrock_boto3_missing", status_code=503) from exc
-
-        client = boto3.client(
-            "bedrock-runtime",
-            region_name=self.region or "us-east-1",
-            verify=self.verify_ssl,
-            config=boto3.session.Config(
-                connect_timeout=self.timeout_s,
-                read_timeout=self.timeout_s,
-            ),
-        )
         vectors: list[list[float]] = []
         for text in texts:
             payload: dict[str, Any] = {

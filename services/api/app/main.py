@@ -381,7 +381,7 @@ CHAT_INTENT_VECTOR_WORKSPACE_ID = (
 )
 CHAT_INTENT_VECTOR_TOP_K = max(1, min(8, int(os.getenv("CHAT_INTENT_VECTOR_TOP_K", "3"))))
 CHAT_INTENT_VECTOR_TIMEOUT_S = max(
-    1.0, float(os.getenv("CHAT_INTENT_VECTOR_TIMEOUT_S", "4.0"))
+    1.0, float(os.getenv("CHAT_INTENT_VECTOR_TIMEOUT_S", "20.0"))
 )
 _chat_intent_vector_min_score_raw = os.getenv("CHAT_INTENT_VECTOR_MIN_SCORE", "0.6").strip()
 try:
@@ -397,6 +397,9 @@ except ValueError:
 CHAT_CAPABILITY_VECTOR_SEARCH_ENABLED = (
     os.getenv("CHAT_CAPABILITY_VECTOR_SEARCH_ENABLED", "true").lower() == "true"
 )
+CHAT_CAPABILITY_VECTOR_REQUIRE_LEXICAL_SIGNAL = (
+    os.getenv("CHAT_CAPABILITY_VECTOR_REQUIRE_LEXICAL_SIGNAL", "true").lower() == "true"
+)
 CHAT_CAPABILITY_VECTOR_COLLECTION = os.getenv("CHAT_CAPABILITY_VECTOR_COLLECTION", "").strip() or None
 CHAT_CAPABILITY_VECTOR_NAMESPACE_PREFIX = (
     os.getenv("CHAT_CAPABILITY_VECTOR_NAMESPACE_PREFIX", "chat_capability_catalog").strip()
@@ -410,7 +413,7 @@ CHAT_CAPABILITY_VECTOR_TOP_K = max(
     1, min(50, int(os.getenv("CHAT_CAPABILITY_VECTOR_TOP_K", "12")))
 )
 CHAT_CAPABILITY_VECTOR_TIMEOUT_S = max(
-    1.0, float(os.getenv("CHAT_CAPABILITY_VECTOR_TIMEOUT_S", "5.0"))
+    1.0, float(os.getenv("CHAT_CAPABILITY_VECTOR_TIMEOUT_S", "20.0"))
 )
 CHAT_CAPABILITY_VECTOR_CLEANUP_ENABLED = (
     os.getenv("CHAT_CAPABILITY_VECTOR_CLEANUP_ENABLED", "true").lower() == "true"
@@ -446,7 +449,7 @@ INTENT_VECTOR_WORKSPACE_ID = (
     or "intent-catalog"
 )
 INTENT_VECTOR_TOP_K = max(1, min(5, int(os.getenv("INTENT_VECTOR_TOP_K", "3"))))
-INTENT_VECTOR_TIMEOUT_S = max(1.0, float(os.getenv("INTENT_VECTOR_TIMEOUT_S", "4.0")))
+INTENT_VECTOR_TIMEOUT_S = max(1.0, float(os.getenv("INTENT_VECTOR_TIMEOUT_S", "20.0")))
 _intent_vector_min_score_raw = os.getenv("INTENT_VECTOR_MIN_SCORE", "0.62").strip()
 try:
     INTENT_VECTOR_MIN_SCORE = float(_intent_vector_min_score_raw or "0.62")
@@ -3721,6 +3724,14 @@ def _hybrid_goal_intent_inference(
     )
 
 
+def _should_run_capability_vector_search(lexical_matches: list[dict[str, Any]]) -> bool:
+    if not CHAT_CAPABILITY_VECTOR_SEARCH_ENABLED:
+        return False
+    if CHAT_CAPABILITY_VECTOR_REQUIRE_LEXICAL_SIGNAL:
+        return any(float(m.get("score") or 0.0) > 0.0 for m in lexical_matches)
+    return True
+
+
 def _should_run_goal_intent_vector_search(
     heuristic: intent_contract.TaskIntentInference,
 ) -> bool:
@@ -4160,10 +4171,14 @@ def _hybrid_chat_capability_matches(
     lexical_matches: list[dict[str, Any]],
     entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    vector_matches = _vector_chat_capability_matches(
-        query=query,
-        capabilities=capabilities,
-        entries=entries,
+    vector_matches = (
+        _vector_chat_capability_matches(
+            query=query,
+            capabilities=capabilities,
+            entries=entries,
+        )
+        if _should_run_capability_vector_search(lexical_matches)
+        else []
     )
     combined: dict[str, dict[str, Any]] = {}
 
