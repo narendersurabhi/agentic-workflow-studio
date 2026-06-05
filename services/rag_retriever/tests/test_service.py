@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import io
+import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from rag_retriever_core import (
@@ -20,8 +24,10 @@ from rag_retriever_core import (
 )
 from rag_retriever_core.errors import RetrieverError
 from rag_retriever_core.service import (
+    BedrockTitanEmbeddingClient,
     RetrieverService,
     RetrieverServiceConfig,
+    build_embedder_from_config,
     build_qdrant_filter,
 )
 
@@ -806,3 +812,83 @@ def test_upsert_texts_requires_scope_when_configured() -> None:
         assert exc.detail == "missing_scope:one_of_tenant_id_user_id_workspace_id_required"
     else:  # pragma: no cover
         raise AssertionError("Expected RetrieverError")
+
+
+def test_config_from_env_supports_bedrock_embeddings(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_PROVIDER", "bedrock")
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+    monkeypatch.setenv("AWS_REGION", "us-east-2")
+    monkeypatch.setenv("BEDROCK_VERIFY_SSL", "false")
+    monkeypatch.delenv("QDRANT_VECTOR_SIZE", raising=False)
+    monkeypatch.delenv("RAG_BEDROCK_REGION", raising=False)
+    monkeypatch.delenv("RAG_BEDROCK_VERIFY_SSL", raising=False)
+    monkeypatch.delenv("RAG_BEDROCK_EMBEDDING_DIMENSIONS", raising=False)
+
+    config = RetrieverServiceConfig.from_env()
+
+    assert config.embedding_provider == "bedrock"
+    assert config.embedding_model == "amazon.titan-embed-text-v2:0"
+    assert config.embedding_region == "us-east-2"
+    assert config.embedding_verify_ssl is False
+    assert config.embedding_dimensions == 1024
+    assert config.qdrant_vector_size == 1024
+
+
+def test_build_embedder_from_config_supports_bedrock() -> None:
+    config = _config()
+    bedrock_config = RetrieverServiceConfig(
+        **{
+            **config.__dict__,
+            "embedding_provider": "bedrock",
+            "embedding_model": "amazon.titan-embed-text-v2:0",
+            "embedding_region": "us-east-2",
+            "embedding_verify_ssl": False,
+            "embedding_dimensions": 1024,
+            "embedding_normalize": True,
+        }
+    )
+
+    embedder = build_embedder_from_config(bedrock_config)
+
+    assert isinstance(embedder, BedrockTitanEmbeddingClient)
+    assert embedder.model == "amazon.titan-embed-text-v2:0"
+    assert embedder.region == "us-east-2"
+    assert embedder.verify_ssl is False
+    assert embedder.dimensions == 1024
+
+
+def test_bedrock_titan_embedding_client_invokes_runtime(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _FakeBedrockRuntime:
+        def invoke_model(self, **kwargs):
+            calls.append(kwargs)
+            return {"body": io.BytesIO(json.dumps({"embedding": [0.1, 0.2, 0.3]}).encode())}
+
+    def _client(**kwargs):
+        calls.append({"client_kwargs": kwargs})
+        return _FakeBedrockRuntime()
+
+    fake_boto3 = SimpleNamespace(
+        client=lambda service_name, **kwargs: _client(service_name=service_name, **kwargs),
+        session=SimpleNamespace(Config=lambda **kwargs: {"config": kwargs}),
+    )
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    embedder = BedrockTitanEmbeddingClient(
+        model="amazon.titan-embed-text-v2:0",
+        region="us-east-2",
+        timeout_s=15.0,
+        verify_ssl=False,
+        dimensions=1024,
+        normalize=True,
+    )
+
+    vectors = embedder.embed_texts(["hello"])
+
+    assert vectors == [[0.1, 0.2, 0.3]]
+    assert calls[0]["client_kwargs"]["service_name"] == "bedrock-runtime"
+    assert calls[0]["client_kwargs"]["region_name"] == "us-east-2"
+    assert calls[0]["client_kwargs"]["verify"] is False
+    body = json.loads(calls[1]["body"])
+    assert body == {"inputText": "hello", "normalize": True, "dimensions": 1024}
+    assert calls[1]["modelId"] == "amazon.titan-embed-text-v2:0"
