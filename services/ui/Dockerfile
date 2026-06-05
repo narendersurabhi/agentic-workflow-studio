@@ -1,7 +1,11 @@
 FROM node:20-alpine
 WORKDIR /app
+ENV NODE_TLS_REJECT_UNAUTHORIZED=0 \
+    NPM_CONFIG_STRICT_SSL=false
 COPY services/ui/package.json /app/package.json
-RUN npm install && npm install --save-dev typescript @types/react @types/react-dom @types/node
+RUN npm config set strict-ssl false \
+    && npm install \
+    && npm install --save-dev typescript @types/react @types/react-dom @types/node
 COPY services/ui /app
 ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}

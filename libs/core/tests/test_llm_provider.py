@@ -7,6 +7,7 @@ from urllib.error import HTTPError
 from urllib.error import URLError
 
 from libs.core.llm_provider import (
+    CacheSessionRef,
     LLMProvider,
     LLMProviderError,
     LLMRequest,
@@ -14,6 +15,8 @@ from libs.core.llm_provider import (
     LLMUnavailableError,
     OpenAIChatCompletionsProvider,
     OpenAIProvider,
+    PromptBlock,
+    Stability,
     parse_json_object,
 )
 from libs.core import llm_provider as llm_provider_module
@@ -219,11 +222,12 @@ def test_resolve_provider_bedrock_prefers_explicit_role_model(monkeypatch) -> No
         max_output_tokens=8192,
         temperature=None,
         timeout_s=60.0,
+        verify_ssl=True,
     ):
-        del region, max_output_tokens, temperature, timeout_s
+        del region, max_output_tokens, temperature, timeout_s, verify_ssl
         self.model_id = model_id
 
-    monkeypatch.setenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-6")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
     monkeypatch.setattr(
         llm_provider_bedrock.BedrockAnthropicProvider,
         "__init__",
@@ -232,11 +236,11 @@ def test_resolve_provider_bedrock_prefers_explicit_role_model(monkeypatch) -> No
 
     provider = llm_provider_module.resolve_provider(
         "bedrock-anthropic",
-        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
 
     assert isinstance(provider, llm_provider_bedrock.BedrockAnthropicProvider)
-    assert provider.model_id == "anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert provider.model_id == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def test_resolve_provider_supports_openai_compatible_endpoint() -> None:
@@ -383,6 +387,114 @@ def test_parse_json_object_accepts_singleton_list_with_object() -> None:
     payload = parse_json_object('[{"ok": true}]')
 
     assert payload == {"ok": True}
+
+
+def test_generate_request_json_object_enforces_top_level_object_contract() -> None:
+    captured: dict[str, LLMRequest] = {}
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest) -> LLMResponse:
+            captured["request"] = request
+            return LLMResponse(content='{"ok": true}')
+
+    payload = _Provider().generate_request_json_object(
+        LLMRequest(
+            prompt="hello",
+            system_prompt="Return JSON only.",
+        )
+    )
+
+    assert payload == {"ok": True}
+    assert captured["request"].json_mode is True
+    assert captured["request"].prompt == "hello"
+    assert "top-level JSON object" in (captured["request"].system_prompt or "")
+
+
+def test_generate_request_json_object_enforces_contract_on_prompt_blocks() -> None:
+    captured: dict[str, LLMRequest] = {}
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest) -> LLMResponse:
+            captured["request"] = request
+            return LLMResponse(content='{"ok": true}')
+
+    _Provider().generate_request_json_object(
+        LLMRequest(
+            prompt="",
+            prompt_blocks=[
+                PromptBlock(text="Return JSON only.", stability=Stability.STATIC),
+                PromptBlock(text='{"input": "hello"}', stability=Stability.DYNAMIC),
+            ],
+        )
+    )
+
+    request = captured["request"]
+    assert request.json_mode is True
+    assert request.prompt_blocks is not None
+    assert "top-level JSON object" in request.prompt_blocks[0].text
+    assert request.prompt_blocks[1].text == '{"input": "hello"}'
+
+
+def test_generate_cached_preserves_structured_request_fields() -> None:
+    captured: dict[str, LLMRequest] = {}
+
+    class _Provider(LLMProvider):
+        def generate_request(self, request: LLMRequest) -> LLMResponse:
+            captured["request"] = request
+            return LLMResponse(content="ok")
+
+    _Provider().generate_cached(
+        [PromptBlock(text="hello", stability=Stability.DYNAMIC)],
+        CacheSessionRef(provider="test"),
+        LLMRequest(prompt="", json_mode=True, reasoning_effort="low"),
+    )
+
+    request = captured["request"]
+    assert request.prompt == "hello"
+    assert request.json_mode is True
+    assert request.reasoning_effort == "low"
+
+
+def test_openai_chat_cached_requests_preserve_json_mode() -> None:
+    captured: dict[str, LLMRequest] = {}
+
+    class _Provider(OpenAIChatCompletionsProvider):
+        def generate_request(self, request: LLMRequest) -> LLMResponse:
+            captured["request"] = request
+            return LLMResponse(content="ok")
+
+    _Provider(api_key="test-key", model="gpt-test", base_url="https://example.test").generate_cached(
+        [PromptBlock(text="hello", stability=Stability.DYNAMIC)],
+        CacheSessionRef(provider="test"),
+        LLMRequest(prompt="", json_mode=True, reasoning_effort="low"),
+    )
+
+    request = captured["request"]
+    assert request.prompt == "hello"
+    assert request.json_mode is True
+    assert request.reasoning_effort == "low"
+
+
+def test_openai_chat_payload_uses_prompt_blocks_and_json_mode() -> None:
+    provider = OpenAIChatCompletionsProvider(
+        api_key="test-key",
+        model="gpt-test",
+        base_url="https://example.test",
+    )
+
+    payload = provider._build_payload(
+        LLMRequest(
+            prompt="",
+            prompt_blocks=[
+                PromptBlock(text="System rules", stability=Stability.STATIC),
+                PromptBlock(text="User payload", stability=Stability.DYNAMIC),
+            ],
+            json_mode=True,
+        )
+    )
+
+    assert payload["messages"][-1]["content"] == "System rules\nUser payload"
+    assert payload["response_format"] == {"type": "json_object"}
 
 
 def test_generate_json_object_uses_generate_compatibility_path() -> None:

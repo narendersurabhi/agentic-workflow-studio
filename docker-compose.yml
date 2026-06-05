@@ -16,6 +16,8 @@ services:
       - "16379:6379"
   qdrant:
     image: qdrant/qdrant:latest
+    environment:
+      QDRANT__TELEMETRY_DISABLED: ${QDRANT__TELEMETRY_DISABLED:-true}
     ports:
       - "16333:6333"
     volumes:

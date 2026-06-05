@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
@@ -64,6 +64,65 @@ class LLMRequest:
     json_mode: bool = False
 
 
+_JSON_OBJECT_RESPONSE_INSTRUCTION = (
+    "Return exactly one top-level JSON object. Do not wrap it in markdown. "
+    "Do not return an array, string, boolean, or explanation."
+)
+
+
+def _append_json_object_instruction(text: Optional[str]) -> str:
+    existing = (text or "").strip()
+    if _JSON_OBJECT_RESPONSE_INSTRUCTION in existing:
+        return existing
+    if not existing:
+        return _JSON_OBJECT_RESPONSE_INSTRUCTION
+    return f"{existing}\n\n{_JSON_OBJECT_RESPONSE_INSTRUCTION}"
+
+
+def _with_json_object_contract(request: LLMRequest) -> LLMRequest:
+    """Return a request that asks providers for a parseable top-level object."""
+    prompt_blocks = request.prompt_blocks
+    if prompt_blocks:
+        if any(_JSON_OBJECT_RESPONSE_INSTRUCTION in block.text for block in prompt_blocks):
+            return replace(request, json_mode=True)
+        updated_blocks = list(prompt_blocks)
+        static_index = next(
+            (
+                idx
+                for idx, block in enumerate(updated_blocks)
+                if block.stability == Stability.STATIC
+            ),
+            -1,
+        )
+        if static_index >= 0:
+            block = updated_blocks[static_index]
+            updated_blocks[static_index] = PromptBlock(
+                text=_append_json_object_instruction(block.text),
+                stability=block.stability,
+            )
+        else:
+            updated_blocks.insert(
+                0,
+                PromptBlock(
+                    text=_JSON_OBJECT_RESPONSE_INSTRUCTION,
+                    stability=Stability.STATIC,
+                ),
+            )
+        return replace(request, json_mode=True, prompt_blocks=updated_blocks)
+
+    return replace(
+        request,
+        json_mode=True,
+        system_prompt=_append_json_object_instruction(request.system_prompt),
+    )
+
+
+def _request_prompt_text(request: LLMRequest) -> str:
+    if request.prompt_blocks:
+        return "\n".join(block.text for block in request.prompt_blocks if block.text)
+    return request.prompt
+
+
 class LLMProviderError(Exception):
     pass
 
@@ -113,9 +172,7 @@ class LLMProvider:
         return self.generate_request_json_object(LLMRequest(prompt=prompt))
 
     def generate_request_json_object(self, request: LLMRequest) -> Dict[str, Any]:
-        if not request.json_mode:
-            from dataclasses import replace
-            request = replace(request, json_mode=True)
+        request = _with_json_object_contract(request)
         response = self.generate_request(request)
         return parse_json_object(response.content)
 
@@ -158,6 +215,8 @@ class LLMProvider:
             temperature=request.temperature,
             max_output_tokens=request.max_output_tokens,
             metadata=request.metadata,
+            reasoning_effort=request.reasoning_effort,
+            json_mode=request.json_mode,
         )
         return self.generate_request(merged)
 
@@ -241,7 +300,7 @@ class OpenAIProvider(LLMProvider):
         raise LLMProviderError("OpenAI API request failed after retries")
 
     def _build_payload(self, request: LLMRequest) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"model": self.model, "input": request.prompt}
+        payload: Dict[str, Any] = {"model": self.model, "input": _request_prompt_text(request)}
         if request.system_prompt:
             payload["instructions"] = request.system_prompt
         if request.temperature is not None and _model_supports_temperature(self.model):
@@ -360,6 +419,8 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             temperature=request.temperature,
             max_output_tokens=request.max_output_tokens,
             metadata=request.metadata,
+            reasoning_effort=request.reasoning_effort,
+            json_mode=request.json_mode,
         )
         return self.generate_request(merged)
 
@@ -367,7 +428,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         messages: list[dict[str, str]] = []
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt})
-        messages.append({"role": "user", "content": request.prompt})
+        messages.append({"role": "user", "content": _request_prompt_text(request)})
         payload: Dict[str, Any] = {"model": self.model, "messages": messages}
         if request.temperature is not None:
             payload["temperature"] = request.temperature
@@ -585,6 +646,7 @@ def extract_json_object_text(text: str) -> str:
 def parse_json_object(text: str) -> Dict[str, Any]:
     queue = [text]
     seen: set[str] = set()
+    last_non_object = ""
     while queue:
         candidate = queue.pop(0).strip()
         if not candidate or candidate in seen:
@@ -592,6 +654,7 @@ def parse_json_object(text: str) -> Dict[str, Any]:
         seen.add(candidate)
         normalized = _strip_markdown_fence(candidate)
         normalized = _unwrap_json_string(normalized)
+        last_non_object = normalized
         try:
             parsed = json.loads(normalized)
         except json.JSONDecodeError:
@@ -610,7 +673,10 @@ def parse_json_object(text: str) -> Dict[str, Any]:
             return parsed[0]
         if isinstance(parsed, str):
             queue.append(parsed)
-    raise LLMProviderError("Top-level structured output must be a JSON object")
+    preview = (last_non_object or text or "").replace("\n", "\\n")[:300]
+    raise LLMProviderError(
+        f"Top-level structured output must be a JSON object: {preview}"
+    )
 
 
 def _strip_markdown_fence(text: str) -> str:

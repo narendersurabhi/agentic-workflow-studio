@@ -87,7 +87,7 @@ Log `cached_input_tokens / input_tokens` per role per turn. A ratio near 0 on th
 
 ```
 LLM_PROVIDER=bedrock-anthropic
-BEDROCK_MODEL_ID=anthropic.claude-3-5-haiku-20241022-v1:0
+BEDROCK_MODEL_ID=us.anthropic.claude-3-5-haiku-20241022-v1:0
 AWS_REGION=us-east-1
 BEDROCK_MAX_OUTPUT_TOKENS=8192
 ```
