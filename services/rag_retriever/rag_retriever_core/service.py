@@ -140,9 +140,32 @@ class RetrieverServiceConfig:
     payload_tenant_id_key: str
     payload_user_id_key: str
     payload_workspace_id_key: str
+    embedding_region: str = ""
+    embedding_verify_ssl: bool = True
+    embedding_dimensions: int | None = None
+    embedding_normalize: bool = True
 
     @classmethod
     def from_env(cls) -> RetrieverServiceConfig:
+        embedding_provider = os.getenv("RAG_EMBEDDING_PROVIDER", "openai").strip().lower()
+        default_embedding_model = (
+            "amazon.titan-embed-text-v2:0"
+            if embedding_provider in {"bedrock", "bedrock-titan", "bedrock_titan"}
+            else "text-embedding-3-small"
+        )
+        embedding_model = os.getenv("RAG_EMBEDDING_MODEL", default_embedding_model).strip()
+        embedding_dimensions = _optional_int(os.getenv("RAG_BEDROCK_EMBEDDING_DIMENSIONS"))
+        if (
+            embedding_dimensions is None
+            and embedding_provider in {"bedrock", "bedrock-titan", "bedrock_titan"}
+        ):
+            embedding_dimensions = _default_embedding_size(
+                embedding_model,
+                provider=embedding_provider,
+            )
+        rag_bedrock_verify_raw = os.getenv("RAG_BEDROCK_VERIFY_SSL")
+        if rag_bedrock_verify_raw is None or rag_bedrock_verify_raw == "":
+            rag_bedrock_verify_raw = os.getenv("BEDROCK_VERIFY_SSL")
         payload_text_key = os.getenv("RAG_PAYLOAD_TEXT_KEY", "text").strip() or "text"
         payload_document_id_key = (
             os.getenv("RAG_PAYLOAD_DOCUMENT_ID_KEY", "document_id").strip() or "document_id"
@@ -180,7 +203,8 @@ class RetrieverServiceConfig:
             qdrant_timeout_s=_float_with_default(os.getenv("QDRANT_TIMEOUT_S"), 10.0),
             qdrant_vector_size=_int_with_default(
                 os.getenv("QDRANT_VECTOR_SIZE"),
-                _default_embedding_size(os.getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small")),
+                embedding_dimensions
+                or _default_embedding_size(embedding_model, provider=embedding_provider),
             ),
             qdrant_distance=os.getenv("QDRANT_DISTANCE", "Cosine").strip() or "Cosine",
             qdrant_on_disk_payload=_bool_with_default(
@@ -196,8 +220,8 @@ class RetrieverServiceConfig:
                     os.getenv("QDRANT_PAYLOAD_INDEX_FIELDS", default_payload_index_fields)
                 )
             ),
-            embedding_provider=os.getenv("RAG_EMBEDDING_PROVIDER", "openai").strip().lower(),
-            embedding_model=os.getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small").strip(),
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
             embedding_api_key=(
                 os.getenv("RAG_OPENAI_API_KEY", "").strip()
                 or os.getenv("OPENAI_API_KEY", "").strip()
@@ -243,6 +267,18 @@ class RetrieverServiceConfig:
             payload_tenant_id_key=payload_tenant_id_key,
             payload_user_id_key=payload_user_id_key,
             payload_workspace_id_key=payload_workspace_id_key,
+            embedding_region=(
+                os.getenv("RAG_BEDROCK_REGION", "").strip()
+                or os.getenv("AWS_REGION", "").strip()
+                or os.getenv("AWS_DEFAULT_REGION", "").strip()
+                or "us-east-1"
+            ),
+            embedding_verify_ssl=_bool_with_default(rag_bedrock_verify_raw, True),
+            embedding_dimensions=embedding_dimensions,
+            embedding_normalize=_bool_with_default(
+                os.getenv("RAG_BEDROCK_EMBEDDING_NORMALIZE"),
+                True,
+            ),
         )
 
 
@@ -293,6 +329,65 @@ class OpenAIEmbeddingClient:
         vectors: list[list[float]] = []
         for entry in entries:
             vector = entry.get("embedding") if isinstance(entry, dict) else None
+            if not isinstance(vector, list) or not vector:
+                raise RetrieverError("embedding_missing_vector", status_code=502)
+            try:
+                vectors.append([float(item) for item in vector])
+            except (TypeError, ValueError) as exc:
+                raise RetrieverError("embedding_vector_invalid", status_code=502) from exc
+        return vectors
+
+
+@dataclass(frozen=True)
+class BedrockTitanEmbeddingClient:
+    model: str
+    region: str
+    timeout_s: float
+    verify_ssl: bool
+    dimensions: int | None
+    normalize: bool
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        if not self.model:
+            raise RetrieverError("embedding_model_missing", status_code=503)
+        try:
+            import boto3
+        except ImportError as exc:
+            raise RetrieverError("embedding_bedrock_boto3_missing", status_code=503) from exc
+
+        client = boto3.client(
+            "bedrock-runtime",
+            region_name=self.region or "us-east-1",
+            verify=self.verify_ssl,
+            config=boto3.session.Config(
+                connect_timeout=self.timeout_s,
+                read_timeout=self.timeout_s,
+            ),
+        )
+        vectors: list[list[float]] = []
+        for text in texts:
+            payload: dict[str, Any] = {
+                "inputText": text,
+                "normalize": self.normalize,
+            }
+            if self.dimensions:
+                payload["dimensions"] = self.dimensions
+            try:
+                raw = client.invoke_model(
+                    modelId=self.model,
+                    body=json.dumps(payload),
+                    contentType="application/json",
+                    accept="application/json",
+                )
+                data = json.loads(raw["body"].read())
+            except json.JSONDecodeError as exc:
+                raise RetrieverError("embedding_bedrock_invalid_json", status_code=502) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise RetrieverError(f"embedding_bedrock_error:{exc}", status_code=502) from exc
+
+            vector = data.get("embedding") if isinstance(data, dict) else None
             if not isinstance(vector, list) or not vector:
                 raise RetrieverError("embedding_missing_vector", status_code=502)
             try:
@@ -1087,6 +1182,15 @@ def build_embedder_from_config(config: RetrieverServiceConfig) -> TextEmbedder:
             base_url=config.embedding_base_url,
             timeout_s=config.embedding_timeout_s,
         )
+    if config.embedding_provider in {"bedrock", "bedrock-titan", "bedrock_titan"}:
+        return BedrockTitanEmbeddingClient(
+            model=config.embedding_model,
+            region=config.embedding_region,
+            timeout_s=config.embedding_timeout_s,
+            verify_ssl=config.embedding_verify_ssl,
+            dimensions=config.embedding_dimensions,
+            normalize=config.embedding_normalize,
+        )
     raise RetrieverError(
         f"unsupported_embedding_provider:{config.embedding_provider}",
         status_code=503,
@@ -1853,6 +1957,15 @@ def _int_with_default(value: str | None, default: int) -> int:
         return default
 
 
+def _optional_int(value: str | None) -> int | None:
+    if value is None or value.strip() == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _float_with_default(value: str | None, default: float) -> float:
     if value is None or value == "":
         return default
@@ -1873,8 +1986,17 @@ def _bool_with_default(value: str | None, default: bool) -> bool:
     return default
 
 
-def _default_embedding_size(model: str | None) -> int:
+def _default_embedding_size(model: str | None, *, provider: str = "openai") -> int:
+    normalized_provider = (provider or "").strip().lower()
     normalized = (model or "").strip().lower()
+    if normalized_provider in {"bedrock", "bedrock-titan", "bedrock_titan"}:
+        known_bedrock = {
+            "amazon.titan-embed-text-v2:0": 1024,
+            "amazon.titan-embed-text-v1": 1536,
+            "cohere.embed-english-v3": 1024,
+            "cohere.embed-multilingual-v3": 1024,
+        }
+        return known_bedrock.get(normalized, 1024)
     known = {
         "text-embedding-3-small": 1536,
         "text-embedding-3-large": 3072,
