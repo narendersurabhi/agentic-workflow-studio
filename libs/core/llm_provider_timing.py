@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 import structlog
 
@@ -12,6 +12,7 @@ from libs.core.llm_provider import (
     LLMResponse,
     PromptBlock,
 )
+
 
 logger = structlog.get_logger("llm.timing")
 
@@ -56,6 +57,25 @@ class TimingLLMProvider(LLMProvider):
         response = self._inner.generate_cached(blocks, session, request)
         self._log(request, response, time.perf_counter() - started)
         return response
+
+    def stream_request(self, request: LLMRequest) -> Iterator[str]:
+        started = time.perf_counter()
+        meta = request.metadata or {}
+        try:
+            for chunk in self._inner.stream_request(request):
+                yield chunk
+        finally:
+            elapsed_s = time.perf_counter() - started
+            fields: dict = {
+                "component": self._component,
+                "model": self._model,
+                "latency_ms": round(elapsed_s * 1000, 3),
+                "streaming": True,
+            }
+            for key in ("job_id", "session_id", "task_id", "step_id"):
+                if key in meta:
+                    fields[key] = meta[key]
+            logger.info("llm_stream_latency", **fields)
 
     def open_cache_session(
         self, job_id: str, static_blocks: List[PromptBlock]

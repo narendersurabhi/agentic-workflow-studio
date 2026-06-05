@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 try:
     import boto3 as _boto3
@@ -163,6 +163,71 @@ class BedrockAnthropicProvider(LLMProvider):
             cached_input_tokens=0,
             cache_creation_tokens=0,
         )
+
+    def stream_request(self, request: LLMRequest) -> Iterator[str]:
+        """Stream response tokens via Bedrock invoke_model_with_response_stream."""
+        blocks = request.prompt_blocks or [PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)]
+        content: List[Dict[str, Any]] = [
+            {"type": "text", "text": block.text}
+            for block in blocks if block.text
+        ]
+        if not content:
+            raise LLMProviderError(
+                f"BedrockAnthropicProvider no non-empty prompt blocks ({self._error_context()})"
+            )
+
+        thinking_enabled = (
+            request.reasoning_effort is not None
+            and request.reasoning_effort != "none"
+        )
+        budget = self._THINKING_BUDGETS.get(request.reasoning_effort or "", 0)
+
+        body: Dict[str, Any] = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": request.max_output_tokens or self.max_output_tokens,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if thinking_enabled and budget:
+            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        if request.system_prompt:
+            body["system"] = request.system_prompt
+        if not thinking_enabled:
+            temp = request.temperature if request.temperature is not None else self.temperature
+            if temp is not None:
+                body["temperature"] = temp
+
+        try:
+            raw = self.client.invoke_model_with_response_stream(
+                modelId=self.model_id,
+                body=json.dumps(body),
+                contentType="application/json",
+                accept="application/json",
+            )
+        except Exception as exc:
+            if is_llm_unavailable_error(exc):
+                raise LLMUnavailableError(
+                    f"Bedrock API unavailable ({self._error_context()}): {exc}"
+                ) from exc
+            raise LLMProviderError(
+                f"Bedrock API error ({self._error_context()}): {exc}"
+            ) from exc
+
+        event_stream = raw.get("body")
+        if event_stream is None:
+            raise LLMProviderError(
+                f"Bedrock streaming response has no body ({self._error_context()})"
+            )
+        for event in event_stream:
+            chunk = event.get("chunk")
+            if not chunk:
+                continue
+            chunk_data = json.loads(chunk.get("bytes", b"{}"))
+            if chunk_data.get("type") == "content_block_delta":
+                delta = chunk_data.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        yield text
 
     def open_cache_session(
         self,
