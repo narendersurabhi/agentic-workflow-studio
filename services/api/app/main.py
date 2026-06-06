@@ -18138,6 +18138,8 @@ def create_chat_message_stream(
     def _stream_callback(text: str) -> None:
         chunk_queue.put(("token", text))
 
+    _t_request = time.perf_counter()
+
     def _run_turn() -> None:
         _stream_callback_local.callback = _stream_callback
         try:
@@ -18158,9 +18160,16 @@ def create_chat_message_stream(
     worker.start()
 
     def _generate() -> Generator[str, None, None]:
+        _first = True
         while True:
             kind, payload = chunk_queue.get()
             if kind == "token":
+                if _first:
+                    logger.info(
+                        "chat_sse_first_token",
+                        extra={"total_ms": round((time.perf_counter() - _t_request) * 1000, 1)},
+                    )
+                    _first = False
                 yield f"data: {json.dumps({'type': 'token', 'text': payload})}\n\n"
             elif kind == "done":
                 worker.join()
