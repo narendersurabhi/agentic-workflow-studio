@@ -974,6 +974,9 @@ capabilities:
         output_format: [output_format, format, target_format]
       chat_field_examples:
         tone: [practical, concise, technical, formal, conversational, executive]
+      chat_thread_hints:
+        action_tokens: [create, generate, write, make, export, save, produce, build]
+        artifact_tokens: [document, documents, doc, docs, docx, word, pdf, report, summary, guide, readme, spec, draft, file]
     enabled: true
     adapters:
       - type: tool
