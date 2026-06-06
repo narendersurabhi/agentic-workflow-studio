@@ -1,11 +1,12 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import StudioWorkbenchIcon from "../features/studio/StudioWorkbenchIcon";
 import { PRIMARY_APP_NAV_ITEMS, type AppScreenId } from "../lib/app-navigation";
-import { useAppTheme } from "../lib/theme";
+import { SHELL_THEMES, useAppTheme, type ShellTheme } from "../lib/theme";
 import { useAuth } from "../lib/auth";
 
 export type AppBreadcrumb = {
@@ -65,6 +66,77 @@ function ThemeModeIcon({
   );
 }
 
+function ThemePicker() {
+  const { shellTheme, setShellTheme } = useAppTheme();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const active = SHELL_THEMES.find((t) => t.id === shellTheme) ?? SHELL_THEMES[0];
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((p) => !p)}
+        className="inline-flex items-center gap-2 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-surface-2"
+        aria-label="Change theme"
+        title="Change theme"
+      >
+        {/* swatch preview of current theme */}
+        <span
+          className="h-3.5 w-3.5 rounded-full border border-white/20 shrink-0"
+          style={{ background: active.swatch }}
+        />
+        {active.label}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-2 w-52 overflow-hidden rounded-2xl border border-white/20 bg-slate-900 p-2 shadow-[0_16px_40px_rgba(0,0,0,0.55)]">
+          <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            Theme
+          </p>
+          <div className="grid grid-cols-3 gap-2">
+            {SHELL_THEMES.map((t) => {
+              const isActive = t.id === shellTheme;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    setShellTheme(t.id as ShellTheme);
+                    setOpen(false);
+                  }}
+                  className={`group flex flex-col items-center gap-1.5 rounded-xl p-2 transition ${
+                    isActive ? "bg-white/10" : "hover:bg-white/5"
+                  }`}
+                  title={t.label}
+                >
+                  <span
+                    className={`h-8 w-8 rounded-full border-2 shadow-sm transition ${
+                      isActive ? "border-sky-400 scale-110" : "border-white/20 group-hover:border-white/40"
+                    }`}
+                    style={{ background: t.swatch }}
+                  />
+                  <span className="text-[10px] font-medium text-slate-300">{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AppShell({
   activeScreen,
   title,
@@ -73,9 +145,9 @@ export default function AppShell({
   children,
   contentClassName = "px-4 py-4",
 }: AppShellProps) {
-  const { mounted, theme, toggleTheme } = useAppTheme();
-  const { user, logout } = useAuth();
+  const { mounted, theme, shellTheme, toggleTheme } = useAppTheme();
   const isLightTheme = mounted ? theme === "light" : false;
+  const { user, logout } = useAuth();
 
   const userInitials = user
     ? user.display_name
@@ -86,11 +158,11 @@ export default function AppShell({
         .slice(0, 2)
     : "";
 
+  const shellClass = mounted ? `shell-theme-${shellTheme}` : "shell-theme-ocean";
+
   return (
     <div
-      className={`app-shell -mx-6 -my-8 min-h-screen text-text-hi ${
-        isLightTheme ? "app-shell-light" : "app-shell-dark"
-      }`}
+      className={`app-shell -mx-6 -my-8 min-h-screen text-text-hi ${shellClass}`}
       data-app-theme={mounted ? theme : "dark"}
     >
       <div className="min-h-screen bg-gradient-shell">
@@ -137,8 +209,9 @@ export default function AppShell({
                 aria-label={isLightTheme ? "Switch to dark mode" : "Switch to light mode"}
               >
                 <ThemeModeIcon theme={isLightTheme ? "light" : "dark"} className="h-4 w-4" />
-                {isLightTheme ? "Dark Mode" : "Light Mode"}
+                {isLightTheme ? "Dark" : "Light"}
               </button>
+              <ThemePicker />
               {actions}
               {user && (
                 <div className="flex items-center gap-2">

@@ -156,6 +156,17 @@
   background: linear-gradient(135deg, #435365, #55697c);
 }
 
+/* Named shell themes */
+.shell-theme-ocean    { background: linear-gradient(135deg, #435365, #55697c); }
+.shell-theme-midnight { background: linear-gradient(135deg, #0d1117, #1a2233); }
+.shell-theme-slate    { background: linear-gradient(135deg, #0f172a, #1e293b); }
+.shell-theme-forest   { background: linear-gradient(135deg, #0a1f0e, #162a1c); }
+.shell-theme-dusk     { background: linear-gradient(135deg, #1a1025, #26183a); }
+.shell-theme-ember    { background: linear-gradient(135deg, #1a0e08, #2c1a10); }
+.shell-theme-cloud    { background: linear-gradient(135deg, #e1e9f2, #f5f8fc); }
+.shell-theme-sand     { background: linear-gradient(135deg, #f5f0e8, #ede5d8); }
+.shell-theme-rose     { background: linear-gradient(135deg, #fdf2f4, #fce7ec); }
+
 .font-body {
   font-family: var(--font-body), "Helvetica Neue", sans-serif;
 }
