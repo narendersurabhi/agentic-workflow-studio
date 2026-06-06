@@ -4893,27 +4893,31 @@ def _route_chat_turn(
     # message also has execution-like tokens — so _capability_offer_hint can still
     # inject a capability offer when relevant. Pure chat questions skip even that.
     if not pending_clarification and _is_question_turn(content):
+        # Always build capability evidence for question turns — the vector search (~50-150ms)
+        # is the only way to detect RAG grounding need and non-RAG capability offers.
+        # We never call the boundary LLM here, so even "conversational-looking" questions
+        # like "what does our docs say about X?" correctly reach RAG.
         _q_evidence: chat_contracts.ChatBoundaryEvidence | None = None
-        if not _looks_like_conversational_turn(content):
-            try:
-                _t_evidence = time.perf_counter()
-                _q_evidence = _build_chat_boundary_evidence(
-                    content=content,
-                    candidate_goal=candidate_goal,
-                    session_metadata=session_metadata,
-                    merged_context=merged_context,
-                )
-                logger.info(
-                    "chat_turn_question_boundary_evidence",
-                    extra={
-                        "evidence_ms": round((time.perf_counter() - _t_evidence) * 1000, 1),
-                        "top_cap": _q_evidence.top_capabilities[0].capability_id if _q_evidence.top_capabilities else None,
-                        "top_score": round(float(_q_evidence.top_capabilities[0].score or 0.0), 3) if _q_evidence.top_capabilities else None,
-                        "signal_strength": _q_evidence.execution_signal_strength,
-                    },
-                )
-            except Exception:  # noqa: BLE001
-                pass
+        try:
+            _t_evidence = time.perf_counter()
+            _q_evidence = _build_chat_boundary_evidence(
+                content=content,
+                candidate_goal=candidate_goal,
+                session_metadata=session_metadata,
+                merged_context=merged_context,
+            )
+            logger.info(
+                "chat_turn_question_boundary_evidence",
+                extra={
+                    "evidence_ms": round((time.perf_counter() - _t_evidence) * 1000, 1),
+                    "top_cap": _q_evidence.top_capabilities[0].capability_id if _q_evidence.top_capabilities else None,
+                    "top_score": round(float(_q_evidence.top_capabilities[0].score or 0.0), 3) if _q_evidence.top_capabilities else None,
+                    "signal_strength": _q_evidence.execution_signal_strength,
+                    "conversational": _looks_like_conversational_turn(content),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
         # Knowledge-seeking question: top candidate is rag.retrieve with high confidence →
         # retrieve and synthesize inline so the answer is grounded in indexed documents.
