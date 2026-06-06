@@ -3084,6 +3084,15 @@ def _capability_wants_grounded_synthesis(capability_id: str) -> bool:
 def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
     arguments = _enrich_memory_arguments(plan.capability_id, plan.arguments, plan.merged_context)
     label = plan.capability_id.replace(".", " ").replace("_", " ").title()
+    _t_tool_start = time.perf_counter()
+    logger.info(
+        "chat_tool_call_start",
+        extra={
+            "capability_id": plan.capability_id,
+            "argument_keys": sorted(arguments.keys()),
+            "session_id": ctx.record.id,
+        },
+    )
     ctx.emit_progress("tool_start", {"capability": plan.capability_id, "label": f"Running {label}"})
     try:
         direct_result = ctx.agent.run_direct_capability(
@@ -3095,8 +3104,17 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
             context_json=plan.merged_context,
             priority=ctx.request.priority,
         )
+        _tool_exec_ms = round((time.perf_counter() - _t_tool_start) * 1000, 1)
         created_job = direct_result.job
         if direct_result.error:
+            logger.warning(
+                "chat_tool_call_error",
+                extra={
+                    "capability_id": plan.capability_id,
+                    "exec_ms": _tool_exec_ms,
+                    "error": direct_result.error,
+                },
+            )
             content = (
                 f"I could not complete that directly in chat. One-step run failed: {direct_result.error}"
             )
@@ -3114,6 +3132,17 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
         direct_output = (
             dict(direct_result.output) if isinstance(direct_result.output, Mapping) else None
         )
+        _match_count = len(direct_output.get("matches") or []) if direct_output else 0
+        logger.info(
+            "chat_tool_call_done",
+            extra={
+                "capability_id": direct_result.capability_id or plan.capability_id,
+                "tool_name": direct_result.tool_name,
+                "exec_ms": _tool_exec_ms,
+                "output_keys": sorted(direct_output.keys()) if direct_output else [],
+                "match_count": _match_count,
+            },
+        )
         ctx.emit_progress("tool_done", {
             "capability": direct_result.capability_id or plan.capability_id,
             "label": f"{label} complete",
@@ -3121,18 +3150,56 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
         })
         content = str(direct_result.assistant_response or plan.assistant_content).strip()
         matches = (direct_output or {}).get("matches") if direct_output else None
+        wants_synthesis = _capability_wants_grounded_synthesis(plan.capability_id)
         if (
             matches
             and isinstance(matches, list)
             and ctx.chat.rag_synthesize_callback is not None
-            and _capability_wants_grounded_synthesis(plan.capability_id)
+            and wants_synthesis
         ):
+            _t_synth = time.perf_counter()
+            logger.info(
+                "chat_tool_rag_synthesis_start",
+                extra={
+                    "capability_id": plan.capability_id,
+                    "match_count": len(matches),
+                },
+            )
             try:
                 synthesized = ctx.chat.rag_synthesize_callback(ctx.content, matches)
                 if synthesized:
                     content = synthesized
+                logger.info(
+                    "chat_tool_rag_synthesis_done",
+                    extra={
+                        "capability_id": plan.capability_id,
+                        "synth_ms": round((time.perf_counter() - _t_synth) * 1000, 1),
+                        "content_len": len(content),
+                    },
+                )
             except Exception:  # noqa: BLE001
-                pass
+                logger.warning(
+                    "chat_tool_rag_synthesis_failed",
+                    extra={
+                        "capability_id": plan.capability_id,
+                        "synth_ms": round((time.perf_counter() - _t_synth) * 1000, 1),
+                    },
+                    exc_info=True,
+                )
+        elif matches and isinstance(matches, list) and not wants_synthesis:
+            logger.debug(
+                "chat_tool_rag_synthesis_skipped",
+                extra={"capability_id": plan.capability_id, "reason": "rag_grounded_synthesis_not_declared"},
+            )
+        logger.info(
+            "chat_tool_call_total",
+            extra={
+                "capability_id": plan.capability_id,
+                "total_ms": round((time.perf_counter() - _t_tool_start) * 1000, 1),
+                "rag_grounded": wants_synthesis and bool(matches),
+                "content_len": len(content),
+            },
+        )
         clear_pending_clarification_state(
             ctx.session_metadata,
             cleared_keys=ctx.cleared_session_keys,
@@ -3153,6 +3220,15 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
             direct_output=direct_output,
         )
     except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "chat_tool_call_exception",
+            extra={
+                "capability_id": plan.capability_id,
+                "total_ms": round((time.perf_counter() - _t_tool_start) * 1000, 1),
+                "exc": str(exc),
+            },
+            exc_info=True,
+        )
         content = f"I could not complete that directly in chat. One-step run failed: {exc}"
         return TurnResult(
             assistant_content=content,

@@ -4896,27 +4896,96 @@ def _route_chat_turn(
         _q_evidence: chat_contracts.ChatBoundaryEvidence | None = None
         if not _looks_like_conversational_turn(content):
             try:
+                _t_evidence = time.perf_counter()
                 _q_evidence = _build_chat_boundary_evidence(
                     content=content,
                     candidate_goal=candidate_goal,
                     session_metadata=session_metadata,
                     merged_context=merged_context,
                 )
+                logger.info(
+                    "chat_turn_question_boundary_evidence",
+                    extra={
+                        "evidence_ms": round((time.perf_counter() - _t_evidence) * 1000, 1),
+                        "top_cap": _q_evidence.top_capabilities[0].capability_id if _q_evidence.top_capabilities else None,
+                        "top_score": round(float(_q_evidence.top_capabilities[0].score or 0.0), 3) if _q_evidence.top_capabilities else None,
+                        "signal_strength": _q_evidence.execution_signal_strength,
+                    },
+                )
             except Exception:  # noqa: BLE001
                 pass
+
+        # Knowledge-seeking question: top candidate is rag.retrieve with high confidence →
+        # retrieve and synthesize inline so the answer is grounded in indexed documents.
+        _q_rag_content: str = ""
+        if (
+            _q_evidence is not None
+            and _q_evidence.top_capabilities
+            and _q_evidence.top_capabilities[0].capability_id == "rag.retrieve"
+            and float(_q_evidence.top_capabilities[0].score or 0.0) >= 0.62
+        ):
+            _t_rag = time.perf_counter()
+            try:
+                logger.info(
+                    "chat_turn_rag_question_retrieve_start",
+                    extra={
+                        "cap_score": round(float(_q_evidence.top_capabilities[0].score or 0.0), 3),
+                        "query_len": len(content),
+                    },
+                )
+                _rag_result = _rag_retriever_request_json(
+                    "/retrieve",
+                    method="POST",
+                    body={"query": content, "top_k": 5, "min_score": 0.5, "include_text": True},
+                    timeout_s=8.0,
+                )
+                _rag_matches = (
+                    _rag_result.get("matches")
+                    if isinstance(_rag_result, dict)
+                    else None
+                )
+                logger.info(
+                    "chat_turn_rag_question_retrieved",
+                    extra={
+                        "retrieve_ms": round((time.perf_counter() - _t_rag) * 1000, 1),
+                        "match_count": len(_rag_matches) if isinstance(_rag_matches, list) else 0,
+                        "top_match_score": round(float((_rag_matches[0].get("score") or 0.0) if _rag_matches else 0.0), 3),
+                    },
+                )
+                if _rag_matches and isinstance(_rag_matches, list):
+                    _t_synth = time.perf_counter()
+                    _q_rag_content = _rag_synthesize(content, _rag_matches)
+                    logger.info(
+                        "chat_turn_rag_question_synthesized",
+                        extra={
+                            "synth_ms": round((time.perf_counter() - _t_synth) * 1000, 1),
+                            "total_rag_ms": round((time.perf_counter() - _t_rag) * 1000, 1),
+                            "content_len": len(_q_rag_content),
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "chat_turn_rag_question_retrieval_failed",
+                    extra={"rag_ms": round((time.perf_counter() - _t_rag) * 1000, 1)},
+                    exc_info=True,
+                )
+
         _q_boundary = chat_contracts.ChatBoundaryDecision(
             decision=chat_contracts.ChatBoundaryDecisionType.chat_reply,
             confidence=0.95,
-            reason_code="question_fast_path",
+            reason_code="rag_question_fast_path" if _q_rag_content else "question_fast_path",
             evidence=_q_evidence,
         )
         logger.info(
             "chat_turn_question_fast_path",
-            extra={"fast_exit_ms": round((time.perf_counter() - _t0) * 1000, 1)},
+            extra={
+                "fast_exit_ms": round((time.perf_counter() - _t0) * 1000, 1),
+                "rag_grounded": bool(_q_rag_content),
+            },
         )
         return _attach_chat_boundary_decision(
             _finalize_chat_turn_plan(
-                _chat_response_turn_plan(goal=content.strip(), assistant_content=""),
+                _chat_response_turn_plan(goal=content.strip(), assistant_content=_q_rag_content),
                 content=content,
                 candidate_goal=candidate_goal,
                 merged_context=merged_context,
