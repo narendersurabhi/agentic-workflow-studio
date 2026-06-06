@@ -18356,6 +18356,36 @@ def auth_logout(request: Request) -> Dict[str, Any]:
     return {"ok": True}
 
 
+@app.get("/auth/me/preferences")
+def get_user_preferences(request: Request, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    session = getattr(request.state, "auth_user", None)
+    if not session:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    user = db.query(UserRecord).filter(UserRecord.id == session["user_id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    return dict(user.preferences_json or {})
+
+
+@app.patch("/auth/me/preferences")
+def update_user_preferences(
+    body: Dict[str, Any],
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    session = getattr(request.state, "auth_user", None)
+    if not session:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    user = db.query(UserRecord).filter(UserRecord.id == session["user_id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    merged = dict(user.preferences_json or {})
+    merged.update(body)
+    user.preferences_json = merged
+    db.commit()
+    return merged
+
+
 @app.post("/chat/sessions", response_model=chat_contracts.ChatSession)
 def create_chat_session(
     request: chat_contracts.ChatSessionCreate,
@@ -20599,6 +20629,30 @@ def search_semantic_memory(
         "matches": matches,
         "user_id": user_id,
     }
+
+
+@app.get("/rag/collections")
+def list_rag_collections() -> dict[str, Any]:
+    result = _rag_retriever_request_json("/collections", method="GET", timeout_s=10.0)
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="rag_retriever_invalid_collections_response")
+    return result
+
+
+@app.post("/rag/collections/ensure")
+def ensure_rag_collection(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    collection_name = str(payload.get("collection_name") or "").strip()
+    if not collection_name:
+        raise HTTPException(status_code=400, detail="collection_name_required")
+    result = _rag_retriever_request_json(
+        "/collections/ensure",
+        method="POST",
+        body={"collection_name": collection_name, "ensure_collection": True},
+        timeout_s=15.0,
+    )
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="rag_retriever_invalid_ensure_response")
+    return result
 
 
 @app.get("/rag/documents")
