@@ -724,6 +724,47 @@ type ChatAssistantAction = {
   context_json?: Record<string, unknown>;
 };
 
+type ToolStepItem = {
+  capability: string;
+  label: string;
+  status: "running" | "done";
+  result?: Record<string, unknown>;
+};
+
+function ToolProgressCard({
+  intent,
+  steps,
+}: {
+  intent?: string;
+  steps: ToolStepItem[];
+}) {
+  if (!intent && steps.length === 0) return null;
+  const anyRunning = steps.some((s) => s.status === "running");
+  return (
+    <div className="mb-2 rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2.5 text-[12px] text-text-sky-token">
+      {intent && steps.length === 0 && (
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
+          <span>{intent}</span>
+        </div>
+      )}
+      {steps.map((step) => (
+        <div key={step.capability} className="flex items-center gap-2 py-0.5">
+          {step.status === "running" ? (
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
+          ) : (
+            <span className="text-emerald-400">✓</span>
+          )}
+          <span className={step.status === "done" ? "text-text-md" : ""}>{step.label}</span>
+        </div>
+      ))}
+      {anyRunning && (
+        <div className="mt-1 text-[11px] text-text-lo">Working…</div>
+      )}
+    </div>
+  );
+}
+
 function MarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
   if (!content) return null;
   // During streaming show plain text to avoid flicker from partial parse trees
@@ -6531,6 +6572,13 @@ const openTemplateModal = (template: Template) => {
       // Append an empty assistant bubble immediately so the user sees activity.
       const streamingMsgId = `streaming-${Date.now()}`;
       const resolvedSessionId = session.id;
+      type ToolStep = {
+        capability: string;
+        label: string;
+        status: "running" | "done";
+        result?: Record<string, unknown>;
+      };
+      let toolSteps: ToolStep[] = [];
       setChatSession((current) =>
         current
           ? appendChatMessage(current, {
@@ -6588,6 +6636,10 @@ const openTemplateModal = (template: Template) => {
             workflow_run?: Record<string, unknown> | null;
             user_message?: ChatMessage;
             assistant_message?: ChatMessage;
+            // tool progress events
+            label?: string;
+            capability?: string;
+            result?: Record<string, unknown>;
           };
           let event: SSEEvent;
           try {
@@ -6595,7 +6647,60 @@ const openTemplateModal = (template: Template) => {
           } catch {
             continue;
           }
-          if (event.type === "token" && event.text) {
+          if (event.type === "tool_intent" && event.label) {
+            const intentLabel = event.label;
+            setChatSession((current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === streamingMsgId
+                        ? { ...m, metadata: { ...m.metadata, toolIntent: intentLabel, toolSteps: [] } }
+                        : m
+                    ),
+                  }
+                : current
+            );
+          } else if (event.type === "tool_start" && event.capability) {
+            const step: ToolStep = {
+              capability: event.capability,
+              label: event.label ?? event.capability,
+              status: "running",
+            };
+            toolSteps = [...toolSteps.filter((s) => s.capability !== event.capability), step];
+            const captured = [...toolSteps];
+            setChatSession((current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === streamingMsgId
+                        ? { ...m, metadata: { ...m.metadata, toolSteps: captured } }
+                        : m
+                    ),
+                  }
+                : current
+            );
+          } else if (event.type === "tool_done" && event.capability) {
+            toolSteps = toolSteps.map((s) =>
+              s.capability === event.capability
+                ? { ...s, status: "done" as const, result: event.result }
+                : s
+            );
+            const captured = [...toolSteps];
+            setChatSession((current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === streamingMsgId
+                        ? { ...m, metadata: { ...m.metadata, toolSteps: captured } }
+                        : m
+                    ),
+                  }
+                : current
+            );
+          } else if (event.type === "token" && event.text) {
             streamedText += event.text;
             const captured = streamedText;
             setChatSession((current) =>
@@ -7355,6 +7460,10 @@ const openTemplateModal = (template: Template) => {
                       <span className="text-text-lo">{formatTimestamp(message.created_at)}</span>
                     </div>
                     <div className="mt-2">
+                      <ToolProgressCard
+                        intent={message.metadata?.toolIntent as string | undefined}
+                        steps={(message.metadata?.toolSteps as ToolStepItem[] | undefined) ?? []}
+                      />
                       <MarkdownContent
                         content={message.content}
                         streaming={Boolean(message.metadata?.streaming)}

@@ -119,6 +119,7 @@ class ChatServiceRuntime:
     normalize_submit_context: Callable[..., "ChatSubmitNormalizationResult | None"] | None = None
     is_chat_only_correction: Callable[[str], bool] | None = None
     defer_pending_clarification_mapping: bool = False
+    progress_callback: Callable[[str, dict], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,7 @@ class ChatRuntime:
     normalize_submit_context: Callable[..., "ChatSubmitNormalizationResult | None"] | None = None
     is_chat_only_correction: Callable[[str], bool] | None = None
     defer_pending_clarification_mapping: bool = False
+    progress_callback: Callable[[str, dict], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -212,6 +214,7 @@ def _decompose_runtime(runtime: ChatServiceRuntime) -> tuple[ChatRuntime, AgentR
         normalize_submit_context=runtime.normalize_submit_context,
         is_chat_only_correction=runtime.is_chat_only_correction,
         defer_pending_clarification_mapping=runtime.defer_pending_clarification_mapping,
+        progress_callback=runtime.progress_callback,
     )
     agent = AgentRuntime(
         create_job=runtime.create_job,
@@ -313,6 +316,14 @@ class TurnContext:
     exit_pending_to_chat: bool = False
     pre_route_normalization: ChatSubmitNormalizationResult | None = None
     clarification_mapping: dict[str, Any] | None = None
+
+    def emit_progress(self, kind: str, payload: dict) -> None:
+        cb = self.chat.progress_callback
+        if cb is not None:
+            try:
+                cb(kind, payload)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 @dataclass
@@ -2881,6 +2892,8 @@ def _execute_run_workflow(plan: RunWorkflowPlan, ctx: TurnContext) -> TurnResult
 
 def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
     arguments = _enrich_memory_arguments(plan.capability_id, plan.arguments, plan.merged_context)
+    label = plan.capability_id.replace(".", " ").replace("_", " ").title()
+    ctx.emit_progress("tool_start", {"capability": plan.capability_id, "label": f"Running {label}"})
     try:
         direct_result = ctx.agent.run_direct_capability(
             db=ctx.db,
@@ -2910,6 +2923,11 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
         direct_output = (
             dict(direct_result.output) if isinstance(direct_result.output, Mapping) else None
         )
+        ctx.emit_progress("tool_done", {
+            "capability": direct_result.capability_id or plan.capability_id,
+            "label": f"{label} complete",
+            **({"result": direct_output} if direct_output else {}),
+        })
         content = str(direct_result.assistant_response or plan.assistant_content).strip()
         clear_pending_clarification_state(
             ctx.session_metadata,
@@ -3318,6 +3336,11 @@ def _chat_thread_hints() -> ChatThreadHints:
     _CHAT_THREAD_HINTS_CACHE = result
     _CHAT_THREAD_HINTS_CACHE_KEY = cache_key
     return result
+
+
+def get_chat_thread_hints() -> ChatThreadHints:
+    """Public accessor for use by the routing layer."""
+    return _chat_thread_hints()
 
 
 def _tokens_from_sequence(value: Any) -> set[str]:

@@ -878,6 +878,9 @@ _chat_deep_response_provider: LLMProvider | None = (
 # so the thread-local is safely isolated per request.
 _stream_callback_local: threading.local = threading.local()
 _worker_start_local: threading.local = threading.local()
+# Tool-progress events (tool_intent / tool_start / tool_done) are pushed into
+# the SSE queue via this thread-local callable.  Shape: (kind: str, payload: dict).
+_tool_progress_callback_local: threading.local = threading.local()
 
 
 def _build_chat_pending_correction_provider() -> LLMProvider | None:
@@ -3379,13 +3382,17 @@ def _looks_like_conversational_turn(content: str) -> bool:
     The boundary LLM is only invoked when this returns False.  We default to True
     (skip the boundary call) unless unambiguous execution signals are present.
     Keeping this gate permissive dramatically reduces TTFT for ordinary chat messages.
+
+    Two-level check:
+    1. Hardcoded phrases that unambiguously mean system execution (deploy, run workflow, etc.)
+    2. Capability-registry signal: intent verb + known capability artifact token — lets
+       registered capabilities self-declare their routing triggers via YAML without
+       requiring changes here for each new capability.
     """
     lowered = str(content or "").strip().lower()
     if not lowered:
         return True
-    # Tokens that can only appear in a genuine workflow/system execution request.
-    # Intentionally narrow — broad verbs like "create", "build", "run" are excluded
-    # because they appear in conversational questions ("how do I run this?").
+    # Level 1 — phrases that can only appear in a genuine workflow/system execution request.
     execution_tokens = (
         "deploy ",
         "port forward",
@@ -3410,7 +3417,26 @@ def _looks_like_conversational_turn(content: str) -> bool:
         "start the job",
         "submit the job",
     )
-    return not any(token in lowered for token in execution_tokens)
+    if any(token in lowered for token in execution_tokens):
+        return False
+    # Level 2 — capability-registry signal.
+    # If the message contains an intent verb AND a known capability artifact token,
+    # route to the boundary LLM so it can decide with full capability evidence.
+    # "how do I create a document?" still reaches boundary LLM, but boundary LLM
+    # correctly returns chat_reply for questions — acceptable tradeoff.
+    _INTENT_VERBS = frozenset({
+        "create", "make", "generate", "write", "export", "save",
+        "build", "produce", "render", "convert", "send", "run", "start",
+    })
+    message_tokens = frozenset(re.findall(r"[a-z0-9]+", lowered))
+    if message_tokens & _INTENT_VERBS:
+        try:
+            hints = chat_service.get_chat_thread_hints()
+            if message_tokens & hints.artifact_tokens:
+                return False
+        except Exception:  # noqa: BLE001
+            pass
+    return True
 
 
 def _looks_like_execution_confirmation(content: str) -> bool:
@@ -4753,6 +4779,28 @@ def _normalized_intent_response_payload(
     return payload
 
 
+def _emit_tool_progress(kind: str, payload: dict) -> None:
+    cb = getattr(_tool_progress_callback_local, "callback", None)
+    if cb is not None:
+        try:
+            cb(kind, payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _tool_intent_label(candidate_goal: str, boundary: chat_contracts.ChatBoundaryDecision | None) -> str:
+    top = (
+        boundary.evidence.top_capabilities[0].capability_id
+        if boundary and boundary.evidence and boundary.evidence.top_capabilities
+        else ""
+    )
+    goal = str(candidate_goal or "").strip()
+    if top:
+        label = top.replace(".", " ").replace("_", " ").title()
+        return f"Working on: {label}"
+    return f"Working on: {goal[:60]}" if goal else "Working on it…"
+
+
 def _route_chat_turn(
     *,
     content: str,
@@ -4907,6 +4955,9 @@ def _route_chat_turn(
         chat_contracts.ChatBoundaryDecisionType.execution_request,
         chat_contracts.ChatBoundaryDecisionType.continue_pending,
     }:
+        _emit_tool_progress("tool_intent", {
+            "label": _tool_intent_label(candidate_goal, boundary),
+        })
         router_turn_plan = _enforce_boundary_clarification_guard(
             turn_plan=_route_chat_turn_with_router(
                 content=content,
@@ -6550,7 +6601,8 @@ def _generate_chat_response(
     system_prompt = (
         "You are the conversational assistant for an agent platform. "
         "Answer directly and stay in chat. "
-        "Do not claim to have executed tools, created jobs, or run workflows unless the system already did so. "
+        "Do not claim to have executed tools, triggered jobs, or run workflows unless the system already did so. "
+        "You can freely generate, draft, or compose any text content (documents, lists, summaries, code) directly in your response. "
         "Be concise, technically accurate, and grounded in the provided context. "
         "User profile, conversation history, and capability candidates are provided above in "
         "<user_profile>, <history>, and <candidates> XML sections when available."
@@ -7864,6 +7916,7 @@ def _extract_chat_clarification_path(content: str) -> str:
 
 
 def _chat_runtime() -> chat_service.ChatServiceRuntime:
+    progress_cb = getattr(_tool_progress_callback_local, "callback", None)
     return chat_service.ChatServiceRuntime(
         route_turn=_route_chat_turn,
         run_direct_capability=_run_chat_direct_capability,
@@ -7881,6 +7934,7 @@ def _chat_runtime() -> chat_service.ChatServiceRuntime:
         make_id=lambda: str(uuid.uuid4()),
         normalize_submit_context=_normalize_chat_submit_context,
         is_chat_only_correction=_looks_like_chat_only_correction,
+        progress_callback=progress_cb,
     )
 
 
@@ -18142,6 +18196,9 @@ def create_chat_message_stream(
     def _stream_callback(text: str) -> None:
         chunk_queue.put(("token", text))
 
+    def _progress_callback(kind: str, payload: dict) -> None:
+        chunk_queue.put((kind, payload))
+
     _t_request = time.perf_counter()
 
     def _run_turn() -> None:
@@ -18149,6 +18206,7 @@ def create_chat_message_stream(
         _worker_start_local.t = _t_worker
         logger.info("chat_worker_started", extra={"thread_start_ms": round((_t_worker - _t_request) * 1000, 1)})
         _stream_callback_local.callback = _stream_callback
+        _tool_progress_callback_local.callback = _progress_callback
         try:
             final_result[0] = chat_service.handle_turn(
                 db,
@@ -18161,6 +18219,7 @@ def create_chat_message_stream(
             error_result[0] = exc
         finally:
             _stream_callback_local.callback = None
+            _tool_progress_callback_local.callback = None
             chunk_queue.put(("done", None))
 
     worker = threading.Thread(target=_run_turn, daemon=True)
@@ -18178,6 +18237,8 @@ def create_chat_message_stream(
                     )
                     _first = False
                 yield f"data: {json.dumps({'type': 'token', 'text': payload})}\n\n"
+            elif kind in {"tool_intent", "tool_start", "tool_done"}:
+                yield f"data: {json.dumps({'type': kind, **payload})}\n\n"
             elif kind == "done":
                 worker.join()
                 exc = error_result[0]
