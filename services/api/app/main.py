@@ -877,6 +877,7 @@ _chat_deep_response_provider: LLMProvider | None = (
 # returning the full text. Each request runs in its own thread (FastAPI sync workers),
 # so the thread-local is safely isolated per request.
 _stream_callback_local: threading.local = threading.local()
+_worker_start_local: threading.local = threading.local()
 
 
 def _build_chat_pending_correction_provider() -> LLMProvider | None:
@@ -4761,6 +4762,9 @@ def _route_chat_turn(
     messages: Sequence[chat_contracts.ChatMessage] | None,
 ) -> dict[str, Any]:
     _t0 = time.perf_counter()
+    _t_worker = getattr(_worker_start_local, "t", None)
+    if _t_worker is not None:
+        logger.info("chat_route_entry", extra={"pre_route_ms": round((_t0 - _t_worker) * 1000, 1)})
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
     if CHAT_RESPONSE_MODE != "answer_or_handoff":
         return _route_chat_turn_legacy(
@@ -18141,6 +18145,9 @@ def create_chat_message_stream(
     _t_request = time.perf_counter()
 
     def _run_turn() -> None:
+        _t_worker = time.perf_counter()
+        _worker_start_local.t = _t_worker
+        logger.info("chat_worker_started", extra={"thread_start_ms": round((_t_worker - _t_request) * 1000, 1)})
         _stream_callback_local.callback = _stream_callback
         try:
             final_result[0] = chat_service.handle_turn(
