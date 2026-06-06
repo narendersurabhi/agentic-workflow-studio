@@ -2707,6 +2707,43 @@ def _resolve_tool_chain(
 
 def _execute_turn(plan: TurnPlan, ctx: TurnContext) -> TurnResult:
     """Dispatch to the executor for the given plan type."""
+    # ── capability-pick trace ─────────────────────────────────────────────────
+    if isinstance(plan, ToolCallPlan):
+        logger.info(
+            "chat_capability_picked",
+            extra={
+                "plan_type": "tool_call",
+                "capability_id": plan.capability_id,
+                "resolved_goal": (plan.resolved_goal or "")[:120],
+                "session_id": ctx.record.id,
+            },
+        )
+    elif isinstance(plan, ToolChainPlan):
+        logger.info(
+            "chat_capability_picked",
+            extra={
+                "plan_type": "tool_chain",
+                "capability_ids": [s.capability_id for s in plan.steps],
+                "resolved_goal": (plan.resolved_goal or "")[:120],
+                "session_id": ctx.record.id,
+            },
+        )
+    else:
+        plan_type = (
+            "ask_clarification" if isinstance(plan, AskClarificationPlan)
+            else "submit_job" if isinstance(plan, SubmitJobPlan)
+            else "run_workflow" if isinstance(plan, RunWorkflowPlan)
+            else "respond"
+        )
+        logger.info(
+            "chat_capability_picked",
+            extra={
+                "plan_type": plan_type,
+                "capability_id": None,
+                "session_id": ctx.record.id,
+            },
+        )
+    # ─────────────────────────────────────────────────────────────────────────
     if isinstance(plan, AskClarificationPlan):
         return _execute_ask_clarification(plan, ctx)
     if isinstance(plan, SubmitJobPlan):
