@@ -120,6 +120,7 @@ class ChatServiceRuntime:
     is_chat_only_correction: Callable[[str], bool] | None = None
     defer_pending_clarification_mapping: bool = False
     progress_callback: Callable[[str, dict], None] | None = None
+    rag_synthesize_callback: Callable[[str, list], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -3068,6 +3069,18 @@ def _execute_tool_chain(plan: ToolChainPlan, ctx: TurnContext) -> TurnResult:
     )
 
 
+def _capability_wants_grounded_synthesis(capability_id: str) -> bool:
+    """Return True if the capability declared rag_grounded_synthesis in its planner_hints."""
+    try:
+        registry = capability_registry.load_capability_registry()
+        spec = registry.get(capability_id)
+        if spec is not None:
+            return bool((spec.planner_hints or {}).get("rag_grounded_synthesis"))
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
     arguments = _enrich_memory_arguments(plan.capability_id, plan.arguments, plan.merged_context)
     label = plan.capability_id.replace(".", " ").replace("_", " ").title()
@@ -3107,6 +3120,19 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
             **({"result": direct_output} if direct_output else {}),
         })
         content = str(direct_result.assistant_response or plan.assistant_content).strip()
+        matches = (direct_output or {}).get("matches") if direct_output else None
+        if (
+            matches
+            and isinstance(matches, list)
+            and ctx.chat.rag_synthesize_callback is not None
+            and _capability_wants_grounded_synthesis(plan.capability_id)
+        ):
+            try:
+                synthesized = ctx.chat.rag_synthesize_callback(ctx.content, matches)
+                if synthesized:
+                    content = synthesized
+            except Exception:  # noqa: BLE001
+                pass
         clear_pending_clarification_state(
             ctx.session_metadata,
             cleared_keys=ctx.cleared_session_keys,

@@ -6701,6 +6701,7 @@ def _generate_chat_response(
     reasoning_effort: str | None = None,
     deep_response: bool = False,
     boundary_decision: Mapping[str, Any] | None = None,
+    rag_context: str | None = None,
 ) -> str:
     # Pick the provider: Sonnet escalation when requested + enabled + available,
     # otherwise fall through to the standard (Haiku) response provider.
@@ -6720,16 +6721,26 @@ def _generate_chat_response(
     component = "chat_deep_response" if sonnet_used else "chat_response"
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     capability_hint = _capability_offer_hint(content, boundary_decision)
-    system_prompt = (
-        "You are the conversational assistant for an agent platform. "
-        "Answer directly and stay in chat. "
-        "Do not claim to have executed tools, triggered jobs, or run workflows unless the system already did so. "
-        "You can freely generate, draft, or compose any text content (documents, lists, summaries, code) directly in your response. "
-        "Be concise, technically accurate, and grounded in the provided context. "
-        "User profile, conversation history, and capability candidates are provided above in "
-        "<user_profile>, <history>, and <candidates> XML sections when available."
-        + (f" {capability_hint}" if capability_hint else "")
-    )
+    if rag_context:
+        system_prompt = (
+            "You are the conversational assistant for an agent platform. "
+            "Answer the user's question using ONLY the retrieved context provided below. "
+            "Be concise, factually grounded, and cite the source by number when relevant. "
+            "If the retrieved context does not contain the answer, say so clearly."
+            f"\n\n<retrieved_context>\n{rag_context}\n</retrieved_context>"
+            + (f"\n\n{capability_hint}" if capability_hint else "")
+        )
+    else:
+        system_prompt = (
+            "You are the conversational assistant for an agent platform. "
+            "Answer directly and stay in chat. "
+            "Do not claim to have executed tools, triggered jobs, or run workflows unless the system already did so. "
+            "You can freely generate, draft, or compose any text content (documents, lists, summaries, code) directly in your response. "
+            "Be concise, technically accurate, and grounded in the provided context. "
+            "User profile, conversation history, and capability candidates are provided above in "
+            "<user_profile>, <history>, and <candidates> XML sections when available."
+            + (f" {capability_hint}" if capability_hint else "")
+        )
     stripped_context = {
         k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
     }
@@ -8047,6 +8058,31 @@ def _extract_chat_clarification_path(content: str) -> str:
     return path_like.group(1).strip() if path_like else ""
 
 
+def _rag_synthesize(query: str, chunks: list[dict]) -> str:
+    """Synthesize a grounded answer from retrieved RAG chunks using the LLM."""
+    context_lines: list[str] = []
+    for i, chunk in enumerate(chunks[:6], 1):
+        source = (
+            str(chunk.get("source_uri") or "").strip()
+            or str(chunk.get("document_id") or "").strip()
+            or f"chunk-{i}"
+        )
+        text = str(chunk.get("text") or "").strip()
+        if text:
+            context_lines.append(f"[{i}] Source: {source}\n{text}")
+    rag_context = "\n\n".join(context_lines) if context_lines else ""
+    if not rag_context:
+        return "I retrieved documents but found no usable text to answer your question."
+    return _generate_chat_response(
+        content=query,
+        candidate_goal=query,
+        merged_context=None,
+        messages=None,
+        fallback_response="I could not synthesize an answer from the retrieved context.",
+        rag_context=rag_context,
+    )
+
+
 def _chat_runtime() -> chat_service.ChatServiceRuntime:
     progress_cb = getattr(_tool_progress_callback_local, "callback", None)
     return chat_service.ChatServiceRuntime(
@@ -8067,6 +8103,7 @@ def _chat_runtime() -> chat_service.ChatServiceRuntime:
         normalize_submit_context=_normalize_chat_submit_context,
         is_chat_only_correction=_looks_like_chat_only_correction,
         progress_callback=progress_cb,
+        rag_synthesize_callback=_rag_synthesize,
     )
 
 

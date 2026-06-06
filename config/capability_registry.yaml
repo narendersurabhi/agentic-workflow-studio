@@ -746,6 +746,7 @@ capabilities:
         mode: rag_matches
         max_items: 5
         excerpt_chars: 180
+      rag_grounded_synthesis: true
     enabled: true
     adapters:
       - type: mcp
