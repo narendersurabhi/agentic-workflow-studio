@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiFetch, useAuth } from "../../lib/auth";
 
 import AppShell from "../../components/AppShell";
@@ -128,11 +129,19 @@ function ScopeComboBox({
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
+  const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
+  // Close on outside click
   useEffect(() => {
+    if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        triggerRef.current && !triggerRef.current.contains(target) &&
+        panelRef.current && !panelRef.current.contains(target)
+      ) {
         setOpen(false);
         setCreating(false);
         setNewName("");
@@ -141,7 +150,30 @@ function ScopeComboBox({
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  }, [open]);
+
+  // Reposition on scroll/resize while open
+  useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const update = () => {
+      if (triggerRef.current) setDropdownRect(triggerRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
+  const handleToggle = () => {
+    if (!open && triggerRef.current) {
+      setDropdownRect(triggerRef.current.getBoundingClientRect());
+    }
+    setOpen((prev) => !prev);
+    setCreating(false);
+  };
 
   const handleSelect = (option: string) => {
     if (option === CREATE_NEW_VALUE) {
@@ -177,102 +209,113 @@ function ScopeComboBox({
     (o, i, arr) => arr.indexOf(o) === i
   );
 
-  return (
-    <div ref={ref} className={fieldGroupClassName}>
-      <span className={fieldLabelClassName}>{label}</span>
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => {
-            setOpen((prev) => !prev);
-            setCreating(false);
-          }}
-          className={`${fieldInputClassName} flex items-center justify-between gap-2 text-left`}
-        >
-          <span className={value ? "text-text-hi" : "text-text-lo"}>
-            {value || placeholder || "—"}
-          </span>
-          <svg
-            className={`h-4 w-4 shrink-0 text-text-md transition-transform ${open ? "rotate-180" : ""}`}
-            viewBox="0 0 20 20"
-            fill="currentColor"
-          >
-            <path
-              fillRule="evenodd"
-              d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-              clipRule="evenodd"
-            />
-          </svg>
-        </button>
+  const dropdownStyle: React.CSSProperties = dropdownRect
+    ? {
+        position: "fixed",
+        top: dropdownRect.bottom + 4,
+        left: dropdownRect.left,
+        width: dropdownRect.width,
+        zIndex: 9999,
+      }
+    : { display: "none" };
 
-        {open && (
-          <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-2xl border border-subtle bg-surface-1 shadow-[0_8px_24px_rgba(0,0,0,0.25)]">
-            {creating ? (
-              <div className="p-3 space-y-2">
-                <input
-                  autoFocus
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleCreate();
-                    if (e.key === "Escape") { setCreating(false); setNewName(""); }
-                  }}
-                  placeholder={`New ${label.toLowerCase()} name…`}
-                  className="w-full rounded-xl border border-subtle bg-surface-2 px-3 py-2 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
-                />
-                {createError && (
-                  <p className="text-[11px] text-rose-400">{createError}</p>
-                )}
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleCreate()}
-                    className="rounded-xl border border-sky-300/30 bg-accent-sky px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-sky-token"
-                  >
-                    Create
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setCreating(false); setNewName(""); }}
-                    className="rounded-xl border border-subtle bg-surface-2 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-md"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <ul className="max-h-52 overflow-y-auto py-1">
-                {allOptions.map((option) => (
-                  <li key={option || "__empty__"}>
-                    <button
-                      type="button"
-                      onClick={() => handleSelect(option)}
-                      className={`w-full px-4 py-2.5 text-left text-sm transition hover:bg-surface-2 ${
-                        option === value
-                          ? "font-semibold text-text-hi"
-                          : option
-                          ? "text-text-md"
-                          : "italic text-text-lo"
-                      }`}
-                    >
-                      {option || "none (clear)"}
-                    </button>
-                  </li>
-                ))}
-                <li className="border-t border-subtle">
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(CREATE_NEW_VALUE)}
-                    className="w-full px-4 py-2.5 text-left text-sm text-text-sky-token transition hover:bg-surface-2"
-                  >
-                    + Create new…
-                  </button>
-                </li>
-              </ul>
-            )}
+  const panel = open && dropdownRect ? (
+    <div
+      ref={panelRef}
+      style={dropdownStyle}
+      className="overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
+    >
+      {creating ? (
+        <div className="p-3 space-y-2">
+          <input
+            autoFocus
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleCreate();
+              if (e.key === "Escape") { setCreating(false); setNewName(""); }
+            }}
+            placeholder={`New ${label.toLowerCase()} name…`}
+            className="w-full rounded-xl border border-white/20 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-sky-400/50 focus:outline-none"
+          />
+          {createError && (
+            <p className="text-[11px] text-rose-400">{createError}</p>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void handleCreate()}
+              className="rounded-xl border border-sky-400/40 bg-sky-500/20 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-300"
+            >
+              Create
+            </button>
+            <button
+              type="button"
+              onClick={() => { setCreating(false); setNewName(""); }}
+              className="rounded-xl border border-white/15 bg-slate-800 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300"
+            >
+              Cancel
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <ul className="max-h-52 overflow-y-auto py-1">
+          {allOptions.map((option) => (
+            <li key={option || "__empty__"}>
+              <button
+                type="button"
+                onClick={() => handleSelect(option)}
+                className={`w-full px-4 py-2.5 text-left text-sm transition hover:bg-slate-800 ${
+                  option === value
+                    ? "font-semibold text-slate-100"
+                    : option
+                    ? "text-slate-300"
+                    : "italic text-slate-500"
+                }`}
+              >
+                {option || "none (clear)"}
+              </button>
+            </li>
+          ))}
+          <li className="border-t border-white/10">
+            <button
+              type="button"
+              onClick={() => handleSelect(CREATE_NEW_VALUE)}
+              className="w-full px-4 py-2.5 text-left text-sm text-sky-400 transition hover:bg-slate-800"
+            >
+              + Create new…
+            </button>
+          </li>
+        </ul>
+      )}
+    </div>
+  ) : null;
+
+  return (
+    <div className={fieldGroupClassName}>
+      <span className={fieldLabelClassName}>{label}</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={handleToggle}
+        className={`${fieldInputClassName} flex items-center justify-between gap-2 text-left`}
+      >
+        <span className={value ? "text-text-hi" : "text-text-lo"}>
+          {value || placeholder || "—"}
+        </span>
+        <svg
+          className={`h-4 w-4 shrink-0 text-text-md transition-transform ${open ? "rotate-180" : ""}`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+      {typeof window !== "undefined" && createPortal(panel, document.body)}
     </div>
   );
 }
