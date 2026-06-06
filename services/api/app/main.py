@@ -6570,6 +6570,42 @@ def _response_reasoning_effort(turn_plan: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _capability_offer_hint(content: str, boundary_decision: Mapping[str, Any] | None) -> str:
+    """Return a system-prompt hint when the user asked a question about something the platform can do.
+
+    Empty string when not applicable (no hint injected).
+    """
+    if not boundary_decision:
+        return ""
+    lowered = str(content or "").strip().lower()
+    # Only trigger for questions — ends with ?, or starts with a question word.
+    _QUESTION_STARTERS = ("how", "what", "can you", "could you", "is there", "do you", "does", "can i", "would you")
+    is_question = lowered.endswith("?") or any(lowered.startswith(q) for q in _QUESTION_STARTERS)
+    if not is_question:
+        return ""
+    evidence = boundary_decision.get("evidence") or {}
+    signal_strength = str(evidence.get("execution_signal_strength") or "none").lower()
+    if signal_strength not in {"moderate", "strong"}:
+        return ""
+    top_caps = evidence.get("top_capabilities") or []
+    if not top_caps or not isinstance(top_caps, list):
+        return ""
+    top = top_caps[0] if isinstance(top_caps[0], Mapping) else {}
+    cap_id = str(top.get("capability_id") or "").strip()
+    cap_score = float(top.get("score") or 0.0)
+    if not cap_id or cap_score < 0.65:
+        return ""
+    registry = capability_registry.load_capability_registry()
+    spec = registry.capabilities.get(cap_id)
+    description = str(spec.description or cap_id).strip() if spec else cap_id
+    return (
+        f"The user asked a question about something this platform can do directly. "
+        f"Top matching capability: '{cap_id}' — {description}. "
+        f"After answering their question, offer to do it for them. "
+        f"Example: 'I can also do this for you directly — just say the word and I will.'"
+    )
+
+
 def _generate_chat_response(
     *,
     content: str,
@@ -6580,6 +6616,7 @@ def _generate_chat_response(
     session_metadata: Mapping[str, Any] | None = None,
     reasoning_effort: str | None = None,
     deep_response: bool = False,
+    boundary_decision: Mapping[str, Any] | None = None,
 ) -> str:
     # Pick the provider: Sonnet escalation when requested + enabled + available,
     # otherwise fall through to the standard (Haiku) response provider.
@@ -6598,6 +6635,7 @@ def _generate_chat_response(
         raise llm_provider.LLMUnavailableError("chat_response_provider_unavailable")
     component = "chat_deep_response" if sonnet_used else "chat_response"
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
+    capability_hint = _capability_offer_hint(content, boundary_decision)
     system_prompt = (
         "You are the conversational assistant for an agent platform. "
         "Answer directly and stay in chat. "
@@ -6606,6 +6644,7 @@ def _generate_chat_response(
         "Be concise, technically accurate, and grounded in the provided context. "
         "User profile, conversation history, and capability candidates are provided above in "
         "<user_profile>, <history>, and <candidates> XML sections when available."
+        + (f" {capability_hint}" if capability_hint else "")
     )
     stripped_context = {
         k: v for k, v in (merged_context or {}).items() if k not in _PROMPT_STABLE_CONTEXT_KEYS
@@ -6913,6 +6952,7 @@ def _finalize_chat_turn_plan(
         session_metadata=session_metadata,
         reasoning_effort=_response_reasoning_effort(finalized),
         deep_response=deep_response,
+        boundary_decision=boundary_decision if isinstance(boundary_decision, Mapping) else {},
     )
     finalized["response_generated"] = True
     return finalized
