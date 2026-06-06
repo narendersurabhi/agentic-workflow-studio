@@ -7,6 +7,7 @@ from enum import Enum
 import logging
 import os
 import re
+import time
 from typing import Any, Callable, Sequence
 
 from sqlalchemy.orm import Session
@@ -2256,7 +2257,9 @@ def _build_turn_context(
     user_id: str | None,
 ) -> TurnContext:
     """Validate session access, assemble all pre-routing state, and return TurnContext."""
+    _tc0 = time.perf_counter()
     record = db.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
+    _tc1 = time.perf_counter()
     if record is None:
         raise KeyError(session_id)
     if not _chat_session_access_allowed(record, user_id):
@@ -2298,7 +2301,9 @@ def _build_turn_context(
     turn_context_json = _sanitize_chat_context(
         _prepare_turn_context(request.context_json, session_metadata=session_metadata, content=content)
     )
+    _tc2 = time.perf_counter()
     messages = _message_records_for_session(db, record.id)
+    _tc3 = time.perf_counter()
     chat_messages = [_message_from_record(m) for m in messages]
     candidate_goal = (
         content.strip()
@@ -2306,6 +2311,7 @@ def _build_turn_context(
         else _candidate_goal(content, session_metadata, messages=chat_messages,
                              is_chat_only_correction=chat.is_chat_only_correction)
     )
+    _tc4 = time.perf_counter()
     context_envelope = context_service.build_chat_context_envelope(
         db=db,
         goal=candidate_goal,
@@ -2314,7 +2320,18 @@ def _build_turn_context(
         turn_context=turn_context_json,
         user_id=bound_user_id,
     )
+    _tc5 = time.perf_counter()
     merged_context = context_service.chat_submit_context_view(context_envelope)
+    logger.info(
+        "chat_build_context_timing",
+        extra={
+            "session_ms": round((_tc1 - _tc0) * 1000, 1),
+            "messages_ms": round((_tc3 - _tc2) * 1000, 1),
+            "envelope_ms": round((_tc5 - _tc4) * 1000, 1),
+            "total_build_ms": round((_tc5 - _tc0) * 1000, 1),
+            "session_id": session_id,
+        },
+    )
 
     # Apply pending clarification slot mapping (may update goal / context)
     pending_state_before_mapping = _parse_pending_clarification_state(session_metadata)
