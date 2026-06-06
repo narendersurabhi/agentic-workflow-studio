@@ -4976,16 +4976,27 @@ def _route_chat_turn(
             reason_code="rag_question_fast_path" if _q_rag_content else "question_fast_path",
             evidence=_q_evidence,
         )
+        # Inject boundary_decision into the base plan so _finalize_chat_turn_plan passes it
+        # to _generate_chat_response, enabling _capability_offer_hint to fire for question turns
+        # where the top candidate is a non-RAG capability (e.g. document.spec.generate).
+        _q_base_plan = _chat_response_turn_plan(goal=content.strip(), assistant_content=_q_rag_content)
+        _q_base_plan["boundary_decision"] = _q_boundary.model_dump(mode="json", exclude_none=True)
         logger.info(
             "chat_turn_question_fast_path",
             extra={
                 "fast_exit_ms": round((time.perf_counter() - _t0) * 1000, 1),
                 "rag_grounded": bool(_q_rag_content),
+                "capability_offer": bool(
+                    _q_evidence
+                    and _q_evidence.top_capabilities
+                    and _q_evidence.top_capabilities[0].capability_id != "rag.retrieve"
+                    and float(_q_evidence.top_capabilities[0].score or 0.0) >= 0.65
+                ),
             },
         )
         return _attach_chat_boundary_decision(
             _finalize_chat_turn_plan(
-                _chat_response_turn_plan(goal=content.strip(), assistant_content=_q_rag_content),
+                _q_base_plan,
                 content=content,
                 candidate_goal=candidate_goal,
                 merged_context=merged_context,
