@@ -2370,6 +2370,7 @@ def _build_turn_context(
     messages = _message_records_for_session(db, record.id)
     _tc3 = time.perf_counter()
     chat_messages = [_message_from_record(m) for m in messages]
+    _tc3a = time.perf_counter()
     candidate_goal = (
         content.strip()
         if restarted_pending_clarification
@@ -2394,6 +2395,8 @@ def _build_turn_context(
             "session_ms": round((_tc1 - _tc0) * 1000, 1),
             "gap1_ms": round((_tc2 - _tc1) * 1000, 1),
             "messages_ms": round((_tc3 - _tc2) * 1000, 1),
+            "convert_ms": round((_tc3a - _tc3) * 1000, 1),
+            "goal_ms": round((_tc4 - _tc3a) * 1000, 1),
             "gap2_ms": round((_tc4 - _tc3) * 1000, 1),
             "envelope_ms": round((_tc5 - _tc4) * 1000, 1),
             "total_build_ms": round((_tc5 - _tc0) * 1000, 1),
@@ -3206,7 +3209,9 @@ def _candidate_goal(
     threaded_goal = _execution_thread_candidate_goal(
         content,
         messages=messages,
-        is_chat_only_correction=is_chat_only_correction,
+        # Only check for chat-only corrections when there is an active pending
+        # clarification state — otherwise the LLM call is wasted on every turn.
+        is_chat_only_correction=is_chat_only_correction if pending_state is not None else None,
     )
     if threaded_goal:
         return threaded_goal
@@ -3266,6 +3271,16 @@ _CHAT_THREAD_HINTS_CACHE_KEY: int | None = None
 
 def _chat_thread_hints() -> ChatThreadHints:
     global _CHAT_THREAD_HINTS_CACHE, _CHAT_THREAD_HINTS_CACHE_KEY
+    # Check our own cache first — avoids calling load_capability_registry (which
+    # runs stat() on the YAML file) on every hot turn.
+    if _CHAT_THREAD_HINTS_CACHE is not None:
+        try:
+            registry = capability_registry.load_capability_registry()
+        except Exception:  # noqa: BLE001
+            return _CHAT_THREAD_HINTS_CACHE
+        if _CHAT_THREAD_HINTS_CACHE_KEY == id(registry):
+            return _CHAT_THREAD_HINTS_CACHE
+
     action_tokens = set(_BOOTSTRAP_EXECUTION_ACTION_TOKENS)
     artifact_tokens = set(_BOOTSTRAP_EXECUTION_ARTIFACT_TOKENS)
     continuation_tokens = set(_BOOTSTRAP_CONTINUATION_TOKENS)
@@ -3279,8 +3294,6 @@ def _chat_thread_hints() -> ChatThreadHints:
         )
 
     cache_key = id(registry)
-    if _CHAT_THREAD_HINTS_CACHE is not None and _CHAT_THREAD_HINTS_CACHE_KEY == cache_key:
-        return _CHAT_THREAD_HINTS_CACHE
 
     for spec in registry.enabled_capabilities().values():
         artifact_tokens.update(_tokens_from_text(spec.capability_id))

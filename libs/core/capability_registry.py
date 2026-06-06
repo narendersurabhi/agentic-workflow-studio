@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time as _time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -159,6 +160,8 @@ def planner_collectible_inputs_for_capability(
 
 _CAPABILITY_CACHE_KEY: tuple[str, float] | None = None
 _CAPABILITY_CACHE_VALUE: CapabilityRegistry | None = None
+_CAPABILITY_CACHE_CHECKED_AT: float = 0.0  # monotonic time of last stat() check
+_CAPABILITY_CACHE_TTL: float = 30.0  # skip stat() for 30 s after a confirmed-fresh load
 
 _CATALOG_JSON_CACHE: dict[str, str] = {}
 
@@ -323,7 +326,17 @@ def load_capability_catalog_json(path: Path | None = None) -> str:
 
 
 def load_capability_registry(path: Path | None = None) -> CapabilityRegistry:
-    global _CAPABILITY_CACHE_KEY, _CAPABILITY_CACHE_VALUE
+    global _CAPABILITY_CACHE_KEY, _CAPABILITY_CACHE_VALUE, _CAPABILITY_CACHE_CHECKED_AT
+
+    now = _time.monotonic()
+
+    # Fast path: if the cache is warm and we checked the file recently, skip stat().
+    # The file changes only on deploys; 30 s staleness is acceptable in production.
+    if (
+        _CAPABILITY_CACHE_VALUE is not None
+        and now - _CAPABILITY_CACHE_CHECKED_AT < _CAPABILITY_CACHE_TTL
+    ):
+        return _CAPABILITY_CACHE_VALUE
 
     resolved = (path or resolve_capability_registry_path()).expanduser()
     try:
@@ -331,6 +344,7 @@ def load_capability_registry(path: Path | None = None) -> CapabilityRegistry:
     except OSError:
         mtime = -1.0
     cache_key = (str(resolved), mtime)
+    _CAPABILITY_CACHE_CHECKED_AT = now
     if _CAPABILITY_CACHE_KEY == cache_key and _CAPABILITY_CACHE_VALUE is not None:
         return _CAPABILITY_CACHE_VALUE
     if mtime < 0:

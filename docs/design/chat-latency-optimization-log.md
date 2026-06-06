@@ -281,6 +281,76 @@ For the overwhelming majority of chat messages, TTFT drops from 2–5s to ~200�
 
 ---
 
+## 13 — DB connection pool overhead (first/stale request: +300–500 ms)
+
+**Symptom**  
+`total_build_ms` was 1188 ms on the first request and ~729 ms on the second. After the second request warmed up the pool, it dropped further.
+
+**Root cause**  
+`pool_pre_ping=True` (SQLAlchemy default) sends a `SELECT 1` on every connection checkout — one extra round-trip before every request. When a connection was stale (recycled after idle time), this triggered a full TCP+SSL+auth reconnect (300–500 ms). The pool was also undersized (`pool_size=5`), causing overflow connections on concurrent requests.
+
+**Fix**  
+- Set `pool_pre_ping=False`; replaced with `pool_recycle=1800` (proactively recycles after 30 min, preventing staleness without a per-request round-trip)
+- `pool_size=20`, `max_overflow=20` (supports 40 concurrent connections), `pool_timeout=10`
+
+**Files changed**  
+- `services/api/app/database.py`
+
+---
+
+## 14 — Session record DB query on every turn (~40–100 ms per warm turn)
+
+**Symptom**  
+`session_ms ≈ 40–100 ms` on every turn — a SELECT on `chat_sessions` that returned the same data.
+
+**Root cause**  
+`_build_turn_context` queried the `chat_sessions` table on every request to load the session record, even though the record's metadata, title, and timestamps don't change between turns.
+
+**Fix**  
+Added in-process session cache (`_SESSION_CACHE` dict with `_CachedSession` dataclass). After each `_persist_turn`, the cache is populated. On the next turn, `_build_turn_context` serves the session record from the cache with `SimpleNamespace`, skipping the DB read entirely.
+
+**Files changed**  
+- `services/api/app/chat_service.py` — `_CachedSession`, `_SESSION_CACHE`, `_get/_put/_invalidate_cached_session`, warm-path in `_build_turn_context`
+
+---
+
+## 15 — User profile DB query on every turn (~30–80 ms per warm turn)
+
+**Symptom**  
+`envelope_ms ≈ 30–80 ms` — a SELECT on the memory table for the user profile on every turn.
+
+**Root cause**  
+`build_chat_context_envelope` → `load_user_profile` always queried the `memory` table. The user profile only changes when memory promotion fires (infrequently).
+
+**Fix**  
+Added in-process TTL cache in `memory_profile_service.py` (`_PROFILE_CACHE` dict, 60 s TTL). `write_user_profile` updates the cache on every write so hits are always fresh. Cold misses still query the DB.
+
+**Files changed**  
+- `services/api/app/memory_profile_service.py`
+
+---
+
+## 16 — `_looks_like_chat_only_correction` LLM call on every turn (~887 ms avg)
+
+**Symptom**  
+After fixes 13–15, `total_build_ms avg = 892 ms` across 5 requests, with `gap2_ms avg = 887 ms`. Session and envelope were near-zero. The bottleneck was entirely inside the `_message_from_record` loop + `_candidate_goal`.
+
+**Root cause**  
+`_execution_thread_candidate_goal` (called from `_candidate_goal` inside `_build_turn_context`) unconditionally called `is_chat_only_correction(current)` — which is `_looks_like_chat_only_correction`, an LLM call to the configured chat provider. This ran on every turn regardless of whether there was an active pending-clarification state to cancel. The LLM call (~887 ms) happened entirely before the main streaming LLM call, dominating TTFT.
+
+**Fix**  
+In `_candidate_goal`, only pass `is_chat_only_correction` to `_execution_thread_candidate_goal` when `pending_state is not None`. When there's no active clarification, the correction check is meaningless so the LLM call is skipped entirely.
+
+Also added `convert_ms` and `goal_ms` sub-fields to `chat_build_context_timing` log to split `gap2_ms` into message-conversion time vs. goal-computation time for future diagnostics.
+
+As a defensive secondary fix, added a 30-second TTL to `load_capability_registry` (via `_CAPABILITY_CACHE_CHECKED_AT`) so repeated calls within the same window skip the `stat()` on the YAML file.
+
+**Files changed**  
+- `services/api/app/chat_service.py` — gate `is_chat_only_correction` behind `pending_state is not None` in `_candidate_goal`; add `_tc3a`, `convert_ms`, `goal_ms` timing
+- `libs/core/capability_registry.py` — `_CAPABILITY_CACHE_CHECKED_AT`, `_CAPABILITY_CACHE_TTL`, TTL fast-path in `load_capability_registry`
+
+---
+
 ## Current state (after all fixes)
 
 | Path | Expected TTFT | Notes |
