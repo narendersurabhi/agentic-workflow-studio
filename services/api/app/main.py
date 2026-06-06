@@ -3373,41 +3373,19 @@ def _chat_route_goal_intent_profile(
 
 
 def _looks_like_conversational_turn(content: str) -> bool:
+    """Return True when the message is almost certainly a chat reply, not a workflow execution.
+
+    The boundary LLM is only invoked when this returns False.  We default to True
+    (skip the boundary call) unless unambiguous execution signals are present.
+    Keeping this gate permissive dramatically reduces TTFT for ordinary chat messages.
+    """
     lowered = str(content or "").strip().lower()
     if not lowered:
         return True
-    casual_phrases = (
-        "hi",
-        "hello",
-        "hey",
-        "help",
-        "thanks",
-        "thank you",
-        "how are you",
-        "what can you do",
-        "can you help me understand",
-        "why ",
-        "what is ",
-        "what's ",
-        "whats ",
-        "what are ",
-        "what was ",
-        "what were ",
-        "how does ",
-        "how do ",
-        "how did ",
-        "how many ",
-        "how much ",
-        "how long ",
-        "how old ",
-        "can you explain",
-        "explain ",
-    )
-    workflow_tokens = (
-        "create ",
-        "build ",
-        "generate ",
-        "render ",
+    # Tokens that can only appear in a genuine workflow/system execution request.
+    # Intentionally narrow — broad verbs like "create", "build", "run" are excluded
+    # because they appear in conversational questions ("how do I run this?").
+    execution_tokens = (
         "deploy ",
         "port forward",
         "open pull request",
@@ -3419,26 +3397,19 @@ def _looks_like_conversational_turn(content: str) -> bool:
         "make a workflow",
         "create a workflow",
         "submit a job",
-        "run ",
+        "submit job",
+        "create workflow",
+        "build workflow",
+        "trigger workflow",
+        "run workflow",
+        "start workflow",
+        "run the workflow",
+        "start the workflow",
+        "run the job",
+        "start the job",
+        "submit the job",
     )
-    if any(token in lowered for token in workflow_tokens):
-        return False
-    if lowered.endswith("?"):
-        return True
-    conversational_patterns = (
-        r"\b(?:i want to|i'd like to|id like to|let'?s)\s+(?:discuss|talk about|chat about)\b",
-        r"\b(?:discuss|talk about|chat about)\b.{0,80}\b(?:with you|together)?\b",
-        r"\b(?:tell me about|walk me through|help me understand|teach me about|give me an overview of)\b",
-        r"\b(?:i am|i'm|im)\s+(?:curious about|interested in|trying to understand|learning about)\b",
-        r"\b(?:thoughts on|opinion on|overview of|basics of|intro to)\b",
-        r"\b(?:practice|mock|roleplay|coach me for|quiz me on)\b.{0,120}\b(?:interview|questions|answers)\b",
-        r"\b(?:ask me (?:a )?question|ask me questions one by one|i will type the answer)\b",
-        r"\b(?:interview practice|mock interview|practice interview questions)\b",
-        r"^(?:who(?:'?s)?|where(?:'?s)?|when(?:'?s)?|which)\s+[a-z]",
-    )
-    if any(re.search(pattern, lowered) for pattern in conversational_patterns):
-        return True
-    return any(lowered.startswith(phrase) or lowered == phrase for phrase in casual_phrases)
+    return not any(token in lowered for token in execution_tokens)
 
 
 def _looks_like_execution_confirmation(content: str) -> bool:
@@ -4810,7 +4781,14 @@ def _route_chat_turn(
     # Speculative pre-fetch: build the route request (intent normalization + capability
     # search) in a background thread while the boundary LLM call runs on the main thread.
     # If the boundary decides execution_request/continue_pending the result is ready
-    # immediately; otherwise the work is discarded (low cost — boundary is the gating call).
+    # immediately; otherwise the work is discarded.
+    # Skip the pre-fetch entirely when the fast-exit heuristic already says chat_reply —
+    # the intent normalization (1.5 s) + decomposition (2–4 s) threads would be wasted.
+    _quick_lifecycle_prefetch = chat_service.clarification_lifecycle_from_metadata(session_metadata)
+    _skip_prefetch = (
+        not _quick_lifecycle_prefetch.active
+        and _looks_like_conversational_turn(content)
+    )
     _prefetch_result: list[chat_contracts.ChatRouteRequest | None] = [None]
 
     def _prefetch_route_request() -> None:
@@ -4826,7 +4804,8 @@ def _route_chat_turn(
             pass  # fall through — _route_chat_turn_with_router will build it synchronously
 
     _prefetch_thread = threading.Thread(target=_prefetch_route_request, daemon=True)
-    _prefetch_thread.start()
+    if not _skip_prefetch:
+        _prefetch_thread.start()
 
     boundary = _generate_chat_boundary_decision(
         content=content,
@@ -4846,7 +4825,7 @@ def _route_chat_turn(
     # On chat_reply / clarification turns the daemon thread finishes on its own —
     # joining unconditionally was the regression (it added the full intent-LLM latency
     # to every chat-reply turn, causing 15 s+ delays).
-    if decision in {
+    if not _skip_prefetch and decision in {
         chat_contracts.ChatBoundaryDecisionType.execution_request,
         chat_contracts.ChatBoundaryDecisionType.continue_pending,
     }:
