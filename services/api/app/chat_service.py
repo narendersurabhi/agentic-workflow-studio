@@ -7,6 +7,7 @@ from enum import Enum
 import logging
 import os
 import re
+import threading
 import time
 from typing import Any, Callable, Sequence
 
@@ -18,6 +19,53 @@ from . import chat_clarification_normalizer, context_service, memory_profile_ser
 from .models import ChatMessageRecord, ChatSessionRecord
 
 logger = logging.getLogger("api.chat_service")
+
+# ---------------------------------------------------------------------------
+# In-process caches — eliminate DB round-trips for data that barely changes
+# between consecutive turns of the same session.
+#
+# Session record cache: keyed by session_id; stores the post-persist state
+# (metadata_json + updated_at + title) so the next turn skips the initial
+# SELECT on chat_sessions.
+#
+# User profile cache: keyed by user_id; stores the profile payload with a
+# monotonic timestamp for TTL expiry.  The profile is re-read from the DB
+# only on the first turn or after the TTL expires.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _CachedSession:
+    metadata_json: dict[str, Any]
+    updated_at: datetime
+    title: str
+    created_at: datetime
+
+_SESSION_CACHE: dict[str, _CachedSession] = {}
+_SESSION_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_session(session_id: str) -> _CachedSession | None:
+    with _SESSION_CACHE_LOCK:
+        return _SESSION_CACHE.get(session_id)
+
+
+def _put_cached_session(
+    session_id: str, metadata_json: dict, updated_at: datetime, title: str, created_at: datetime
+) -> None:
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE[session_id] = _CachedSession(
+            metadata_json=dict(metadata_json),
+            updated_at=updated_at,
+            title=title,
+            created_at=created_at,
+        )
+
+
+def _invalidate_cached_session(session_id: str) -> None:
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE.pop(session_id, None)
+
+
 _INTERNAL_CHAT_USER_ID_KEY = "_chat_user_id"
 _CHAT_STATE_VERSION_KEY = "_chat_state_version"
 _CHAT_STATE_CONFLICT_COUNT_KEY = "_chat_state_conflict_count"
@@ -2258,10 +2306,27 @@ def _build_turn_context(
 ) -> TurnContext:
     """Validate session access, assemble all pre-routing state, and return TurnContext."""
     _tc0 = time.perf_counter()
-    record = db.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
+    _cached = _get_cached_session(session_id)
+    if _cached is not None:
+        # Warm path: skip the SELECT on chat_sessions entirely.  We have all
+        # fields we need from last turn's post-persist snapshot.  A lightweight
+        # namespace works wherever the code uses record.field; _persist_chat_session_state
+        # does its own fresh SELECT internally so the ORM identity map is not needed here.
+        import types as _types
+        record: Any = _types.SimpleNamespace(
+            id=session_id,
+            title=_cached.title,
+            metadata_json=dict(_cached.metadata_json),
+            updated_at=_cached.updated_at,
+            created_at=_cached.created_at,
+        )
+        _cache_hit = True
+    else:
+        record = db.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
+        if record is None:
+            raise KeyError(session_id)
+        _cache_hit = False
     _tc1 = time.perf_counter()
-    if record is None:
-        raise KeyError(session_id)
     if not _chat_session_access_allowed(record, user_id):
         raise KeyError(session_id)
 
@@ -2325,6 +2390,7 @@ def _build_turn_context(
     logger.info(
         "chat_build_context_timing",
         extra={
+            "cache_hit": _cache_hit,
             "session_ms": round((_tc1 - _tc0) * 1000, 1),
             "gap1_ms": round((_tc2 - _tc1) * 1000, 1),
             "messages_ms": round((_tc3 - _tc2) * 1000, 1),
@@ -3092,6 +3158,16 @@ def handle_turn(
     )
 
     _persist_turn(db, ctx, result, user_message, assistant_message)
+
+    # Update the session cache with the post-persist record state so the NEXT
+    # turn can skip the SELECT on chat_sessions entirely.
+    _put_cached_session(
+        session_id=ctx.record.id,
+        metadata_json=dict(ctx.record.metadata_json or {}),
+        updated_at=ctx.record.updated_at,
+        title=ctx.record.title,
+        created_at=ctx.record.created_at,
+    )
 
     if ctx.bound_user_id:
         try:
