@@ -3439,6 +3439,28 @@ def _looks_like_conversational_turn(content: str) -> bool:
     return True
 
 
+_QUESTION_FIRST_TOKENS = frozenset({
+    "how", "what", "why", "where", "when", "who", "which",
+    "is", "are", "was", "were", "does", "do", "did",
+    "can", "could", "would", "will", "should", "shall",
+})
+
+
+def _is_question_turn(content: str) -> bool:
+    """Return True when the message is clearly a question.
+
+    Used as a fast-path guard in _route_chat_turn to skip the boundary LLM entirely —
+    question turns are always chat_reply regardless of capability signal strength.
+    """
+    lowered = str(content or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered.endswith("?"):
+        return True
+    first_token = re.split(r"\s+", lowered, maxsplit=1)[0]
+    return first_token in _QUESTION_FIRST_TOKENS
+
+
 def _looks_like_execution_confirmation(content: str) -> bool:
     lowered = str(content or "").strip().lower()
     if not lowered:
@@ -4842,6 +4864,44 @@ def _route_chat_turn(
         not _quick_lifecycle_prefetch.active
         and _looks_like_conversational_turn(content)
     )
+    # Question fast-path: skip the boundary LLM for clear question turns.
+    # Build lightweight capability evidence (lexical + vector, no LLM) only when the
+    # message also has execution-like tokens — so _capability_offer_hint can still
+    # inject a capability offer when relevant. Pure chat questions skip even that.
+    if not pending_clarification and _is_question_turn(content):
+        _q_evidence: chat_contracts.ChatBoundaryEvidence | None = None
+        if not _looks_like_conversational_turn(content):
+            try:
+                _q_evidence = _build_chat_boundary_evidence(
+                    content=content,
+                    candidate_goal=candidate_goal,
+                    session_metadata=session_metadata,
+                    merged_context=merged_context,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        _q_boundary = chat_contracts.ChatBoundaryDecision(
+            decision=chat_contracts.ChatBoundaryDecisionType.chat_reply,
+            confidence=0.95,
+            reason_code="question_fast_path",
+            evidence=_q_evidence,
+        )
+        logger.info(
+            "chat_turn_question_fast_path",
+            extra={"fast_exit_ms": round((time.perf_counter() - _t0) * 1000, 1)},
+        )
+        return _attach_chat_boundary_decision(
+            _finalize_chat_turn_plan(
+                _chat_response_turn_plan(goal=content.strip(), assistant_content=""),
+                content=content,
+                candidate_goal=candidate_goal,
+                merged_context=merged_context,
+                messages=messages,
+                session_metadata=session_metadata,
+            ),
+            _q_boundary,
+        )
+
     _prefetch_result: list[chat_contracts.ChatRouteRequest | None] = [None]
 
     def _prefetch_route_request() -> None:

@@ -225,8 +225,8 @@ type ToolStep = {
 | Capability offer hint for question turns | ✅ Done |
 | `ToolChainPlan` + `_execute_tool_chain` | ✅ Done |
 | `chains_to` in capability registry YAML | ✅ Done |
-| Question-detection guard (false positive reduction) | Pending |
-| Result download card in UI | Pending |
+| Question-detection guard (false positive reduction) | ✅ Done |
+| Result download card in UI | ✅ Done |
 | End-to-end test: "create a word document" | Pending |
 
 ## Next Steps
