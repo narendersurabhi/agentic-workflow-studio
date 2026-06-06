@@ -17,7 +17,6 @@ class UserRecord(Base):
     display_name: Mapped[str] = mapped_column(String)
     password_hash: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime)
-    preferences_json: Mapped[Dict[str, Any]] = mapped_column("preferences", JSON, nullable=True, default=dict)
 
 
 class JobRecord(Base):

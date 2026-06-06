@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "20260606_add_user_preferences"
-down_revision = "20260603_add_run_collaboration_memory"
+down_revision = "20260603_agent_coordination"
 branch_labels = None
 depends_on = None
 

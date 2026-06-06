@@ -22,6 +22,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from prometheus_client import Counter, make_asgi_app
+import sqlalchemy
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18361,10 +18362,17 @@ def get_user_preferences(request: Request, db: Session = Depends(get_db)) -> Dic
     session = getattr(request.state, "auth_user", None)
     if not session:
         raise HTTPException(status_code=401, detail="not_authenticated")
-    user = db.query(UserRecord).filter(UserRecord.id == session["user_id"]).first()
-    if not user:
+    try:
+        row = db.execute(
+            sqlalchemy.text("SELECT preferences FROM users WHERE id = :uid"),
+            {"uid": session["user_id"]},
+        ).fetchone()
+    except Exception:
+        return {}
+    if row is None:
         raise HTTPException(status_code=404, detail="user_not_found")
-    return dict(user.preferences_json or {})
+    prefs = row[0]
+    return dict(prefs) if isinstance(prefs, dict) else {}
 
 
 @app.patch("/auth/me/preferences")
@@ -18376,14 +18384,26 @@ def update_user_preferences(
     session = getattr(request.state, "auth_user", None)
     if not session:
         raise HTTPException(status_code=401, detail="not_authenticated")
-    user = db.query(UserRecord).filter(UserRecord.id == session["user_id"]).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="user_not_found")
-    merged = dict(user.preferences_json or {})
-    merged.update(body)
-    user.preferences_json = merged
-    db.commit()
-    return merged
+    try:
+        row = db.execute(
+            sqlalchemy.text("SELECT preferences FROM users WHERE id = :uid"),
+            {"uid": session["user_id"]},
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="user_not_found")
+        existing = dict(row[0]) if isinstance(row[0], dict) else {}
+        merged = {**existing, **body}
+        db.execute(
+            sqlalchemy.text("UPDATE users SET preferences = :prefs WHERE id = :uid"),
+            {"prefs": json.dumps(merged), "uid": session["user_id"]},
+        )
+        db.commit()
+        return merged
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="preferences_unavailable")
 
 
 @app.post("/chat/sessions", response_model=chat_contracts.ChatSession)
