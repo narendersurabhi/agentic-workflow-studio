@@ -2326,7 +2326,9 @@ def _build_turn_context(
         "chat_build_context_timing",
         extra={
             "session_ms": round((_tc1 - _tc0) * 1000, 1),
+            "gap1_ms": round((_tc2 - _tc1) * 1000, 1),
             "messages_ms": round((_tc3 - _tc2) * 1000, 1),
+            "gap2_ms": round((_tc4 - _tc3) * 1000, 1),
             "envelope_ms": round((_tc5 - _tc4) * 1000, 1),
             "total_build_ms": round((_tc5 - _tc0) * 1000, 1),
             "session_id": session_id,
