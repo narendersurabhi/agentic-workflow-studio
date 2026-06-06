@@ -4760,6 +4760,7 @@ def _route_chat_turn(
     merged_context: Mapping[str, Any] | None,
     messages: Sequence[chat_contracts.ChatMessage] | None,
 ) -> dict[str, Any]:
+    _t0 = time.perf_counter()
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
     if CHAT_RESPONSE_MODE != "answer_or_handoff":
         return _route_chat_turn_legacy(
@@ -4820,6 +4821,14 @@ def _route_chat_turn(
     boundary = _postprocess_chat_boundary_decision(boundary, content=content)
     _record_chat_boundary_decision_metrics(boundary)
     decision = boundary.decision
+    logger.info(
+        "chat_turn_boundary_done",
+        extra={
+            "decision": str(decision),
+            "fast_exit": _skip_prefetch,
+            "boundary_ms": round((time.perf_counter() - _t0) * 1000, 1),
+        },
+    )
 
     # Only block on the pre-fetch result for execution turns that will use the router.
     # On chat_reply / clarification turns the daemon thread finishes on its own —
@@ -6566,10 +6575,22 @@ def _generate_chat_response(
         reasoning_effort=reasoning_effort,
     )
     stream_cb = getattr(_stream_callback_local, "callback", None)
+    _t_llm = time.perf_counter()
     try:
         if stream_cb is not None:
             chunks: list[str] = []
+            _ttft_logged = False
             for chunk in provider.stream_request(llm_request):
+                if not _ttft_logged:
+                    logger.info(
+                        "chat_stream_ttft",
+                        extra={
+                            "component": component,
+                            "ttft_ms": round((time.perf_counter() - _t_llm) * 1000, 1),
+                            "session_id": chat_session_id,
+                        },
+                    )
+                    _ttft_logged = True
                 stream_cb(chunk)
                 chunks.append(chunk)
             generated = "".join(chunks).strip()
