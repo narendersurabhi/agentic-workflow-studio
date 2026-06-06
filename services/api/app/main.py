@@ -3907,6 +3907,30 @@ def _chat_capability_search_entries(
     return capability_search.build_capability_search_entries(capability_map)
 
 
+def _is_chat_direct_capability(capability_id: str) -> bool:
+    """Return True when a capability is eligible for inline chat execution.
+
+    Two sources are merged:
+    1. The operator allowlist (CHAT_DIRECT_CAPABILITIES env var / default set).
+    2. The capability registry: planner_hints.allow_chat_direct == true.
+
+    Capabilities self-declare via YAML; operators can extend or override via env var.
+    Returns False when CHAT_DIRECT_EXECUTION_ENABLED is False.
+    """
+    if not CHAT_DIRECT_EXECUTION_ENABLED:
+        return False
+    if capability_id in CHAT_DIRECT_CAPABILITIES:
+        return True
+    try:
+        registry = capability_registry.load_capability_registry()
+        spec = registry.capabilities.get(capability_id)
+        if spec is not None:
+            return bool((spec.planner_hints or {}).get("allow_chat_direct"))
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _chat_capability_vector_namespace(
     capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
 ) -> str:
@@ -5735,7 +5759,7 @@ def _build_chat_route_candidates(
     visible_capabilities = [
         (capability_id, spec)
         for capability_id, spec in _chat_visible_capabilities()
-        if capability_id in CHAT_DIRECT_CAPABILITIES
+        if _is_chat_direct_capability(capability_id)
     ]
     direct_candidate_hints = _chat_route_candidate_hints(normalized)
     query = _chat_boundary_query_text(content, candidate_goal)
@@ -7199,15 +7223,23 @@ def _normalize_chat_route(
             route = "respond"
         fallback_used = True
         fallback_reason = fallback_reason or "invalid_or_missing_route"
-    if route == "tool_call" and capability_id not in CHAT_DIRECT_CAPABILITIES:
+    if route == "tool_call" and not _is_chat_direct_capability(capability_id):
         route = "ask_clarification" if missing_slots else ("submit_job" if execution_oriented else "respond")
         capability_id = ""
         fallback_used = True
         fallback_reason = fallback_reason or "invalid_direct_capability"
-    if route == "tool_call" and capability_id in CHAT_DIRECT_CAPABILITIES:
-        blocking_slots = []
-        missing_slots = []
-    if route == "tool_call" and (missing_slots or risk_level != "read_only"):
+    if route == "tool_call" and _is_chat_direct_capability(capability_id):
+        if missing_slots:
+            # Clarify first — even pre-authorized capabilities need required inputs.
+            route = "ask_clarification"
+            fallback_used = True
+            fallback_reason = fallback_reason or "missing_inputs_for_direct_capability"
+        else:
+            # All inputs present: execute inline. Skip the risk_level check —
+            # the capability declared allow_chat_direct or the operator pre-authorized it.
+            blocking_slots = []
+            missing_slots = []
+    elif route == "tool_call" and (missing_slots or risk_level != "read_only"):
         route = "ask_clarification" if missing_slots else ("submit_job" if execution_oriented else "respond")
         fallback_used = True
         fallback_reason = fallback_reason or (
@@ -8047,7 +8079,7 @@ def _chat_direct_capability_spec(
         raise RuntimeError("chat_direct_execution_disabled")
     if not normalized_capability_id:
         raise RuntimeError("chat_direct_missing_capability_id")
-    if normalized_capability_id not in CHAT_DIRECT_CAPABILITIES:
+    if not _is_chat_direct_capability(normalized_capability_id):
         raise RuntimeError(f"chat_direct_capability_not_allowed:{normalized_capability_id}")
     if capability_registry.resolve_capability_mode() == "disabled":
         raise RuntimeError("chat_direct_capabilities_disabled")

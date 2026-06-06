@@ -974,6 +974,7 @@ capabilities:
         output_format: [output_format, format, target_format]
       chat_field_examples:
         tone: [practical, concise, technical, formal, conversational, executive]
+      allow_chat_direct: true
       chat_thread_hints:
         action_tokens: [create, generate, write, make, export, save, produce, build]
         artifact_tokens: [document, documents, doc, docs, docx, word, pdf, report, summary, guide, readme, spec, draft, file]
@@ -1250,6 +1251,7 @@ capabilities:
         path: bytes_written
         description: Number of bytes written to the rendered DOCX artifact.
     planner_hints:
+      allow_chat_direct: true
       task_intents: [render]
       required_output_extension: docx
       chat_output_format_tokens:
@@ -1318,6 +1320,7 @@ capabilities:
         path: bytes_written
         description: Number of bytes written to the rendered PDF artifact.
     planner_hints:
+      allow_chat_direct: true
       task_intents: [render]
       required_output_extension: pdf
       chat_output_format_tokens:
