@@ -269,6 +269,16 @@ class ToolCallPlan:
 
 
 @dataclass(frozen=True)
+class ToolChainPlan:
+    """Sequential chain of tool calls — each step's output feeds the next step's input."""
+    steps: list[ToolCallPlan]
+    resolved_goal: str
+    merged_context: dict[str, Any]
+    assessment: dict[str, Any]
+    assistant_content: str = ""
+
+
+@dataclass(frozen=True)
 class RespondPlan:
     resolved_goal: str
     merged_context: dict[str, Any]
@@ -284,6 +294,7 @@ TurnPlan = (
     | SubmitJobPlan
     | RunWorkflowPlan
     | ToolCallPlan
+    | ToolChainPlan
     | RespondPlan
 )
 
@@ -2591,10 +2602,23 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
 
     if route_type == "tool_call":
         raw_args = turn_dict.get("arguments")
+        capability_id = str(turn_dict.get("capability_id") or "").strip()
+        arguments = dict(raw_args) if isinstance(raw_args, Mapping) else {}
+        chain = _resolve_tool_chain(
+            capability_id=capability_id,
+            arguments=arguments,
+            resolved_goal=resolved_goal,
+            merged_context=merged_context,
+            assessment=assessment,
+            assistant_content=assistant_content,
+            content=ctx.content,
+        )
+        if chain is not None:
+            return chain
         return ToolCallPlan(
             resolved_goal=resolved_goal,
-            capability_id=str(turn_dict.get("capability_id") or "").strip(),
-            arguments=dict(raw_args) if isinstance(raw_args, Mapping) else {},
+            capability_id=capability_id,
+            arguments=arguments,
             merged_context=merged_context,
             assessment=assessment,
             assistant_content=assistant_content,
@@ -2611,6 +2635,75 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
     )
 
 
+def _resolve_tool_chain(
+    *,
+    capability_id: str,
+    arguments: dict[str, Any],
+    resolved_goal: str,
+    merged_context: dict[str, Any],
+    assessment: dict[str, Any],
+    assistant_content: str,
+    content: str,
+) -> ToolChainPlan | None:
+    """Return a ToolChainPlan when the capability declares a downstream render step.
+
+    Reads `chains_to: {<format>: <capability_id>}` from the capability's
+    planner_hints and wires the step-1 output automatically into step-2 arguments.
+    Returns None when no chain applies so the caller falls through to ToolCallPlan.
+    """
+    spec = capability_registry.load_capability_registry().capabilities.get(capability_id)
+    if spec is None:
+        return None
+    hints = spec.planner_hints if isinstance(spec.planner_hints, Mapping) else {}
+    chains_to = hints.get("chains_to")
+    if not isinstance(chains_to, Mapping) or not chains_to:
+        return None
+
+    output_format = str(arguments.get("output_format") or "").strip().lower()
+    if not output_format:
+        lowered = content.lower()
+        for token, fmt in (hints.get("chat_output_format_tokens") or {}).items():
+            if token in lowered:
+                output_format = str(fmt).lower()
+                break
+
+    downstream_id = str(chains_to.get(output_format) or "").strip()
+    if not downstream_id:
+        return None
+    downstream_spec = capability_registry.load_capability_registry().capabilities.get(downstream_id)
+    if downstream_spec is None or not downstream_spec.enabled:
+        return None
+
+    step1 = ToolCallPlan(
+        resolved_goal=resolved_goal,
+        capability_id=capability_id,
+        arguments=arguments,
+        merged_context=merged_context,
+        assessment=assessment,
+        assistant_content="",
+    )
+    step2_args = {k: v for k, v in arguments.items() if k not in {"output_format"}}
+    if "path" not in step2_args:
+        topic = str(arguments.get("topic") or resolved_goal or "document").strip()
+        safe = re.sub(r"[^\w\s-]", "", topic)[:60].strip()
+        step2_args["path"] = f"{safe}.{output_format}"
+    step2 = ToolCallPlan(
+        resolved_goal=resolved_goal,
+        capability_id=downstream_id,
+        arguments=step2_args,
+        merged_context=merged_context,
+        assessment=assessment,
+        assistant_content=assistant_content,
+    )
+    return ToolChainPlan(
+        steps=[step1, step2],
+        resolved_goal=resolved_goal,
+        merged_context=merged_context,
+        assessment=assessment,
+        assistant_content=assistant_content,
+    )
+
+
 def _execute_turn(plan: TurnPlan, ctx: TurnContext) -> TurnResult:
     """Dispatch to the executor for the given plan type."""
     if isinstance(plan, AskClarificationPlan):
@@ -2619,6 +2712,8 @@ def _execute_turn(plan: TurnPlan, ctx: TurnContext) -> TurnResult:
         return _execute_submit_job(plan, ctx)
     if isinstance(plan, RunWorkflowPlan):
         return _execute_run_workflow(plan, ctx)
+    if isinstance(plan, ToolChainPlan):
+        return _execute_tool_chain(plan, ctx)
     if isinstance(plan, ToolCallPlan):
         return _execute_tool_call(plan, ctx)
     return _execute_respond(plan, ctx)  # type: ignore[arg-type]
@@ -2888,6 +2983,89 @@ def _execute_run_workflow(plan: RunWorkflowPlan, ctx: TurnContext) -> TurnResult
                 context_json=plan.merged_context,
             ),
         )
+
+
+def _execute_tool_chain(plan: ToolChainPlan, ctx: TurnContext) -> TurnResult:
+    """Execute steps sequentially, wiring each step's output into the next step's arguments."""
+    accumulated: dict[str, Any] = {}
+    last_result: ChatDirectRunResult | None = None
+    total = len(plan.steps)
+
+    for i, step in enumerate(plan.steps):
+        merged_args = _enrich_memory_arguments(
+            step.capability_id,
+            {**accumulated, **step.arguments},
+            step.merged_context,
+        )
+        label = step.capability_id.replace(".", " ").replace("_", " ").title()
+        ctx.emit_progress("tool_start", {
+            "capability": step.capability_id,
+            "label": f"Running {label}",
+            "step": i + 1,
+            "total_steps": total,
+        })
+        try:
+            direct_result = ctx.agent.run_direct_capability(
+                db=ctx.db,
+                chat_session_id=ctx.record.id,
+                goal=plan.resolved_goal,
+                capability_id=step.capability_id,
+                arguments=merged_args,
+                context_json=step.merged_context,
+                priority=ctx.request.priority,
+            )
+        except Exception as exc:  # noqa: BLE001
+            ctx.emit_progress("tool_done", {"capability": step.capability_id, "label": f"{label} failed", "error": str(exc)[:200]})
+            return TurnResult(
+                assistant_content=f"Step {i + 1} ({step.capability_id}) failed: {exc}",
+                assistant_action=chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.respond,
+                    goal=plan.resolved_goal,
+                    goal_intent_profile=dict(plan.assessment),
+                    context_json=plan.merged_context,
+                ),
+            )
+        if direct_result.error:
+            ctx.emit_progress("tool_done", {"capability": step.capability_id, "label": f"{label} failed"})
+            return TurnResult(
+                assistant_content=f"Step {i + 1} ({step.capability_id}) failed: {direct_result.error}",
+                assistant_action=chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.respond,
+                    goal=plan.resolved_goal,
+                    goal_intent_profile=dict(plan.assessment),
+                    context_json=plan.merged_context,
+                ),
+                created_job=direct_result.job,
+            )
+        if isinstance(direct_result.output, Mapping):
+            accumulated.update(direct_result.output)
+        ctx.emit_progress("tool_done", {
+            "capability": direct_result.capability_id or step.capability_id,
+            "label": f"{label} complete",
+            "step": i + 1,
+            **({"result": dict(direct_result.output)} if isinstance(direct_result.output, Mapping) else {}),
+        })
+        last_result = direct_result
+
+    clear_pending_clarification_state(
+        ctx.session_metadata,
+        cleared_keys=ctx.cleared_session_keys,
+        include_workflow_input=True,
+    )
+    content = str(last_result.assistant_response if last_result else plan.assistant_content).strip()
+    return TurnResult(
+        assistant_content=content or plan.assistant_content,
+        assistant_action=chat_contracts.AssistantAction(
+            type=chat_contracts.AssistantActionType.tool_call,
+            goal=plan.resolved_goal,
+            job_id=last_result.job.id if last_result else None,
+            capability_id=last_result.capability_id if last_result else None,
+            goal_intent_profile=dict(plan.assessment),
+            context_json=plan.merged_context,
+        ),
+        created_job=last_result.job if last_result else None,
+        direct_output=dict(accumulated) if accumulated else None,
+    )
 
 
 def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:

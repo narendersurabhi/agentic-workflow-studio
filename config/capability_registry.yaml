@@ -977,6 +977,9 @@ capabilities:
       chat_thread_hints:
         action_tokens: [create, generate, write, make, export, save, produce, build]
         artifact_tokens: [document, documents, doc, docs, docx, word, pdf, report, summary, guide, readme, spec, draft, file]
+      chains_to:
+        docx: document.docx.render
+        pdf: document.pdf.render
     enabled: true
     adapters:
       - type: tool

@@ -214,14 +214,27 @@ type ToolStep = {
 
 ---
 
+## Implementation Status
+
+| Feature | Status |
+|---|---|
+| Level-2 routing gate (capability-aware) | ✅ Done |
+| `tool_intent` / `tool_start` / `tool_done` SSE events | ✅ Done |
+| `ToolProgressCard` UI component | ✅ Done |
+| `progress_callback` wired through runtime | ✅ Done |
+| Capability offer hint for question turns | ✅ Done |
+| `ToolChainPlan` + `_execute_tool_chain` | ✅ Done |
+| `chains_to` in capability registry YAML | ✅ Done |
+| Question-detection guard (false positive reduction) | Pending |
+| Result download card in UI | Pending |
+| End-to-end test: "create a word document" | Pending |
+
 ## Next Steps
 
-1. **Add question-detection guard** to `_looks_like_conversational_turn()` — if message is a question (`?`, starts with `how`/`what`/`why`/`can you explain`), stay on fast path regardless of level-2 signal. Eliminates most false positives.
+1. **End-to-end test** — rebuild containers, test "create a word document about most visited places" through: routing → boundary → router → clarification → `ToolChainPlan` → `document.spec.generate` → `document.docx.render` → progress events in UI.
 
-2. **Verify end-to-end tool invocation** — test "create a word document about most visited places" through the full path: routing → boundary → router → clarification → execution → result in chat.
+2. **Result download card** — when `tool_done` includes a `result.path`, render a download button in the `ToolProgressCard`.
 
-3. **Wire tool progress events into SSE stream** — emit `{"type":"tool_started","capability":"document.spec.generate"}` and `{"type":"tool_completed","result_url":"..."}` events so the UI can show progress.
+3. **Question-detection guard** — if message is a question, skip the level-2 routing gate (stay on fast path) but still inject the capability offer hint via `_capability_offer_hint`.
 
-4. **Surface tool result in chat thread** — after execution, append a system message with the result (download link, preview, summary).
-
-5. **Evaluate multi-step chaining** — determine whether the router or a new planner layer should handle "generate + render" chains from a single user message.
+4. **Extend `chains_to`** to other capabilities as needed.
