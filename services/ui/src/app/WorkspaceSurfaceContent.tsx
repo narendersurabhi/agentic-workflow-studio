@@ -894,6 +894,15 @@ const appendChatMessage = (session: ChatSession, message: ChatMessage): ChatSess
   messages: [...(Array.isArray(session.messages) ? session.messages : []), message],
 });
 
+// ─── Chat state cache ─────────────────────────────────────────────────────────
+// Survives client-side navigation within the same tab. Keeps the active chat
+// session and draft input alive when the user switches to another screen and
+// navigates back.
+const _chatCache: { session: ChatSession | null; input: string } = {
+  session: null,
+  input: "",
+};
+
 type Plan = {
   id: string;
   job_id: string;
@@ -2448,8 +2457,22 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [isReorderMode, setIsReorderMode] = useState(false);
   const [draggingTemplateId, setDraggingTemplateId] = useState<string | null>(null);
   const [dragOverTemplateId, setDragOverTemplateId] = useState<string | null>(null);
-  const [chatSession, setChatSession] = useState<ChatSession | null>(null);
-  const [chatInput, setChatInput] = useState("");
+  const [chatSession, setChatSessionState] = useState<ChatSession | null>(() => _chatCache.session);
+  const setChatSession = (s: ChatSession | null | ((prev: ChatSession | null) => ChatSession | null)) => {
+    if (typeof s === "function") {
+      setChatSessionState((prev) => { const next = s(prev); _chatCache.session = next; return next; });
+    } else {
+      _chatCache.session = s; setChatSessionState(s);
+    }
+  };
+  const [chatInput, setChatInputState] = useState<string>(() => _chatCache.input);
+  const setChatInput = (v: string | ((prev: string) => string)) => {
+    if (typeof v === "function") {
+      setChatInputState((prev) => { const next = v(prev); _chatCache.input = next; return next; });
+    } else {
+      _chatCache.input = v; setChatInputState(v);
+    }
+  };
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
