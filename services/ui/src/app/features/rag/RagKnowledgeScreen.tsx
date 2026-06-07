@@ -31,6 +31,28 @@ type RagDocumentSummary = {
   metadata: Record<string, unknown>;
 };
 
+// ─── Module-level cache ───────────────────────────────────────────────────────
+// Survives client-side navigation within the same tab. Resets on full reload.
+type RagScreenCache = {
+  collectionName: string;
+  namespace: string;
+  workspaceId: string;
+  tenantId: string;
+  availableCollections: string[];
+  documents: RagDocumentSummary[];
+  selectedDocumentId: string | null;
+};
+
+const _cache: RagScreenCache = {
+  collectionName: DEFAULT_COLLECTION,
+  namespace: DEFAULT_NAMESPACE,
+  workspaceId: "",
+  tenantId: "",
+  availableCollections: [DEFAULT_COLLECTION],
+  documents: [],
+  selectedDocumentId: null,
+};
+
 type RagDocumentListResponse = {
   collection_name: string;
   truncated: boolean;
@@ -351,21 +373,32 @@ function RagModeButton({
 
 export default function RagKnowledgeScreen() {
   const { user: authUser } = useAuth();
-  const [collectionName, setCollectionName] = useState(DEFAULT_COLLECTION);
-  const [namespace, setNamespace] = useState(DEFAULT_NAMESPACE);
+  // Scope state — initialized from module-level cache so navigation preserves selections
+  const [collectionName, setCollectionNameState] = useState(() => _cache.collectionName);
+  const [namespace, setNamespaceState] = useState(() => _cache.namespace);
   const [userId, setUserId] = useState("");
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [tenantId, setTenantId] = useState("");
+  const [workspaceId, setWorkspaceIdState] = useState(() => _cache.workspaceId);
+  const [tenantId, setTenantIdState] = useState(() => _cache.tenantId);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Available options fetched from the API / derived from documents
-  const [availableCollections, setAvailableCollections] = useState<string[]>([DEFAULT_COLLECTION]);
-  const [collectionsLoading, setCollectionsLoading] = useState(true);
+  const setCollectionName = (v: string) => { _cache.collectionName = v; setCollectionNameState(v); };
+  const setNamespace = (v: string) => { _cache.namespace = v; setNamespaceState(v); };
+  const setWorkspaceId = (v: string) => { _cache.workspaceId = v; setWorkspaceIdState(v); };
+  const setTenantId = (v: string) => { _cache.tenantId = v; setTenantIdState(v); };
 
-  const [documents, setDocuments] = useState<RagDocumentSummary[]>([]);
+  // Available options fetched from the API / derived from documents
+  const [availableCollections, setAvailableCollectionsState] = useState<string[]>(() => _cache.availableCollections);
+  const [collectionsLoading, setCollectionsLoading] = useState(_cache.availableCollections.length <= 1);
+
+  const setAvailableCollections = (cols: string[]) => { _cache.availableCollections = cols; setAvailableCollectionsState(cols); };
+
+  const [documents, setDocumentsState] = useState<RagDocumentSummary[]>(() => _cache.documents);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [selectedDocumentId, setSelectedDocumentIdState] = useState<string | null>(() => _cache.selectedDocumentId);
+
+  const setDocuments = (docs: RagDocumentSummary[]) => { _cache.documents = docs; setDocumentsState(docs); };
+  const setSelectedDocumentId = (id: string | null) => { _cache.selectedDocumentId = id; setSelectedDocumentIdState(id); };
 
   const [chunkResponse, setChunkResponse] = useState<RagDocumentChunksResponse | null>(null);
   const [chunksLoading, setChunksLoading] = useState(false);
@@ -400,8 +433,12 @@ export default function RagKnowledgeScreen() {
     [documents]
   );
 
-  // Fetch available collections on mount
+  // Fetch available collections on mount (skips network call if cache is warm)
   useEffect(() => {
+    if (_cache.availableCollections.length > 1) {
+      setCollectionsLoading(false);
+      return;
+    }
     setCollectionsLoading(true);
     apiFetch(`${apiUrl}/rag/collections`)
       .then((res) => res.json())
@@ -537,6 +574,8 @@ export default function RagKnowledgeScreen() {
 
   useEffect(() => {
     if (!userId.trim()) return;
+    // Suppress background refresh when we just navigated back and have cached docs —
+    // but always refresh when scope changes (userId changing from "" → real ID counts).
     void refreshDocuments();
   }, [collectionName, namespace, tenantId, userId, workspaceId]);
 
