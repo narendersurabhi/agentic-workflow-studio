@@ -31,23 +31,46 @@ type RagDocumentSummary = {
   metadata: Record<string, unknown>;
 };
 
-// ─── Module-level cache ───────────────────────────────────────────────────────
-// Survives client-side navigation within the same tab. Resets on full reload.
+// ─── Scope persistence ────────────────────────────────────────────────────────
+// Three-layer strategy:
+//   1. localStorage  — instant paint on every mount (no flicker)
+//   2. Server prefs  — source of truth; overwrites localStorage on load
+//   3. Module cache  — keeps documents / collections alive across same-tab navigation
+
+const SCOPE_LS_KEY = "ape.rag.scope.v1";
+
+type RagScope = { collectionName: string; namespace: string; workspaceId: string; tenantId: string };
+
+function readLsScope(): RagScope {
+  try {
+    if (typeof window === "undefined") throw new Error();
+    const raw = window.localStorage.getItem(SCOPE_LS_KEY);
+    if (!raw) throw new Error();
+    const parsed = JSON.parse(raw) as Partial<RagScope>;
+    return {
+      collectionName: parsed.collectionName || DEFAULT_COLLECTION,
+      namespace:      parsed.namespace      ?? DEFAULT_NAMESPACE,
+      workspaceId:    parsed.workspaceId    ?? "",
+      tenantId:       parsed.tenantId       ?? "",
+    };
+  } catch {
+    return { collectionName: DEFAULT_COLLECTION, namespace: DEFAULT_NAMESPACE, workspaceId: "", tenantId: "" };
+  }
+}
+
+function writeLsScope(scope: RagScope) {
+  try { window.localStorage.setItem(SCOPE_LS_KEY, JSON.stringify(scope)); } catch { /* quota */ }
+}
+
 type RagScreenCache = {
-  collectionName: string;
-  namespace: string;
-  workspaceId: string;
-  tenantId: string;
+  scope: RagScope;
   availableCollections: string[];
   documents: RagDocumentSummary[];
   selectedDocumentId: string | null;
 };
 
 const _cache: RagScreenCache = {
-  collectionName: DEFAULT_COLLECTION,
-  namespace: DEFAULT_NAMESPACE,
-  workspaceId: "",
-  tenantId: "",
+  scope: { collectionName: DEFAULT_COLLECTION, namespace: DEFAULT_NAMESPACE, workspaceId: "", tenantId: "" },
   availableCollections: [DEFAULT_COLLECTION],
   documents: [],
   selectedDocumentId: null,
@@ -373,18 +396,46 @@ function RagModeButton({
 
 export default function RagKnowledgeScreen() {
   const { user: authUser } = useAuth();
-  // Scope state — initialized from module-level cache so navigation preserves selections
-  const [collectionName, setCollectionNameState] = useState(() => _cache.collectionName);
-  const [namespace, setNamespaceState] = useState(() => _cache.namespace);
+
+  // ── Scope state ──────────────────────────────────────────────────────────────
+  // Layer 1: module cache (same-tab navigation, instant)
+  // Layer 2: localStorage (survives full reload, painted before server responds)
+  // Layer 3: server preferences (source of truth, applied after fetch)
+  const [collectionName, setCollectionNameState] = useState(() => _cache.scope.collectionName);
+  const [namespace, setNamespaceState] = useState(() => _cache.scope.namespace);
   const [userId, setUserId] = useState("");
-  const [workspaceId, setWorkspaceIdState] = useState(() => _cache.workspaceId);
-  const [tenantId, setTenantIdState] = useState(() => _cache.tenantId);
+  const [workspaceId, setWorkspaceIdState] = useState(() => _cache.scope.workspaceId);
+  const [tenantId, setTenantIdState] = useState(() => _cache.scope.tenantId);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const setCollectionName = (v: string) => { _cache.collectionName = v; setCollectionNameState(v); };
-  const setNamespace = (v: string) => { _cache.namespace = v; setNamespaceState(v); };
-  const setWorkspaceId = (v: string) => { _cache.workspaceId = v; setWorkspaceIdState(v); };
-  const setTenantId = (v: string) => { _cache.tenantId = v; setTenantIdState(v); };
+  const scopeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyScope = (scope: RagScope) => {
+    _cache.scope = scope;
+    writeLsScope(scope);
+    setCollectionNameState(scope.collectionName);
+    setNamespaceState(scope.namespace);
+    setWorkspaceIdState(scope.workspaceId);
+    setTenantIdState(scope.tenantId);
+  };
+
+  const persistScope = (scope: RagScope) => {
+    _cache.scope = scope;
+    writeLsScope(scope);
+    if (scopeSaveTimerRef.current) clearTimeout(scopeSaveTimerRef.current);
+    scopeSaveTimerRef.current = setTimeout(() => {
+      apiFetch(`${apiUrl}/auth/me/preferences`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rag_scope: scope }),
+      }).catch(() => {/* ignore — scope loss on network error is acceptable */});
+    }, 400);
+  };
+
+  const setCollectionName = (v: string) => { const s = { ..._cache.scope, collectionName: v }; persistScope(s); setCollectionNameState(v); };
+  const setNamespace = (v: string) => { const s = { ..._cache.scope, namespace: v }; persistScope(s); setNamespaceState(v); };
+  const setWorkspaceId = (v: string) => { const s = { ..._cache.scope, workspaceId: v }; persistScope(s); setWorkspaceIdState(v); };
+  const setTenantId = (v: string) => { const s = { ..._cache.scope, tenantId: v }; persistScope(s); setTenantIdState(v); };
 
   // Available options fetched from the API / derived from documents
   const [availableCollections, setAvailableCollectionsState] = useState<string[]>(() => _cache.availableCollections);
@@ -460,6 +511,36 @@ export default function RagKnowledgeScreen() {
       setUserId(authUser.user_id);
     }
   }, [authUser?.user_id]);
+
+  // Hydrate scope: localStorage first (instant), then server (source of truth)
+  useEffect(() => {
+    // Skip if the in-memory cache is already warmer than defaults (same-tab navigation)
+    const inMemoryHot =
+      _cache.scope.collectionName !== DEFAULT_COLLECTION ||
+      _cache.scope.namespace !== DEFAULT_NAMESPACE ||
+      _cache.scope.workspaceId !== "" ||
+      _cache.scope.tenantId !== "";
+    if (!inMemoryHot) {
+      const lsScope = readLsScope();
+      applyScope(lsScope);
+    }
+    // Fetch server preferences and overwrite with the authoritative value
+    apiFetch(`${apiUrl}/auth/me/preferences`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((prefs: Record<string, unknown> | null) => {
+        if (!prefs) return;
+        const raw = prefs.rag_scope as Partial<RagScope> | undefined;
+        if (!raw || typeof raw !== "object") return;
+        const scope: RagScope = {
+          collectionName: (typeof raw.collectionName === "string" && raw.collectionName) ? raw.collectionName : DEFAULT_COLLECTION,
+          namespace:      typeof raw.namespace === "string"   ? raw.namespace   : DEFAULT_NAMESPACE,
+          workspaceId:    typeof raw.workspaceId === "string" ? raw.workspaceId : "",
+          tenantId:       typeof raw.tenantId === "string"    ? raw.tenantId    : "",
+        };
+        applyScope(scope);
+      })
+      .catch(() => { /* unauthenticated or network error — keep current */ });
+  }, []);
 
   const selectedDocument = useMemo(() => {
     if (chunkResponse?.document && chunkResponse.document.document_id === selectedDocumentId) {
