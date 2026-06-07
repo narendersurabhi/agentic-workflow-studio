@@ -49,6 +49,7 @@ export default function WorkflowLibraryPage() {
     null
   );
   const [notice, setNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const activeWorkflowDefinition = useMemo(
     () => workflowDefinitions.find((definition) => definition.id === activeWorkflowDefinitionId) || null,
@@ -215,16 +216,9 @@ export default function WorkflowLibraryPage() {
   }, [activeWorkflowVersionId, workflowVersions]);
 
   const deleteWorkflowDefinition = async (definition: WorkflowDefinition) => {
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        `Delete saved draft "${definition.title}" and its published versions, triggers, and run history?`
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
     setWorkflowActionLoading("delete");
     setDeletingWorkflowDefinitionId(definition.id);
+    setActionError(null);
     try {
       const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}`,
@@ -235,9 +229,10 @@ export default function WorkflowLibraryPage() {
         throw new Error(detailMessage(body, `Delete draft failed (${response.status}).`));
       }
       setWorkflowDefinitions((prev) => prev.filter((item) => item.id !== definition.id));
-      setNotice(`Deleted saved draft ${definition.title}.`);
+      setNotice(`Deleted "${definition.title}".`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Failed to delete saved draft.");
+      console.error("[WorkflowLibrary] deleteWorkflowDefinition:", error);
+      setActionError(error instanceof Error ? error.message : "Failed to delete saved draft.");
     } finally {
       setDeletingWorkflowDefinitionId(null);
       setWorkflowActionLoading(null);
@@ -245,14 +240,9 @@ export default function WorkflowLibraryPage() {
   };
 
   const deleteWorkflowVersion = async (version: WorkflowVersion) => {
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        `Delete version v${version.version_number}? Its run history will also be deleted.`
-      );
-      if (!confirmed) return;
-    }
     setWorkflowActionLoading("delete");
     setDeletingWorkflowVersionId(version.id);
+    setActionError(null);
     try {
       const response = await apiFetch(
         `${apiUrl}/workflows/versions/${encodeURIComponent(version.id)}`,
@@ -268,7 +258,8 @@ export default function WorkflowLibraryPage() {
       }
       setNotice(`Deleted version v${version.version_number}.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Failed to delete version.");
+      console.error("[WorkflowLibrary] deleteWorkflowVersion:", error);
+      setActionError(error instanceof Error ? error.message : "Failed to delete version.");
     } finally {
       setDeletingWorkflowVersionId(null);
       setWorkflowActionLoading(null);
@@ -369,6 +360,11 @@ export default function WorkflowLibraryPage() {
           New Workflow
         </Link>
       </ShellActions>
+      {actionError ? (
+        <div className="mb-4 rounded-[24px] border border-rose-300/20 bg-accent-rose px-4 py-3 text-sm text-text-rose-token">
+          {actionError}
+        </div>
+      ) : null}
       {notice ? (
         <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {notice}

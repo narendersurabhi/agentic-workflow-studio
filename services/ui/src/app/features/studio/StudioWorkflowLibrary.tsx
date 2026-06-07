@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type {
   WorkflowDefinition,
   WorkflowRun,
@@ -82,6 +83,9 @@ export default function StudioWorkflowLibrary({
   onCreateManualTrigger,
   onInvokeTrigger,
 }: StudioWorkflowLibraryProps) {
+  const [confirmDeleteDefinitionId, setConfirmDeleteDefinitionId] = useState<string | null>(null);
+  const [confirmDeleteVersionId, setConfirmDeleteVersionId] = useState<string | null>(null);
+
   return (
     <section className={libraryPanelClassName}>
       <div className="flex items-start justify-between gap-3">
@@ -166,16 +170,42 @@ export default function StudioWorkflowLibrary({
                     >
                       {openDefinitionLabel}
                     </button>
-                    <button
-                      className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteDefinition(definition);
-                      }}
-                      disabled={deletingWorkflowDefinitionId === definition.id}
-                    >
-                      {deletingWorkflowDefinitionId === definition.id ? "Deleting..." : "Delete"}
-                    </button>
+                    {confirmDeleteDefinitionId === definition.id ? (
+                      <>
+                        <span className="self-center text-xs text-text-rose-token">Delete this workflow?</span>
+                        <button
+                          className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setConfirmDeleteDefinitionId(null);
+                            onDeleteDefinition(definition);
+                          }}
+                          disabled={deletingWorkflowDefinitionId === definition.id}
+                        >
+                          {deletingWorkflowDefinitionId === definition.id ? "Deleting..." : "Yes, Delete"}
+                        </button>
+                        <button
+                          className={libraryActionButtonClassName}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setConfirmDeleteDefinitionId(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setConfirmDeleteDefinitionId(definition.id);
+                        }}
+                        disabled={deletingWorkflowDefinitionId === definition.id}
+                      >
+                        {deletingWorkflowDefinitionId === definition.id ? "Deleting..." : "Delete"}
+                      </button>
+                    )}
                   </div>
                 </article>
               );
@@ -315,16 +345,42 @@ export default function StudioWorkflowLibrary({
                       {openVersionLabel}
                     </button>
                     {onDeleteVersion ? (
-                      <button
-                        className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDeleteVersion(version);
-                        }}
-                        disabled={deletingWorkflowVersionId === version.id}
-                      >
-                        {deletingWorkflowVersionId === version.id ? "Deleting..." : "Delete"}
-                      </button>
+                      confirmDeleteVersionId === version.id ? (
+                        <>
+                          <span className="self-center text-xs text-text-rose-token">Delete v{version.version_number}?</span>
+                          <button
+                            className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setConfirmDeleteVersionId(null);
+                              onDeleteVersion(version);
+                            }}
+                            disabled={deletingWorkflowVersionId === version.id}
+                          >
+                            {deletingWorkflowVersionId === version.id ? "Deleting..." : "Yes, Delete"}
+                          </button>
+                          <button
+                            className={libraryActionButtonClassName}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setConfirmDeleteVersionId(null);
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setConfirmDeleteVersionId(version.id);
+                          }}
+                          disabled={deletingWorkflowVersionId === version.id}
+                        >
+                          Delete
+                        </button>
+                      )
                     ) : null}
                   </div>
                 </article>
