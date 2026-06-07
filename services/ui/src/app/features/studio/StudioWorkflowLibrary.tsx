@@ -31,6 +31,8 @@ type StudioWorkflowLibraryProps = {
   openDefinitionLabel?: string;
   onSelectVersion?: (version: WorkflowVersion) => void;
   onOpenVersion: (version: WorkflowVersion) => void;
+  onDeleteVersion?: (version: WorkflowVersion) => void;
+  deletingWorkflowVersionId?: string | null;
   openVersionLabel?: string;
   onCreateManualTrigger: () => void;
   onInvokeTrigger: (trigger: WorkflowTrigger) => void;
@@ -74,6 +76,8 @@ export default function StudioWorkflowLibrary({
   openDefinitionLabel = "Open Draft",
   onSelectVersion,
   onOpenVersion,
+  onDeleteVersion,
+  deletingWorkflowVersionId,
   openVersionLabel = "Restore Version",
   onCreateManualTrigger,
   onInvokeTrigger,
@@ -310,6 +314,18 @@ export default function StudioWorkflowLibrary({
                     >
                       {openVersionLabel}
                     </button>
+                    {onDeleteVersion ? (
+                      <button
+                        className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteVersion(version);
+                        }}
+                        disabled={deletingWorkflowVersionId === version.id}
+                      >
+                        {deletingWorkflowVersionId === version.id ? "Deleting..." : "Delete"}
+                      </button>
+                    ) : null}
                   </div>
                 </article>
               );

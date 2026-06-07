@@ -44,6 +44,7 @@ export default function WorkflowLibraryPage() {
   const [deletingWorkflowDefinitionId, setDeletingWorkflowDefinitionId] = useState<string | null>(
     null
   );
+  const [deletingWorkflowVersionId, setDeletingWorkflowVersionId] = useState<string | null>(null);
   const [workflowActionLoading, setWorkflowActionLoading] = useState<"delete" | "save" | "run" | null>(
     null
   );
@@ -243,6 +244,37 @@ export default function WorkflowLibraryPage() {
     }
   };
 
+  const deleteWorkflowVersion = async (version: WorkflowVersion) => {
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        `Delete version v${version.version_number}? Its run history will also be deleted.`
+      );
+      if (!confirmed) return;
+    }
+    setWorkflowActionLoading("delete");
+    setDeletingWorkflowVersionId(version.id);
+    try {
+      const response = await apiFetch(
+        `${apiUrl}/workflows/versions/${encodeURIComponent(version.id)}`,
+        { method: "DELETE" }
+      );
+      const body = response.status === 204 ? null : ((await response.json()) as { detail?: unknown } | null);
+      if (!response.ok) {
+        throw new Error(detailMessage(body, `Delete version failed (${response.status}).`));
+      }
+      setWorkflowVersions((prev) => prev.filter((v) => v.id !== version.id));
+      if (activeWorkflowDefinitionId) {
+        void refreshWorkflowRuns(activeWorkflowDefinitionId);
+      }
+      setNotice(`Deleted version v${version.version_number}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Failed to delete version.");
+    } finally {
+      setDeletingWorkflowVersionId(null);
+      setWorkflowActionLoading(null);
+    }
+  };
+
   const createManualWorkflowTrigger = async () => {
     if (!activeWorkflowDefinitionId || !activeWorkflowDefinition) {
       setNotice("Select a workflow definition before creating a trigger.");
@@ -400,6 +432,7 @@ export default function WorkflowLibraryPage() {
                     void deleteWorkflowDefinition(definition);
                   }}
                   openDefinitionLabel="Open In Studio"
+                  deletingWorkflowVersionId={deletingWorkflowVersionId}
                   onSelectVersion={(version) => {
                     setActiveWorkflowVersionId(version.id);
                   }}
@@ -407,6 +440,9 @@ export default function WorkflowLibraryPage() {
                     router.push(
                       `/studio?definition=${encodeURIComponent(version.definition_id)}&version=${encodeURIComponent(version.id)}`
                     );
+                  }}
+                  onDeleteVersion={(version) => {
+                    void deleteWorkflowVersion(version);
                   }}
                   openVersionLabel="Open Version"
                   onCreateManualTrigger={() => {

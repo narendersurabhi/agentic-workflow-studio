@@ -21563,6 +21563,26 @@ def list_workflow_versions(
     return [_workflow_version_from_record(record) for record in records]
 
 
+@app.delete("/workflows/versions/{version_id}")
+def delete_workflow_version(
+    version_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    record = (
+        db.query(WorkflowVersionRecord)
+        .filter(WorkflowVersionRecord.id == version_id)
+        .first()
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="workflow_version_not_found")
+    db.query(WorkflowRunRecord).filter(
+        WorkflowRunRecord.version_id == version_id
+    ).delete(synchronize_session=False)
+    db.delete(record)
+    db.commit()
+    return {"ok": True}
+
+
 @app.post(
     "/workflows/definitions/{definition_id}/publish",
     response_model=models.WorkflowVersion,
