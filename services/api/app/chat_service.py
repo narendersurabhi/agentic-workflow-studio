@@ -3223,17 +3223,32 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
                     },
                     exc_info=True,
                 )
-        elif matches and isinstance(matches, list) and not wants_synthesis:
-            logger.debug(
+        else:
+            _skip_reason = (
+                "no_matches" if not matches
+                else "synthesis_not_declared" if not wants_synthesis
+                else "no_synthesize_callback" if ctx.chat.rag_synthesize_callback is None
+                else "unknown"
+            )
+            logger.info(
                 "chat_tool_rag_synthesis_skipped",
-                extra={"capability_id": plan.capability_id, "reason": "rag_grounded_synthesis_not_declared"},
+                extra={
+                    "capability_id": plan.capability_id,
+                    "reason": _skip_reason,
+                    "match_count": len(matches) if isinstance(matches, list) else 0,
+                    "wants_synthesis": wants_synthesis,
+                    "has_callback": ctx.chat.rag_synthesize_callback is not None,
+                },
             )
         logger.info(
             "chat_tool_call_total",
             extra={
                 "capability_id": plan.capability_id,
                 "total_ms": round((time.perf_counter() - _t_tool_start) * 1000, 1),
-                "rag_grounded": wants_synthesis and bool(matches),
+                "rag_grounded": bool(matches) and wants_synthesis and ctx.chat.rag_synthesize_callback is not None,
+                "match_count": len(matches) if isinstance(matches, list) else 0,
+                "wants_synthesis": wants_synthesis,
+                "has_callback": ctx.chat.rag_synthesize_callback is not None,
                 "content_len": len(content),
             },
         )
