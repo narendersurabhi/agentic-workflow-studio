@@ -35,11 +35,11 @@
   --gradient-panel-deep: linear-gradient(180deg, rgba(37, 49, 61, 0.86), rgba(16, 24, 34, 0.90));
   --gradient-panel-mid: linear-gradient(180deg, rgba(63, 79, 95, 0.54), rgba(47, 60, 74, 0.68));
 
-  /* Shell structural gradients */
-  --gradient-shell: linear-gradient(180deg, #435365 0px, #435365 78px, #55697c 78px, #55697c 100%);
-  --gradient-header: linear-gradient(180deg, rgba(67, 83, 101, 0.98), rgba(60, 74, 90, 0.98));
+  /* Shell structural gradients — defaults (ocean); overridden by .shell-theme-* */
+  --gradient-shell:   linear-gradient(180deg, #435365 0px, #435365 78px, #55697c 78px, #55697c 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(67, 83, 101, 0.98), rgba(60, 74, 90, 0.98));
   --gradient-sidebar: linear-gradient(180deg, rgba(49, 61, 74, 0.96), rgba(44, 56, 69, 0.98));
-  --gradient-hero: linear-gradient(135deg, rgb(28, 25, 23), rgb(15, 23, 42), rgb(8, 30, 58));
+  --gradient-hero:    linear-gradient(135deg, rgb(28, 25, 23), rgb(15, 23, 42), rgb(8, 30, 58));
 
   /* Navigation tokens */
   --nav-active-bg:     rgba(56, 189, 248, 0.18);
@@ -92,10 +92,7 @@
   --gradient-panel-deep: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(238, 245, 252, 0.98));
   --gradient-panel-mid: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(241, 245, 249, 0.96));
 
-  /* Shell structural gradients */
-  --gradient-shell: linear-gradient(180deg, #e1e9f2 0px, #e1e9f2 78px, #f5f8fc 78px, #f5f8fc 100%);
-  --gradient-header: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(241, 245, 249, 0.98));
-  --gradient-sidebar: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.98));
+  /* Hero header gradient — light mode content area only */
   --gradient-hero: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(238, 245, 252, 0.98));
 
   /* Navigation tokens */
@@ -147,25 +144,57 @@
 @tailwind components;
 @tailwind utilities;
 
-/* App shell gradient backgrounds — driven by class applied in AppShell.tsx */
-.app-shell-light {
-  background: linear-gradient(135deg, #e1e9f2, #f5f8fc);
-}
+/* ─── Named shell themes ──────────────────────────────────────────────────────
+   Each class sets CSS custom properties on the app-shell root element.
+   Child elements using bg-gradient-shell / bg-gradient-header / bg-gradient-sidebar
+   inherit these values, so the visual theme applies throughout the shell.
+   Dark / light mode independently controls text, surface, and border tokens. */
 
-.app-shell-dark {
-  background: linear-gradient(135deg, #435365, #55697c);
+.shell-theme-ocean {
+  --gradient-shell:   linear-gradient(180deg, #435365 0px, #435365 78px, #55697c 78px, #55697c 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(67, 83, 101, 0.98), rgba(60, 74, 90, 0.98));
+  --gradient-sidebar: linear-gradient(180deg, rgba(49, 61, 74, 0.96), rgba(44, 56, 69, 0.98));
 }
-
-/* Named shell themes */
-.shell-theme-ocean    { background: linear-gradient(135deg, #435365, #55697c); }
-.shell-theme-midnight { background: linear-gradient(135deg, #0d1117, #1a2233); }
-.shell-theme-slate    { background: linear-gradient(135deg, #0f172a, #1e293b); }
-.shell-theme-forest   { background: linear-gradient(135deg, #0a1f0e, #162a1c); }
-.shell-theme-dusk     { background: linear-gradient(135deg, #1a1025, #26183a); }
-.shell-theme-ember    { background: linear-gradient(135deg, #1a0e08, #2c1a10); }
-.shell-theme-cloud    { background: linear-gradient(135deg, #e1e9f2, #f5f8fc); }
-.shell-theme-sand     { background: linear-gradient(135deg, #f5f0e8, #ede5d8); }
-.shell-theme-rose     { background: linear-gradient(135deg, #fdf2f4, #fce7ec); }
+.shell-theme-midnight {
+  --gradient-shell:   linear-gradient(180deg, #0d1117 0px, #0d1117 78px, #1a2233 78px, #1a2233 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(13, 17, 23, 0.99), rgba(18, 24, 36, 0.99));
+  --gradient-sidebar: linear-gradient(180deg, rgba(10, 14, 20, 0.98), rgba(14, 20, 32, 0.98));
+}
+.shell-theme-slate {
+  --gradient-shell:   linear-gradient(180deg, #0f172a 0px, #0f172a 78px, #1e293b 78px, #1e293b 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(15, 23, 42, 0.99), rgba(20, 30, 50, 0.99));
+  --gradient-sidebar: linear-gradient(180deg, rgba(12, 18, 34, 0.98), rgba(16, 24, 44, 0.98));
+}
+.shell-theme-forest {
+  --gradient-shell:   linear-gradient(180deg, #0a1f0e 0px, #0a1f0e 78px, #162a1c 78px, #162a1c 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(10, 31, 14, 0.99), rgba(16, 36, 22, 0.99));
+  --gradient-sidebar: linear-gradient(180deg, rgba(8, 24, 11, 0.98), rgba(12, 28, 18, 0.98));
+}
+.shell-theme-dusk {
+  --gradient-shell:   linear-gradient(180deg, #1a1025 0px, #1a1025 78px, #26183a 78px, #26183a 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(26, 16, 37, 0.99), rgba(32, 22, 50, 0.99));
+  --gradient-sidebar: linear-gradient(180deg, rgba(20, 12, 30, 0.98), rgba(26, 18, 42, 0.98));
+}
+.shell-theme-ember {
+  --gradient-shell:   linear-gradient(180deg, #1a0e08 0px, #1a0e08 78px, #2c1a10 78px, #2c1a10 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(26, 14, 8, 0.99), rgba(34, 22, 14, 0.99));
+  --gradient-sidebar: linear-gradient(180deg, rgba(20, 10, 6, 0.98), rgba(28, 16, 10, 0.98));
+}
+.shell-theme-cloud {
+  --gradient-shell:   linear-gradient(180deg, #e1e9f2 0px, #e1e9f2 78px, #f5f8fc 78px, #f5f8fc 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(241, 245, 249, 0.98));
+  --gradient-sidebar: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.98));
+}
+.shell-theme-sand {
+  --gradient-shell:   linear-gradient(180deg, #f5f0e8 0px, #f5f0e8 78px, #ede5d8 78px, #ede5d8 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(252, 249, 244, 0.96), rgba(248, 244, 237, 0.98));
+  --gradient-sidebar: linear-gradient(180deg, rgba(250, 246, 240, 0.96), rgba(244, 239, 230, 0.98));
+}
+.shell-theme-rose {
+  --gradient-shell:   linear-gradient(180deg, #fdf2f4 0px, #fdf2f4 78px, #fce7ec 78px, #fce7ec 100%);
+  --gradient-header:  linear-gradient(180deg, rgba(255, 249, 250, 0.96), rgba(253, 244, 247, 0.98));
+  --gradient-sidebar: linear-gradient(180deg, rgba(253, 246, 248, 0.96), rgba(251, 242, 245, 0.98));
+}
 
 .font-body {
   font-family: var(--font-body), "Helvetica Neue", sans-serif;
