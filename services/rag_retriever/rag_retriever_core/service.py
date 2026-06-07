@@ -107,6 +107,8 @@ class VectorDatabase(Protocol):
         filter_obj: dict[str, Any],
     ) -> None: ...
 
+    def list_collections(self) -> list[str]: ...
+
 
 @dataclass(frozen=True)
 class RetrieverServiceConfig:
@@ -468,6 +470,17 @@ class QdrantClient:
                 return None
             raise
 
+    def list_collections(self) -> list[str]:
+        result = self._request(method="GET", path="/collections")
+        collections = (result or {}).get("collections") if isinstance(result, dict) else None
+        if not isinstance(collections, list):
+            return []
+        return [
+            str(c.get("name") or "").strip()
+            for c in collections
+            if isinstance(c, dict) and str(c.get("name") or "").strip()
+        ]
+
     def scroll(
         self,
         *,
@@ -666,6 +679,9 @@ class RetrieverService:
                 for score, _index, match in limited
             ],
         )
+
+    def list_collections(self) -> list[str]:
+        return self.vector_db.list_collections()
 
     def list_documents(self, request: DocumentListRequest) -> DocumentListResponse:
         self._validate_scope(

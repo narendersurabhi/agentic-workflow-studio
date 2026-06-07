@@ -43,6 +43,7 @@ kubectl port-forward -n awe svc/coder 18001:8000
 
 # Qdrant HTTP API
 kubectl port-forward -n awe svc/qdrant 16333:6333
+kubectl port-forward -n awe svc/qdrant 16333:6333
 
 ```
 

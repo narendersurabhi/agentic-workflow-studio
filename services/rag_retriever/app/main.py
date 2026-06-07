@@ -135,6 +135,14 @@ def delete_document_endpoint(request: DeleteDocumentRequest) -> DeleteDocumentRe
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
+@app.get("/collections")
+def list_collections_endpoint() -> dict:
+    try:
+        return {"collections": RETRIEVER_SERVICE.list_collections()}
+    except RetrieverError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 @app.post("/collections/ensure", response_model=EnsureCollectionResponse)
 def ensure_collection_endpoint(request: EnsureCollectionRequest) -> EnsureCollectionResponse:
     try:
