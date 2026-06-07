@@ -3,25 +3,13 @@
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 import StudioWorkbenchIcon from "../features/studio/StudioWorkbenchIcon";
-import { PRIMARY_APP_NAV_ITEMS, type AppScreenId } from "../lib/app-navigation";
+import { PRIMARY_APP_NAV_ITEMS } from "../lib/app-navigation";
 import { SHELL_THEMES, useAppTheme, type ShellTheme } from "../lib/theme";
+import { useShellMeta, useShellActionsSlotRef } from "../lib/shell";
 import { useAuth } from "../lib/auth";
-
-export type AppBreadcrumb = {
-  label: string;
-  href?: string;
-};
-
-export type AppShellProps = {
-  activeScreen: AppScreenId;
-  title: string;
-  breadcrumbs?: AppBreadcrumb[];
-  actions?: ReactNode;
-  children: ReactNode;
-  contentClassName?: string;
-};
 
 function ThemeModeIcon({
   theme,
@@ -91,7 +79,6 @@ function ThemePicker() {
         aria-label="Change theme"
         title="Change theme"
       >
-        {/* swatch preview of current theme */}
         <span
           className="h-3.5 w-3.5 rounded-full border border-white/20 shrink-0"
           style={{ background: active.swatch }}
@@ -137,17 +124,20 @@ function ThemePicker() {
   );
 }
 
-export default function AppShell({
-  activeScreen,
-  title,
-  breadcrumbs = [],
-  actions,
-  children,
-  contentClassName = "px-4 py-4",
-}: AppShellProps) {
+export default function AppShell({ children }: { children: ReactNode }) {
   const { mounted, theme, shellTheme, toggleTheme } = useAppTheme();
   const isLightTheme = mounted ? theme === "light" : false;
   const { user, logout } = useAuth();
+  const pathname = usePathname();
+  const shellMeta = useShellMeta();
+  const actionsSlotRef = useShellActionsSlotRef();
+
+  // Derive active nav item and title from pathname
+  const activeNavItem = PRIMARY_APP_NAV_ITEMS.find((item) => item.href === pathname)
+    ?? PRIMARY_APP_NAV_ITEMS.find((item) => item.href !== "/" && pathname.startsWith(item.href));
+  const activeScreenId = activeNavItem?.id ?? "home";
+  const title = shellMeta.title || activeNavItem?.title || "Workspace";
+  const breadcrumbs = shellMeta.breadcrumbs;
 
   const userInitials = user
     ? user.display_name
@@ -162,7 +152,7 @@ export default function AppShell({
 
   return (
     <div
-      className={`app-shell -mx-6 -my-8 min-h-screen text-text-hi ${shellClass}`}
+      className={`app-shell min-h-screen text-text-hi ${shellClass}`}
       data-app-theme={mounted ? theme : "dark"}
     >
       <div className="min-h-screen bg-gradient-shell">
@@ -178,30 +168,30 @@ export default function AppShell({
               <div className="truncate text-[22px] font-semibold tracking-[-0.03em] text-text-hi">
                 {title}
               </div>
-              {breadcrumbs.length > 0 ? (
+              {breadcrumbs.length > 0 && (
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-text-md">
-                  {breadcrumbs.map((breadcrumb, index) => (
-                    <span key={`${breadcrumb.label}-${index}`} className="contents">
-                      {breadcrumb.href ? (
-                        <Link
-                          href={breadcrumb.href}
-                          className="transition hover:text-text-hi"
-                        >
-                          {breadcrumb.label}
+                  {breadcrumbs.map((crumb, i) => (
+                    <span key={`${crumb.label}-${i}`} className="contents">
+                      {crumb.href ? (
+                        <Link href={crumb.href} className="transition hover:text-text-hi">
+                          {crumb.label}
                         </Link>
                       ) : (
-                        <span className="text-text-hi">{breadcrumb.label}</span>
+                        <span className="text-text-hi">{crumb.label}</span>
                       )}
-                      {index < breadcrumbs.length - 1 ? (
+                      {i < breadcrumbs.length - 1 && (
                         <span className="text-text-lo">›</span>
-                      ) : null}
+                      )}
                     </span>
                   ))}
                 </div>
-              ) : null}
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {/* Per-page action buttons are portalled here by ShellActions */}
+              <div ref={actionsSlotRef} className="flex flex-wrap items-center gap-2" />
+
               <button
                 type="button"
                 onClick={toggleTheme}
@@ -212,7 +202,7 @@ export default function AppShell({
                 {isLightTheme ? "Dark" : "Light"}
               </button>
               <ThemePicker />
-              {actions}
+
               {user && (
                 <div className="flex items-center gap-2">
                   <div
@@ -249,7 +239,7 @@ export default function AppShell({
                     aria-label={item.label}
                     className="flex h-11 w-11 items-center justify-center rounded-xl border transition"
                     style={
-                      item.id === activeScreen
+                      item.id === activeScreenId
                         ? {
                             background: "var(--nav-active-bg)",
                             borderColor: "var(--nav-active-border)",
@@ -270,7 +260,7 @@ export default function AppShell({
             </div>
           </aside>
 
-          <main className={`min-w-0 overflow-auto ${contentClassName}`}>{children}</main>
+          <main className="min-w-0 overflow-auto">{children}</main>
         </div>
       </div>
     </div>

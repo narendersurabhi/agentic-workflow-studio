@@ -1,10 +1,9 @@
 import { Suspense } from "react";
-
-import { WorkspaceSurfaceContent } from "../WorkspaceSurfaceContent";
+import { WorkspaceSurfaceContent } from "../../WorkspaceSurfaceContent";
 
 export default function ChatPage() {
   return (
-    <Suspense fallback={<main className="min-h-screen bg-slate-50" />}>
+    <Suspense fallback={<div className="min-h-screen" />}>
       <WorkspaceSurfaceContent screen="chat" />
     </Suspense>
   );

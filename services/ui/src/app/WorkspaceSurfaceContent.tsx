@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import AppShell from "./components/AppShell";
+import { useShell, ShellActions } from "./lib/shell";
 import ComposerDagCanvas from "./components/composer/ComposerDagCanvas";
 import ScreenHeader, {
   screenHeaderPrimaryActionClassName,
@@ -2386,6 +2386,17 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const showWelcomeScreen = initialScreen === "home";
   const showComposeScreen = initialScreen === "compose";
   const showChatScreen = initialScreen === "chat";
+
+  const shellTitle = showWelcomeScreen
+    ? "AI Workflow Workspace"
+    : showChatScreen
+    ? "Chat"
+    : "Run from Prompt";
+  useShell({
+    title: shellTitle,
+    breadcrumbs: showWelcomeScreen ? [{ label: "Welcome" }] : [{ label: shellTitle }],
+  });
+
   const { user: authUser } = useAuth();
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState("{}");
@@ -7356,33 +7367,27 @@ const openTemplateModal = (template: Template) => {
 
   if (showWelcomeScreen) {
     return (
-      <AppShell
-        activeScreen="home"
-        title="AI Workflow Workspace"
-        breadcrumbs={[{ label: "Welcome" }]}
-        actions={
-          <>
-            <Link
-              href="/project"
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-            >
-              Project
-            </Link>
-            <Link
-              href="/workflows"
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-            >
-              Saved Workflows
-            </Link>
-            <Link
-              href="/studio"
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
-            >
-              Open Studio
-            </Link>
-          </>
-        }
-      >
+      <>
+        <ShellActions>
+          <Link
+            href="/project"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+          >
+            Project
+          </Link>
+          <Link
+            href="/workflows"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+          >
+            Saved Workflows
+          </Link>
+          <Link
+            href="/studio"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
+          >
+            Open Studio
+          </Link>
+        </ShellActions>
         <section className="relative">
           <div className="mb-4">
             <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
@@ -7431,7 +7436,7 @@ const openTemplateModal = (template: Template) => {
             ))}
           </div>
         </section>
-      </AppShell>
+      </>
     );
   }
 
@@ -7453,8 +7458,7 @@ const openTemplateModal = (template: Template) => {
       : "border-sky-300/22 bg-accent-sky text-text-sky-token";
 
     return (
-      <AppShell activeScreen="chat" title="Chat">
-        <div className="flex h-[calc(100dvh-60px)] flex-col gap-0 overflow-hidden">
+      <div className="flex h-[calc(100dvh-60px)] flex-col gap-0 overflow-hidden">
           {/* ── Top bar ── */}
           <div className="flex shrink-0 items-center justify-between gap-4 border-b border-subtle px-4 py-3">
             <div>
@@ -7692,7 +7696,6 @@ const openTemplateModal = (template: Template) => {
             ) : null}
           </div>
         </div>
-      </AppShell>
     );
   }
 
@@ -7740,10 +7743,6 @@ const openTemplateModal = (template: Template) => {
   const sidebarToggleTopClassName = useStudioSurfaceTheme ? "top-[92px]" : "top-4";
 
   return (
-    <AppShell
-      activeScreen={showComposeScreen ? "compose" : "chat"}
-      title={showComposeScreen ? "Run from Prompt" : "Chat"}
-    >
     <div className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
       {!useStudioSurfaceTheme ? (
         <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
@@ -12062,7 +12061,6 @@ const openTemplateModal = (template: Template) => {
 
       </div>
     </div>
-    </AppShell>
   );
 }
 

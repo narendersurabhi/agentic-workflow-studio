@@ -5,7 +5,7 @@ import { apiFetch, useAuth } from "../../lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import AppShell from "../../components/AppShell";
+import { useShell, ShellActions } from "../../lib/shell";
 import StudioWorkflowLibrary from "./StudioWorkflowLibrary";
 import type {
   WorkflowDefinition,
@@ -313,31 +313,30 @@ export default function WorkflowLibraryPage() {
     activeWorkflowDefinition ? `active ${activeWorkflowDefinition.title}` : "no active draft",
   ];
 
+  useShell({
+    title: "Saved Workflows",
+    breadcrumbs: [
+      { label: "Project", href: "/project" },
+      { label: "Saved Workflows" },
+    ],
+  });
+
   return (
-    <AppShell
-      activeScreen="workflows"
-      title="Saved Workflows"
-      breadcrumbs={[
-        { label: "Project", href: "/project" },
-        { label: "Saved Workflows" },
-      ]}
-      actions={
-        <>
-          <Link
-            href="/studio"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-          >
-            Open Studio
-          </Link>
-          <Link
-            href="/studio?mode=new"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
-          >
-            New Workflow
-          </Link>
-        </>
-      }
-    >
+    <>
+      <ShellActions>
+        <Link
+          href="/studio"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+        >
+          Open Studio
+        </Link>
+        <Link
+          href="/studio?mode=new"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
+        >
+          New Workflow
+        </Link>
+      </ShellActions>
       {notice ? (
         <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {notice}
@@ -419,6 +418,6 @@ export default function WorkflowLibraryPage() {
                 />
               </div>
       </section>
-    </AppShell>
+    </>
   );
 }

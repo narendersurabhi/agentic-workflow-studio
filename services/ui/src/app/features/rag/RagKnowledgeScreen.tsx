@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiFetch, useAuth } from "../../lib/auth";
 
-import AppShell from "../../components/AppShell";
+import { useShell, ShellActions } from "../../lib/shell";
 import ScreenHeader from "../../components/ScreenHeader";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
@@ -843,35 +843,34 @@ export default function RagKnowledgeScreen() {
     setNotice(null);
   };
 
+  useShell({
+    title: "Knowledge Base",
+    breadcrumbs: [
+      { label: "Project", href: "/project" },
+      { label: "Knowledge Base" },
+    ],
+  });
+
   return (
-    <AppShell
-      activeScreen="rag"
-      title="Knowledge Base"
-      breadcrumbs={[
-        { label: "Project", href: "/project" },
-        { label: "Knowledge Base" },
-      ]}
-      actions={
-        <>
-          <button
-            type="button"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void refreshDocuments()}
-            disabled={documentsLoading}
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void submitIndex()}
-            disabled={indexing}
-          >
-            {indexing ? "Indexing..." : "Index Now"}
-          </button>
-        </>
-      }
-    >
+    <>
+      <ShellActions>
+        <button
+          type="button"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void refreshDocuments()}
+          disabled={documentsLoading}
+        >
+          Refresh
+        </button>
+        <button
+          type="button"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void submitIndex()}
+          disabled={indexing}
+        >
+          {indexing ? "Indexing..." : "Index Now"}
+        </button>
+      </ShellActions>
       <ScreenHeader
         eyebrow="Knowledge Base"
         title="Knowledge Base"
@@ -1338,6 +1337,6 @@ export default function RagKnowledgeScreen() {
           )}
         </section>
       </div>
-    </AppShell>
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import RagKnowledgeScreen from "../features/rag/RagKnowledgeScreen";
+import RagKnowledgeScreen from "../../features/rag/RagKnowledgeScreen";
 
 export default function RagPage() {
   return <RagKnowledgeScreen />;

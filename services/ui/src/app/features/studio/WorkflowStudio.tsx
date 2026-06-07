@@ -5,7 +5,7 @@ import { apiFetch } from "../../lib/auth";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import AppShell from "../../components/AppShell";
+import { useShell, ShellActions } from "../../lib/shell";
 import ComposerDagCanvas from "../../components/composer/ComposerDagCanvas";
 import ComposerValidationPanel from "../../components/composer/ComposerValidationPanel";
 import {
@@ -6557,67 +6557,66 @@ export default function WorkflowStudio() {
       ? "Process Flow Designer"
       : composerDraft.summary.trim() || "Workflow Studio draft";
 
+  useShell({
+    title: studioShellTitle,
+    breadcrumbs: [
+      { label: "Project", href: "/project" },
+      { label: "Workflows", href: "/workflows" },
+      { label: studioShellBreadcrumbLabel },
+    ],
+  });
+
   return (
-    <AppShell
-      activeScreen="studio"
-      title={studioShellTitle}
-      breadcrumbs={[
-        { label: "Project", href: "/project" },
-        { label: "Workflows", href: "/workflows" },
-        { label: studioShellBreadcrumbLabel },
-      ]}
-      actions={
-        <>
-          <div className="inline-flex items-center gap-1 rounded-xl border border-subtle bg-surface-1 p-1">
-            {(["workflow", "workbench"] as StudioSurface[]).map((surface) => (
-              <button
-                key={surface}
-                type="button"
-                className={`rounded-lg px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
-                  activeStudioSurface === surface
-                    ? "bg-accent-sky text-text-hi"
-                    : "text-text-hi hover:bg-surface-1"
-                }`}
-                onClick={() => switchStudioSurface(surface)}
-              >
-                {surface === "workflow" ? "studio" : "canvas"}
-              </button>
-            ))}
-          </div>
-          {activeStudioSurface === "workflow" ? (
-            <>
-              <button
-                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-                onClick={startFreshStudioDraft}
-              >
-                New Workflow
-              </button>
-              <button
-                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={saveWorkflowDefinition}
-                disabled={workflowActionLoading !== null}
-              >
-                {workflowActionLoading === "save" ? "Saving..." : "Save"}
-              </button>
-              <button
-                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={publishWorkflowVersion}
-                disabled={workflowActionLoading !== null}
-              >
-                {workflowActionLoading === "publish" ? "Publishing..." : "Publish"}
-              </button>
-              <button
-                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={runWorkflowVersion}
-                disabled={workflowActionLoading !== null}
-              >
-                {workflowActionLoading === "run" ? "Starting..." : "Run Workflow"}
-              </button>
-            </>
-          ) : null}
-        </>
-      }
-    >
+    <>
+      <ShellActions>
+        <div className="inline-flex items-center gap-1 rounded-xl border border-subtle bg-surface-1 p-1">
+          {(["workflow", "workbench"] as StudioSurface[]).map((surface) => (
+            <button
+              key={surface}
+              type="button"
+              className={`rounded-lg px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+                activeStudioSurface === surface
+                  ? "bg-accent-sky text-text-hi"
+                  : "text-text-hi hover:bg-surface-1"
+              }`}
+              onClick={() => switchStudioSurface(surface)}
+            >
+              {surface === "workflow" ? "studio" : "canvas"}
+            </button>
+          ))}
+        </div>
+        {activeStudioSurface === "workflow" ? (
+          <>
+            <button
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+              onClick={startFreshStudioDraft}
+            >
+              New Workflow
+            </button>
+            <button
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={saveWorkflowDefinition}
+              disabled={workflowActionLoading !== null}
+            >
+              {workflowActionLoading === "save" ? "Saving..." : "Save"}
+            </button>
+            <button
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={publishWorkflowVersion}
+              disabled={workflowActionLoading !== null}
+            >
+              {workflowActionLoading === "publish" ? "Publishing..." : "Publish"}
+            </button>
+            <button
+              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={runWorkflowVersion}
+              disabled={workflowActionLoading !== null}
+            >
+              {workflowActionLoading === "run" ? "Starting..." : "Run Workflow"}
+            </button>
+          </>
+        ) : null}
+      </ShellActions>
       {activeStudioSurface === "workflow" && studioNotice ? (
         <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {studioNotice}
@@ -7023,6 +7022,6 @@ export default function WorkflowStudio() {
           </div>
         </div>
       ) : null}
-    </AppShell>
+    </>
   );
 }
