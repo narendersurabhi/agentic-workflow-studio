@@ -104,8 +104,8 @@ docker compose build api && docker compose up -d api
 **`libs/core/tool_registry.py` is too large (~1400 lines)**
 Concrete handler implementations (`_math_eval`, `_write_text_file`, `_http_fetch`, `_llm_generate`, etc.) belong in `libs/tools/`, not `libs/core/`. The file currently combines handler code, DI wiring, registration, and the public factory — these should be split. Do not add new handler implementations here; put them in `libs/tools/` instead.
 
-**Alembic not wired into startup**
-`_init_db()` in `services/api/app/main.py` runs `create_all()` but not `alembic upgrade head`. Adding a column to an ORM model without a migration silently breaks existing deployments (caused a production login failure with the `preferences` column). Every ORM model change needs an Alembic migration. Option to wire `alembic upgrade head` into startup is planned but not done yet — do not implement without asking.
+**Alembic wired into startup** ✓ resolved
+`_init_db()` now calls `_run_migrations()` which runs `alembic upgrade head` before `create_all()`. Every deployment automatically applies pending migrations. Every ORM model change still needs an Alembic migration — `create_all()` is kept as a safety net for fresh databases but migrations are the authoritative schema source.
 
 **No Alembic baseline migration**
 The oldest migration (`20260204_add_task_intent`, `down_revision = None`) assumes `jobs`, `plans`, `tasks`, `chat_sessions`, `chat_messages` already exist. Fresh DB deployments work only because `create_all()` runs first. This ordering is undocumented and fragile. A proper baseline migration is needed.
@@ -120,7 +120,7 @@ These use `anyOf`/`not` at the top level that can't be expressed cleanly in Pyda
 
 ## What NOT to Do
 
-- Do not run `alembic upgrade head` or create migration files without asking
+- Do not create Alembic migration files without asking
 - Do not `git push --force` to main
 - Do not add `time.sleep()` to tool handlers
 - Do not add fallback/error-swallowing in tool handlers — let errors propagate so `ToolRegistry` can classify them

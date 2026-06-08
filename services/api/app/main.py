@@ -1102,13 +1102,26 @@ def _rag_retriever_request_json(
 
 
 def _init_db() -> None:
+    _run_migrations()
     Base.metadata.create_all(bind=engine)
-    # Idempotent column additions for schema evolution (create_all won't add
-    # columns to existing tables).
-    with engine.begin() as conn:
-        conn.execute(sqlalchemy.text(
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB"
-        ))
+    if EVENT_OUTBOX_ENABLED:
+        _start_event_outbox_dispatcher()
+    if ORCHESTRATOR_ENABLED:
+        _start_orchestrator()
+    if JOB_RECOVERY_ENABLED:
+        _recover_jobs()
+
+
+def _run_migrations() -> None:
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic import command
+
+    alembic_ini = Path(__file__).parent / "alembic.ini"
+    cfg = Config(str(alembic_ini))
+    cfg.set_main_option("script_location", str(alembic_ini.parent / "alembic"))
+    command.upgrade(cfg, "head")
+    logger.info("alembic_upgrade_head_complete")
     if EVENT_OUTBOX_ENABLED:
         _start_event_outbox_dispatcher()
     if ORCHESTRATOR_ENABLED:
