@@ -48,7 +48,7 @@ def test_resolve_input_schema_finds_real_schema_regardless_of_cwd(tmp_path, monk
     monkeypatch.chdir(tmp_path)
 
     class _Spec:
-        input_schema_ref = "agent_run_capability_input"
+        input_schema_ref = "agent_capability_input"
         capability_id = "agent.run"
 
     schema = agent_tools._resolve_input_schema(_Spec())

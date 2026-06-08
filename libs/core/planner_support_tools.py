@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core import (
     capability_registry,
     capability_search,
@@ -13,28 +15,81 @@ from libs.core import (
 )
 
 
+class SearchCapabilitiesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(description="Search query for capability catalog")
+    intent_hint: str | None = None
+    limit: int | None = Field(default=None, ge=1, le=25)
+
+
+class SearchCapabilitiesOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    matches: list[dict[str, Any]]
+
+
+class GetCapabilityContractInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    capability_id: str = Field(description="The capability ID to inspect")
+
+
+class GetCapabilityContractOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    contract: dict[str, Any]
+
+
+class GetSchemaInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_ref: str = Field(description="Schema reference (path or ID) to load")
+
+
+class GetSchemaOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema: dict[str, Any]
+    summary: dict[str, Any]
+
+
+class GetWorkflowHintsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str = Field(description="The planning goal to get workflow hints for")
+    limit: int | None = Field(default=None, ge=1, le=25)
+
+
+class GetWorkflowHintsOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    hints: list[dict[str, Any]]
+
+
+class GetMemoryHintsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str = Field(description="The planning goal to get memory hints for")
+    user_id: str | None = None
+    limit: int | None = Field(default=None, ge=1, le=25)
+
+
+class GetMemoryHintsOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    hints: list[dict[str, Any]]
+
+
+class FinalizeRunSpecInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan: dict[str, Any] = Field(description="Capability-first PlanCreate candidate to compile")
+
+
+class FinalizeRunSpecOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+    run_spec: dict[str, Any] | None = None
+    error: str | None = None
+
+
 def build_planner_support_tool_specs() -> list[models.ToolSpec]:
     return [
         models.ToolSpec(
             name="search_capabilities",
             description="Search the allowed capability catalog for relevant capability IDs.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "intent_hint": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "matches": {"type": "array", "items": {"type": "object"}},
-                },
-                "required": ["matches"],
-            },
+            input_schema=SearchCapabilitiesInput.model_json_schema(),
+            output_schema=SearchCapabilitiesOutput.model_json_schema(),
             usage_guidance=(
                 "Planner-only metadata tool. Use it to narrow capability candidates. "
                 "Do not emit this tool name in tasks."
@@ -44,17 +99,8 @@ def build_planner_support_tool_specs() -> list[models.ToolSpec]:
         models.ToolSpec(
             name="get_capability_contract",
             description="Inspect the contract, hints, and adapter summary for one capability.",
-            input_schema={
-                "type": "object",
-                "properties": {"capability_id": {"type": "string"}},
-                "required": ["capability_id"],
-                "additionalProperties": False,
-            },
-            output_schema={
-                "type": "object",
-                "properties": {"contract": {"type": "object"}},
-                "required": ["contract"],
-            },
+            input_schema=GetCapabilityContractInput.model_json_schema(),
+            output_schema=GetCapabilityContractOutput.model_json_schema(),
             usage_guidance=(
                 "Planner-only metadata tool. Use it to inspect required inputs and planner hints."
             ),
@@ -63,17 +109,8 @@ def build_planner_support_tool_specs() -> list[models.ToolSpec]:
         models.ToolSpec(
             name="get_schema",
             description="Load a JSON schema and summarize its required fields.",
-            input_schema={
-                "type": "object",
-                "properties": {"schema_ref": {"type": "string"}},
-                "required": ["schema_ref"],
-                "additionalProperties": False,
-            },
-            output_schema={
-                "type": "object",
-                "properties": {"schema": {"type": "object"}, "summary": {"type": "object"}},
-                "required": ["schema", "summary"],
-            },
+            input_schema=GetSchemaInput.model_json_schema(),
+            output_schema=GetSchemaOutput.model_json_schema(),
             usage_guidance=(
                 "Planner-only metadata tool. Use it to inspect input or output schema requirements."
             ),
@@ -82,20 +119,8 @@ def build_planner_support_tool_specs() -> list[models.ToolSpec]:
         models.ToolSpec(
             name="get_workflow_hints",
             description="Return plan-shape hints from the normalized intent envelope and capability candidates.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "goal": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
-                },
-                "required": ["goal"],
-                "additionalProperties": False,
-            },
-            output_schema={
-                "type": "object",
-                "properties": {"hints": {"type": "array", "items": {"type": "object"}}},
-                "required": ["hints"],
-            },
+            input_schema=GetWorkflowHintsInput.model_json_schema(),
+            output_schema=GetWorkflowHintsOutput.model_json_schema(),
             usage_guidance=(
                 "Planner-only metadata tool. Use it for prior segment order, clarification, and candidate-capability hints."
             ),
@@ -104,21 +129,8 @@ def build_planner_support_tool_specs() -> list[models.ToolSpec]:
         models.ToolSpec(
             name="get_memory_hints",
             description="Return planner-readable memory sources and when to use them.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "goal": {"type": "string"},
-                    "user_id": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
-                },
-                "required": ["goal"],
-                "additionalProperties": False,
-            },
-            output_schema={
-                "type": "object",
-                "properties": {"hints": {"type": "array", "items": {"type": "object"}}},
-                "required": ["hints"],
-            },
+            input_schema=GetMemoryHintsInput.model_json_schema(),
+            output_schema=GetMemoryHintsOutput.model_json_schema(),
             usage_guidance=(
                 "Planner-only metadata tool. Use it to decide which memory sources are relevant before planning."
             ),
@@ -127,21 +139,8 @@ def build_planner_support_tool_specs() -> list[models.ToolSpec]:
         models.ToolSpec(
             name="finalize_run_spec",
             description="Compile a capability-first PlanCreate candidate into a canonical RunSpec.",
-            input_schema={
-                "type": "object",
-                "properties": {"plan": {"type": "object"}},
-                "required": ["plan"],
-                "additionalProperties": False,
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "ok": {"type": "boolean"},
-                    "run_spec": {"type": "object"},
-                    "error": {"type": "string"},
-                },
-                "required": ["ok"],
-            },
+            input_schema=FinalizeRunSpecInput.model_json_schema(),
+            output_schema=FinalizeRunSpecOutput.model_json_schema(),
             usage_guidance=(
                 "Planner-only metadata tool. Use it to validate a candidate plan shape before returning it."
             ),

@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from libs.core import capability_registry, mcp_gateway, tool_bootstrap, tool_governance
+from libs.core import capability_registry, mcp_gateway, tool_registry, tool_governance
 from libs.framework.tool_runtime import ToolExecutionError, ToolRegistry
 
 
@@ -127,7 +127,7 @@ def build_chat_direct_executor(
     llm_enabled: bool = False,
     llm_provider_instance: Any | None = None,
 ) -> ChatDirectExecutor:
-    registry = tool_bootstrap.build_default_registry(
+    registry = tool_registry.build_default_registry(
         http_fetch_enabled=False,
         llm_enabled=llm_enabled,
         llm_provider=llm_provider_instance,

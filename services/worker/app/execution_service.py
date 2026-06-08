@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from libs.core import (
+    agent_cancel,
     capability_registry,
     execution_contracts,
     intent_contract,
@@ -688,6 +689,7 @@ def _execute_capability_tool(
             },
         )
         return tool_error
+    agent_cancel.set_current_run_id(run_id)
     idempotency_key = str(uuid.uuid4())
     tool_started_at = time.monotonic()
     core_logging.log_event(

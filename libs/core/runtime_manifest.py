@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from libs.framework.tool_runtime import ToolRegistry
 
-from . import capability_registry, mcp_gateway, tool_bootstrap
+from . import capability_registry, mcp_gateway, tool_registry
 from .llm_provider import MockLLMProvider
 
 SCHEMA_VERSION = "runtime-manifest.v1"
@@ -227,7 +227,7 @@ def _build_tool_registry_for_service(
     provider = MockLLMProvider() if llm_enabled else None
     try:
         return (
-            tool_bootstrap.build_default_registry(
+            tool_registry.build_default_registry(
                 http_fetch_enabled=http_fetch_enabled,
                 llm_enabled=llm_enabled,
                 llm_provider=provider,

@@ -19,7 +19,7 @@ def test_build_worker_tool_runtime_uses_tool_bootstrap(monkeypatch) -> None:
         return registry
 
     monkeypatch.setattr(
-        tool_runtime_adapter.tool_bootstrap,
+        tool_runtime_adapter.tool_registry,
         "build_default_registry",
         fake_build_default_registry,
     )

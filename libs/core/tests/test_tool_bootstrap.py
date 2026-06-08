@@ -1,4 +1,4 @@
-from libs.core import tool_bootstrap
+from libs.core import tool_registry
 from libs.framework.tool_runtime import ToolRegistry
 
 
@@ -6,22 +6,22 @@ def test_build_tool_registry_wires_catalog_plugins_and_governance(monkeypatch) -
     calls: list[tuple[str, object]] = []
 
     monkeypatch.setattr(
-        tool_bootstrap.tool_catalog,
+        tool_registry,
         "register_default_tools",
         lambda registry, **kwargs: calls.append(("catalog", registry)),
     )
     monkeypatch.setattr(
-        tool_bootstrap.tool_plugins,
+        tool_registry.tool_plugins,
         "load_configured_plugins",
         lambda registry, **kwargs: calls.append(("plugins", registry)),
     )
     monkeypatch.setattr(
-        tool_bootstrap.tool_governance,
+        tool_registry.tool_governance,
         "filter_registry_tools",
         lambda registry, service_name: calls.append(("governance", service_name)),
     )
 
-    registry = tool_bootstrap.build_tool_registry(
+    registry = tool_registry.build_tool_registry(
         handlers=object(),
         http_fetch_enabled=False,
         llm_enabled=False,

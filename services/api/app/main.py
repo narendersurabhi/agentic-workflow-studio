@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
 
 import redis
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from prometheus_client import Counter, make_asgi_app
@@ -46,7 +46,7 @@ from libs.core import (
     run_specs,
     runtime_manifest,
     state_machine,
-    tool_bootstrap,
+    tool_registry,
     workflow_contracts,
 )
 from libs.core.llm_provider import (
@@ -61,6 +61,7 @@ from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
 from libs.core.llm_provider_timing import TimingLLMProvider
 from .database import Base, SessionLocal, engine
 from .models import (
+    AgentCheckpointRecord,
     AgentDefinitionRecord,
     AgentDefinitionVersionRecord,
     ChatMessageRecord,
@@ -588,7 +589,7 @@ def _build_api_tool_registry_llm_provider() -> LLMProvider | None:
 
 
 _api_tool_registry_llm_provider = _build_api_tool_registry_llm_provider()
-_tool_spec_registry = tool_bootstrap.build_default_registry(
+_tool_spec_registry = tool_registry.build_default_registry(
     http_fetch_enabled=False,
     llm_enabled=_api_tool_registry_llm_provider is not None,
     llm_provider=_api_tool_registry_llm_provider,
@@ -1102,6 +1103,12 @@ def _rag_retriever_request_json(
 
 def _init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    # Idempotent column additions for schema evolution (create_all won't add
+    # columns to existing tables).
+    with engine.begin() as conn:
+        conn.execute(sqlalchemy.text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB"
+        ))
     if EVENT_OUTBOX_ENABLED:
         _start_event_outbox_dispatcher()
     if ORCHESTRATOR_ENABLED:
@@ -2406,6 +2413,8 @@ def _agent_definition_validate_create_payload(
 
 
 def _agent_definition_from_record(record: AgentDefinitionRecord) -> models.AgentDefinition:
+    raw_status = str(record.status or "draft")
+    status = "published" if raw_status == "published" else "draft"
     return models.AgentDefinition(
         id=record.id,
         name=record.name,
@@ -2422,6 +2431,7 @@ def _agent_definition_from_record(record: AgentDefinitionRecord) -> models.Agent
         guardrail_policy=record.guardrail_policy_json or {},
         workspace_policy=record.workspace_policy_json or {},
         enabled=bool(record.enabled),
+        status=status,
         user_id=record.user_id,
         metadata=record.metadata_json or {},
         created_at=record.created_at,
@@ -18349,6 +18359,36 @@ def auth_me(request: Request) -> Dict[str, Any]:
     return user
 
 
+@app.patch("/auth/me")
+def update_profile(
+    body: Dict[str, Any],
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    session = getattr(request.state, "auth_user", None)
+    if not session:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    user = db.query(UserRecord).filter(UserRecord.id == session["user_id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    display_name = str(body.get("display_name") or "").strip()
+    current_password = str(body.get("current_password") or "")
+    new_password = str(body.get("new_password") or "")
+    if display_name:
+        user.display_name = display_name
+    if new_password:
+        if not current_password:
+            raise HTTPException(status_code=422, detail="current_password_required")
+        if not auth_service.verify_password(current_password, user.password_hash):
+            raise HTTPException(status_code=401, detail="invalid_current_password")
+        if len(new_password) < 6:
+            raise HTTPException(status_code=422, detail="password_too_short")
+        user.password_hash = auth_service.hash_password(new_password)
+    db.commit()
+    db.refresh(user)
+    return {"user_id": user.id, "username": user.username, "display_name": user.display_name}
+
+
 @app.post("/auth/logout")
 def auth_logout(request: Request) -> Dict[str, Any]:
     token = getattr(request.state, "auth_token", None)
@@ -18362,17 +18402,10 @@ def get_user_preferences(request: Request, db: Session = Depends(get_db)) -> Dic
     session = getattr(request.state, "auth_user", None)
     if not session:
         raise HTTPException(status_code=401, detail="not_authenticated")
-    try:
-        row = db.execute(
-            sqlalchemy.text("SELECT preferences FROM users WHERE id = :uid"),
-            {"uid": session["user_id"]},
-        ).fetchone()
-    except Exception:
-        return {}
-    if row is None:
+    user = db.query(UserRecord).filter(UserRecord.id == session["user_id"]).first()
+    if user is None:
         raise HTTPException(status_code=404, detail="user_not_found")
-    prefs = row[0]
-    return dict(prefs) if isinstance(prefs, dict) else {}
+    return dict(user.preferences) if isinstance(user.preferences, dict) else {}
 
 
 @app.patch("/auth/me/preferences")
@@ -18384,26 +18417,14 @@ def update_user_preferences(
     session = getattr(request.state, "auth_user", None)
     if not session:
         raise HTTPException(status_code=401, detail="not_authenticated")
-    try:
-        row = db.execute(
-            sqlalchemy.text("SELECT preferences FROM users WHERE id = :uid"),
-            {"uid": session["user_id"]},
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="user_not_found")
-        existing = dict(row[0]) if isinstance(row[0], dict) else {}
-        merged = {**existing, **body}
-        db.execute(
-            sqlalchemy.text("UPDATE users SET preferences = :prefs WHERE id = :uid"),
-            {"prefs": json.dumps(merged), "uid": session["user_id"]},
-        )
-        db.commit()
-        return merged
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=503, detail="preferences_unavailable")
+    user = db.query(UserRecord).filter(UserRecord.id == session["user_id"]).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    existing = dict(user.preferences) if isinstance(user.preferences, dict) else {}
+    merged = {**existing, **body}
+    user.preferences = merged
+    db.commit()
+    return merged
 
 
 @app.post("/chat/sessions", response_model=chat_contracts.ChatSession)
@@ -20067,6 +20088,8 @@ def cancel_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     _sync_shadow_run_status(db, job)
     db.commit()
     _emit_event("job.canceled", {"job_id": job.id, "correlation_id": str(uuid.uuid4())})
+    from libs.core import agent_cancel
+    agent_cancel.signal_cancel(run_id)
     return _run_from_record(run_record, job_record=job)
 
 
@@ -21204,6 +21227,7 @@ def create_agent_definition(
         ),
         metadata_json=dict(payload.metadata) if isinstance(payload.metadata, dict) else {},
         enabled=True,
+        status="draft",
         user_id=_semantic_normalize_text(payload.user_id, max_len=120) or None,
         created_at=now,
         updated_at=now,
@@ -21217,6 +21241,7 @@ def create_agent_definition(
 @app.get("/agents/definitions", response_model=List[models.AgentDefinition])
 def list_agent_definitions(
     user_id: str | None = Query(None),
+    status: str | None = Query(None, description="Filter by status: draft or published"),
     include_disabled: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> List[models.AgentDefinition]:
@@ -21226,6 +21251,9 @@ def list_agent_definitions(
         query = query.filter(AgentDefinitionRecord.user_id == normalized_user_id)
     if not include_disabled:
         query = query.filter(AgentDefinitionRecord.enabled.is_(True))
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status in ("draft", "published"):
+        query = query.filter(AgentDefinitionRecord.status == normalized_status)
     records = query.order_by(AgentDefinitionRecord.updated_at.desc()).all()
     return [_agent_definition_from_record(record) for record in records]
 
@@ -21324,6 +21352,14 @@ def update_agent_definition(
     if "metadata" in fields_set:
         record.metadata_json = dict(payload.metadata) if isinstance(payload.metadata, dict) else {}
 
+    # Behavioral changes require re-publish — reset status to draft.
+    _BEHAVIORAL_FIELDS = {
+        "agent_capability_id", "instructions", "allowed_capability_ids",
+        "llm_config", "memory_policy", "guardrail_policy", "workspace_policy",
+    }
+    if record.status == "published" and fields_set & _BEHAVIORAL_FIELDS:
+        record.status = "draft"
+
     record.updated_at = _utcnow()
     db.commit()
     db.refresh(record)
@@ -21357,6 +21393,8 @@ def publish_agent_definition_version(
         created_at=now,
     )
     db.add(version)
+    record.status = "published"
+    record.updated_at = now
     db.commit()
     db.refresh(version)
     return _agent_definition_version_from_record(version)
@@ -23261,6 +23299,278 @@ def workbench_agent_run(
         run_spec=final_run_spec.model_dump(mode="json"),
         execution_request=None,
     ).model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# Internal sub-agent dispatch endpoint
+# ---------------------------------------------------------------------------
+
+_INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+
+def _verify_internal_token(token: str | None) -> None:
+    """Require X-Internal-Token header when INTERNAL_API_TOKEN env var is set."""
+    if not _INTERNAL_API_TOKEN:
+        return  # unauthenticated in dev; token not configured
+    if token != _INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=403, detail="invalid_internal_token")
+
+
+def _build_sub_agent_run_spec(req: models.SubAgentDispatchRequest) -> models.RunSpec:
+    """Build a one-step RunSpec that executes the agent.run capability."""
+    input_bindings: dict[str, Any] = {"goal": req.goal}
+    if req.instructions is not None:
+        input_bindings["instructions"] = req.instructions
+    if req.max_steps is not None:
+        input_bindings["max_steps"] = req.max_steps
+    if req.allowed_capability_ids:
+        input_bindings["allowed_capability_ids"] = req.allowed_capability_ids
+    if req.agent_id:
+        input_bindings["agent_id"] = req.agent_id
+    if req.role:
+        input_bindings["role"] = req.role
+    if req.workspace_isolation != "none":
+        input_bindings["workspace_isolation"] = req.workspace_isolation
+    if req.workspace_path:
+        input_bindings["workspace_path"] = req.workspace_path
+
+    cap_request = models.CapabilityRequestSpec(
+        request_id="agent.run",
+        capability_id="agent.run",
+        execution_request_id="agent",
+    )
+    step = models.StepSpec(
+        step_id="agent",
+        name="agent",
+        description=str(req.goal)[:200],
+        instruction=str(req.goal)[:200],
+        capability_request=cap_request,
+        input_bindings=input_bindings,
+        acceptance_policy=models.StepAcceptancePolicy(
+            acceptance_criteria=[],
+            critic_required=False,
+        ),
+        routing_hints={
+            "tool_name": "agent",
+            "adapter_type": "tool",
+            "server_id": "local_worker",
+            "planner_request_field": "tool_requests",
+        },
+    )
+    return models.RunSpec(
+        kind=models.RunKind.api,
+        planner_version="sub_agent_dispatch_v1",
+        tasks_summary=str(req.goal)[:200],
+        steps=[step],
+        dag_edges=[],
+        capability_requests=[cap_request],
+        metadata={
+            "surface": "sub_agent",
+            "parent_run_id": req.parent_run_id or "",
+            "depth": req.depth,
+            "ephemeral": True,
+        },
+    )
+
+
+@app.post("/internal/sub-agent", response_model=models.SubAgentDispatchResponse)
+def internal_sub_agent(
+    req: models.SubAgentDispatchRequest,
+    x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
+    db: Session = Depends(get_db),
+) -> models.SubAgentDispatchResponse:
+    """Dispatch a sub-agent as an independent job.
+
+    Called by worker processes when an agent invokes a nested agent.run — gives
+    the sub-agent its own worker process and isolated context window. Returns
+    immediately with run_id; the caller polls GET /runs/{run_id} for completion.
+    """
+    _verify_internal_token(x_internal_token)
+    run_spec = _build_sub_agent_run_spec(req)
+    run_record, _ = _workbench_launch_run(
+        run_spec,
+        title=f"Sub-agent: {str(req.goal)[:80]}",
+        goal=req.goal,
+        user_id=req.user_id,
+        context_json={},
+        db=db,
+    )
+    return models.SubAgentDispatchResponse(
+        run_id=run_record.id,
+        job_id=run_record.job_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal agent-checkpoint endpoints
+# ---------------------------------------------------------------------------
+
+_CHECKPOINT_TTL_HOURS = 24
+
+
+def _checkpoint_from_record(record: AgentCheckpointRecord) -> models.AgentCheckpoint:
+    try:
+        messages = json.loads(record.messages_json)
+    except Exception:
+        messages = []
+    try:
+        allowed_cap_ids = json.loads(record.allowed_capability_ids_json or "null")
+    except Exception:
+        allowed_cap_ids = None
+    return models.AgentCheckpoint(
+        id=record.id,
+        run_id=record.run_id,
+        task_id=record.task_id,
+        messages=messages,
+        goal=record.goal,
+        instructions=record.instructions,
+        allowed_capability_ids=allowed_cap_ids,
+        max_steps=record.max_steps,
+        steps_taken=record.steps_taken,
+        question=record.question,
+        status=record.status,
+        created_at=record.created_at,
+        expires_at=record.expires_at,
+    )
+
+
+@app.post("/internal/agent-checkpoints", response_model=dict)
+def create_agent_checkpoint(
+    body: models.AgentCheckpointCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    now = _utcnow()
+    expires_at = now + timedelta(hours=_CHECKPOINT_TTL_HOURS)
+    record = AgentCheckpointRecord(
+        id=str(uuid.uuid4()),
+        run_id=body.run_id or None,
+        task_id=body.task_id or None,
+        messages_json=json.dumps(body.messages, ensure_ascii=False),
+        goal=body.goal,
+        instructions=body.instructions,
+        allowed_capability_ids_json=json.dumps(body.allowed_capability_ids) if body.allowed_capability_ids is not None else None,
+        max_steps=body.max_steps,
+        steps_taken=body.steps_taken,
+        question=body.question,
+        status="pending",
+        created_at=now,
+        expires_at=expires_at,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return {"checkpoint_id": record.id}
+
+
+@app.get("/internal/agent-checkpoints/{checkpoint_id}", response_model=models.AgentCheckpoint)
+def get_agent_checkpoint(
+    checkpoint_id: str,
+    db: Session = Depends(get_db),
+) -> models.AgentCheckpoint:
+    record = db.query(AgentCheckpointRecord).filter(AgentCheckpointRecord.id == checkpoint_id).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="checkpoint_not_found")
+    return _checkpoint_from_record(record)
+
+
+@app.post("/agents/{run_id}/resume", response_model=models.Run)
+def resume_agent_run(
+    run_id: str,
+    body: models.AgentResumeRequest,
+    db: Session = Depends(get_db),
+) -> models.Run:
+    """Resume a paused agent run by appending a user reply to the checkpoint and re-dispatching."""
+    run_record = db.query(RunRecord).filter(RunRecord.id == run_id).first()
+    if run_record is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    job = db.query(JobRecord).filter(JobRecord.id == run_record.job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="run_job_not_found")
+
+    # Find the paused checkpoint for this run.
+    now = _utcnow()
+    checkpoint = (
+        db.query(AgentCheckpointRecord)
+        .filter(
+            AgentCheckpointRecord.run_id == run_id,
+            AgentCheckpointRecord.status == "pending",
+            AgentCheckpointRecord.expires_at > now,
+        )
+        .order_by(AgentCheckpointRecord.created_at.desc())
+        .first()
+    )
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="no_pending_checkpoint")
+
+    # Append the user reply to the saved messages.
+    try:
+        messages: list = json.loads(checkpoint.messages_json)
+    except Exception:
+        messages = []
+    messages.append({"role": "user", "content": body.message})
+    checkpoint.messages_json = json.dumps(messages, ensure_ascii=False)
+    checkpoint.status = "resuming"
+    db.flush()
+
+    # Reconstruct payload for the resumed agent task.
+    try:
+        allowed_cap_ids = json.loads(checkpoint.allowed_capability_ids_json or "null")
+    except Exception:
+        allowed_cap_ids = None
+
+    agent_tool_inputs: dict[str, Any] = {
+        "goal": checkpoint.goal,
+        "resume_from_checkpoint_id": checkpoint.id,
+    }
+    if checkpoint.instructions:
+        agent_tool_inputs["instructions"] = checkpoint.instructions
+    if allowed_cap_ids is not None:
+        agent_tool_inputs["allowed_capability_ids"] = allowed_cap_ids
+    if checkpoint.max_steps is not None:
+        agent_tool_inputs["max_steps"] = checkpoint.max_steps
+
+    # Add a new task to the existing plan for the resumed loop.
+    plan = _active_plan_record_for_job(db, job, job_id=job.id)
+    if plan is None:
+        raise HTTPException(status_code=400, detail="run_has_no_active_plan")
+
+    resume_task_id = str(uuid.uuid4())
+    resume_task = TaskRecord(
+        id=resume_task_id,
+        job_id=job.id,
+        plan_id=plan.id,
+        name="agent_resume",
+        description=f"Resume paused agent (checkpoint {checkpoint.id[:8]})",
+        instruction=f"Continue the agent loop from checkpoint. User reply: {body.message[:200]}",
+        acceptance_criteria=[],
+        expected_output_schema_ref="agent_capability_input",
+        status=models.TaskStatus.ready.value,
+        intent=models.ToolIntent.generate.value,
+        deps=[],
+        attempts=1,
+        max_attempts=1,
+        rework_count=0,
+        max_reworks=0,
+        assigned_to=None,
+        tool_requests=["agent.run"],
+        tool_inputs={"agent.run": agent_tool_inputs},
+        created_at=now,
+        updated_at=now,
+        critic_required=0,
+    )
+    db.add(resume_task)
+
+    # Reactivate the job so the orchestrator dispatches the new task.
+    if models.JobStatus(job.status) not in {
+        models.JobStatus.running,
+        models.JobStatus.planning,
+    }:
+        _set_job_status(job, models.JobStatus.running)
+    job.updated_at = now
+    db.commit()
+
+    _enqueue_ready_tasks(job.id, plan.id, str(uuid.uuid4()))
+    return _run_from_record(run_record, job_record=job)
 
 
 # ---------------------------------------------------------------------------

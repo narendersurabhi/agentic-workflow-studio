@@ -10,7 +10,155 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
+
+
+class GithubRepoCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, description="Repository name")
+    description: str | None = None
+    private: bool | None = None
+    org: str | None = None
+    auto_init: bool | None = None
+    default_branch: str | None = None
+
+
+class GithubRepoCreateOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    full_name: str
+    html_url: str
+    clone_url: str
+
+
+class GithubRepoUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="Repository owner")
+    repo: str = Field(min_length=1, description="Repository name")
+    description: str | None = None
+    homepage: str | None = None
+    private: bool | None = None
+    default_branch: str | None = None
+
+
+class GithubRepoUpdateOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    full_name: str
+    html_url: str
+
+
+class GithubRepoListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    org: str | None = None
+    per_page: int | None = Field(default=None, ge=1, le=100)
+
+
+class GithubRepoListOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    repos: list[dict[str, Any]]
+
+
+class GithubBranchListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="Repository owner")
+    repo: str = Field(min_length=1, description="Repository name")
+    per_page: int | None = Field(default=None, ge=1, le=100)
+
+
+class GithubBranchListOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    branches: list[dict[str, Any]]
+
+
+class GithubFileWriteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="Repository owner")
+    repo: str = Field(min_length=1, description="Repository name")
+    path: str = Field(min_length=1, description="File path within the repository")
+    content: str = Field(min_length=1, description="File content to write")
+    message: str = Field(min_length=1, description="Commit message")
+    branch: str | None = None
+    sha: str | None = None
+
+
+class GithubFileWriteOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    commit_sha: str
+
+
+class GithubPrCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="Repository owner")
+    repo: str = Field(min_length=1, description="Repository name")
+    title: str = Field(min_length=1, description="PR title")
+    head: str = Field(min_length=1, description="Head branch")
+    base: str = Field(min_length=1, description="Base branch")
+    body: str | None = None
+
+
+class GithubPrCreateOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    html_url: str
+    number: int
+
+
+class GithubRepoPushInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="Repository owner")
+    repo: str = Field(min_length=1, description="Repository name")
+    path: str = Field(min_length=1, description="Workspace-relative path to push")
+    branch: str | None = None
+    message: str | None = None
+    author_name: str | None = None
+    author_email: str | None = None
+
+
+class GithubRepoPushOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    branch: str
+    remote: str
+
+
+class GithubRepoCloneOrPullInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="Repository owner")
+    repo: str = Field(min_length=1, description="Repository name")
+    path: str = Field(min_length=1, description="Workspace-relative path to clone/pull into")
+    branch: str | None = None
+    pull_strategy: str | None = None
+    force_reset: bool | None = None
+
+
+class GithubRepoCloneOrPullOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    action: str
+    branch: str
+
+
+class GithubRepoPushPrInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="Repository owner")
+    repo: str = Field(min_length=1, description="Repository name")
+    path: str = Field(min_length=1, description="Workspace-relative path")
+    branch: str = Field(min_length=1, description="New branch name to create")
+    base: str | None = None
+    title: str | None = None
+    body: str | None = None
+    message: str | None = None
+    author_name: str | None = None
+    author_email: str | None = None
+
+
+class GithubRepoPushPrOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    branch: str
+    base: str
+    remote: str
+    pr_url: str
+    pr_number: int
 
 
 def register_github_tools(registry) -> None:
@@ -25,27 +173,8 @@ def register_github_tools(registry) -> None:
                     "Create a repository using the GitHub API. Provide name and optionally "
                     "description, private, org, auto_init, default_branch."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "minLength": 1},
-                        "description": {"type": "string"},
-                        "private": {"type": "boolean"},
-                        "org": {"type": "string"},
-                        "auto_init": {"type": "boolean"},
-                        "default_branch": {"type": "string"},
-                    },
-                    "required": ["name"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "full_name": {"type": "string"},
-                        "html_url": {"type": "string"},
-                        "clone_url": {"type": "string"},
-                    },
-                    "required": ["full_name", "html_url", "clone_url"],
-                },
+                input_schema=GithubRepoCreateInput.model_json_schema(),
+                output_schema=GithubRepoCreateOutput.model_json_schema(),
                 timeout_s=15,
                 risk_level=RiskLevel.medium,
                 tool_intent=ToolIntent.io,
@@ -62,23 +191,8 @@ def register_github_tools(registry) -> None:
                 usage_guidance=(
                     "Update repository settings. Provide owner and repo, plus any fields to update."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "minLength": 1},
-                        "repo": {"type": "string", "minLength": 1},
-                        "description": {"type": "string"},
-                        "homepage": {"type": "string"},
-                        "private": {"type": "boolean"},
-                        "default_branch": {"type": "string"},
-                    },
-                    "required": ["owner", "repo"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"full_name": {"type": "string"}, "html_url": {"type": "string"}},
-                    "required": ["full_name", "html_url"],
-                },
+                input_schema=GithubRepoUpdateInput.model_json_schema(),
+                output_schema=GithubRepoUpdateOutput.model_json_schema(),
                 timeout_s=15,
                 risk_level=RiskLevel.medium,
                 tool_intent=ToolIntent.io,
@@ -95,18 +209,8 @@ def register_github_tools(registry) -> None:
                 usage_guidance=(
                     "List repositories. Provide optional org to list organization repos."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "org": {"type": "string"},
-                        "per_page": {"type": "integer", "minimum": 1, "maximum": 100},
-                    },
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"repos": {"type": "array", "items": {"type": "object"}}},
-                    "required": ["repos"],
-                },
+                input_schema=GithubRepoListInput.model_json_schema(),
+                output_schema=GithubRepoListOutput.model_json_schema(),
                 timeout_s=15,
                 risk_level=RiskLevel.low,
                 tool_intent=ToolIntent.io,
@@ -121,20 +225,8 @@ def register_github_tools(registry) -> None:
                 name="github_branch_list",
                 description="List branches for a repository",
                 usage_guidance="Provide owner and repo. Optionally provide per_page.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "minLength": 1},
-                        "repo": {"type": "string", "minLength": 1},
-                        "per_page": {"type": "integer", "minimum": 1, "maximum": 100},
-                    },
-                    "required": ["owner", "repo"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"branches": {"type": "array", "items": {"type": "object"}}},
-                    "required": ["branches"],
-                },
+                input_schema=GithubBranchListInput.model_json_schema(),
+                output_schema=GithubBranchListOutput.model_json_schema(),
                 timeout_s=15,
                 risk_level=RiskLevel.low,
                 tool_intent=ToolIntent.io,
@@ -153,24 +245,8 @@ def register_github_tools(registry) -> None:
                     "Provide owner, repo, path, content, and commit message. "
                     "Branch defaults to main."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "minLength": 1},
-                        "repo": {"type": "string", "minLength": 1},
-                        "path": {"type": "string", "minLength": 1},
-                        "content": {"type": "string", "minLength": 1},
-                        "message": {"type": "string", "minLength": 1},
-                        "branch": {"type": "string"},
-                        "sha": {"type": "string"},
-                    },
-                    "required": ["owner", "repo", "path", "content", "message"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}, "commit_sha": {"type": "string"}},
-                    "required": ["path", "commit_sha"],
-                },
+                input_schema=GithubFileWriteInput.model_json_schema(),
+                output_schema=GithubFileWriteOutput.model_json_schema(),
                 timeout_s=20,
                 risk_level=RiskLevel.medium,
                 tool_intent=ToolIntent.io,
@@ -187,23 +263,8 @@ def register_github_tools(registry) -> None:
                 usage_guidance=(
                     "Create a PR. Provide owner, repo, title, head, base, and optional body."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "minLength": 1},
-                        "repo": {"type": "string", "minLength": 1},
-                        "title": {"type": "string", "minLength": 1},
-                        "head": {"type": "string", "minLength": 1},
-                        "base": {"type": "string", "minLength": 1},
-                        "body": {"type": "string"},
-                    },
-                    "required": ["owner", "repo", "title", "head", "base"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"html_url": {"type": "string"}, "number": {"type": "integer"}},
-                    "required": ["html_url", "number"],
-                },
+                input_schema=GithubPrCreateInput.model_json_schema(),
+                output_schema=GithubPrCreateOutput.model_json_schema(),
                 timeout_s=20,
                 risk_level=RiskLevel.medium,
                 tool_intent=ToolIntent.io,
@@ -221,24 +282,8 @@ def register_github_tools(registry) -> None:
                     "Push local workspace files to GitHub. Provide owner, repo, path (workspace "
                     "relative), and optional branch and message. Uses GITHUB_TOKEN."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "minLength": 1},
-                        "repo": {"type": "string", "minLength": 1},
-                        "path": {"type": "string", "minLength": 1},
-                        "branch": {"type": "string"},
-                        "message": {"type": "string"},
-                        "author_name": {"type": "string"},
-                        "author_email": {"type": "string"},
-                    },
-                    "required": ["owner", "repo", "path"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"branch": {"type": "string"}, "remote": {"type": "string"}},
-                    "required": ["branch", "remote"],
-                },
+                input_schema=GithubRepoPushInput.model_json_schema(),
+                output_schema=GithubRepoPushOutput.model_json_schema(),
                 timeout_s=60,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.io,
@@ -257,27 +302,8 @@ def register_github_tools(registry) -> None:
                     "Optional: pull_strategy ('rebase', 'merge', 'ff-only') and force_reset=true "
                     "to hard reset to origin/<branch>."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "minLength": 1},
-                        "repo": {"type": "string", "minLength": 1},
-                        "path": {"type": "string", "minLength": 1},
-                        "branch": {"type": "string"},
-                        "pull_strategy": {"type": "string"},
-                        "force_reset": {"type": "boolean"},
-                    },
-                    "required": ["owner", "repo", "path"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "action": {"type": "string"},
-                        "branch": {"type": "string"},
-                    },
-                    "required": ["path", "action", "branch"],
-                },
+                input_schema=GithubRepoCloneOrPullInput.model_json_schema(),
+                output_schema=GithubRepoCloneOrPullOutput.model_json_schema(),
                 timeout_s=120,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.io,
@@ -294,33 +320,8 @@ def register_github_tools(registry) -> None:
                     "Provide owner, repo, path (workspace relative), base branch, and new branch name. "
                     "Optionally provide PR title/body, commit message, and author identity."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "minLength": 1},
-                        "repo": {"type": "string", "minLength": 1},
-                        "path": {"type": "string", "minLength": 1},
-                        "base": {"type": "string"},
-                        "branch": {"type": "string", "minLength": 1},
-                        "title": {"type": "string"},
-                        "body": {"type": "string"},
-                        "message": {"type": "string"},
-                        "author_name": {"type": "string"},
-                        "author_email": {"type": "string"},
-                    },
-                    "required": ["owner", "repo", "path", "branch"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "branch": {"type": "string"},
-                        "base": {"type": "string"},
-                        "remote": {"type": "string"},
-                        "pr_url": {"type": "string"},
-                        "pr_number": {"type": "integer"},
-                    },
-                    "required": ["branch", "base", "remote", "pr_url", "pr_number"],
-                },
+                input_schema=GithubRepoPushPrInput.model_json_schema(),
+                output_schema=GithubRepoPushPrOutput.model_json_schema(),
                 timeout_s=120,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.io,

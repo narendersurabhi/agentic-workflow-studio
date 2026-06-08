@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -534,6 +534,62 @@ class WorkbenchCapabilityRunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
     # Advanced overrides – optional; runtime defaults apply when omitted
     retry_policy: Optional[Dict[str, Any]] = None
+
+
+class SubAgentDispatchRequest(BaseModel):
+    """Request body for POST /internal/sub-agent."""
+
+    goal: str
+    instructions: Optional[str] = None
+    max_steps: Optional[int] = Field(default=None, ge=1, le=32)
+    allowed_capability_ids: Optional[List[str]] = None
+    agent_id: Optional[str] = None
+    role: Optional[str] = None
+    parent_run_id: Optional[str] = None
+    depth: int = 0
+    user_id: Optional[str] = None
+    workspace_isolation: Literal["none", "worktree"] = "none"
+    workspace_path: Optional[str] = None
+
+
+class SubAgentDispatchResponse(BaseModel):
+    run_id: str
+    job_id: str
+
+
+class AgentCheckpoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    run_id: Optional[str] = None
+    task_id: Optional[str] = None
+    messages: List[Dict[str, Any]]
+    goal: str
+    instructions: Optional[str] = None
+    allowed_capability_ids: Optional[List[str]] = None
+    max_steps: Optional[int] = None
+    steps_taken: int = 0
+    question: str
+    status: str = "pending"
+    created_at: datetime
+    expires_at: datetime
+
+
+class AgentCheckpointCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: Optional[str] = None
+    task_id: Optional[str] = None
+    messages: List[Dict[str, Any]]
+    goal: str
+    instructions: Optional[str] = None
+    allowed_capability_ids: Optional[List[str]] = None
+    max_steps: Optional[int] = None
+    steps_taken: int = 0
+    question: str
+
+
+class AgentResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: str = Field(min_length=1, description="User reply to continue the paused agent")
 
 
 class WorkbenchAgentRunRequest(BaseModel):
@@ -1171,6 +1227,7 @@ class AgentDefinition(BaseModel):
     guardrail_policy: Dict[str, Any] = Field(default_factory=dict)
     workspace_policy: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    status: Literal["draft", "published"] = "draft"
     user_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime

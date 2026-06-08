@@ -17,6 +17,7 @@ class UserRecord(Base):
     display_name: Mapped[str] = mapped_column(String)
     password_hash: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime)
+    preferences: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
 
 
 class JobRecord(Base):
@@ -195,6 +196,7 @@ class AgentDefinitionRecord(Base):
     )
     metadata_json: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    status: Mapped[str] = mapped_column(String, default="draft", index=True)
     user_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, index=True)
@@ -599,6 +601,24 @@ class SkillRecord(Base):
     definition: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class AgentCheckpointRecord(Base):
+    __tablename__ = "agent_checkpoints"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    messages_json: Mapped[str] = mapped_column(Text)
+    goal: Mapped[str] = mapped_column(String)
+    instructions: Mapped[str | None] = mapped_column(String, nullable=True)
+    allowed_capability_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    steps_taken: Mapped[int] = mapped_column(Integer, default=0)
+    question: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, index=True, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
 class MemoryRecord(Base):

@@ -2,10 +2,30 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core import prompts
 from libs.core.llm_provider import LLMProvider, LLMProviderError
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolExecutionError
+
+
+# complex schema: keep as raw dict — anyOf at top level for input_schema
+class LlmIterativeImproveOpenapiSpecHistoryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    iteration: int
+    valid: bool
+    error_count: int
+    warning_count: int
+
+
+class LlmIterativeImproveOpenapiSpecOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    openapi_spec: dict[str, Any] = Field(description="The resulting OpenAPI spec object")
+    validation_report: dict[str, Any] = Field(description="Validation report from the last iteration")
+    iterations: int = Field(description="Number of iterations performed")
+    reached_threshold: bool = Field(description="Whether the spec reached valid threshold")
+    history: list[LlmIterativeImproveOpenapiSpecHistoryItem] = Field(description="Per-iteration history")
 
 
 def register_openapi_iterative_tools(registry, llm_provider: LLMProvider, timeout_s: int) -> None:
@@ -20,6 +40,7 @@ def register_openapi_iterative_tools(registry, llm_provider: LLMProvider, timeou
                     "is reached."
                 ),
                 input_schema={
+                    # complex validation: keep as raw dict — anyOf at top level
                     "type": "object",
                     "properties": {
                         "job": {"type": "object"},
@@ -28,40 +49,7 @@ def register_openapi_iterative_tools(registry, llm_provider: LLMProvider, timeou
                     },
                     "anyOf": [{"required": ["job"]}, {"required": ["openapi_spec"]}],
                 },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "openapi_spec": {"type": "object"},
-                        "validation_report": {"type": "object"},
-                        "iterations": {"type": "integer"},
-                        "reached_threshold": {"type": "boolean"},
-                        "history": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "iteration": {"type": "integer"},
-                                    "valid": {"type": "boolean"},
-                                    "error_count": {"type": "integer"},
-                                    "warning_count": {"type": "integer"},
-                                },
-                                "required": [
-                                    "iteration",
-                                    "valid",
-                                    "error_count",
-                                    "warning_count",
-                                ],
-                            },
-                        },
-                    },
-                    "required": [
-                        "openapi_spec",
-                        "validation_report",
-                        "iterations",
-                        "reached_threshold",
-                        "history",
-                    ],
-                },
+                output_schema=LlmIterativeImproveOpenapiSpecOutput.model_json_schema(),
                 memory_reads=["job_context", "task_outputs"],
                 memory_writes=["task_outputs"],
                 timeout_s=timeout_s,

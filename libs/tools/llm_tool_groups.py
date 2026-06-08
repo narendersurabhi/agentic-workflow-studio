@@ -2,11 +2,124 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool
 
 
 PayloadHandler = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+class LlmGenerateOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(description="Raw LLM completion text")
+
+
+class CodingAgentGenerateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str = Field(min_length=1, description="Code generation goal")
+    files: list[str] | None = None
+    constraints: str | None = None
+    workspace_path: str | None = None
+
+
+class CodingAgentGenerateFileItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    content: str
+
+
+class CodingAgentGenerateOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    files: list[CodingAgentGenerateFileItem]
+    written_paths: list[str]
+
+
+class CodingAgentAutonomousInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str = Field(min_length=1, description="Autonomous coding goal")
+    workspace_path: str = Field(min_length=1, description="Workspace path to implement in")
+    constraints: str | None = None
+    max_steps: int | None = Field(default=None, ge=1, le=12)
+
+
+class CodingAgentAutonomousOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_path: str
+    steps_total: int
+    steps_completed: int
+    written_paths: list[str]
+
+
+class CodingAgentPublishPrInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, description="GitHub repo owner")
+    repo: str = Field(min_length=1, description="GitHub repo name")
+    branch: str = Field(min_length=1, description="Branch to create")
+    base: str = Field(min_length=1, description="Base branch for the PR")
+    workspace_path: str = Field(min_length=1, description="Local workspace path to publish")
+    title: str | None = None
+    body: str | None = None
+    message: str | None = None
+    head: str | None = None
+    draft: bool | None = None
+    maintainer_can_modify: bool | None = None
+    include_globs: list[str] | None = None
+    exclude_globs: list[str] | None = None
+    max_files: int | None = Field(default=None, ge=1, le=2000)
+    max_file_bytes: int | None = Field(default=None, ge=1, le=5_000_000)
+    max_total_bytes: int | None = Field(default=None, ge=1, le=20_000_000)
+
+
+class CodingAgentPublishPrOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    branch: str
+    base: str
+    selected_files: int
+    selected_paths_preview: list[str]
+    skipped: dict[str, Any]
+    branch_create: dict[str, Any]
+    push_result: dict[str, Any]
+    pull_request: dict[str, Any]
+
+
+class AgentRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str = Field(min_length=1, description="Goal for the agentic loop to achieve")
+    instructions: str | None = None
+    max_steps: int | None = Field(default=None, ge=1, le=32)
+    allowed_capability_ids: list[str] | None = None
+    background: bool = Field(
+        default=False,
+        description="Return immediately with run_id without waiting for the loop to finish. Requires API_URL to be configured in the worker.",
+    )
+    workspace_isolation: Literal["none", "worktree"] = Field(
+        default="none",
+        description="Workspace isolation mode. 'worktree' creates a git worktree branch for the agent's file operations.",
+    )
+    workspace_path: str | None = Field(
+        default=None,
+        description="Git repository path to use for workspace isolation. Required when workspace_isolation='worktree'.",
+    )
+    resume_from_checkpoint_id: str | None = Field(
+        default=None,
+        description="If set, restore conversation state from this checkpoint and continue the loop.",
+    )
+
+
+class AgentRunOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    result: str
+    steps_taken: int
+    tool_calls: list[dict[str, Any]]
+    run_id: str | None = Field(default=None, description="Set when background=True: the dispatched job's run ID.")
+    background: bool = Field(default=False, description="True when the agent was dispatched as a background job.")
+    status: str | None = Field(default=None, description="'paused' when the agent called wait_for_input.")
+    checkpoint_id: str | None = Field(default=None, description="Set when status='paused': ID to use when resuming.")
+    question: str | None = Field(default=None, description="Set when status='paused': the question the agent asked.")
 
 
 def register_llm_text_tool(
@@ -26,6 +139,7 @@ def register_llm_text_tool(
                     "Returns the raw completion in the 'text' field."
                 ),
                 input_schema={
+                    # complex validation: keep as raw dict — anyOf at top level
                     "type": "object",
                     "properties": {
                         "text": {"type": "string", "minLength": 1},
@@ -33,63 +147,7 @@ def register_llm_text_tool(
                     },
                     "anyOf": [{"required": ["text"]}, {"required": ["prompt"]}],
                 },
-                output_schema={
-                    "type": "object",
-                    "properties": {"text": {"type": "string"}},
-                    "required": ["text"],
-                },
-                timeout_s=timeout_s,
-                risk_level=RiskLevel.high,
-                tool_intent=ToolIntent.generate,
-            ),
-            handler=handler,
-        )
-    )
-
-
-def register_llm_contextual_text_tool(
-    registry,
-    *,
-    timeout_s: int,
-    handler: PayloadHandler,
-) -> None:
-    registry.register(
-        Tool(
-            spec=ToolSpec(
-                name="llm_generate_with_context",
-                description="Generate text with an LLM using an explicit prompt and context payload",
-                usage_guidance=(
-                    "Use when the workflow should pass a prompt and a separate context object "
-                    "or string explicitly. Provide 'prompt', optional 'context', and optional "
-                    "'system_prompt', 'temperature', or 'max_output_tokens'. Returns the raw "
-                    "completion in the 'text' field."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "prompt": {"type": "string", "minLength": 1},
-                        "context": {
-                            "oneOf": [
-                                {"type": "object"},
-                                {"type": "array"},
-                                {"type": "string"},
-                                {"type": "number"},
-                                {"type": "boolean"},
-                                {"type": "null"},
-                            ]
-                        },
-                        "system_prompt": {"type": "string", "minLength": 1},
-                        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
-                        "max_output_tokens": {"type": "integer", "minimum": 1, "maximum": 16384},
-                    },
-                    "required": ["prompt"],
-                    "not": {"required": ["text"]},
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"text": {"type": "string"}},
-                    "required": ["text"],
-                },
+                output_schema=LlmGenerateOutput.model_json_schema(),
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.generate,
@@ -117,34 +175,8 @@ def register_coding_agent_tools(
                     "'files' (list of relative paths), 'constraints', and 'workspace_path'. "
                     "The tool calls the coding agent service and writes files to the workspace."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "goal": {"type": "string", "minLength": 1},
-                        "files": {"type": "array", "items": {"type": "string"}},
-                        "constraints": {"type": "string"},
-                        "workspace_path": {"type": "string"},
-                    },
-                    "required": ["goal"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "files": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "path": {"type": "string"},
-                                    "content": {"type": "string"},
-                                },
-                                "required": ["path", "content"],
-                            },
-                        },
-                        "written_paths": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["files", "written_paths"],
-                },
+                input_schema=CodingAgentGenerateInput.model_json_schema(),
+                output_schema=CodingAgentGenerateOutput.model_json_schema(),
                 memory_writes=["task_outputs"],
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
@@ -164,31 +196,8 @@ def register_coding_agent_tools(
                     "IMPLEMENTATION_PLAN.md, then implements each step and updates status "
                     "in the plan file until complete."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "goal": {"type": "string", "minLength": 1},
-                        "workspace_path": {"type": "string", "minLength": 1},
-                        "constraints": {"type": "string"},
-                        "max_steps": {"type": "integer", "minimum": 1, "maximum": 12},
-                    },
-                    "required": ["goal", "workspace_path"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "plan_path": {"type": "string"},
-                        "steps_total": {"type": "integer"},
-                        "steps_completed": {"type": "integer"},
-                        "written_paths": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": [
-                        "plan_path",
-                        "steps_total",
-                        "steps_completed",
-                        "written_paths",
-                    ],
-                },
+                input_schema=CodingAgentAutonomousInput.model_json_schema(),
+                output_schema=CodingAgentAutonomousOutput.model_json_schema(),
                 memory_writes=["task_outputs"],
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
@@ -212,68 +221,8 @@ def register_coding_agent_tools(
                         "title, body, message, include_globs, exclude_globs, max_files, "
                         "max_file_bytes, max_total_bytes, draft."
                     ),
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "owner": {"type": "string", "minLength": 1},
-                            "repo": {"type": "string", "minLength": 1},
-                            "branch": {"type": "string", "minLength": 1},
-                            "base": {"type": "string", "minLength": 1},
-                            "workspace_path": {"type": "string", "minLength": 1},
-                            "title": {"type": "string"},
-                            "body": {"type": "string"},
-                            "message": {"type": "string"},
-                            "head": {"type": "string"},
-                            "draft": {"type": "boolean"},
-                            "maintainer_can_modify": {"type": "boolean"},
-                            "include_globs": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "exclude_globs": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "max_files": {"type": "integer", "minimum": 1, "maximum": 2000},
-                            "max_file_bytes": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 5_000_000,
-                            },
-                            "max_total_bytes": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 20_000_000,
-                            },
-                        },
-                        "required": ["owner", "repo", "branch", "base", "workspace_path"],
-                    },
-                    output_schema={
-                        "type": "object",
-                        "properties": {
-                            "branch": {"type": "string"},
-                            "base": {"type": "string"},
-                            "selected_files": {"type": "integer"},
-                            "selected_paths_preview": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "skipped": {"type": "object"},
-                            "branch_create": {"type": "object"},
-                            "push_result": {"type": "object"},
-                            "pull_request": {"type": "object"},
-                        },
-                        "required": [
-                            "branch",
-                            "base",
-                            "selected_files",
-                            "selected_paths_preview",
-                            "skipped",
-                            "branch_create",
-                            "push_result",
-                            "pull_request",
-                        ],
-                    },
+                    input_schema=CodingAgentPublishPrInput.model_json_schema(),
+                    output_schema=CodingAgentPublishPrOutput.model_json_schema(),
                     timeout_s=timeout_s,
                     risk_level=RiskLevel.high,
                     tool_intent=ToolIntent.io,
@@ -283,7 +232,7 @@ def register_coding_agent_tools(
         )
 
 
-def register_agent_run_tool(
+def register_agent_tool(
     registry,
     *,
     timeout_s: int,
@@ -292,7 +241,7 @@ def register_agent_run_tool(
     registry.register(
         Tool(
             spec=ToolSpec(
-                name="agent_run",
+                name="agent",
                 description=(
                     "Run a general-purpose agentic loop. Reasons about a goal using the "
                     "configured tools and iterates until the goal is achieved or max steps "
@@ -304,28 +253,8 @@ def register_agent_run_tool(
                     "capability IDs the agent may call). Returns 'result', 'steps_taken', "
                     "and 'tool_calls'."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "goal": {"type": "string", "minLength": 1},
-                        "instructions": {"type": "string"},
-                        "max_steps": {"type": "integer", "minimum": 1, "maximum": 32},
-                        "allowed_capability_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                    },
-                    "required": ["goal"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "result": {"type": "string"},
-                        "steps_taken": {"type": "integer"},
-                        "tool_calls": {"type": "array", "items": {"type": "object"}},
-                    },
-                    "required": ["result", "steps_taken", "tool_calls"],
-                },
+                input_schema=AgentRunInput.model_json_schema(),
+                output_schema=AgentRunOutput.model_json_schema(),
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.generate,

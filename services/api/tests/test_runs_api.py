@@ -728,7 +728,7 @@ def test_dynamic_agents_materialize_from_nested_agent_run_output() -> None:
                 "run_id": run_id,
                 "status": "completed",
                 "outputs": {
-                    "agent_run": {
+                    "agent": {
                         "result": "done",
                         "steps_taken": 2,
                         "agents": [

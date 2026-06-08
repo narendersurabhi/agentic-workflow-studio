@@ -6,16 +6,16 @@ import math
 import os
 import re
 import shutil
-import time
-from datetime import UTC, datetime
 from subprocess import CompletedProcess, run
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
+from dataclasses import dataclass
+
 from .llm_provider import LLMProvider, LLMRequest
-from . import tool_bootstrap, tool_catalog, tool_governance, tool_plugins, tracing as core_tracing
-from libs.core import mcp_gateway
+from . import tool_governance, tool_plugins, tracing as core_tracing
+from libs.core import mcp_gateway, sub_agent_dispatch
 from .models import ToolSpec
 from libs.framework.tool_runtime import (
     Tool as _FrameworkTool,
@@ -29,10 +29,23 @@ from libs.tools.document_spec_llm import (
     llm_generate_document_spec as _llm_generate_document_spec_external,
     llm_improve_document_spec as _llm_improve_document_spec_external,
 )
-from libs.tools.core_ops import CoreOpsHandlers
+from libs.tools.core_ops import CoreOpsHandlers, register_core_ops_tools
+from libs.tools.docx_render_from_spec import register_docx_tools
+from libs.tools.document_spec_iterative import register_document_spec_iterative_tools
+from libs.tools.document_spec_llm import register_document_spec_llm_tools
+from libs.tools.document_spec_validate import register_document_spec_tools
+from libs.tools.github_tools import register_github_tools
+from libs.tools.llm_tool_groups import (
+    register_agent_tool,
+    register_coding_agent_tools,
+    register_llm_text_tool,
+)
+from libs.tools.openapi_iterative import register_openapi_iterative_tools
+from libs.tools.pdf_render_from_spec import register_pdf_tools
 from libs.tools import mcp_client
 from libs.tools import coder_tools
 from libs.tools import agent_tools
+from . import planner_support_tools
 
 LOGGER = logging.getLogger(__name__)
 
@@ -286,17 +299,100 @@ def _load_entrypoint_plugins(
     )
 
 
+@dataclass(frozen=True)
+class ToolCatalogHandlers:
+    core_ops_handlers: CoreOpsHandlers
+    resolve_llm_timeout_s: Callable[[Optional[LLMProvider]], int]
+    resolve_coding_agent_timeout_s: Callable[[], int]
+    resolve_llm_iterative_timeout_s: Callable[[Optional[LLMProvider]], int]
+    llm_generate: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    coding_agent_generate: Callable[[Dict[str, Any]], Dict[str, Any]]
+    coding_agent_autonomous: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    coding_agent_publish_pr: Callable[[Dict[str, Any]], Dict[str, Any]]
+    agent: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    llm_generate_document_spec: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    llm_improve_document_spec: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    sanitize_document_spec: Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def register_default_tools(
+    registry: ToolRegistry,
+    *,
+    handlers: ToolCatalogHandlers,
+    http_fetch_enabled: bool = False,
+    llm_enabled: bool = False,
+    llm_provider: Optional[LLMProvider] = None,
+) -> None:
+    register_core_ops_tools(
+        registry,
+        handlers=handlers.core_ops_handlers,
+        http_fetch_enabled=http_fetch_enabled,
+    )
+    register_docx_tools(registry)
+    register_pdf_tools(registry)
+    register_document_spec_tools(registry)
+    register_github_tools(registry)
+
+    if not llm_enabled:
+        return
+    if llm_provider is None:
+        raise ValueError("llm_enabled requires a llm_provider instance")
+
+    llm_timeout_s = handlers.resolve_llm_timeout_s(llm_provider)
+    coding_agent_timeout_s = handlers.resolve_coding_agent_timeout_s()
+    llm_iterative_timeout_s = handlers.resolve_llm_iterative_timeout_s(llm_provider)
+
+    register_llm_text_tool(
+        registry,
+        timeout_s=llm_timeout_s,
+        handler=lambda payload, provider=llm_provider: handlers.llm_generate(payload, provider),
+    )
+    register_coding_agent_tools(
+        registry,
+        timeout_s=coding_agent_timeout_s,
+        handler_generate=handlers.coding_agent_generate,
+        handler_autonomous=lambda payload, provider=llm_provider: handlers.coding_agent_autonomous(
+            payload, provider
+        ),
+        handler_publish_pr=handlers.coding_agent_publish_pr,
+    )
+    register_agent_tool(
+        registry,
+        timeout_s=coding_agent_timeout_s,
+        handler=lambda payload, provider=llm_provider: handlers.agent(payload, provider),
+    )
+    register_document_spec_llm_tools(
+        registry,
+        llm_provider,
+        timeout_s=llm_timeout_s,
+        sanitize_document_spec=handlers.sanitize_document_spec,
+    )
+    register_document_spec_iterative_tools(
+        registry,
+        llm_provider,
+        timeout_s=llm_iterative_timeout_s,
+        generate_document_spec=handlers.llm_generate_document_spec,
+        improve_document_spec=handlers.llm_improve_document_spec,
+        sanitize_document_spec=handlers.sanitize_document_spec,
+    )
+    register_openapi_iterative_tools(
+        registry,
+        llm_provider,
+        timeout_s=llm_iterative_timeout_s,
+    )
+
+
+def build_planner_support_tool_specs() -> list[ToolSpec]:
+    return planner_support_tools.build_planner_support_tool_specs()
+
+
 def _build_core_ops_handlers() -> CoreOpsHandlers:
     return CoreOpsHandlers(
         math_eval=_math_eval,
-        text_summarize=_text_summarize,
-        file_write_artifact=lambda payload: _write_text_file(payload, default_filename="artifact.txt"),
         file_write_text=_write_text_file,
-        file_write_code=_file_write_code,
         file_read_text=_file_read_text,
         list_files=_list_files,
         workspace_write_text=_write_workspace_text_file,
-        workspace_write_code=_workspace_write_code,
         workspace_read_text=_workspace_read_text,
         workspace_list_files=_list_workspace_files,
         artifact_mkdir=_artifact_mkdir,
@@ -308,7 +404,6 @@ def _build_core_ops_handlers() -> CoreOpsHandlers:
         artifact_copy=_artifact_copy,
         workspace_copy=_workspace_copy,
         artifact_move=_artifact_move_to_workspace,
-        derive_output_filename=_derive_output_filename,
         run_tests=_run_tests,
         search_text=_search_text,
         memory_read=_memory_read,
@@ -316,26 +411,66 @@ def _build_core_ops_handlers() -> CoreOpsHandlers:
         memory_semantic_write=_memory_semantic_write,
         memory_semantic_search=_memory_semantic_search,
         docx_render=_docx_render,
-        sleep=_sleep,
         http_fetch=_http_fetch,
     )
 
 
-def _default_catalog_handlers() -> tool_catalog.ToolCatalogHandlers:
-    return tool_catalog.ToolCatalogHandlers(
+def _default_catalog_handlers() -> ToolCatalogHandlers:
+    return ToolCatalogHandlers(
         core_ops_handlers=_build_core_ops_handlers(),
         resolve_llm_timeout_s=_resolve_llm_timeout_s,
         resolve_coding_agent_timeout_s=_resolve_coding_agent_timeout_s,
         resolve_llm_iterative_timeout_s=_resolve_llm_iterative_tool_timeout_s,
         llm_generate=_llm_generate,
-        llm_generate_with_context=_llm_generate_with_context,
         coding_agent_generate=_coding_agent_generate,
         coding_agent_autonomous=_coding_agent_autonomous,
         coding_agent_publish_pr=_coding_agent_publish_pr,
-        agent_run=_agent_run,
+        agent=_agent,
         llm_generate_document_spec=_llm_generate_document_spec,
         llm_improve_document_spec=_llm_improve_document_spec,
         sanitize_document_spec=_sanitize_document_spec,
+    )
+
+
+def build_tool_registry(
+    *,
+    handlers: ToolCatalogHandlers,
+    http_fetch_enabled: bool = False,
+    llm_enabled: bool = False,
+    llm_provider: Optional[LLMProvider] = None,
+    service_name: str | None = None,
+) -> ToolRegistry:
+    registry = ToolRegistry()
+    register_default_tools(
+        registry,
+        handlers=handlers,
+        http_fetch_enabled=http_fetch_enabled,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+    )
+    tool_plugins.load_configured_plugins(
+        registry,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+        http_fetch_enabled=http_fetch_enabled,
+    )
+    tool_governance.filter_registry_tools(registry, service_name)
+    return registry
+
+
+def build_default_registry(
+    *,
+    http_fetch_enabled: bool = False,
+    llm_enabled: bool = False,
+    llm_provider: Optional[LLMProvider] = None,
+    service_name: str | None = None,
+) -> ToolRegistry:
+    return build_tool_registry(
+        handlers=_default_catalog_handlers(),
+        http_fetch_enabled=http_fetch_enabled,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+        service_name=service_name,
     )
 
 
@@ -345,8 +480,7 @@ def default_registry(
     llm_provider: Optional[LLMProvider] = None,
     service_name: Optional[str] = None,
 ) -> ToolRegistry:
-    return tool_bootstrap.build_tool_registry(
-        handlers=_default_catalog_handlers(),
+    return build_default_registry(
         http_fetch_enabled=http_fetch_enabled,
         llm_enabled=llm_enabled,
         llm_provider=llm_provider,
@@ -359,12 +493,6 @@ def _math_eval(payload: Dict[str, Any]) -> Dict[str, Any]:
     allowed = {"sqrt": math.sqrt, "pow": pow}
     value = eval(expr, {"__builtins__": {}}, allowed)  # noqa: S307
     return {"value": value}
-
-
-def _text_summarize(payload: Dict[str, Any]) -> Dict[str, Any]:
-    text = payload.get("text", "")
-    summary = text[:200]
-    return {"summary": summary}
 
 
 def _write_text_file(
@@ -401,45 +529,6 @@ def _write_workspace_text_file(
     candidate.parent.mkdir(parents=True, exist_ok=True)
     candidate.write_text(content, encoding="utf-8")
     return {"path": str(candidate)}
-
-
-def _file_write_code(payload: Dict[str, Any]) -> Dict[str, Any]:
-    path = payload.get("path", "")
-    if not path:
-        raise ToolExecutionError("Missing file name in path")
-    _ensure_code_extension(path)
-    return _write_text_file(payload)
-
-
-def _workspace_write_code(payload: Dict[str, Any]) -> Dict[str, Any]:
-    path = payload.get("path", "")
-    if not path:
-        raise ToolExecutionError("Missing file name in path")
-    _ensure_code_extension(path)
-    return _write_workspace_text_file(payload)
-
-
-def _ensure_code_extension(path: str) -> None:
-    code_extensions = {
-        ".py",
-        ".js",
-        ".ts",
-        ".tsx",
-        ".jsx",
-        ".html",
-        ".css",
-        ".json",
-        ".md",
-        ".yml",
-        ".yaml",
-        ".toml",
-        ".sh",
-        ".sql",
-        ".txt",
-    }
-    suffix = Path(path).suffix.lower()
-    if not suffix or suffix not in code_extensions:
-        raise ToolExecutionError("Unsupported code file extension")
 
 
 def _file_read_text(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -691,195 +780,6 @@ def _artifact_move_to_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolExecutionError("Destination already exists")
     shutil.move(str(source), str(destination))
     return {"path": str(destination)}
-
-
-def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:
-    def pick_str(*values: Any) -> str:
-        for value in values:
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return ""
-
-    memory_context = _select_job_context_from_memory(payload.get("memory"))
-    nested_context = memory_context.get("context_json")
-    if not isinstance(nested_context, dict):
-        nested_context = {}
-
-    role_name = pick_str(
-        payload.get("target_role_name"),
-        payload.get("role_name"),
-        payload.get("topic"),
-        memory_context.get("target_role_name"),
-        memory_context.get("role_name"),
-        memory_context.get("topic"),
-        nested_context.get("target_role_name"),
-        nested_context.get("role_name"),
-        nested_context.get("topic"),
-    )
-    job_description = pick_str(
-        payload.get("job_description"),
-        memory_context.get("job_description"),
-        nested_context.get("job_description"),
-    )
-    date_value = pick_str(
-        payload.get("date"),
-        payload.get("today"),
-        memory_context.get("date"),
-        memory_context.get("today"),
-        nested_context.get("date"),
-        nested_context.get("today"),
-    )
-    output_dir = (
-        pick_str(
-            payload.get("output_dir"),
-            memory_context.get("output_dir"),
-            nested_context.get("output_dir"),
-        )
-        or "documents"
-    )
-    document_type = pick_str(
-        payload.get("document_type"),
-        memory_context.get("document_type"),
-        nested_context.get("document_type"),
-    )
-    extension_hint = pick_str(
-        payload.get("output_extension"),
-        payload.get("file_extension"),
-        payload.get("extension"),
-        payload.get("format"),
-        memory_context.get("output_extension"),
-        memory_context.get("file_extension"),
-        memory_context.get("extension"),
-        memory_context.get("format"),
-        nested_context.get("output_extension"),
-        nested_context.get("file_extension"),
-        nested_context.get("extension"),
-        nested_context.get("format"),
-    )
-    normalized_doc_type = document_type.lower().replace("-", "_")
-    known_format_types = {
-        "pdf",
-        "docx",
-        "md",
-        "markdown",
-        "txt",
-        "html",
-        "htm",
-        "json",
-        "yaml",
-        "yml",
-        "xml",
-        "csv",
-    }
-
-    def normalize_extension(raw: str) -> str:
-        value = raw.strip().lower()
-        if value.startswith("."):
-            value = value[1:]
-        if value == "markdown":
-            value = "md"
-        if not value:
-            return ""
-        if not re.fullmatch(r"[a-z0-9]{1,16}", value):
-            raise ToolExecutionError("Invalid output_extension")
-        return value
-
-    output_extension = ""
-    if extension_hint:
-        output_extension = normalize_extension(extension_hint)
-    elif normalized_doc_type in known_format_types:
-        output_extension = normalize_extension(normalized_doc_type)
-    if not output_extension:
-        output_extension = "docx"
-    if not isinstance(output_dir, str):
-        output_dir = "documents"
-    output_dir = output_dir.strip().strip("/")
-    if not output_dir:
-        output_dir = "documents"
-    if output_dir.startswith("/") or ".." in Path(output_dir).parts:
-        raise ToolExecutionError("Invalid output_dir")
-
-    def clean_label(value: Any) -> str:
-        if not isinstance(value, str):
-            return ""
-        # Keep output human-readable while stripping filesystem-unsafe characters.
-        cleaned = re.sub(r'[<>:"/\\\\|?*]', " ", value)
-        cleaned = re.sub(r"[,_;:]+", " ", cleaned)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
-        return cleaned
-
-    def slugify(value: str, pattern: str) -> str:
-        cleaned = re.sub(pattern, "_", value.lower())
-        cleaned = re.sub(r"_+", "_", cleaned).strip("_")
-        return cleaned
-
-    if (not isinstance(role_name, str) or not role_name.strip()) and isinstance(job_description, str):
-        role_name = _derive_role_name_from_jd(job_description)
-
-    role_label = clean_label(role_name)
-    if not role_label:
-        raise ToolExecutionError("Missing target_role_name")
-    if not isinstance(date_value, str) or not date_value.strip():
-        # Fallback for plans that omit date/today in output-path derivation.
-        date_value = datetime.now(UTC).date().isoformat()
-
-    role_slug = slugify(role_label or str(role_name), r"[^a-z0-9]+") or "document"
-    date_slug = slugify(date_value, r"[^0-9]+")
-    if not date_slug:
-        raise ToolExecutionError("Invalid date")
-    filename = f"{role_slug}_{date_slug}.{output_extension}"
-    return {
-        "path": f"{output_dir}/{filename}",
-        "document_type": normalized_doc_type or "document",
-        "output_extension": output_extension,
-    }
-
-
-def _derive_role_name_from_jd(job_description: str) -> str:
-    patterns = (
-        r"(?im)^\s*title\s*:\s*(.+)$",
-        r"(?im)^\s*role\s*:\s*(.+)$",
-        r"(?im)^\s*position\s*:\s*(.+)$",
-        r"(?im)\bwe are hiring (?:a|an)\s+([^.\n]+)",
-        r"(?im)\bseeking (?:a|an)\s+([^.\n]+)",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, job_description)
-        if match:
-            return match.group(1).strip(" -:,.")
-    first_line = next((line.strip() for line in job_description.splitlines() if line.strip()), "")
-    return first_line[:120].strip(" -:,.")
-
-
-def _select_job_context_from_memory(memory: Any) -> Dict[str, Any]:
-    if not isinstance(memory, dict):
-        return {}
-    direct = memory.get("context_json")
-    if isinstance(direct, dict):
-        return direct
-    entries = memory.get("job_contexts")
-    if not isinstance(entries, list):
-        entries = memory.get("job_context")
-    if isinstance(entries, list):
-        for entry in entries:
-            if isinstance(entry, dict):
-                payload = entry.get("payload")
-                if isinstance(payload, dict):
-                    context_json = payload.get("context_json")
-                    if isinstance(context_json, dict):
-                        return context_json
-                    return payload
-    task_outputs = memory.get("task_outputs")
-    if isinstance(task_outputs, list):
-        for entry in task_outputs:
-            if not isinstance(entry, dict):
-                continue
-            payload = entry.get("payload")
-            if isinstance(payload, dict):
-                context_json = payload.get("context_json")
-                if isinstance(context_json, dict):
-                    return context_json
-    return {}
 
 
 def _run_tests(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1152,12 +1052,6 @@ def _docx_render(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"path": str(candidate)}
 
 
-def _sleep(payload: Dict[str, Any]) -> Dict[str, Any]:
-    seconds = float(payload.get("seconds", 0))
-    time.sleep(seconds)
-    return {"slept": seconds}
-
-
 def _http_fetch(payload: Dict[str, Any]) -> Dict[str, Any]:
     import urllib.request
 
@@ -1306,11 +1200,16 @@ def _coding_agent_autonomous(payload: Dict[str, Any], provider: LLMProvider) -> 
     )
 
 
-def _agent_run(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int = 0) -> Dict[str, Any]:
+def _agent(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int = 0) -> Dict[str, Any]:
     def _execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        # Intercept recursive agent_run calls to thread depth through
-        if tool_name == "agent_run" or tool_name == "agent__run":
-            return _agent_run(arguments, provider, _recursion_depth=_recursion_depth + 1)
+        # Intercept recursive agent calls: dispatch as an independent job when
+        # API_URL is available (true process isolation); fall back to in-process
+        # recursion in dev/test environments where API_URL is not set.
+        if tool_name == "agent" or tool_name == "agent__run":
+            api_url = sub_agent_dispatch.get_api_url()
+            if api_url:
+                return sub_agent_dispatch.dispatch_sub_agent(arguments, api_url=api_url)
+            return _agent(arguments, provider, _recursion_depth=_recursion_depth + 1)
         reg = default_registry(
             http_fetch_enabled=True,
             llm_enabled=True,
@@ -1322,7 +1221,7 @@ def _agent_run(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth:
             raise _TEE(f"tool_not_found:{tool_name}")
         return tool.handler(arguments)
 
-    return agent_tools.agent_run(
+    return agent_tools.agent(
         payload,
         provider,
         invoke_capability=lambda cap_id, args: mcp_gateway.invoke_capability(
@@ -1363,70 +1262,6 @@ def _llm_generate(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, A
             "cache_write_tokens": response.cache_creation_tokens,
         },
     }
-
-
-def _llm_generate_with_context(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:
-    prompt = str(payload.get("prompt") or "").strip()
-    if not prompt:
-        raise ToolExecutionError("missing_prompt")
-    context_value = payload.get("context")
-    prompt_with_context = _render_prompt_with_context(prompt, context_value)
-    system_prompt = payload.get("system_prompt")
-    if not isinstance(system_prompt, str) or not system_prompt.strip():
-        system_prompt = None
-    raw_temperature = payload.get("temperature")
-    temperature = raw_temperature if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool) else None
-    raw_max_tokens = payload.get("max_output_tokens")
-    max_output_tokens = raw_max_tokens if isinstance(raw_max_tokens, int) and not isinstance(raw_max_tokens, bool) else None
-    meta: Dict[str, Any] = {
-        "component": "tools",
-        "tool": "llm_generate_with_context",
-        "operation": "generate_text_with_context",
-        "prompt_len": len(prompt),
-        "has_context": context_value is not None,
-    }
-    job_id = payload.get("job_id")
-    if job_id:
-        meta["job_id"] = job_id
-    response = provider.generate_request(
-        LLMRequest(
-            prompt=prompt_with_context,
-            system_prompt=system_prompt,
-            temperature=float(temperature) if temperature is not None else None,
-            max_output_tokens=max_output_tokens,
-            metadata=meta,
-        )
-    )
-    return {
-        "text": response.content,
-        "usage": {
-            "prompt_tokens": response.input_tokens,
-            "completion_tokens": response.output_tokens,
-            "cached_tokens": response.cached_input_tokens,
-            "cache_write_tokens": response.cache_creation_tokens,
-        },
-    }
-
-
-def _render_prompt_with_context(prompt: str, context_value: Any) -> str:
-    if context_value is None:
-        return prompt
-    if isinstance(context_value, str):
-        context_text = context_value.strip()
-        if not context_text:
-            return prompt
-    elif isinstance(context_value, (dict, list)):
-        if not context_value:
-            return prompt
-        try:
-            context_text = json.dumps(context_value, indent=2, ensure_ascii=True)
-        except (TypeError, ValueError):
-            context_text = str(context_value)
-    else:
-        context_text = str(context_value).strip()
-        if not context_text:
-            return prompt
-    return f"{prompt}\n\nContext:\n{context_text}"
 
 
 def _llm_generate_document_spec(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:

@@ -1501,7 +1501,7 @@ capabilities:
     idempotency: unsafe_write
     group: agent
     subgroup: loop
-    input_schema_ref: agent_run_capability_input
+    input_schema_ref: agent_capability_input
     output_schema_ref: ""
     tags:
       - agent
@@ -1519,7 +1519,7 @@ capabilities:
     adapters:
       - type: tool
         server_id: local_worker
-        tool_name: agent_run
+        tool_name: agent
         arg_map: {}
         enabled: true
   - id: codegen.publish_pr
