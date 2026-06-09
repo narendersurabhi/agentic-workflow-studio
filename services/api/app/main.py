@@ -1112,16 +1112,63 @@ def _init_db() -> None:
         _recover_jobs()
 
 
+def _apply_idempotent_schema_patches() -> None:
+    """Column/table additions that pre-Alembic databases need but that
+    migrations can't apply (because we stamped past them). All statements
+    use IF NOT EXISTS so they are always safe to re-run."""
+    patches = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB",
+        "ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'draft'",
+        """CREATE TABLE IF NOT EXISTS agent_checkpoints (
+            id VARCHAR NOT NULL,
+            run_id VARCHAR,
+            task_id VARCHAR,
+            messages_json TEXT NOT NULL,
+            goal VARCHAR NOT NULL,
+            instructions VARCHAR,
+            allowed_capability_ids_json TEXT,
+            max_steps INTEGER,
+            steps_taken INTEGER NOT NULL DEFAULT 0,
+            question VARCHAR NOT NULL,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+            expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+            PRIMARY KEY (id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_agent_checkpoints_run_id ON agent_checkpoints (run_id)",
+        "CREATE INDEX IF NOT EXISTS ix_agent_checkpoints_status ON agent_checkpoints (status)",
+        "CREATE INDEX IF NOT EXISTS ix_agent_checkpoints_expires_at ON agent_checkpoints (expires_at)",
+        "CREATE INDEX IF NOT EXISTS ix_agent_definitions_status ON agent_definitions (status)",
+    ]
+    with engine.begin() as conn:
+        for patch in patches:
+            conn.execute(sqlalchemy.text(patch))
+    logger.info("idempotent_schema_patches_applied")
+
+
 def _run_migrations() -> None:
     from pathlib import Path
     from alembic.config import Config
     from alembic import command
+    from alembic.runtime.migration import MigrationContext
 
     alembic_ini = Path(__file__).parent / "alembic.ini"
     cfg = Config(str(alembic_ini))
     cfg.set_main_option("script_location", str(alembic_ini.parent / "alembic"))
-    command.upgrade(cfg, "head")
-    logger.info("alembic_upgrade_head_complete")
+
+    with engine.connect() as conn:
+        current_rev = MigrationContext.configure(conn).get_current_revision()
+
+    if current_rev is None:
+        # DB was created by create_all() before Alembic was wired in.
+        # Stamp to head so Alembic skips CREATE TABLE migrations for tables
+        # that already exist, then apply any structural changes idempotently.
+        command.stamp(cfg, "head")
+        logger.info("alembic_stamped_head: existing db has no migration history")
+        _apply_idempotent_schema_patches()
+    else:
+        command.upgrade(cfg, "head")
+        logger.info("alembic_upgrade_head_complete")
     if EVENT_OUTBOX_ENABLED:
         _start_event_outbox_dispatcher()
     if ORCHESTRATOR_ENABLED:
