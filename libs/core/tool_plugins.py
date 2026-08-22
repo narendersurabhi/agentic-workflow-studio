@@ -82,7 +82,9 @@ def call_register_fn(
     try:
         register_fn(registry, **kwargs)
     except TypeError as exc:
-        raise ToolPluginLoadError(f"Invalid tool plugin signature for {register_fn}: {exc}") from exc
+        raise ToolPluginLoadError(
+            f"Invalid tool plugin signature for {register_fn}: {exc}"
+        ) from exc
 
 
 def _iter_entry_points(group: str) -> list[Any]:

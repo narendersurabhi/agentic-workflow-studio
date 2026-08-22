@@ -158,10 +158,11 @@ class RetrieverServiceConfig:
         )
         embedding_model = os.getenv("RAG_EMBEDDING_MODEL", default_embedding_model).strip()
         embedding_dimensions = _optional_int(os.getenv("RAG_BEDROCK_EMBEDDING_DIMENSIONS"))
-        if (
-            embedding_dimensions is None
-            and embedding_provider in {"bedrock", "bedrock-titan", "bedrock_titan"}
-        ):
+        if embedding_dimensions is None and embedding_provider in {
+            "bedrock",
+            "bedrock-titan",
+            "bedrock_titan",
+        }:
             embedding_dimensions = _default_embedding_size(
                 embedding_model,
                 provider=embedding_provider,
@@ -182,9 +183,7 @@ class RetrieverServiceConfig:
         payload_tenant_id_key = (
             os.getenv("RAG_PAYLOAD_TENANT_ID_KEY", "tenant_id").strip() or "tenant_id"
         )
-        payload_user_id_key = (
-            os.getenv("RAG_PAYLOAD_USER_ID_KEY", "user_id").strip() or "user_id"
-        )
+        payload_user_id_key = os.getenv("RAG_PAYLOAD_USER_ID_KEY", "user_id").strip() or "user_id"
         payload_workspace_id_key = (
             os.getenv("RAG_PAYLOAD_WORKSPACE_ID_KEY", "workspace_id").strip() or "workspace_id"
         )
@@ -219,9 +218,7 @@ class RetrieverServiceConfig:
                 True,
             ),
             qdrant_payload_index_fields=tuple(
-                _csv_values(
-                    os.getenv("QDRANT_PAYLOAD_INDEX_FIELDS", default_payload_index_fields)
-                )
+                _csv_values(os.getenv("QDRANT_PAYLOAD_INDEX_FIELDS", default_payload_index_fields))
             ),
             embedding_provider=embedding_provider,
             embedding_model=embedding_model,
@@ -344,6 +341,7 @@ class OpenAIEmbeddingClient:
 @functools.lru_cache(maxsize=8)
 def _cached_bedrock_runtime_client(region: str, verify_ssl: bool, timeout_s: float) -> Any:
     import boto3  # lazy — may not be installed in all deployments
+
     return boto3.client(
         "bedrock-runtime",
         region_name=region or "us-east-1",
@@ -618,9 +616,7 @@ class RetrieverService:
         if self.config.require_scope and not any(
             [request.tenant_id, request.user_id, request.workspace_id]
         ):
-            raise RetrieverError(
-                "missing_scope:one_of_tenant_id_user_id_workspace_id_required"
-            )
+            raise RetrieverError("missing_scope:one_of_tenant_id_user_id_workspace_id_required")
         collection = self._resolve_collection_name(None)
         top_k = request.top_k or self.config.top_k_default
         top_k = max(1, min(self.config.top_k_max, top_k))
@@ -795,12 +791,18 @@ class RetrieverService:
             deleted_chunk_count=len(chunks_response.chunks),
         )
 
-    def ensure_collection(self, request: EnsureCollectionRequest | None = None) -> EnsureCollectionResponse:
+    def ensure_collection(
+        self, request: EnsureCollectionRequest | None = None
+    ) -> EnsureCollectionResponse:
         normalized = request or EnsureCollectionRequest()
         collection = self._resolve_collection_name(normalized.collection_name)
         vector_size = normalized.vector_size or self.config.qdrant_vector_size
         distance = (normalized.distance or self.config.qdrant_distance).strip() or "Cosine"
-        vector_name = normalized.vector_name if normalized.vector_name is not None else self.config.qdrant_vector_name
+        vector_name = (
+            normalized.vector_name
+            if normalized.vector_name is not None
+            else self.config.qdrant_vector_name
+        )
         payload_keyword_fields = [
             field
             for field in (
@@ -840,7 +842,9 @@ class RetrieverService:
             vector_size=vector_size,
             distance=distance,
             vector_name=vector_name,
-            payload_keyword_fields=payload_keyword_fields if normalized.create_payload_indexes else [],
+            payload_keyword_fields=payload_keyword_fields
+            if normalized.create_payload_indexes
+            else [],
         )
 
     def upsert_texts(self, request: UpsertTextsRequest) -> UpsertTextsResponse:
@@ -859,9 +863,7 @@ class RetrieverService:
             if self.config.require_scope and not any(
                 [normalized.tenant_id, normalized.user_id, normalized.workspace_id]
             ):
-                raise RetrieverError(
-                    "missing_scope:one_of_tenant_id_user_id_workspace_id_required"
-                )
+                raise RetrieverError("missing_scope:one_of_tenant_id_user_id_workspace_id_required")
             chunk_id = normalized.chunk_id or _derive_chunk_id(
                 collection=collection,
                 document_id=normalized.document_id,
@@ -891,7 +893,9 @@ class RetrieverService:
             chunk_ids=chunk_ids,
         )
 
-    def index_workspace_file(self, request: IndexWorkspaceFileRequest) -> IndexWorkspaceFileResponse:
+    def index_workspace_file(
+        self, request: IndexWorkspaceFileRequest
+    ) -> IndexWorkspaceFileResponse:
         normalized_path, content = _read_workspace_file(request.path, self.config)
         chunk_size = request.chunk_size_chars or self.config.workspace_chunk_size_chars
         overlap = (
@@ -1031,7 +1035,8 @@ class RetrieverService:
                     base_metadata.setdefault("chunking_strategy", "markdown")
                     prepared_chunks, _section_count = _prepare_markdown_chunks(
                         content,
-                        chunk_size=request.chunk_size_chars or self.config.workspace_chunk_size_chars,
+                        chunk_size=request.chunk_size_chars
+                        or self.config.workspace_chunk_size_chars,
                         overlap=(
                             request.chunk_overlap_chars
                             if request.chunk_overlap_chars is not None
@@ -1044,7 +1049,8 @@ class RetrieverService:
                     base_metadata.setdefault("chunking_strategy", "text")
                     prepared_chunks = _prepare_text_chunks(
                         content,
-                        chunk_size=request.chunk_size_chars or self.config.workspace_chunk_size_chars,
+                        chunk_size=request.chunk_size_chars
+                        or self.config.workspace_chunk_size_chars,
                         overlap=(
                             request.chunk_overlap_chars
                             if request.chunk_overlap_chars is not None
@@ -1141,7 +1147,9 @@ class RetrieverService:
     def ensure_default_collection(self) -> EnsureCollectionResponse | None:
         if not self.config.qdrant_collection:
             return None
-        return self.ensure_collection(EnsureCollectionRequest(collection_name=self.config.qdrant_collection))
+        return self.ensure_collection(
+            EnsureCollectionRequest(collection_name=self.config.qdrant_collection)
+        )
 
     def _scroll_points(
         self,
@@ -1192,6 +1200,7 @@ class RetrieverService:
 
 def build_service_from_env() -> RetrieverService:
     from .timing import TimingTextEmbedder, TimingVectorDatabase  # lazy to avoid circular import
+
     config = RetrieverServiceConfig.from_env()
     embedder = TimingTextEmbedder(build_embedder_from_config(config))
     vector_db = TimingVectorDatabase(
@@ -1241,8 +1250,7 @@ def build_qdrant_filter(
     raw_filters = request.filters if isinstance(request.filters, dict) else None
     if raw_filters:
         if any(
-            key in raw_filters
-            for key in ("must", "should", "must_not", "should_not", "min_should")
+            key in raw_filters for key in ("must", "should", "must_not", "should_not", "min_should")
         ):
             merged = dict(raw_filters)
             existing_must = merged.get("must")
@@ -1316,9 +1324,7 @@ def normalize_match(
     payload_dict = dict(payload) if isinstance(payload, dict) else {}
     chunk_id = str(point.get("id") or payload_dict.get("chunk_id") or "")
     document_id = str(
-        payload_dict.get(config.payload_document_id_key)
-        or payload_dict.get("doc_id")
-        or chunk_id
+        payload_dict.get(config.payload_document_id_key) or payload_dict.get("doc_id") or chunk_id
     )
     text = str(payload_dict.get(config.payload_text_key) or "")
     source_uri = str(
@@ -1539,7 +1545,9 @@ def _compute_rerank_score(
 
     metadata_text = _stringify_metadata_for_rerank(match.metadata)
     metadata_terms = set(_tokenize_rerank_text(metadata_text))
-    metadata_overlap = len(unique_query_terms.intersection(metadata_terms)) / len(unique_query_terms)
+    metadata_overlap = len(unique_query_terms.intersection(metadata_terms)) / len(
+        unique_query_terms
+    )
 
     normalized_query = _normalize_rerank_phrase(query)
     normalized_text = _normalize_rerank_phrase(f"{primary_text} {metadata_text}")

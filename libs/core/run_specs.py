@@ -157,9 +157,7 @@ def run_spec_to_plan(run_spec: models.RunSpec) -> models.PlanCreate:
                     if dependency_id in step_by_id
                 ],
                 capability_requests=(
-                    [restored_request_id]
-                    if restored_request_field == "capability_requests"
-                    else []
+                    [restored_request_id] if restored_request_field == "capability_requests" else []
                 ),
                 tool_requests=(
                     [restored_request_id] if restored_request_field == "tool_requests" else []

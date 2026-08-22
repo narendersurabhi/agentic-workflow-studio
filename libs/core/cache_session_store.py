@@ -149,9 +149,7 @@ class CachingLLMProvider(LLMProvider):
     def stream_request(self, request: LLMRequest) -> Iterator[str]:
         return self._inner.stream_request(request)
 
-    def open_cache_session(
-        self, job_id: str, static_blocks: List[PromptBlock]
-    ) -> CacheSessionRef:
+    def open_cache_session(self, job_id: str, static_blocks: List[PromptBlock]) -> CacheSessionRef:
         return self._inner.open_cache_session(job_id, static_blocks)
 
     def close_cache_session(self, ref: CacheSessionRef) -> None:

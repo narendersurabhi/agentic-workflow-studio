@@ -207,11 +207,7 @@ def get_schema_support(
     schema = _load_schema_from_ref(schema_ref, schema_registry_path=schema_registry_path)
     if schema is None:
         return {"schema": {}, "summary": {}, "error": f"schema_not_found:{schema_ref}"}
-    required = [
-        key
-        for key in schema.get("required", [])
-        if isinstance(key, str) and key.strip()
-    ]
+    required = [key for key in schema.get("required", []) if isinstance(key, str) and key.strip()]
     return {
         "schema": schema,
         "summary": {
@@ -291,7 +287,9 @@ def get_memory_hints_support(
                 "scope": spec.scope.value,
                 "description": spec.description,
                 "user_scoped": spec.scope in {models.MemoryScope.user, models.MemoryScope.project},
-                "requires_user_id": bool(user_id) if spec.scope == models.MemoryScope.user else False,
+                "requires_user_id": bool(user_id)
+                if spec.scope == models.MemoryScope.user
+                else False,
             }
         )
     return {"hints": hints[:limit]}
@@ -303,7 +301,9 @@ def finalize_run_spec_support(
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        candidate = plan if isinstance(plan, models.PlanCreate) else models.PlanCreate.model_validate(plan)
+        candidate = (
+            plan if isinstance(plan, models.PlanCreate) else models.PlanCreate.model_validate(plan)
+        )
         compiled = run_specs.plan_to_run_spec(
             candidate,
             kind=models.RunKind.planner,

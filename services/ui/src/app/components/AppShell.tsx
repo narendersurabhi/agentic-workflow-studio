@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -293,7 +293,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div ref={actionsSlotRef} className="flex flex-wrap items-center gap-2" />
+              <div
+                ref={actionsSlotRef as RefObject<HTMLDivElement>}
+                className="flex flex-wrap items-center gap-2"
+              />
               <button
                 type="button"
                 onClick={toggleTheme}

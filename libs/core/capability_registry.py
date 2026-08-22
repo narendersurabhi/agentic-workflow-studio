@@ -218,7 +218,9 @@ def evaluate_capability_allowlist(
 ) -> CapabilityAllowDecision:
     normalized_capability_id = canonicalize_capability_id(capability_id)
     if not normalized_capability_id:
-        return CapabilityAllowDecision(False, "missing_capability_id", mode="enforce", violated=True)
+        return CapabilityAllowDecision(
+            False, "missing_capability_id", mode="enforce", violated=True
+        )
     if not _capability_governance_enabled():
         return CapabilityAllowDecision(True, "governance_disabled", mode="enforce", violated=False)
 
@@ -311,10 +313,7 @@ def load_capability_catalog_json(path: Path | None = None) -> str:
                 for e in spec.exports
             ],
             "planner_hints": dict(sorted(spec.planner_hints.items())),
-            "adapters": [
-                {"server_id": a.server_id, "type": a.type}
-                for a in spec.adapters
-            ],
+            "adapters": [{"server_id": a.server_id, "type": a.type} for a in spec.adapters],
         }
         for spec in registry.capabilities.values()
         if spec.enabled

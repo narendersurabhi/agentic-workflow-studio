@@ -164,7 +164,9 @@ def load_intent_eval_cases(path: Path) -> list[IntentEvalCase]:
             raw_case.get("expected_capabilities_by_segment")
         )
         expected_profile_intent = str(raw_case.get("expected_profile_intent") or "").strip() or None
-        expected_missing_inputs = tuple(_coerce_string_list(raw_case.get("expected_missing_inputs")))
+        expected_missing_inputs = tuple(
+            _coerce_string_list(raw_case.get("expected_missing_inputs"))
+        )
         expected_requires_clarification_raw = raw_case.get("expected_requires_clarification")
         expected_requires_clarification = (
             bool(expected_requires_clarification_raw)
@@ -305,7 +307,9 @@ def evaluate_intent_normalization_case(
     envelope: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     envelope_map = envelope if isinstance(envelope, Mapping) else {}
-    profile_map = envelope_map.get("profile") if isinstance(envelope_map.get("profile"), Mapping) else {}
+    profile_map = (
+        envelope_map.get("profile") if isinstance(envelope_map.get("profile"), Mapping) else {}
+    )
     clarification_map = (
         envelope_map.get("clarification")
         if isinstance(envelope_map.get("clarification"), Mapping)
@@ -344,9 +348,7 @@ def evaluate_intent_normalization_case(
         ).strip()
         or None
     )
-    actual_disagreement_reason = (
-        str(disagreement_map.get("reason_code") or "").strip() or None
-    )
+    actual_disagreement_reason = str(disagreement_map.get("reason_code") or "").strip() or None
     expected_disagreement = bool(
         case.expected_disagreement_reason
         or case.expected_clarification_mode == "intent_disagreement"
@@ -456,9 +458,7 @@ def evaluate_intent_cases(
             allowed_capability_ids=allowed_capability_ids,
         )
         if normalize_goal_intent is not None:
-            envelope = _coerce_report_mapping(
-                normalize_goal_intent(case.goal, case.intent_context)
-            )
+            envelope = _coerce_report_mapping(normalize_goal_intent(case.goal, case.intent_context))
             normalization_result = evaluate_intent_normalization_case(case, envelope)
             result["normalization"] = normalization_result
             profile_match = normalization_result["profile_intent"]["match"]
@@ -472,7 +472,9 @@ def evaluate_intent_cases(
             normalization_missing_tp += int(normalization_result["missing_inputs"]["tp"])
             normalization_missing_fp += int(normalization_result["missing_inputs"]["fp"])
             normalization_missing_fn += int(normalization_result["missing_inputs"]["fn"])
-            clarification_match = normalization_result["clarification"]["requires_clarification_match"]
+            clarification_match = normalization_result["clarification"][
+                "requires_clarification_match"
+            ]
             if clarification_match is not None:
                 normalization_clarification_total += 1
                 normalization_clarification_hits += int(bool(clarification_match))

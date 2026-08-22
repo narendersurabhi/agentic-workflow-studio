@@ -99,7 +99,8 @@ def build_feedback_rows(examples: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 or None,
                 "top_k_candidates": top_k_candidates,
                 "fallback_used": fallback_used,
-                "fallback_reason": _normalize_str(dimensions.get("routing_fallback_reason")) or None,
+                "fallback_reason": _normalize_str(dimensions.get("routing_fallback_reason"))
+                or None,
                 "execution_started": _normalize_str(dimensions.get("routing_execution_started"))
                 == "yes",
                 "execution_succeeded": execution_succeeded,
@@ -118,5 +119,7 @@ def build_feedback_rows(examples: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 "hard_negative_ids": hard_negative_ids,
             }
         )
-    rows.sort(key=lambda item: (str(item.get("session_id") or ""), str(item.get("message_id") or "")))
+    rows.sort(
+        key=lambda item: (str(item.get("session_id") or ""), str(item.get("message_id") or ""))
+    )
     return rows

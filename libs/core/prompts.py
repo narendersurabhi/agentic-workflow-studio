@@ -98,7 +98,9 @@ def runbook_document_spec_improve_prompt(
     spec_json = json.dumps(document_spec, ensure_ascii=False, indent=2, default=str)
     report_json = json.dumps(validation_report, ensure_ascii=False, indent=2, default=str)
     job_json = (
-        json.dumps(job, ensure_ascii=False, indent=2, default=str) if isinstance(job, dict) else "null"
+        json.dumps(job, ensure_ascii=False, indent=2, default=str)
+        if isinstance(job, dict)
+        else "null"
     )
     allowed_json = (
         json.dumps(allowed_block_types, ensure_ascii=False)
@@ -148,7 +150,9 @@ def openapi_spec_improve_prompt(
     spec_json = json.dumps(openapi_spec, ensure_ascii=False, indent=2, default=str)
     report_json = json.dumps(validation_report, ensure_ascii=False, indent=2, default=str)
     job_json = (
-        json.dumps(job, ensure_ascii=False, indent=2, default=str) if isinstance(job, dict) else "null"
+        json.dumps(job, ensure_ascii=False, indent=2, default=str)
+        if isinstance(job, dict)
+        else "null"
     )
     return (
         "You are improving an OpenAPI spec JSON object based on a validation report.\n"
@@ -163,10 +167,3 @@ def openapi_spec_improve_prompt(
         f"Original OpenAPI spec: {spec_json}\n"
         "Return ONLY the improved JSON object."
     )
-
-
-
-
-
-
-

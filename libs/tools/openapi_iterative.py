@@ -22,10 +22,14 @@ class LlmIterativeImproveOpenapiSpecHistoryItem(BaseModel):
 class LlmIterativeImproveOpenapiSpecOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     openapi_spec: dict[str, Any] = Field(description="The resulting OpenAPI spec object")
-    validation_report: dict[str, Any] = Field(description="Validation report from the last iteration")
+    validation_report: dict[str, Any] = Field(
+        description="Validation report from the last iteration"
+    )
     iterations: int = Field(description="Number of iterations performed")
     reached_threshold: bool = Field(description="Whether the spec reached valid threshold")
-    history: list[LlmIterativeImproveOpenapiSpecHistoryItem] = Field(description="Per-iteration history")
+    history: list[LlmIterativeImproveOpenapiSpecHistoryItem] = Field(
+        description="Per-iteration history"
+    )
 
 
 def register_openapi_iterative_tools(registry, llm_provider: LLMProvider, timeout_s: int) -> None:
@@ -63,7 +67,9 @@ def register_openapi_iterative_tools(registry, llm_provider: LLMProvider, timeou
     )
 
 
-def llm_iterative_improve_openapi_spec(payload: dict[str, Any], provider: LLMProvider) -> dict[str, Any]:
+def llm_iterative_improve_openapi_spec(
+    payload: dict[str, Any], provider: LLMProvider
+) -> dict[str, Any]:
     job = payload.get("job")
     openapi_spec = payload.get("openapi_spec")
     max_iterations = payload.get("max_iterations", 3)

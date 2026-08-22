@@ -60,7 +60,9 @@ def register_pdf_tools(registry) -> None:
 def _pdf_render_from_spec(payload: Dict[str, Any]) -> Dict[str, Any]:
     document_spec = payload.get("document_spec")
     if not isinstance(document_spec, dict):
-        _tool_error("document_spec missing (not found in memory). Provide document_spec explicitly.")
+        _tool_error(
+            "document_spec missing (not found in memory). Provide document_spec explicitly."
+        )
     _ensure_validation_passed(payload)
     try:
         from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT

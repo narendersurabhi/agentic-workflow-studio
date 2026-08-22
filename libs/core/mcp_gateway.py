@@ -277,9 +277,7 @@ def _parse_server(server_id: str, raw: dict[str, Any]) -> MCPServerSpec:
         raw.get("route_paths", []), f"mcp_servers.{server_id}.route_paths"
     )
     timeout_s = _optional_float(raw.get("timeout_s"), f"mcp_servers.{server_id}.timeout_s")
-    max_retries = _optional_int(
-        raw.get("max_retries"), f"mcp_servers.{server_id}.max_retries"
-    )
+    max_retries = _optional_int(raw.get("max_retries"), f"mcp_servers.{server_id}.max_retries")
     retry_sleep_s = _optional_float(
         raw.get("retry_sleep_s"), f"mcp_servers.{server_id}.retry_sleep_s"
     )

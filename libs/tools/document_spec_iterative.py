@@ -36,7 +36,9 @@ class IterativeDocumentSpecHistoryItem(BaseModel):
 class LlmIterativeImproveDocumentSpecOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     document_spec: dict[str, Any] = Field(description="The resulting DocumentSpec object")
-    validation_report: dict[str, Any] = Field(description="Validation report from the last iteration")
+    validation_report: dict[str, Any] = Field(
+        description="Validation report from the last iteration"
+    )
     iterations: int = Field(description="Number of iterations performed")
     reached_threshold: bool = Field(description="Whether the spec reached valid threshold")
     history: list[IterativeDocumentSpecHistoryItem] = Field(description="Per-iteration history")
@@ -399,6 +401,8 @@ def _filter_document_spec_validation_report(
     filtered = dict(report)
     filtered["warnings"] = filtered_warnings
     return filtered
+
+
 def _resolve_allowed_block_types(raw: Any) -> list[str]:
     if raw is None:
         return list(_DEFAULT_ALLOWED_BLOCK_TYPES)

@@ -51,7 +51,9 @@ class LlmDocumentSpecOutput(BaseModel):
 class LlmImproveDocumentSpecInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     document_spec: dict[str, Any] = Field(description="The DocumentSpec to improve")
-    validation_report: dict[str, Any] = Field(description="Validation report from document_spec_validate")
+    validation_report: dict[str, Any] = Field(
+        description="Validation report from document_spec_validate"
+    )
     allowed_block_types: list[str] | None = None
 
 
@@ -232,11 +234,14 @@ def llm_generate_document_spec(
         )
     allowed = _resolve_allowed_block_types(payload.get("allowed_block_types"))
     explicit_inputs = _compact_document_spec_inputs(payload)
-    missing = [key for key in _DOCUMENT_SPEC_REQUIRED_INPUTS if not _non_empty_string(explicit_inputs.get(key))]
+    missing = [
+        key
+        for key in _DOCUMENT_SPEC_REQUIRED_INPUTS
+        if not _non_empty_string(explicit_inputs.get(key))
+    ]
     if missing:
         raise ToolExecutionError(
-            "Missing required explicit fields for llm_generate_document_spec: "
-            + ", ".join(missing)
+            "Missing required explicit fields for llm_generate_document_spec: " + ", ".join(missing)
         )
     prompt = prompts.document_spec_prompt(explicit_inputs, allowed)
     job_id = payload.get("job_id")
@@ -283,15 +288,11 @@ def llm_generate_document_spec_from_markdown(
     return {"document_spec": sanitize_document_spec(document_spec)}
 
 
-def _compact_document_spec_inputs(
-    payload: dict[str, Any]
-) -> dict[str, Any]:
+def _compact_document_spec_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     return project_document_generation_inputs(payload)
 
 
-def _compact_markdown_document_spec_inputs(
-    payload: dict[str, Any]
-) -> dict[str, Any]:
+def _compact_markdown_document_spec_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     return project_markdown_document_generation_inputs(payload)
 
 

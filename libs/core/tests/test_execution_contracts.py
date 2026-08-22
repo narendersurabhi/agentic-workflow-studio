@@ -80,9 +80,7 @@ def test_build_task_dispatch_payload_normalizes_and_roundtrips_execution_fields(
             "correlation_id": "corr-1",
             "instruction": "Render the final report",
             "tool_requests": ["docx_render_from_spec"],
-            "tool_inputs": {
-                "docx_render_from_spec": {"path": "artifacts/report.docx"}
-            },
+            "tool_inputs": {"docx_render_from_spec": {"path": "artifacts/report.docx"}},
             "attempts": 0,
             "max_attempts": 0,
             "critic_required": 0,
@@ -109,9 +107,7 @@ def test_build_task_dispatch_payload_normalizes_and_roundtrips_execution_fields(
 
 def test_embed_capability_bindings_preserves_plain_tool_inputs() -> None:
     embedded = execution_contracts.embed_capability_bindings(
-        {
-            "github.repo.list": {"owner": "narendersurabhi", "repo": "scientific-agent-lab"}
-        },
+        {"github.repo.list": {"owner": "narendersurabhi", "repo": "scientific-agent-lab"}},
         {
             "github.repo.list": {
                 "request_id": "github.repo.list",
@@ -155,9 +151,7 @@ def test_build_task_dispatch_payload_reads_embedded_capability_bindings() -> Non
         }
     )
 
-    assert payload.tool_inputs == {
-        "github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}
-    }
+    assert payload.tool_inputs == {"github.repo.list": {"owner": "narendersurabhi", "repo": "demo"}}
     assert payload.capability_bindings["github.repo.list"].server_id == "github_local"
 
 
@@ -175,10 +169,6 @@ def test_embed_execution_gate_roundtrips_through_dispatch_payload() -> None:
     )
 
     assert payload.tool_inputs == {"llm_generate": {"text": "hello"}}
-    assert payload.execution_gates == {
-        "llm_generate": {"expression": "context.approved == true"}
-    }
+    assert payload.execution_gates == {"llm_generate": {"expression": "context.approved == true"}}
     request = execution_contracts.build_task_execution_request(payload.model_dump(mode="json"))
-    assert request.requests[0].execution_gate == {
-        "expression": "context.approved == true"
-    }
+    assert request.requests[0].execution_gate == {"expression": "context.approved == true"}

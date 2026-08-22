@@ -115,11 +115,21 @@ class AgentRunOutput(BaseModel):
     result: str
     steps_taken: int
     tool_calls: list[dict[str, Any]]
-    run_id: str | None = Field(default=None, description="Set when background=True: the dispatched job's run ID.")
-    background: bool = Field(default=False, description="True when the agent was dispatched as a background job.")
-    status: str | None = Field(default=None, description="'paused' when the agent called wait_for_input.")
-    checkpoint_id: str | None = Field(default=None, description="Set when status='paused': ID to use when resuming.")
-    question: str | None = Field(default=None, description="Set when status='paused': the question the agent asked.")
+    run_id: str | None = Field(
+        default=None, description="Set when background=True: the dispatched job's run ID."
+    )
+    background: bool = Field(
+        default=False, description="True when the agent was dispatched as a background job."
+    )
+    status: str | None = Field(
+        default=None, description="'paused' when the agent called wait_for_input."
+    )
+    checkpoint_id: str | None = Field(
+        default=None, description="Set when status='paused': ID to use when resuming."
+    )
+    question: str | None = Field(
+        default=None, description="Set when status='paused': the question the agent asked."
+    )
 
 
 def register_llm_text_tool(

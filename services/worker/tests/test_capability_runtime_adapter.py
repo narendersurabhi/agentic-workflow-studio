@@ -60,7 +60,9 @@ def test_execute_capability_bridges_native_tool(monkeypatch) -> None:
             assert tool_name == "llm_generate"
             return _Tool()
 
-        def execute_tool(self, tool_name: str, *, payload, idempotency_key, trace_id, max_output_bytes):
+        def execute_tool(
+            self, tool_name: str, *, payload, idempotency_key, trace_id, max_output_bytes
+        ):
             self.calls.append(dict(payload))
             return models.ToolCall(
                 tool_name=tool_name,

@@ -12,7 +12,7 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Mapping, Sequence
+from typing import Any, Dict, Generator, Iterable, List, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
@@ -109,10 +109,13 @@ def _utcnow() -> datetime:
 
 
 def _sync_builtin_skills() -> None:
-    built_ins_path = Path(__file__).parent.parent.parent.parent / "config" / "skills" / "built_ins.yaml"
+    built_ins_path = (
+        Path(__file__).parent.parent.parent.parent / "config" / "skills" / "built_ins.yaml"
+    )
     if not built_ins_path.exists():
         return
     import yaml  # type: ignore[import]
+
     with open(built_ins_path) as f:
         entries = yaml.safe_load(f) or []
     db = SessionLocal()
@@ -123,23 +126,29 @@ def _sync_builtin_skills() -> None:
                 continue
             steps = []
             for i, s in enumerate(entry.get("steps", [])):
-                steps.append({
-                    "id": s.get("id", f"step-{i}"),
-                    "order": s.get("order", i + 1),
-                    "type": s.get("type", "goal_text"),
-                    "capability_id": s.get("capability_id"),
-                    "goal_template": s.get("goal_template"),
-                    "inputs": s.get("inputs", {}),
-                    "condition": s.get("condition"),
-                })
+                steps.append(
+                    {
+                        "id": s.get("id", f"step-{i}"),
+                        "order": s.get("order", i + 1),
+                        "type": s.get("type", "goal_text"),
+                        "capability_id": s.get("capability_id"),
+                        "goal_template": s.get("goal_template"),
+                        "inputs": s.get("inputs", {}),
+                        "condition": s.get("condition"),
+                    }
+                )
             definition = {
                 "instructions": entry.get("instructions"),
                 "steps": steps,
             }
-            existing = db.query(SkillRecord).filter(
-                SkillRecord.built_in == True,  # noqa: E712
-                SkillRecord.name == name,
-            ).first()
+            existing = (
+                db.query(SkillRecord)
+                .filter(
+                    SkillRecord.built_in == True,  # noqa: E712
+                    SkillRecord.name == name,
+                )
+                .first()
+            )
             now = datetime.now(UTC).replace(tzinfo=None)
             if existing:
                 existing.definition = definition
@@ -147,17 +156,19 @@ def _sync_builtin_skills() -> None:
                 existing.version = (existing.version or 1) + 1
                 existing.updated_at = now
             else:
-                db.add(SkillRecord(
-                    id=str(uuid.uuid4()),
-                    name=name,
-                    description=entry.get("description"),
-                    version=1,
-                    built_in=True,
-                    owner_id=None,
-                    definition=definition,
-                    created_at=now,
-                    updated_at=now,
-                ))
+                db.add(
+                    SkillRecord(
+                        id=str(uuid.uuid4()),
+                        name=name,
+                        description=entry.get("description"),
+                        version=1,
+                        built_in=True,
+                        owner_id=None,
+                        definition=definition,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
         db.commit()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("builtin_skills_sync_failed: %s", exc)
@@ -280,9 +291,7 @@ CHAT_PENDING_CORRECTION_MODEL = os.getenv("CHAT_PENDING_CORRECTION_MODEL", "").s
 CHAT_CLARIFICATION_NORMALIZER_ENABLED = (
     os.getenv("CHAT_CLARIFICATION_NORMALIZER_ENABLED", "true").lower() == "true"
 )
-CHAT_CLARIFICATION_NORMALIZER_MODEL = os.getenv(
-    "CHAT_CLARIFICATION_NORMALIZER_MODEL", ""
-).strip()
+CHAT_CLARIFICATION_NORMALIZER_MODEL = os.getenv("CHAT_CLARIFICATION_NORMALIZER_MODEL", "").strip()
 CHAT_CLARIFICATION_NORMALIZER_CONFIDENCE_THRESHOLD = max(
     0.0,
     min(
@@ -373,9 +382,7 @@ INTENT_MEMORY_RETRIEVAL_ENABLED = (
 INTENT_MEMORY_RETRIEVAL_LIMIT = max(
     1, min(10, int(os.getenv("INTENT_MEMORY_RETRIEVAL_LIMIT", "3")))
 )
-CHAT_DIRECT_EXECUTION_ENABLED = (
-    os.getenv("CHAT_DIRECT_EXECUTION_ENABLED", "true").lower() == "true"
-)
+CHAT_DIRECT_EXECUTION_ENABLED = os.getenv("CHAT_DIRECT_EXECUTION_ENABLED", "true").lower() == "true"
 CHAT_INTENT_VECTOR_SEARCH_ENABLED = (
     os.getenv("CHAT_INTENT_VECTOR_SEARCH_ENABLED", "true").lower() == "true"
 )
@@ -390,9 +397,7 @@ CHAT_INTENT_VECTOR_WORKSPACE_ID = (
     or "chat-intent-catalog"
 )
 CHAT_INTENT_VECTOR_TOP_K = max(1, min(8, int(os.getenv("CHAT_INTENT_VECTOR_TOP_K", "3"))))
-CHAT_INTENT_VECTOR_TIMEOUT_S = max(
-    1.0, float(os.getenv("CHAT_INTENT_VECTOR_TIMEOUT_S", "20.0"))
-)
+CHAT_INTENT_VECTOR_TIMEOUT_S = max(1.0, float(os.getenv("CHAT_INTENT_VECTOR_TIMEOUT_S", "20.0")))
 _chat_intent_vector_min_score_raw = os.getenv("CHAT_INTENT_VECTOR_MIN_SCORE", "0.6").strip()
 try:
     CHAT_INTENT_VECTOR_MIN_SCORE = float(_chat_intent_vector_min_score_raw or "0.6")
@@ -410,7 +415,9 @@ CHAT_CAPABILITY_VECTOR_SEARCH_ENABLED = (
 CHAT_CAPABILITY_VECTOR_REQUIRE_LEXICAL_SIGNAL = (
     os.getenv("CHAT_CAPABILITY_VECTOR_REQUIRE_LEXICAL_SIGNAL", "true").lower() == "true"
 )
-CHAT_CAPABILITY_VECTOR_COLLECTION = os.getenv("CHAT_CAPABILITY_VECTOR_COLLECTION", "").strip() or None
+CHAT_CAPABILITY_VECTOR_COLLECTION = (
+    os.getenv("CHAT_CAPABILITY_VECTOR_COLLECTION", "").strip() or None
+)
 CHAT_CAPABILITY_VECTOR_NAMESPACE_PREFIX = (
     os.getenv("CHAT_CAPABILITY_VECTOR_NAMESPACE_PREFIX", "chat_capability_catalog").strip()
     or "chat_capability_catalog"
@@ -419,9 +426,7 @@ CHAT_CAPABILITY_VECTOR_WORKSPACE_ID = (
     os.getenv("CHAT_CAPABILITY_VECTOR_WORKSPACE_ID", "chat-capability-catalog").strip()
     or "chat-capability-catalog"
 )
-CHAT_CAPABILITY_VECTOR_TOP_K = max(
-    1, min(50, int(os.getenv("CHAT_CAPABILITY_VECTOR_TOP_K", "12")))
-)
+CHAT_CAPABILITY_VECTOR_TOP_K = max(1, min(50, int(os.getenv("CHAT_CAPABILITY_VECTOR_TOP_K", "12"))))
 CHAT_CAPABILITY_VECTOR_TIMEOUT_S = max(
     1.0, float(os.getenv("CHAT_CAPABILITY_VECTOR_TIMEOUT_S", "20.0"))
 )
@@ -446,17 +451,13 @@ if CHAT_ROUTING_MODE not in {"always_router", "response_first"}:
 CHAT_PENDING_CORRECTION_MODE = os.getenv("CHAT_PENDING_CORRECTION_MODE", "llm").strip().lower()
 if CHAT_PENDING_CORRECTION_MODE not in {"heuristic", "llm", "hybrid"}:
     CHAT_PENDING_CORRECTION_MODE = "llm"
-INTENT_VECTOR_SEARCH_ENABLED = (
-    os.getenv("INTENT_VECTOR_SEARCH_ENABLED", "true").lower() == "true"
-)
+INTENT_VECTOR_SEARCH_ENABLED = os.getenv("INTENT_VECTOR_SEARCH_ENABLED", "true").lower() == "true"
 INTENT_VECTOR_COLLECTION = os.getenv("INTENT_VECTOR_COLLECTION", "").strip() or None
 INTENT_VECTOR_NAMESPACE_PREFIX = (
-    os.getenv("INTENT_VECTOR_NAMESPACE_PREFIX", "intent_catalog").strip()
-    or "intent_catalog"
+    os.getenv("INTENT_VECTOR_NAMESPACE_PREFIX", "intent_catalog").strip() or "intent_catalog"
 )
 INTENT_VECTOR_WORKSPACE_ID = (
-    os.getenv("INTENT_VECTOR_WORKSPACE_ID", "intent-catalog").strip()
-    or "intent-catalog"
+    os.getenv("INTENT_VECTOR_WORKSPACE_ID", "intent-catalog").strip() or "intent-catalog"
 )
 INTENT_VECTOR_TOP_K = max(1, min(5, int(os.getenv("INTENT_VECTOR_TOP_K", "3"))))
 INTENT_VECTOR_TIMEOUT_S = max(1.0, float(os.getenv("INTENT_VECTOR_TIMEOUT_S", "20.0")))
@@ -513,9 +514,7 @@ CHAT_DIRECT_CAPABILITIES = {
 }
 if not CHAT_DIRECT_EXECUTION_ENABLED:
     CHAT_DIRECT_CAPABILITIES = set()
-INTENT_MEMORY_PERSIST_ENABLED = (
-    os.getenv("INTENT_MEMORY_PERSIST_ENABLED", "true").lower() == "true"
-)
+INTENT_MEMORY_PERSIST_ENABLED = os.getenv("INTENT_MEMORY_PERSIST_ENABLED", "true").lower() == "true"
 INTERACTION_SUMMARY_MEMORY_PERSIST = (
     os.getenv("INTERACTION_SUMMARY_MEMORY_PERSIST", "true").lower() == "true"
 )
@@ -525,30 +524,24 @@ INTERACTION_SUMMARY_COMPACTION_ENABLED = (
 INTERACTION_SUMMARY_COMPACT_EVERY_N = max(
     1, int(os.getenv("INTERACTION_SUMMARY_COMPACT_EVERY_N", "10"))
 )
-INTERACTION_SUMMARY_MAX_ITEMS = max(
-    1, int(os.getenv("INTERACTION_SUMMARY_MAX_ITEMS", "40"))
-)
+INTERACTION_SUMMARY_MAX_ITEMS = max(1, int(os.getenv("INTERACTION_SUMMARY_MAX_ITEMS", "40")))
 INTERACTION_SUMMARY_MAX_FACTS_PER_ITEM = max(
     1, int(os.getenv("INTERACTION_SUMMARY_MAX_FACTS_PER_ITEM", "4"))
 )
 INTERACTION_SUMMARY_MAX_CHARS_PER_FIELD = max(
     24, int(os.getenv("INTERACTION_SUMMARY_MAX_CHARS_PER_FIELD", "180"))
 )
-INTERACTION_SUMMARY_MAX_TOKENS = max(
-    200, int(os.getenv("INTERACTION_SUMMARY_MAX_TOKENS", "1800"))
-)
+INTERACTION_SUMMARY_MAX_TOKENS = max(200, int(os.getenv("INTERACTION_SUMMARY_MAX_TOKENS", "1800")))
 EVENT_OUTBOX_ENABLED = os.getenv("EVENT_OUTBOX_ENABLED", "true").lower() == "true"
 EVENT_OUTBOX_BATCH_SIZE = int(os.getenv("EVENT_OUTBOX_BATCH_SIZE", "200"))
 EVENT_OUTBOX_POLL_S = float(os.getenv("EVENT_OUTBOX_POLL_S", "1.0"))
 EVENT_OUTBOX_REDIS_RETRIES = int(os.getenv("EVENT_OUTBOX_REDIS_RETRIES", "3"))
 EVENT_OUTBOX_REDIS_RETRY_SLEEP_S = float(os.getenv("EVENT_OUTBOX_REDIS_RETRY_SLEEP_S", "0.2"))
-SEMANTIC_MEMORY_DEFAULT_USER_ID = os.getenv("SEMANTIC_MEMORY_DEFAULT_USER_ID", "default-user").strip()
-RUNTIME_CONFORMANCE_ENABLED = (
-    os.getenv("RUNTIME_CONFORMANCE_ENABLED", "true").lower() == "true"
-)
-STUDIO_RUN_SCHEDULER_ENABLED = (
-    os.getenv("STUDIO_RUN_SCHEDULER_ENABLED", "false").lower() == "true"
-)
+SEMANTIC_MEMORY_DEFAULT_USER_ID = os.getenv(
+    "SEMANTIC_MEMORY_DEFAULT_USER_ID", "default-user"
+).strip()
+RUNTIME_CONFORMANCE_ENABLED = os.getenv("RUNTIME_CONFORMANCE_ENABLED", "true").lower() == "true"
+STUDIO_RUN_SCHEDULER_ENABLED = os.getenv("STUDIO_RUN_SCHEDULER_ENABLED", "false").lower() == "true"
 PLANNER_RUN_SCHEDULER_ENABLED = (
     os.getenv("PLANNER_RUN_SCHEDULER_ENABLED", "false").lower() == "true"
 )
@@ -670,7 +663,9 @@ _intent_assess_provider = (
     TimingLLMProvider(
         _intent_assess_provider_raw,
         component="intent_assess",
-        model=(INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+        model=(
+            INTENT_ASSESS_MODEL or INTENT_DECOMPOSE_MODEL or LLM_MODEL_NAME or "unknown"
+        ).strip(),
     )
     if _intent_assess_provider_raw is not None
     else None
@@ -755,11 +750,7 @@ _chat_router_provider: LLMProvider | None = (
 
 
 _CHAT_BOUNDARY_MODEL_NAME = (
-    CHAT_BOUNDARY_MODEL
-    or CHAT_ROUTER_MODEL
-    or CHAT_RESPONSE_MODEL
-    or LLM_MODEL_NAME
-    or ""
+    CHAT_BOUNDARY_MODEL or CHAT_ROUTER_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or ""
 ).strip()
 
 
@@ -868,7 +859,9 @@ _chat_deep_response_provider: LLMProvider | None = (
     TimingLLMProvider(
         CachingLLMProvider(_chat_deep_response_provider_raw, _cache_session_store),
         component="chat_deep_response",
-        model=(CHAT_DEEP_RESPONSE_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown").strip(),
+        model=(
+            CHAT_DEEP_RESPONSE_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "unknown"
+        ).strip(),
     )
     if _chat_deep_response_provider_raw is not None
     else None
@@ -892,10 +885,7 @@ def _build_chat_pending_correction_provider() -> LLMProvider | None:
     if not provider_name or provider_name == "mock":
         return None
     model_name = (
-        CHAT_PENDING_CORRECTION_MODEL
-        or CHAT_RESPONSE_MODEL
-        or LLM_MODEL_NAME
-        or ""
+        CHAT_PENDING_CORRECTION_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or ""
     ).strip()
     if not model_name:
         return None
@@ -926,10 +916,7 @@ def _build_chat_clarification_normalizer_provider() -> LLMProvider | None:
     if not provider_name or provider_name == "mock":
         return None
     model_name = (
-        CHAT_CLARIFICATION_NORMALIZER_MODEL
-        or CHAT_RESPONSE_MODEL
-        or LLM_MODEL_NAME
-        or ""
+        CHAT_CLARIFICATION_NORMALIZER_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or ""
     ).strip()
     if not model_name:
         return None
@@ -1506,7 +1493,9 @@ def _adaptive_policy_from_metadata(metadata: Mapping[str, Any] | None) -> dict[s
     raw_policy = normalized.get("adaptive_policy")
     policy = dict(raw_policy) if isinstance(raw_policy, Mapping) else {}
     try:
-        raw_max_replans = policy.get("max_replans", policy.get("maxReplans", ADAPTIVE_REPLAN_MAX_DEFAULT))
+        raw_max_replans = policy.get(
+            "max_replans", policy.get("maxReplans", ADAPTIVE_REPLAN_MAX_DEFAULT)
+        )
         max_replans = int(raw_max_replans)
     except (TypeError, ValueError):
         max_replans = ADAPTIVE_REPLAN_MAX_DEFAULT
@@ -1586,10 +1575,11 @@ def _manual_replan_block_reason_from_metadata(
     normalized = metadata if isinstance(metadata, Mapping) else {}
     if isinstance(normalized.get("pending_replan"), Mapping):
         return "pending_replan"
-    if (
-        _planning_mode_from_metadata(normalized) == models.PlanningMode.adaptive
-        and _replan_count_from_metadata(normalized) >= _effective_max_replans_from_metadata(normalized)
-    ):
+    if _planning_mode_from_metadata(
+        normalized
+    ) == models.PlanningMode.adaptive and _replan_count_from_metadata(
+        normalized
+    ) >= _effective_max_replans_from_metadata(normalized):
         return "max_replans_exhausted"
     return None
 
@@ -1902,9 +1892,7 @@ def _record_task_evaluator_state(
         else None
     )
     decision_payload = (
-        dict(repair_decision)
-        if isinstance(repair_decision, Mapping) and repair_decision
-        else None
+        dict(repair_decision) if isinstance(repair_decision, Mapping) and repair_decision else None
     )
     if signal_payload is None and decision_payload is None:
         return
@@ -1941,7 +1929,9 @@ def _record_task_checkpoint_replay_state(
     replay_payload: Mapping[str, Any] | None,
     occurred_at: datetime,
 ) -> None:
-    payload = dict(replay_payload) if isinstance(replay_payload, Mapping) and replay_payload else None
+    payload = (
+        dict(replay_payload) if isinstance(replay_payload, Mapping) and replay_payload else None
+    )
     if payload is None:
         return
     attempt = _latest_step_attempt_record(db, task.id)
@@ -1982,9 +1972,9 @@ def _mark_task_failed_from_evaluator(
         task=task,
         payload=payload,
         status=models.TaskStatus.failed.value,
-        step_attempt_id=attempt.id if attempt is not None else _resolve_step_attempt_id_for_event(
-            db, step_id=task.id, payload=payload
-        ),
+        step_attempt_id=attempt.id
+        if attempt is not None
+        else _resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
     )
     task.status = models.TaskStatus.failed.value
     task.updated_at = occurred_at
@@ -2032,6 +2022,7 @@ def _build_failed_step_context(
 ) -> models.FailedStepContext | None:
     if not isinstance(context, Mapping):
         return None
+
     def _coerce_non_negative_int(value: Any) -> int:
         try:
             return max(0, int(value or 0))
@@ -2303,8 +2294,7 @@ def _mark_plan_revision_active(
 ) -> None:
     metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
     history = [
-        entry.model_dump(mode="json")
-        for entry in _plan_revision_summaries_from_metadata(metadata)
+        entry.model_dump(mode="json") for entry in _plan_revision_summaries_from_metadata(metadata)
     ]
     active_timestamp = (
         plan_record.created_at.isoformat()
@@ -2824,7 +2814,9 @@ def _workflow_run_from_record(
         job_id=record.job_id,
         plan_id=(
             _active_plan_id_from_metadata(
-                job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+                job_record.metadata_json
+                if job_record and isinstance(job_record.metadata_json, dict)
+                else {}
             )
             or record.plan_id
         ),
@@ -2848,13 +2840,19 @@ def _workflow_run_from_record(
         run_id=record.id,
         user_id=record.user_id,
         planning_mode=_planning_mode_from_metadata(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            job_record.metadata_json
+            if job_record and isinstance(job_record.metadata_json, dict)
+            else {}
         ),
         current_revision_number=_current_revision_number_from_metadata(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            job_record.metadata_json
+            if job_record and isinstance(job_record.metadata_json, dict)
+            else {}
         ),
         adaptive_status=_adaptive_replan_status_from_metadata(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            job_record.metadata_json
+            if job_record and isinstance(job_record.metadata_json, dict)
+            else {}
         ),
         metadata=record.metadata_json or {},
         created_at=record.created_at,
@@ -2923,7 +2921,9 @@ def _run_from_record(
         job_id=record.job_id,
         plan_id=(
             _active_plan_id_from_metadata(
-                job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+                job_record.metadata_json
+                if job_record and isinstance(job_record.metadata_json, dict)
+                else {}
             )
             or record.plan_id
         ),
@@ -2950,13 +2950,19 @@ def _run_from_record(
         ),
         user_id=record.user_id,
         planning_mode=_planning_mode_from_metadata(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            job_record.metadata_json
+            if job_record and isinstance(job_record.metadata_json, dict)
+            else {}
         ),
         current_revision_number=_current_revision_number_from_metadata(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            job_record.metadata_json
+            if job_record and isinstance(job_record.metadata_json, dict)
+            else {}
         ),
         adaptive_status=_adaptive_replan_status_from_metadata(
-            job_record.metadata_json if job_record and isinstance(job_record.metadata_json, dict) else {}
+            job_record.metadata_json
+            if job_record and isinstance(job_record.metadata_json, dict)
+            else {}
         ),
         run_spec=record.run_spec_json or {},
         metadata=metadata,
@@ -3316,17 +3322,20 @@ def _threshold_bucket(value: float) -> str:
 
 
 def _infer_goal_risk_level(goal: str, intent: str) -> str:
-    return intent_service.assess_goal_intent(
-        goal,
-        config=_goal_intent_assess_config(),
-        runtime=intent_service.GoalIntentRuntime(
-            infer_task_intent=lambda _goal: type(
-                "_GoalIntentInference",
-                (),
-                {"intent": intent, "source": "main_wrapper", "confidence": 1.0},
-            )(),
-        ),
-    ).risk_level or "read_only"
+    return (
+        intent_service.assess_goal_intent(
+            goal,
+            config=_goal_intent_assess_config(),
+            runtime=intent_service.GoalIntentRuntime(
+                infer_task_intent=lambda _goal: type(
+                    "_GoalIntentInference",
+                    (),
+                    {"intent": intent, "source": "main_wrapper", "confidence": 1.0},
+                )(),
+            ),
+        ).risk_level
+        or "read_only"
+    )
 
 
 def _goal_intent_assess_config() -> intent_service.GoalIntentConfig:
@@ -3495,10 +3504,23 @@ def _looks_like_conversational_turn(content: str) -> bool:
     # route to the boundary LLM so it can decide with full capability evidence.
     # "how do I create a document?" still reaches boundary LLM, but boundary LLM
     # correctly returns chat_reply for questions — acceptable tradeoff.
-    _INTENT_VERBS = frozenset({
-        "create", "make", "generate", "write", "export", "save",
-        "build", "produce", "render", "convert", "send", "run", "start",
-    })
+    _INTENT_VERBS = frozenset(
+        {
+            "create",
+            "make",
+            "generate",
+            "write",
+            "export",
+            "save",
+            "build",
+            "produce",
+            "render",
+            "convert",
+            "send",
+            "run",
+            "start",
+        }
+    )
     message_tokens = frozenset(re.findall(r"[a-z0-9]+", lowered))
     if message_tokens & _INTENT_VERBS:
         try:
@@ -3510,11 +3532,30 @@ def _looks_like_conversational_turn(content: str) -> bool:
     return True
 
 
-_QUESTION_FIRST_TOKENS = frozenset({
-    "how", "what", "why", "where", "when", "who", "which",
-    "is", "are", "was", "were", "does", "do", "did",
-    "can", "could", "would", "will", "should", "shall",
-})
+_QUESTION_FIRST_TOKENS = frozenset(
+    {
+        "how",
+        "what",
+        "why",
+        "where",
+        "when",
+        "who",
+        "which",
+        "is",
+        "are",
+        "was",
+        "were",
+        "does",
+        "do",
+        "did",
+        "can",
+        "could",
+        "would",
+        "will",
+        "should",
+        "shall",
+    }
+)
 
 
 def _is_question_turn(content: str) -> bool:
@@ -4035,9 +4076,7 @@ def _chat_capability_vector_document(
     tags = [str(tag).strip() for tag in spec.tags if str(tag).strip()]
     aliases = [str(alias).strip() for alias in spec.aliases if str(alias).strip()]
     required_inputs = [
-        str(item).strip()
-        for item in entry.get("required_inputs", [])
-        if str(item).strip()
+        str(item).strip() for item in entry.get("required_inputs", []) if str(item).strip()
     ]
     lines = [f"Capability ID: {capability_id}"]
     if description:
@@ -4319,11 +4358,7 @@ def _vector_chat_capability_matches(
         if not isinstance(match, dict):
             continue
         metadata = match.get("metadata") if isinstance(match.get("metadata"), dict) else {}
-        capability_id = str(
-            metadata.get("capability_id")
-            or match.get("document_id")
-            or ""
-        ).strip()
+        capability_id = str(metadata.get("capability_id") or match.get("document_id") or "").strip()
         if not capability_id or capability_id in seen_ids or capability_id not in allowed_ids:
             continue
         try:
@@ -4641,7 +4676,9 @@ def _chat_clarification_turn_plan(
         normalized_questions = existing_questions
     assessment["needs_clarification"] = True
     assessment["requires_blocking_clarification"] = True
-    assessment["source"] = str(source or assessment.get("source") or "").strip() or "chat_clarification"
+    assessment["source"] = (
+        str(source or assessment.get("source") or "").strip() or "chat_clarification"
+    )
     if source == "chat_boundary_meta_clarification":
         assessment["missing_slots"] = []
         assessment["blocking_slots"] = []
@@ -4815,9 +4852,7 @@ def _normalize_goal_intent(
     )
     normalized_assessment_mode = str(assessment_mode_override or "").strip().lower()
     if normalized_assessment_mode not in {"heuristic", "llm", "hybrid"}:
-        normalized_assessment_mode = (
-            INTENT_ASSESS_MODE if INTENT_ASSESS_ENABLED else "disabled"
-        )
+        normalized_assessment_mode = INTENT_ASSESS_MODE if INTENT_ASSESS_ENABLED else "disabled"
     intent_context = (
         context_service.intent_context_view(context_envelope)
         if context_envelope is not None
@@ -4905,7 +4940,9 @@ def _emit_tool_progress(kind: str, payload: dict) -> None:
             pass
 
 
-def _tool_intent_label(candidate_goal: str, boundary: chat_contracts.ChatBoundaryDecision | None) -> str:
+def _tool_intent_label(
+    candidate_goal: str, boundary: chat_contracts.ChatBoundaryDecision | None
+) -> str:
     top = (
         boundary.evidence.top_capabilities[0].capability_id
         if boundary and boundary.evidence and boundary.evidence.top_capabilities
@@ -4955,9 +4992,8 @@ def _route_chat_turn(
     # Skip the pre-fetch entirely when the fast-exit heuristic already says chat_reply —
     # the intent normalization (1.5 s) + decomposition (2–4 s) threads would be wasted.
     _quick_lifecycle_prefetch = chat_service.clarification_lifecycle_from_metadata(session_metadata)
-    _skip_prefetch = (
-        not _quick_lifecycle_prefetch.active
-        and _looks_like_conversational_turn(content)
+    _skip_prefetch = not _quick_lifecycle_prefetch.active and _looks_like_conversational_turn(
+        content
     )
     # Question fast-path: skip the boundary LLM for clear question turns.
     # Build lightweight capability evidence (lexical + vector, no LLM) only when the
@@ -4981,8 +5017,12 @@ def _route_chat_turn(
                 "chat_turn_question_boundary_evidence",
                 extra={
                     "evidence_ms": round((time.perf_counter() - _t_evidence) * 1000, 1),
-                    "top_cap": _q_evidence.top_capabilities[0].capability_id if _q_evidence.top_capabilities else None,
-                    "top_score": round(float(_q_evidence.top_capabilities[0].score or 0.0), 3) if _q_evidence.top_capabilities else None,
+                    "top_cap": _q_evidence.top_capabilities[0].capability_id
+                    if _q_evidence.top_capabilities
+                    else None,
+                    "top_score": round(float(_q_evidence.top_capabilities[0].score or 0.0), 3)
+                    if _q_evidence.top_capabilities
+                    else None,
                     "signal_strength": _q_evidence.execution_signal_strength,
                     "conversational": _looks_like_conversational_turn(content),
                 },
@@ -5014,17 +5054,15 @@ def _route_chat_turn(
                     body={"query": content, "top_k": 5, "min_score": 0.5, "include_text": True},
                     timeout_s=8.0,
                 )
-                _rag_matches = (
-                    _rag_result.get("matches")
-                    if isinstance(_rag_result, dict)
-                    else None
-                )
+                _rag_matches = _rag_result.get("matches") if isinstance(_rag_result, dict) else None
                 logger.info(
                     "chat_turn_rag_question_retrieved",
                     extra={
                         "retrieve_ms": round((time.perf_counter() - _t_rag) * 1000, 1),
                         "match_count": len(_rag_matches) if isinstance(_rag_matches, list) else 0,
-                        "top_match_score": round(float((_rag_matches[0].get("score") or 0.0) if _rag_matches else 0.0), 3),
+                        "top_match_score": round(
+                            float((_rag_matches[0].get("score") or 0.0) if _rag_matches else 0.0), 3
+                        ),
                     },
                 )
                 if _rag_matches and isinstance(_rag_matches, list):
@@ -5054,7 +5092,9 @@ def _route_chat_turn(
         # Inject boundary_decision into the base plan so _finalize_chat_turn_plan passes it
         # to _generate_chat_response, enabling _capability_offer_hint to fire for question turns
         # where the top candidate is a non-RAG capability (e.g. document.spec.generate).
-        _q_base_plan = _chat_response_turn_plan(goal=content.strip(), assistant_content=_q_rag_content)
+        _q_base_plan = _chat_response_turn_plan(
+            goal=content.strip(), assistant_content=_q_rag_content
+        )
         _q_base_plan["boundary_decision"] = _q_boundary.model_dump(mode="json", exclude_none=True)
         logger.info(
             "chat_turn_question_fast_path",
@@ -5179,8 +5219,7 @@ def _route_chat_turn(
         turn_plan = _finalize_chat_turn_plan(
             _chat_response_turn_plan(
                 goal=content.strip(),
-                assistant_content=boundary.assistant_response
-                or "",
+                assistant_content=boundary.assistant_response or "",
                 source="chat_boundary_meta_clarification",
             ),
             content=content,
@@ -5194,9 +5233,12 @@ def _route_chat_turn(
         chat_contracts.ChatBoundaryDecisionType.execution_request,
         chat_contracts.ChatBoundaryDecisionType.continue_pending,
     }:
-        _emit_tool_progress("tool_intent", {
-            "label": _tool_intent_label(candidate_goal, boundary),
-        })
+        _emit_tool_progress(
+            "tool_intent",
+            {
+                "label": _tool_intent_label(candidate_goal, boundary),
+            },
+        )
         router_turn_plan = _enforce_boundary_clarification_guard(
             turn_plan=_route_chat_turn_with_router(
                 content=content,
@@ -5278,7 +5320,9 @@ def _enforce_boundary_clarification_guard(
 
     return {
         "type": "ask_clarification",
-        "assistant_content": "\n".join(questions) if questions else boundary.assistant_response or "",
+        "assistant_content": "\n".join(questions)
+        if questions
+        else boundary.assistant_response or "",
         "clarification_questions": questions,
         "goal_intent_profile": assessment,
         "resolved_goal": str(finalized.get("resolved_goal") or candidate_goal or "").strip(),
@@ -5438,7 +5482,9 @@ def _route_chat_turn_with_router(
         raise llm_provider.LLMUnavailableError("chat_router_failed") from exc
 
 
-def _chat_route_request_id(*, content: str, candidate_goal: str, pending_clarification: bool) -> str:
+def _chat_route_request_id(
+    *, content: str, candidate_goal: str, pending_clarification: bool
+) -> str:
     payload = json.dumps(
         {
             "content": str(content or "").strip(),
@@ -5632,13 +5678,17 @@ def _score_workflow_route_candidate(
         score += 2.0
         reason_codes.append("workflow_manual_trigger_available")
 
-    return round(score, 3), reason_codes, {
-        "title": title,
-        "goal": goal,
-        "trigger_title": str(trigger.title or "").strip() if trigger is not None else "",
-        "overlap_tokens": overlap,
-        "overlap_count": len(overlap),
-    }
+    return (
+        round(score, 3),
+        reason_codes,
+        {
+            "title": title,
+            "goal": goal,
+            "trigger_title": str(trigger.title or "").strip() if trigger is not None else "",
+            "overlap_tokens": overlap,
+            "overlap_count": len(overlap),
+        },
+    )
 
 
 def _retrieve_chat_workflow_candidates(
@@ -5947,7 +5997,9 @@ def _build_chat_route_candidates(
             if str(match.get("id") or "").strip()
         }
 
-        def _sort_key(item: tuple[str, capability_registry.CapabilitySpec]) -> tuple[float, int, str]:
+        def _sort_key(
+            item: tuple[str, capability_registry.CapabilitySpec],
+        ) -> tuple[float, int, str]:
             capability_id, _spec = item
             match = match_by_id.get(capability_id, {})
             raw_score = float(match.get("score") or 0.0)
@@ -6153,10 +6205,14 @@ def _build_chat_route_request(
         context_json=dict(merged_context or {}),
         workflow_context=chat_contracts.ChatRouteWorkflowContext(
             target_available=workflow_invocation is not None and workflow_invocation.has_target(),
-            definition_id=workflow_invocation.definition_id if workflow_invocation is not None else None,
+            definition_id=workflow_invocation.definition_id
+            if workflow_invocation is not None
+            else None,
             version_id=workflow_invocation.version_id if workflow_invocation is not None else None,
             trigger_id=workflow_invocation.trigger_id if workflow_invocation is not None else None,
-            input_keys=sorted(workflow_invocation.inputs.keys()) if workflow_invocation is not None else [],
+            input_keys=sorted(workflow_invocation.inputs.keys())
+            if workflow_invocation is not None
+            else [],
         ),
         user_context={"user_id": resolved_user_id} if resolved_user_id else {},
         policy_context={
@@ -6167,7 +6223,8 @@ def _build_chat_route_request(
                 [
                     candidate
                     for candidate in candidates
-                    if candidate.candidate_type == chat_contracts.ChatRouteCandidateType.direct_agent
+                    if candidate.candidate_type
+                    == chat_contracts.ChatRouteCandidateType.direct_agent
                 ]
             ),
             "workflow_candidate_count": len(
@@ -6199,7 +6256,8 @@ def _build_chat_route_request(
                 "conversational_turn": _looks_like_conversational_turn(content),
             },
             retrieved_candidates=candidates,
-            workflow_target_available=workflow_invocation is not None and workflow_invocation.has_target(),
+            workflow_target_available=workflow_invocation is not None
+            and workflow_invocation.has_target(),
             pending_clarification=pending_clarification,
             missing_inputs=list(heuristic.missing_slots or []),
             historical_success_features=(
@@ -6216,11 +6274,13 @@ def _build_chat_route_request(
 
 # Keys that are stable within a session and should be extracted into the RUN
 # prompt block rather than embedded in the per-turn DYNAMIC payload.
-_PROMPT_STABLE_CONTEXT_KEYS: frozenset[str] = frozenset({
-    "user_profile",
-    "interaction_summaries",
-    "capability_candidates",
-})
+_PROMPT_STABLE_CONTEXT_KEYS: frozenset[str] = frozenset(
+    {
+        "user_profile",
+        "interaction_summaries",
+        "capability_candidates",
+    }
+)
 
 _CHAT_ROUTER_SYSTEM_PROMPT: str = (
     "You route chat turns for an agent platform. "
@@ -6549,9 +6609,7 @@ def _chat_boundary_execution_signal_strength(
     top_family_score = _chat_boundary_score(top_families[0].score) if top_families else 0.0
     total_family_score = sum(_chat_boundary_score(family.score) for family in top_families)
     family_concentration = (
-        round(top_family_score / total_family_score, 3)
-        if total_family_score > 0.0
-        else 0.0
+        round(top_family_score / total_family_score, 3) if total_family_score > 0.0 else 0.0
     )
     intent = str(intent_profile.intent or "").strip().lower() if intent_profile is not None else ""
     has_execution_intent = intent not in {"", "other", "inform", "clarify"}
@@ -6609,15 +6667,10 @@ def _build_chat_boundary_evidence(
     clarification_lifecycle = chat_service.clarification_lifecycle_from_metadata(session_metadata)
     pending_state = clarification_lifecycle.state if clarification_lifecycle.active else None
     pending_active = clarification_lifecycle.active
-    pending = (
-        pending_state.model_dump(mode="json", exclude_none=True)
-        if pending_state is not None
-        else {}
-    )
     preferred_capability_ids: list[str] = []
     if pending_state is not None:
-        for raw_capability_id in (
-            [pending_state.active_capability_id] + list(pending_state.candidate_capabilities or [])
+        for raw_capability_id in [pending_state.active_capability_id] + list(
+            pending_state.candidate_capabilities or []
         ):
             capability_id = capability_registry.canonicalize_capability_id(raw_capability_id)
             if capability_id and capability_id not in preferred_capability_ids:
@@ -6637,7 +6690,9 @@ def _build_chat_boundary_evidence(
         candidate_goal=candidate_goal,
         pending_clarification=pending_active,
     )
-    likely_clarification_answer = pending_active and _looks_like_pending_clarification_answer(content)
+    likely_clarification_answer = pending_active and _looks_like_pending_clarification_answer(
+        content
+    )
     (
         top_capability_score,
         top_family_score,
@@ -6670,8 +6725,12 @@ def _build_chat_boundary_evidence(
         workflow_target_available=workflow_invocation is not None,
         likely_clarification_answer=likely_clarification_answer,
         intent=str(intent_profile.intent or "").strip() if intent_profile is not None else "",
-        risk_level=str(intent_profile.risk_level or "").strip() if intent_profile is not None else "",
-        needs_clarification=bool(intent_profile.needs_clarification) if intent_profile is not None else False,
+        risk_level=str(intent_profile.risk_level or "").strip()
+        if intent_profile is not None
+        else "",
+        needs_clarification=bool(intent_profile.needs_clarification)
+        if intent_profile is not None
+        else False,
         missing_inputs=missing_inputs,
         active_family=str(pending_state.active_family or "").strip()
         if pending_state is not None
@@ -6680,25 +6739,15 @@ def _build_chat_boundary_evidence(
         if pending_state is not None
         else "",
         clarification_resolved_slot_count=(
-            len(
-                dict(
-                    pending_state.known_slot_values
-                    or pending_state.resolved_slots
-                    or {}
-                )
-            )
+            len(dict(pending_state.known_slot_values or pending_state.resolved_slots or {}))
             if pending_state is not None
             else 0
         ),
         clarification_pending_field_count=(
-            len(list(pending_fields))
-            if pending_state is not None
-            else 0
+            len(list(pending_fields)) if pending_state is not None else 0
         ),
         clarification_answer_count=(
-            len(list(pending_state.answer_history or []))
-            if pending_state is not None
-            else 0
+            len(list(pending_state.answer_history or [])) if pending_state is not None else 0
         ),
         top_capability_score=top_capability_score,
         top_family_score=top_family_score,
@@ -6761,8 +6810,12 @@ def _build_chat_boundary_decision_prompt(
         "recent_messages": recent_messages,
         "workflow_context": {
             "target_available": workflow_invocation is not None,
-            "trigger_id": workflow_invocation.trigger_id if workflow_invocation is not None else None,
-            "version_id": workflow_invocation.version_id if workflow_invocation is not None else None,
+            "trigger_id": workflow_invocation.trigger_id
+            if workflow_invocation is not None
+            else None,
+            "version_id": workflow_invocation.version_id
+            if workflow_invocation is not None
+            else None,
             "definition_id": workflow_invocation.definition_id
             if workflow_invocation is not None
             else None,
@@ -6818,7 +6871,17 @@ def _capability_offer_hint(content: str, boundary_decision: Mapping[str, Any] | 
         return ""
     lowered = str(content or "").strip().lower()
     # Only trigger for questions — ends with ?, or starts with a question word.
-    _QUESTION_STARTERS = ("how", "what", "can you", "could you", "is there", "do you", "does", "can i", "would you")
+    _QUESTION_STARTERS = (
+        "how",
+        "what",
+        "can you",
+        "could you",
+        "is there",
+        "do you",
+        "does",
+        "can i",
+        "would you",
+    )
     is_question = lowered.endswith("?") or any(lowered.startswith(q) for q in _QUESTION_STARTERS)
     if not is_question:
         return ""
@@ -7050,7 +7113,10 @@ def _generate_chat_boundary_decision(
             "chat_boundary_decision_failed",
             extra={
                 "provider": LLM_PROVIDER_NAME,
-                "model": CHAT_BOUNDARY_MODEL or CHAT_ROUTER_MODEL or CHAT_RESPONSE_MODEL or LLM_MODEL_NAME,
+                "model": CHAT_BOUNDARY_MODEL
+                or CHAT_ROUTER_MODEL
+                or CHAT_RESPONSE_MODEL
+                or LLM_MODEL_NAME,
                 "error_type": type(exc).__name__,
                 "error": str(exc)[:500],
             },
@@ -7095,10 +7161,7 @@ def _postprocess_chat_boundary_decision(
         not evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.meta_clarification
     ):
-        if (
-            evidence.needs_clarification
-            and evidence.execution_signal_strength == "strong"
-        ):
+        if evidence.needs_clarification and evidence.execution_signal_strength == "strong":
             return boundary.model_copy(
                 update={
                     "decision": chat_contracts.ChatBoundaryDecisionType.execution_request,
@@ -7218,7 +7281,13 @@ def _normalize_chat_route(
     decision = chat_contracts.ChatRouteDecision.model_validate(dict(parsed or {}))
     boundary_features = dict(route_request.routing_evidence.boundary_features or {})
     route = str(decision.route or "").strip().lower()
-    route_recognized = route in {"respond", "tool_call", "ask_clarification", "submit_job", "run_workflow"}
+    route_recognized = route in {
+        "respond",
+        "tool_call",
+        "ask_clarification",
+        "submit_job",
+        "run_workflow",
+    }
     if not route_recognized:
         route = ""
     capability_id = str(decision.capability_id or "").strip()
@@ -7312,7 +7381,9 @@ def _normalize_chat_route(
     ):
         missing_slots.append("intent_action")
     conversational_turn = _looks_like_conversational_turn(content)
-    execution_oriented = bool(intent and intent not in {"other", "inform", "clarify"}) or not conversational_turn
+    execution_oriented = (
+        bool(intent and intent not in {"other", "inform", "clarify"}) or not conversational_turn
+    )
     clarification_questions = list(decision.clarification_questions or [])
     assistant_response = str(decision.assistant_response or "").strip()
     if route == "ask_clarification" and missing_slots:
@@ -7327,7 +7398,11 @@ def _normalize_chat_route(
                 goal=candidate_goal,
                 allow_single_candidate_fallback=False,
             )
-            if question_field and question_field in missing_slots and question_text not in filtered_questions:
+            if (
+                question_field
+                and question_field in missing_slots
+                and question_text not in filtered_questions
+            ):
                 filtered_questions.append(question_text)
         if filtered_questions:
             clarification_questions = filtered_questions
@@ -7346,7 +7421,9 @@ def _normalize_chat_route(
     fallback_reason = str(decision.fallback_reason or "").strip() or None
     calibration_features = (
         dict(route_request.routing_evidence.historical_success_features.get("calibration"))
-        if isinstance(route_request.routing_evidence.historical_success_features.get("calibration"), Mapping)
+        if isinstance(
+            route_request.routing_evidence.historical_success_features.get("calibration"), Mapping
+        )
         else {}
     )
     workflow_invocation_available = bool(route_request.workflow_context.target_available)
@@ -7369,9 +7446,9 @@ def _normalize_chat_route(
         for candidate in retrieved_candidates
         if candidate.candidate_type == chat_contracts.ChatRouteCandidateType.generic_path
     ]
-    recommended_fallback_route = str(
-        boundary_features.get("recommended_fallback_route") or ""
-    ).strip().lower()
+    recommended_fallback_route = (
+        str(boundary_features.get("recommended_fallback_route") or "").strip().lower()
+    )
     if not route:
         if recommended_fallback_route in {
             "respond",
@@ -7390,7 +7467,11 @@ def _normalize_chat_route(
         fallback_used = True
         fallback_reason = fallback_reason or "invalid_or_missing_route"
     if route == "tool_call" and not _is_chat_direct_capability(capability_id):
-        route = "ask_clarification" if missing_slots else ("submit_job" if execution_oriented else "respond")
+        route = (
+            "ask_clarification"
+            if missing_slots
+            else ("submit_job" if execution_oriented else "respond")
+        )
         capability_id = ""
         fallback_used = True
         fallback_reason = fallback_reason or "invalid_direct_capability"
@@ -7406,7 +7487,11 @@ def _normalize_chat_route(
             blocking_slots = []
             missing_slots = []
     elif route == "tool_call" and (missing_slots or risk_level != "read_only"):
-        route = "ask_clarification" if missing_slots else ("submit_job" if execution_oriented else "respond")
+        route = (
+            "ask_clarification"
+            if missing_slots
+            else ("submit_job" if execution_oriented else "respond")
+        )
         fallback_used = True
         fallback_reason = fallback_reason or (
             "missing_inputs_for_direct_capability"
@@ -7446,7 +7531,9 @@ def _normalize_chat_route(
                 fallback_used = True
                 fallback_reason = fallback_reason or "workflow_target_missing"
         if route == "run_workflow" and selected_workflow_candidate is not None:
-            workflow_context_updates = _workflow_candidate_context_updates(selected_workflow_candidate)
+            workflow_context_updates = _workflow_candidate_context_updates(
+                selected_workflow_candidate
+            )
             if not workflow_context_updates:
                 route = "ask_clarification"
                 if not clarification_questions:
@@ -7475,15 +7562,8 @@ def _normalize_chat_route(
         route = "ask_clarification"
         fallback_used = True
         fallback_reason = fallback_reason or "missing_inputs_before_submit"
-    if (
-        route == "respond"
-        and (
-            clarification_questions
-            or (
-                missing_slots
-                and not conversational_turn
-            )
-        )
+    if route == "respond" and (
+        clarification_questions or (missing_slots and not conversational_turn)
     ):
         route = "ask_clarification"
         fallback_used = True
@@ -7532,9 +7612,9 @@ def _normalize_chat_route(
         selected_probability = probability_by_candidate_id.get(selected_candidate_id)
         if isinstance(selected_probability, (int, float)):
             selected_candidate_calibration = round(float(selected_probability), 6)
-    shadow_selected_candidate_id = str(
-        calibration_features.get("shadow_selected_candidate_id") or ""
-    ).strip() or None
+    shadow_selected_candidate_id = (
+        str(calibration_features.get("shadow_selected_candidate_id") or "").strip() or None
+    )
     shadow_selected_confidence = None
     if shadow_selected_candidate_id:
         shadow_probability = probability_by_candidate_id.get(shadow_selected_candidate_id)
@@ -7742,9 +7822,7 @@ def _candidate_capability_ids_for_envelope(
         ordered = list(active_target.capability_ids)
         if preferred_capability and preferred_capability in ordered:
             ordered = [preferred_capability] + [
-                capability_id
-                for capability_id in ordered
-                if capability_id != preferred_capability
+                capability_id for capability_id in ordered if capability_id != preferred_capability
             ]
         for capability_id in ordered:
             normalized = capability_registry.canonicalize_capability_id(capability_id)
@@ -7773,7 +7851,8 @@ def _candidate_capability_ids_for_envelope(
         filtered = [
             capability_id
             for capability_id in capability_ids
-            if str(_capability_family_for_id(capability_id) or "").strip().lower() == normalized_family
+            if str(_capability_family_for_id(capability_id) or "").strip().lower()
+            == normalized_family
         ]
         if filtered:
             return filtered
@@ -7969,7 +8048,9 @@ def _normalize_chat_submit_context(
     submit_context = (
         context_service.chat_submit_context_view(context_envelope)
         if context_envelope is not None
-        else dict(merged_context) if isinstance(merged_context, Mapping) else {}
+        else dict(merged_context)
+        if isinstance(merged_context, Mapping)
+        else {}
     )
     stripped_content = str(content or "").strip()
     goal_with_clarification = goal
@@ -8649,7 +8730,9 @@ def _run_chat_workflow(
     workflow_interface, _chat_context_json, runtime_inputs = _prepare_chat_workflow_runtime_inputs(
         version=version,
         trigger=trigger,
-        context_json=payload["context_json"] if isinstance(payload["context_json"], Mapping) else {},
+        context_json=payload["context_json"]
+        if isinstance(payload["context_json"], Mapping)
+        else {},
         inputs=payload["inputs"] if isinstance(payload["inputs"], Mapping) else {},
     )
     if workflow_interface.get("inputs"):
@@ -8912,7 +8995,9 @@ def _preflight_job_context(
     envelope = context_service.build_preflight_context_envelope(
         db=db,
         goal=normalized_goal,
-        provided_job_context=job_context if isinstance(job_context, Mapping) and job_context else None,
+        provided_job_context=job_context
+        if isinstance(job_context, Mapping) and job_context
+        else None,
         persisted_job_context=None,
         normalized_intent_envelope=_normalized_intent_envelope_from_metadata(
             metadata,
@@ -9085,7 +9170,9 @@ def _semantic_build_key(namespace: str, subject: str, fact: str) -> str:
     return f"{_semantic_slug(namespace)}:{_semantic_slug(subject)}:{fingerprint}"
 
 
-def _semantic_entry_to_match(entry: models.MemoryEntry, score: float, include_payload: bool) -> dict[str, Any]:
+def _semantic_entry_to_match(
+    entry: models.MemoryEntry, score: float, include_payload: bool
+) -> dict[str, Any]:
     payload = entry.payload if isinstance(entry.payload, dict) else {}
     match: dict[str, Any] = {
         "score": round(score, 4),
@@ -9148,7 +9235,9 @@ def _retrieve_intent_workflow_hints(
     normalized_goal = _semantic_normalize_text(goal, max_len=1200)
     if not normalized_goal:
         return []
-    normalized_user_id = _semantic_normalize_text(user_id, max_len=120) or _semantic_default_user_id()
+    normalized_user_id = (
+        _semantic_normalize_text(user_id, max_len=120) or _semantic_default_user_id()
+    )
     query_model = models.MemoryQuery(
         name="semantic_memory",
         scope=models.MemoryScope.user,
@@ -9253,7 +9342,9 @@ def _persist_intent_workflow_memory(
     segments = _goal_intent_segments_from_metadata(metadata)
     if not profile and not segments:
         return
-    user_id = _semantic_user_id_from_context(job.context_json if isinstance(job.context_json, Mapping) else None)
+    user_id = _semantic_user_id_from_context(
+        job.context_json if isinstance(job.context_json, Mapping) else None
+    )
     intent_order = [
         str(segment.get("intent") or "").strip()
         for segment in segments
@@ -9304,7 +9395,9 @@ def _persist_intent_workflow_memory(
         "fact": fact,
         "aliases": [],
         "keywords": sorted(
-            _semantic_tokens(job.goal, " ".join(intent_order), " ".join(selected_capabilities), outcome)
+            _semantic_tokens(
+                job.goal, " ".join(intent_order), " ".join(selected_capabilities), outcome
+            )
         )[:32],
         "confidence": 0.9 if outcome == "succeeded" else 0.4,
         "source": "job_outcome",
@@ -9348,7 +9441,9 @@ def _persist_intent_workflow_memory(
         )
         if isinstance(write_request.payload, Mapping):
             write_request.metadata["semantic_subject"] = str(
-                write_request.payload.get("subject") or write_request.metadata.get("semantic_subject") or ""
+                write_request.payload.get("subject")
+                or write_request.metadata.get("semantic_subject")
+                or ""
             )
         memory_store.write_memory(db, write_request)
         metadata["intent_memory_persisted"] = True
@@ -9498,7 +9593,9 @@ def _coerce_literal_for_schema(value: Any, schema: Mapping[str, Any] | None) -> 
         item_schema = schema.get("items") if isinstance(schema, Mapping) else None
         if isinstance(value, list):
             return [
-                _coerce_literal_for_schema(item, item_schema if isinstance(item_schema, Mapping) else None)
+                _coerce_literal_for_schema(
+                    item, item_schema if isinstance(item_schema, Mapping) else None
+                )
                 for item in value
             ]
         if value is None:
@@ -9595,7 +9692,10 @@ def _normalize_plan_capability_inputs(plan: models.PlanCreate) -> models.PlanCre
         task_changed = False
         request_ids = [
             request_id
-            for request_id in [*list(task.tool_requests or []), *list(task.capability_requests or [])]
+            for request_id in [
+                *list(task.tool_requests or []),
+                *list(task.capability_requests or []),
+            ]
             if isinstance(request_id, str) and request_id.strip()
         ]
         for request_id in request_ids:
@@ -9647,7 +9747,9 @@ def _resolve_capability_schemas(
     if not include_schemas:
         return None, None
     input_schema = _load_schema_from_ref(spec.input_schema_ref) if spec.input_schema_ref else None
-    output_schema = _load_schema_from_ref(spec.output_schema_ref) if spec.output_schema_ref else None
+    output_schema = (
+        _load_schema_from_ref(spec.output_schema_ref) if spec.output_schema_ref else None
+    )
     if input_schema is not None and output_schema is not None:
         return input_schema, output_schema
     for adapter in spec.adapters:
@@ -9829,9 +9931,8 @@ def _heuristic_capability_recommendations(
 
         if last_node:
             last_output = (
-                (last_node.get("output_path") or "").strip()
-                or _infer_capability_output_path(last_node.get("capability_id", ""))
-            )
+                last_node.get("output_path") or ""
+            ).strip() or _infer_capability_output_path(last_node.get("capability_id", ""))
             if last_output and last_output in required_inputs:
                 score += 32
                 reasons.append(f"uses previous output '{last_output}'")
@@ -9979,7 +10080,9 @@ def _compact_interaction_summaries(
         compacted.append(
             {
                 "id": str(raw.get("id") or "").strip() or f"i{len(compacted) + 1}",
-                "action": _truncate_summary_field(str(raw.get("action") or "unknown action"), max_chars),
+                "action": _truncate_summary_field(
+                    str(raw.get("action") or "unknown action"), max_chars
+                ),
                 "facts": facts,
                 "evidence": [
                     _truncate_summary_field(entry, max_chars)
@@ -9993,7 +10096,10 @@ def _compact_interaction_summaries(
         )
 
     # Compact every Nth entry to reduce repetitive detail while preserving latest context.
-    if INTERACTION_SUMMARY_COMPACT_EVERY_N > 1 and len(compacted) > INTERACTION_SUMMARY_COMPACT_EVERY_N:
+    if (
+        INTERACTION_SUMMARY_COMPACT_EVERY_N > 1
+        and len(compacted) > INTERACTION_SUMMARY_COMPACT_EVERY_N
+    ):
         kept: list[dict[str, Any]] = []
         for index, item in enumerate(compacted):
             is_recent_tail = index >= len(compacted) - INTERACTION_SUMMARY_COMPACT_EVERY_N
@@ -10004,7 +10110,10 @@ def _compact_interaction_summaries(
             compacted = kept
 
     # Enforce token budget with progressive trimming.
-    while len(compacted) > 1 and _estimate_interaction_summaries_tokens(compacted) > INTERACTION_SUMMARY_MAX_TOKENS:
+    while (
+        len(compacted) > 1
+        and _estimate_interaction_summaries_tokens(compacted) > INTERACTION_SUMMARY_MAX_TOKENS
+    ):
         dropped_items += 1
         compacted.pop(0)
     if _estimate_interaction_summaries_tokens(compacted) > INTERACTION_SUMMARY_MAX_TOKENS:
@@ -10012,7 +10121,9 @@ def _compact_interaction_summaries(
         item["facts"] = item["facts"][:1]
         item["evidence"] = []
         item["speculation"] = []
-        item["action"] = _truncate_summary_field(str(item.get("action") or "action"), max_chars // 2)
+        item["action"] = _truncate_summary_field(
+            str(item.get("action") or "action"), max_chars // 2
+        )
 
     output_tokens = _estimate_interaction_summaries_tokens(compacted)
     output_count = len(compacted)
@@ -10159,7 +10270,9 @@ def _intent_catalog_capability_entries() -> list[dict[str, Any]]:
         capabilities = registry.enabled_capabilities()
         entries = capability_search.build_capability_search_entries(capabilities)
         return [
-            _with_intent_capability_contract_fields(entry, capabilities.get(str(entry.get("id") or "")))
+            _with_intent_capability_contract_fields(
+                entry, capabilities.get(str(entry.get("id") or ""))
+            )
             for entry in entries
         ]
     except Exception:  # noqa: BLE001
@@ -10217,7 +10330,9 @@ def _with_intent_capability_contract_fields(
 def _schema_required_fields(schema: Mapping[str, Any] | None) -> list[str]:
     if not isinstance(schema, Mapping):
         return []
-    return _dedupe_strings(schema.get("required") if isinstance(schema.get("required"), list) else [])
+    return _dedupe_strings(
+        schema.get("required") if isinstance(schema.get("required"), list) else []
+    )
 
 
 def _schema_optional_fields(
@@ -10484,9 +10599,7 @@ def _rank_default_capabilities_for_intent_segment(
     intent_hints = _INTENT_CAPABILITY_HINTS.get(intent, ())
     objective_lower = objective.lower()
     objective_tokens = {
-        token
-        for token in re.findall(r"[a-z0-9]+", objective_lower)
-        if len(token) >= 4
+        token for token in re.findall(r"[a-z0-9]+", objective_lower) if len(token) >= 4
     }
     scored: list[tuple[float, str, list[str]]] = []
     for entry in allowed_capability_catalog:
@@ -10536,7 +10649,8 @@ def _rank_default_capabilities_for_intent_segment(
             score += 10.0
             reasons.append("generate intent alignment")
         if intent == "io" and any(
-            token in search_blob for token in ("list", "search", "read", "write", "memory", "github")
+            token in search_blob
+            for token in ("list", "search", "read", "write", "memory", "github")
         ):
             score += 10.0
             reasons.append("io intent alignment")
@@ -10735,7 +10849,9 @@ def _filter_catalog_capability_ids(
         return []
     if not allowed_capability_ids:
         return capability_ids
-    return [capability_id for capability_id in capability_ids if capability_id in allowed_capability_ids]
+    return [
+        capability_id for capability_id in capability_ids if capability_id in allowed_capability_ids
+    ]
 
 
 def _capability_entry_lookup(
@@ -10838,9 +10954,7 @@ def _normalize_llm_intent_graph(
     for index, raw_segment in enumerate(raw_segments[:8]):
         if not isinstance(raw_segment, dict):
             continue
-        fallback_segment = (
-            fallback_segments[index] if index < len(fallback_segments) else {}
-        )
+        fallback_segment = fallback_segments[index] if index < len(fallback_segments) else {}
         segment_id_raw = str(raw_segment.get("id") or "").strip()
         segment_id = (
             segment_id_raw
@@ -11046,9 +11160,7 @@ def _llm_decompose_goal_intent(
     if semantic_goal_capabilities:
         prompt += "Most relevant capabilities for this goal from local semantic search:\n"
         prompt += json.dumps(semantic_goal_capabilities[:8], ensure_ascii=True)
-        prompt += (
-            "\nPrefer these capability IDs when they fit the goal and segment objective.\n"
-        )
+        prompt += "\nPrefer these capability IDs when they fit the goal and segment objective.\n"
     if interaction_summaries:
         prompt += "Interaction summaries (grounding evidence):\n"
         prompt += json.dumps(interaction_summaries[:32], ensure_ascii=True)
@@ -11088,7 +11200,9 @@ def _segment_fact_candidates(segment: Mapping[str, Any]) -> list[str]:
         return []
     parts = [
         entry.strip(" ,.-")
-        for entry in re.split(r"(?:[;\n]|(?:\bthen\b)|(?:\band\b)|(?:\bwith\b))", objective, flags=re.IGNORECASE)
+        for entry in re.split(
+            r"(?:[;\n]|(?:\bthen\b)|(?:\band\b)|(?:\bwith\b))", objective, flags=re.IGNORECASE
+        )
     ]
     normalized: list[str] = []
     for part in parts:
@@ -11133,9 +11247,7 @@ def _apply_supported_fact_filter(
         segment = dict(raw_segment)
         candidates = _segment_fact_candidates(segment)
         supported = [
-            candidate
-            for candidate in candidates
-            if _is_supported_intent_fact(candidate, corpus)
+            candidate for candidate in candidates if _is_supported_intent_fact(candidate, corpus)
         ]
         stripped = [candidate for candidate in candidates if candidate not in supported]
         fact_candidates += len(candidates)
@@ -11147,9 +11259,7 @@ def _apply_supported_fact_filter(
             segment["objective"] = "; ".join(supported)
         else:
             segment["objective_facts"] = []
-            segment["objective"] = _fallback_objective_for_intent(
-                str(segment.get("intent") or "")
-            )
+            segment["objective"] = _fallback_objective_for_intent(str(segment.get("intent") or ""))
             segment["confidence"] = round(
                 max(0.0, min(1.0, float(segment.get("confidence") or 0.0) * 0.7)),
                 3,
@@ -11266,9 +11376,9 @@ def _record_intent_decompose_metrics(
                 cap_total
             )
         if cap_matched > 0:
-            intent_capability_suggestions_matched_total.labels(source=source, model=model_label).inc(
-                cap_matched
-            )
+            intent_capability_suggestions_matched_total.labels(
+                source=source, model=model_label
+            ).inc(cap_matched)
 
 
 def _on_intent_decompose_llm_failure(exc: Exception) -> None:
@@ -11304,8 +11414,9 @@ def _decompose_goal_intent(
             heuristic_decompose=intent_contract.decompose_goal_intent,
             capability_entries=_intent_catalog_capability_entries,
             capability_ids=_intent_catalog_capability_ids,
-            normalize_user_id=lambda raw_user_id: _semantic_normalize_text(raw_user_id, max_len=120)
-            or _semantic_default_user_id(),
+            normalize_user_id=lambda raw_user_id: (
+                _semantic_normalize_text(raw_user_id, max_len=120) or _semantic_default_user_id()
+            ),
             retrieve_workflow_hints=lambda session, goal_text, normalized_user_id, limit: (
                 _retrieve_intent_workflow_hints(
                     session,
@@ -11359,13 +11470,15 @@ def _llm_capability_recommendations(
         capability_id = str(item.get("id") or "").strip()
         if not capability_id:
             continue
-        required_inputs = [entry for entry in item.get("required_inputs", []) if isinstance(entry, str)]
+        required_inputs = [
+            entry for entry in item.get("required_inputs", []) if isinstance(entry, str)
+        ]
         description = str(item.get("description") or "").strip()
         catalog_lines.append(
             f"- {capability_id} | required={required_inputs} | description={description[:180]}"
         )
     draft_lines = [
-        f"- {node.get('capability_id','')} output={node.get('output_path','') or _infer_capability_output_path(node.get('capability_id',''))}"
+        f"- {node.get('capability_id', '')} output={node.get('output_path', '') or _infer_capability_output_path(node.get('capability_id', ''))}"
         for node in draft_nodes
     ]
     prompt = (
@@ -11376,8 +11489,7 @@ def _llm_capability_recommendations(
         f"Goal:\n{goal}\n\n"
         f"Context keys available:\n{sorted(context.keys())}\n\n"
         f"Current draft chain:\n{draft_lines if draft_lines else ['(empty)']}\n\n"
-        "Allowed capability catalog:\n"
-        + "\n".join(catalog_lines)
+        "Allowed capability catalog:\n" + "\n".join(catalog_lines)
     )
     parsed = provider.generate_request_json_object(
         LLMRequest(
@@ -11448,10 +11560,14 @@ _COMPOSER_EXPRESSION_ROOTS = ("context.", "workflow.input.", "workflow.variable.
 
 
 def _composer_control_kind(raw_node: Mapping[str, Any]) -> str:
-    control_kind = str(raw_node.get("controlKind") or raw_node.get("control_kind") or "").strip().lower()
+    control_kind = (
+        str(raw_node.get("controlKind") or raw_node.get("control_kind") or "").strip().lower()
+    )
     if control_kind in _COMPOSER_CONTROL_KINDS:
         return control_kind
-    capability_id = str(raw_node.get("capabilityId") or raw_node.get("capability_id") or "").strip().lower()
+    capability_id = (
+        str(raw_node.get("capabilityId") or raw_node.get("capability_id") or "").strip().lower()
+    )
     if capability_id.startswith("studio.control."):
         suffix = capability_id.rsplit(".", 1)[-1].strip()
         if suffix in _COMPOSER_CONTROL_KINDS:
@@ -11484,7 +11600,11 @@ def _validate_composer_control_node(
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
     expression = str(control_config.get("expression") or "").strip()
-    parallel_mode = str(control_config.get("parallelMode") or control_config.get("parallel_mode") or "fan_out").strip().lower()
+    parallel_mode = (
+        str(control_config.get("parallelMode") or control_config.get("parallel_mode") or "fan_out")
+        .strip()
+        .lower()
+    )
     if control_kind in {"if", "if_else", "switch"} and not expression:
         diagnostics.append(
             {
@@ -11494,10 +11614,14 @@ def _validate_composer_control_node(
                 "message": "Control-flow node requires a non-empty expression.",
             }
         )
-    if control_kind in {"if", "if_else"} and expression and not _composer_if_expression_supported(
-        expression,
-        workflow_input_keys=workflow_input_keys,
-        workflow_variable_keys=workflow_variable_keys,
+    if (
+        control_kind in {"if", "if_else"}
+        and expression
+        and not _composer_if_expression_supported(
+            expression,
+            workflow_input_keys=workflow_input_keys,
+            workflow_variable_keys=workflow_variable_keys,
+        )
     ):
         diagnostics.append(
             {
@@ -11590,6 +11714,7 @@ def _validate_composer_control_node(
                 )
     return diagnostics
 
+
 def _composer_expression_operand(
     token: str,
 ) -> tuple[str, str] | None:
@@ -11629,7 +11754,17 @@ def _composer_expression_operand_supported(
     return True
 
 
-_COMPOSER_BINARY_OPERATORS = (">=", "<=", "!=", "==", ">", "<", " contains ", " startswith ", " endswith ")
+_COMPOSER_BINARY_OPERATORS = (
+    ">=",
+    "<=",
+    "!=",
+    "==",
+    ">",
+    "<",
+    " contains ",
+    " startswith ",
+    " endswith ",
+)
 
 
 def _composer_split_logical(expression: str, keyword: str) -> list[str]:
@@ -11988,7 +12123,12 @@ def _coerce_workflow_interface(
                 )
                 continue
             seen_input_keys.add(key)
-            value_type = str(raw_input.get("valueType") or raw_input.get("value_type") or "string").strip().lower() or "string"
+            value_type = (
+                str(raw_input.get("valueType") or raw_input.get("value_type") or "string")
+                .strip()
+                .lower()
+                or "string"
+            )
             if value_type not in _WORKFLOW_INTERFACE_VALUE_TYPES:
                 diagnostics_errors.append(
                     {
@@ -12203,8 +12343,13 @@ def _resolve_workflow_binding_value(
         input_key = str(binding.get("input_key") or "").strip()
         value = resolved_inputs.get(input_key) if isinstance(resolved_inputs, Mapping) else None
         if value is None and preview:
-            return _workflow_placeholder_value(placeholder_type, key=input_key or placeholder_key), None
-        return value, None if value is not None else f"Workflow input '{input_key}' is not resolved."
+            return _workflow_placeholder_value(
+                placeholder_type, key=input_key or placeholder_key
+            ), None
+        return (
+            value,
+            None if value is not None else f"Workflow input '{input_key}' is not resolved.",
+        )
     if kind == "workflow_variable":
         variable_key = str(binding.get("variable_key") or "").strip()
         value = (
@@ -12255,14 +12400,10 @@ def _build_workflow_interface_runtime_context(
     )
     resolved_inputs: dict[str, Any] = dict(existing_inputs)
     input_defs = (
-        workflow_interface.get("inputs", [])
-        if isinstance(workflow_interface, Mapping)
-        else []
+        workflow_interface.get("inputs", []) if isinstance(workflow_interface, Mapping) else []
     )
     variable_defs = (
-        workflow_interface.get("variables", [])
-        if isinstance(workflow_interface, Mapping)
-        else []
+        workflow_interface.get("variables", []) if isinstance(workflow_interface, Mapping) else []
     )
     normalized_explicit_inputs = (
         dict(explicit_inputs) if isinstance(explicit_inputs, Mapping) else {}
@@ -12387,17 +12528,22 @@ def _build_plan_from_composer_draft(
     }
     diagnostics_errors.extend(workflow_interface_errors)
     diagnostics_warnings.extend(workflow_interface_warnings)
-    preview_job_context, workflow_interface_context_errors = _build_workflow_interface_runtime_context(
-        workflow_interface,
-        base_context=job_context,
-        preview=True,
+    preview_job_context, workflow_interface_context_errors = (
+        _build_workflow_interface_runtime_context(
+            workflow_interface,
+            base_context=job_context,
+            preview=True,
+        )
     )
     diagnostics_errors.extend(workflow_interface_context_errors)
     job_context = preview_job_context
     raw_nodes = draft.get("nodes")
     if not isinstance(raw_nodes, list) or not raw_nodes:
         diagnostics_errors.append(
-            {"code": "draft.nodes_missing", "message": "Composer draft must include non-empty nodes."}
+            {
+                "code": "draft.nodes_missing",
+                "message": "Composer draft must include non-empty nodes.",
+            }
         )
         return None, diagnostics_errors, diagnostics_warnings
 
@@ -12428,15 +12574,27 @@ def _build_plan_from_composer_draft(
         if not capability_id:
             diagnostics_errors.append(
                 {
-                    "code": "draft.capability_missing" if not is_control_node else "draft.control_kind_missing",
+                    "code": "draft.capability_missing"
+                    if not is_control_node
+                    else "draft.control_kind_missing",
                     "node_id": node_id,
-                    "message": "capabilityId is required." if not is_control_node else "Control node is missing control kind/capabilityId.",
+                    "message": "capabilityId is required."
+                    if not is_control_node
+                    else "Control node is missing control kind/capabilityId.",
                 }
             )
             continue
         capability_spec = None
         if is_control_node:
-            parallel_mode = str(control_config.get("parallelMode") or control_config.get("parallel_mode") or "fan_out").strip().lower()
+            parallel_mode = (
+                str(
+                    control_config.get("parallelMode")
+                    or control_config.get("parallel_mode")
+                    or "fan_out"
+                )
+                .strip()
+                .lower()
+            )
             if control_kind not in {"if", "if_else"} and not (
                 control_kind == "parallel" and parallel_mode in {"fan_out", "fan_in"}
             ):
@@ -12569,11 +12727,15 @@ def _build_plan_from_composer_draft(
     for node in canonical_nodes:
         if not node.get("is_control") or node.get("control_kind") != "parallel":
             continue
-        parallel_mode = str(
-            node.get("control_config", {}).get("parallelMode")
-            or node.get("control_config", {}).get("parallel_mode")
-            or "fan_out"
-        ).strip().lower()
+        parallel_mode = (
+            str(
+                node.get("control_config", {}).get("parallelMode")
+                or node.get("control_config", {}).get("parallel_mode")
+                or "fan_out"
+            )
+            .strip()
+            .lower()
+        )
         outgoing_count = len(children_by_node_id.get(node["node_id"], set()))
         incoming_count = len(deps_by_node_id.get(node["node_id"], set()))
         if parallel_mode == "fan_out" and outgoing_count < 2:
@@ -12778,7 +12940,9 @@ def _build_plan_from_composer_draft(
                 )
                 continue
             if binding_kind == "context":
-                raw_path = str(raw_binding.get("path") or raw_binding.get("contextPath") or "").strip()
+                raw_path = str(
+                    raw_binding.get("path") or raw_binding.get("contextPath") or ""
+                ).strip()
                 segments = _split_reference_path(raw_path)
                 if not segments:
                     diagnostics_errors.append(
@@ -12832,7 +12996,9 @@ def _build_plan_from_composer_draft(
                 source_id = str(
                     raw_binding.get("nodeId") or raw_binding.get("sourceNodeId") or ""
                 ).strip()
-                source_path = str(raw_binding.get("path") or raw_binding.get("sourcePath") or "").strip()
+                source_path = str(
+                    raw_binding.get("path") or raw_binding.get("sourcePath") or ""
+                ).strip()
                 if not source_id or source_id not in node_by_id:
                     diagnostics_errors.append(
                         {
@@ -12940,8 +13106,7 @@ def _build_plan_from_composer_draft(
             )
 
         deps = [
-            node_by_id[dep_id]["task_name"]
-            for dep_id in sorted(_resolve_non_control_deps(node_id))
+            node_by_id[dep_id]["task_name"] for dep_id in sorted(_resolve_non_control_deps(node_id))
         ]
         embedded_tool_inputs = execution_contracts.embed_execution_gate(
             {capability_id: tool_input_payload},
@@ -13208,7 +13373,9 @@ def _handle_plan_created(envelope: dict) -> None:
         job_metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
         existing = _active_plan_record_for_job(db, job)
         pending_replan = (
-            job_metadata.get("pending_replan") if isinstance(job_metadata.get("pending_replan"), Mapping) else None
+            job_metadata.get("pending_replan")
+            if isinstance(job_metadata.get("pending_replan"), Mapping)
+            else None
         )
         excluded_completed_task_ids = _excluded_completed_task_ids_from_context(pending_replan)
         preserved_prefix_candidates = (
@@ -13236,7 +13403,9 @@ def _handle_plan_created(envelope: dict) -> None:
                 job_metadata,
                 goal=job_goal,
             ),
-            goal_intent_graph=job_metadata.get("goal_intent_graph") if isinstance(job_metadata, dict) else None,
+            goal_intent_graph=job_metadata.get("goal_intent_graph")
+            if isinstance(job_metadata, dict)
+            else None,
             render_path_mode=planner_contracts.render_path_mode_from_metadata(
                 job_metadata,
             ),
@@ -13267,7 +13436,9 @@ def _handle_plan_created(envelope: dict) -> None:
             if pending_replan is None:
                 plan_id = existing.id
                 if use_postgres_scheduler and job:
-                    metadata = dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
+                    metadata = (
+                        dict(job.metadata_json) if isinstance(job.metadata_json, dict) else {}
+                    )
                     metadata["scheduler_mode"] = POSTGRES_RUN_SPEC_SCHEDULER_MODE
                     metadata["run_spec"] = planner_run_spec.model_dump(mode="json")
                     job.metadata_json = metadata
@@ -13309,9 +13480,7 @@ def _handle_plan_created(envelope: dict) -> None:
         )
         revision_task_annotations.update(preserved_annotations)
         preserved_task_names = {
-            str(task.name or "").strip()
-            for task in preserved_tasks
-            if str(task.name or "").strip()
+            str(task.name or "").strip() for task in preserved_tasks if str(task.name or "").strip()
         }
         goal_intent_segments = _goal_intent_segments_from_metadata(
             job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
@@ -13355,7 +13524,9 @@ def _handle_plan_created(envelope: dict) -> None:
                 if normalized_capability:
                     selected_capabilities.add(normalized_capability)
             task_intent_value = (
-                task.intent.value if isinstance(task.intent, models.ToolIntent) else str(task.intent or "")
+                task.intent.value
+                if isinstance(task.intent, models.ToolIntent)
+                else str(task.intent or "")
             )
             normalized_task_intent = (
                 intent_contract.normalize_task_intent(task_intent_value)
@@ -13786,7 +13957,9 @@ def _should_preserve_completed_prefix_for_replan(
 def _dag_edges_from_task_records(task_records: Sequence[TaskRecord]) -> list[list[str]]:
     edges: list[list[str]] = []
     seen: set[tuple[str, str]] = set()
-    known_names = {str(record.name or "").strip() for record in task_records if str(record.name or "").strip()}
+    known_names = {
+        str(record.name or "").strip() for record in task_records if str(record.name or "").strip()
+    }
     for record in task_records:
         target = str(record.name or "").strip()
         if not target:
@@ -13810,9 +13983,7 @@ def _plan_with_preserved_prefix(
     if not preserved_tasks:
         return plan
     existing_names = {
-        str(task.name or "").strip()
-        for task in plan.tasks
-        if str(task.name or "").strip()
+        str(task.name or "").strip() for task in plan.tasks if str(task.name or "").strip()
     }
     merged_tasks: list[models.TaskCreate] = [
         _task_create_from_record(task)
@@ -13823,7 +13994,9 @@ def _plan_with_preserved_prefix(
     synthetic_records: list[TaskRecord] = []
     now = _utcnow()
     for index, task in enumerate(merged_tasks):
-        intent_value = task.intent.value if isinstance(task.intent, models.ToolIntent) else task.intent
+        intent_value = (
+            task.intent.value if isinstance(task.intent, models.ToolIntent) else task.intent
+        )
         synthetic_records.append(
             TaskRecord(
                 id=f"synthetic-{index}",
@@ -13918,7 +14091,9 @@ def _preserve_completed_prefix_for_replan(
     pending_replan: Mapping[str, Any] | None,
     occurred_at: datetime,
 ) -> tuple[list[TaskRecord], dict[str, dict[str, Any]]]:
-    if prior_plan_record is None or not _should_preserve_completed_prefix_for_replan(pending_replan):
+    if prior_plan_record is None or not _should_preserve_completed_prefix_for_replan(
+        pending_replan
+    ):
         return [], {}
     preserved_tasks = _completed_task_records_for_plan(
         db,
@@ -13931,7 +14106,9 @@ def _preserve_completed_prefix_for_replan(
     source_revision_number = 0
     if isinstance(pending_replan, Mapping):
         try:
-            source_revision_number = max(0, int(pending_replan.get("prior_revision_number", 0) or 0))
+            source_revision_number = max(
+                0, int(pending_replan.get("prior_revision_number", 0) or 0)
+            )
         except (TypeError, ValueError):
             source_revision_number = 0
     annotations: dict[str, dict[str, Any]] = {}
@@ -14246,9 +14423,7 @@ def _schedule_task_retry_same_step(
     if checkpoint_lineage:
         checkpoint_id = str(checkpoint_lineage.get("checkpoint_id") or "").strip()
         checkpoint_record = (
-            db.query(StepCheckpointRecord)
-            .filter(StepCheckpointRecord.id == checkpoint_id)
-            .first()
+            db.query(StepCheckpointRecord).filter(StepCheckpointRecord.id == checkpoint_id).first()
             if checkpoint_id
             else None
         )
@@ -14442,7 +14617,10 @@ def _schema_invalid_strategy_for_policy(
     policy: Mapping[str, Any] | None,
 ) -> models.ReplanStrategy:
     raw = (
-        str((policy or {}).get("schema_invalid_strategy") or ADAPTIVE_SCHEMA_INVALID_STRATEGY_DEFAULT)
+        str(
+            (policy or {}).get("schema_invalid_strategy")
+            or ADAPTIVE_SCHEMA_INVALID_STRATEGY_DEFAULT
+        )
         .strip()
         .lower()
     )
@@ -14480,7 +14658,9 @@ def _apply_task_evaluator_recovery(
         max_reworks=max(int(task.max_reworks or 0), 0),
         evaluator_signal=evaluator_signal,
         requested_rework=requested_rework,
-        min_confidence=float(policy.get("evaluator_min_confidence", ADAPTIVE_EVALUATOR_MIN_CONFIDENCE_DEFAULT)),
+        min_confidence=float(
+            policy.get("evaluator_min_confidence", ADAPTIVE_EVALUATOR_MIN_CONFIDENCE_DEFAULT)
+        ),
         replan_confidence_floor=float(
             policy.get(
                 "evaluator_replan_confidence_floor",
@@ -14514,11 +14694,14 @@ def _apply_task_evaluator_recovery(
             task=task,
             payload=payload,
             status=models.TaskStatus.rework_requested.value,
-            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+            step_attempt_id=_resolve_step_attempt_id_for_event(
+                db, step_id=task.id, payload=payload
+            ),
         )
         exclude_completed_task_ids = (
             [task.id]
-            if task.status in {
+            if task.status
+            in {
                 models.TaskStatus.completed.value,
                 models.TaskStatus.accepted.value,
             }
@@ -14557,7 +14740,9 @@ def _apply_task_evaluator_recovery(
             task=task,
             payload=payload,
             status=models.TaskStatus.rework_requested.value,
-            step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+            step_attempt_id=_resolve_step_attempt_id_for_event(
+                db, step_id=task.id, payload=payload
+            ),
         )
         task.rework_count = requested_rework_count
         task.status = models.TaskStatus.pending.value
@@ -14624,7 +14809,9 @@ def _handle_task_accepted(envelope: dict) -> None:
                 task=task,
                 payload=payload,
                 status=models.TaskStatus.accepted.value,
-                step_attempt_id=_resolve_step_attempt_id_for_event(db, step_id=task.id, payload=payload),
+                step_attempt_id=_resolve_step_attempt_id_for_event(
+                    db, step_id=task.id, payload=payload
+                ),
             )
             db.commit()
             resolved_job_id = task.job_id
@@ -14769,7 +14956,9 @@ def _schedule_postgres_run(job_id: str, *, correlation_id: str | None = None) ->
         if not task_records:
             return
         task_by_name = {record.name: record for record in task_records}
-        latest_attempts = _latest_step_attempts_for_steps(db, [record.id for record in task_records])
+        latest_attempts = _latest_step_attempts_for_steps(
+            db, [record.id for record in task_records]
+        )
         tasks = _resolve_task_deps(task_records)
         task_map = {task.id: task for task in tasks}
         id_to_name = {record.id: record.name for record in task_records}
@@ -14802,16 +14991,23 @@ def _schedule_postgres_run(job_id: str, *, correlation_id: str | None = None) ->
                 record,
                 latest_attempts.get(record.id),
             )
-            if effective_status in {
-                models.TaskStatus.running.value,
-                models.TaskStatus.completed.value,
-                models.TaskStatus.accepted.value,
-            } and record.status != effective_status:
+            if (
+                effective_status
+                in {
+                    models.TaskStatus.running.value,
+                    models.TaskStatus.completed.value,
+                    models.TaskStatus.accepted.value,
+                }
+                and record.status != effective_status
+            ):
                 record.status = effective_status
                 record.updated_at = now
             effective_status_by_step_id[step.step_id] = effective_status
             record_by_step_id[step.step_id] = record
-            if effective_status in {models.TaskStatus.completed.value, models.TaskStatus.accepted.value}:
+            if effective_status in {
+                models.TaskStatus.completed.value,
+                models.TaskStatus.accepted.value,
+            }:
                 completed_step_ids.add(step.step_id)
         for step in run_spec.steps:
             record = record_by_step_id.get(step.step_id)
@@ -15002,7 +15198,9 @@ def _task_context_with_run_context(
 def _job_agent_roster(job: JobRecord | None) -> list[dict[str, Any]]:
     metadata = job.metadata_json if job and isinstance(job.metadata_json, dict) else {}
     roster = metadata.get("agents")
-    return [agent for agent in roster if isinstance(agent, dict)] if isinstance(roster, list) else []
+    return (
+        [agent for agent in roster if isinstance(agent, dict)] if isinstance(roster, list) else []
+    )
 
 
 def _task_payload_with_error(
@@ -15086,7 +15284,9 @@ def _handle_policy_decision(envelope: dict) -> None:
                     if job_record
                     else {}
                 )
-                job_goal = job_record.goal if job_record and isinstance(job_record.goal, str) else ""
+                job_goal = (
+                    job_record.goal if job_record and isinstance(job_record.goal, str) else ""
+                )
                 task_intent_profiles = _coerce_task_intent_profiles(
                     job_record.metadata_json
                     if job_record and isinstance(job_record.metadata_json, dict)
@@ -15618,9 +15818,7 @@ def _compile_plan_preflight(
         for request_id in task_request_ids:
             resolved_payload_raw = resolved_inputs.get(request_id, {})
             resolved_payload = (
-                resolved_payload_raw
-                if isinstance(resolved_payload_raw, Mapping)
-                else {}
+                resolved_payload_raw if isinstance(resolved_payload_raw, Mapping) else {}
             )
             request_payload_error = _preflight_request_payload_semantics(
                 request_id=request_id,
@@ -15650,9 +15848,7 @@ def _compile_plan_preflight(
         for request_id in task_request_ids:
             resolved_payload_raw = resolved_inputs.get(request_id, {})
             resolved_payload = (
-                resolved_payload_raw
-                if isinstance(resolved_payload_raw, Mapping)
-                else {}
+                resolved_payload_raw if isinstance(resolved_payload_raw, Mapping) else {}
             )
             segment_payload = _prepare_segment_payload_for_preflight(
                 request_id=request_id,
@@ -15715,7 +15911,11 @@ def _prepare_segment_payload_for_preflight(
 ) -> dict[str, Any]:
     segment_payload = dict(resolved_payload)
     segment_payload.setdefault("tool_inputs", task_payload.get("tool_inputs", {}))
-    if "instruction" not in segment_payload and isinstance(task.instruction, str) and task.instruction.strip():
+    if (
+        "instruction" not in segment_payload
+        and isinstance(task.instruction, str)
+        and task.instruction.strip()
+    ):
         segment_payload["instruction"] = task.instruction.strip()
     if request_id in {
         "document.spec.generate",
@@ -15836,9 +16036,7 @@ def _preflight_memory_request_payload(
     raw_scope = str(payload.get("scope") or "").strip().lower()
     expected_scope = spec.scope.value
     if raw_scope and raw_scope != expected_scope:
-        return (
-            f"{request_id}:scope_mismatch:{name}:expected_{expected_scope}:got_{raw_scope}"
-        )
+        return f"{request_id}:scope_mismatch:{name}:expected_{expected_scope}:got_{raw_scope}"
 
     resolved_scope = raw_scope or expected_scope
     if resolved_scope in {"request", "session"} and not str(payload.get("job_id") or "").strip():
@@ -16016,9 +16214,7 @@ def _preflight_error_diagnostic(task_name: str, message: str) -> dict[str, Any]:
         if detail.startswith("risk_level_mismatch:"):
             diagnostic["code"] = "intent_segment.risk_level_mismatch"
             target = tool_name or "tool"
-            diagnostic["message"] = (
-                f"{target} risk tier exceeds intent segment risk constraints."
-            )
+            diagnostic["message"] = f"{target} risk tier exceeds intent segment risk constraints."
             return diagnostic
         if detail.startswith("segment_intent_mismatch:"):
             diagnostic["code"] = "intent_segment.intent_mismatch"
@@ -16230,11 +16426,7 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
     now = _utcnow()
     try:
         with SessionLocal() as db:
-            record = (
-                db.query(TaskResultRecord)
-                .filter(TaskResultRecord.task_id == task_id)
-                .first()
-            )
+            record = db.query(TaskResultRecord).filter(TaskResultRecord.task_id == task_id).first()
             task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
             job_id = (
                 task.job_id
@@ -16270,9 +16462,7 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
                 # result's run_id is the worker's execution run id, which is not
                 # a RunRecord, so trusting it would make run lookups miss.
                 run_id = _durable_run_id(job, job_id)
-                if not (
-                    db.query(RunRecord.id).filter(RunRecord.id == run_id).first()
-                ):
+                if not (db.query(RunRecord.id).filter(RunRecord.id == run_id).first()):
                     fallback = str(normalized_result.get("run_id") or "").strip()
                     if fallback:
                         run_id = fallback
@@ -16301,11 +16491,7 @@ def _persist_task_result_to_postgres(task_id: str, result: Mapping[str, Any]) ->
 def _load_task_result_from_postgres(task_id: str) -> dict[str, Any]:
     try:
         with SessionLocal() as db:
-            record = (
-                db.query(TaskResultRecord)
-                .filter(TaskResultRecord.task_id == task_id)
-                .first()
-            )
+            record = db.query(TaskResultRecord).filter(TaskResultRecord.task_id == task_id).first()
             if record is None or not isinstance(record.result_json, dict):
                 return {}
             return dict(record.result_json)
@@ -16338,7 +16524,9 @@ def _load_task_result(task_id: str) -> dict[str, Any]:
         return {}
 
 
-def _alias_dependency_output_keys(task: models.Task | TaskRecord | None, output: Any) -> dict[str, Any]:
+def _alias_dependency_output_keys(
+    task: models.Task | TaskRecord | None, output: Any
+) -> dict[str, Any]:
     if not isinstance(output, Mapping):
         return {}
     aliased = dict(output)
@@ -16610,7 +16798,9 @@ def _build_chat_workflow_terminal_message(
     workflow_version: WorkflowVersionRecord | None,
     status: models.JobStatus,
 ) -> str:
-    workflow_title = str(workflow_run.title or workflow_run.goal or "Workflow").strip() or "Workflow"
+    workflow_title = (
+        str(workflow_run.title or workflow_run.goal or "Workflow").strip() or "Workflow"
+    )
     if status == models.JobStatus.succeeded:
         payload = _resolve_chat_workflow_success_payload(
             job=job,
@@ -16820,16 +17010,14 @@ def _render_chat_workflow_payload(value: Any, *, max_chars: int = 4000) -> str:
             lines: list[str] = []
             for item in items[:10]:
                 if isinstance(item, Mapping):
-                    label = (
-                        str(
-                            item.get("text")
-                            or item.get("title")
-                            or item.get("name")
-                            or item.get("path")
-                            or item.get("id")
-                            or ""
-                        ).strip()
-                    )
+                    label = str(
+                        item.get("text")
+                        or item.get("title")
+                        or item.get("name")
+                        or item.get("path")
+                        or item.get("id")
+                        or ""
+                    ).strip()
                     if not label:
                         label = json.dumps(dict(item), ensure_ascii=True)
                 else:
@@ -17114,9 +17302,7 @@ def _upsert_shadow_run(
     if record is None:
         record = RunRecord(
             id=run_id,
-            kind=_run_kind_from_records(
-                job_record, workflow_run_record=workflow_run_record
-            ).value,
+            kind=_run_kind_from_records(job_record, workflow_run_record=workflow_run_record).value,
             title=(
                 workflow_run_record.title
                 if workflow_run_record is not None
@@ -17187,18 +17373,14 @@ def _upsert_shadow_run(
     metadata["legacy_job_id"] = job_record.id
     if workflow_run_record is not None:
         metadata["legacy_workflow_run_id"] = workflow_run_record.id
-    record.kind = _run_kind_from_records(
-        job_record, workflow_run_record=workflow_run_record
-    ).value
+    record.kind = _run_kind_from_records(job_record, workflow_run_record=workflow_run_record).value
     record.title = (
         workflow_run_record.title
         if workflow_run_record is not None
         else str(job_record.goal or "Run")
     )
     record.goal = (
-        workflow_run_record.goal
-        if workflow_run_record is not None
-        else str(job_record.goal or "")
+        workflow_run_record.goal if workflow_run_record is not None else str(job_record.goal or "")
     )
     record.requested_context_json = (
         workflow_run_record.requested_context_json
@@ -17212,9 +17394,7 @@ def _upsert_shadow_run(
         if workflow_run_record is not None
         else str((job_record.metadata_json or {}).get("workflow_run_id") or "").strip() or None
     )
-    record.plan_id = (
-        plan_record.id if plan_record is not None else record.plan_id
-    )
+    record.plan_id = plan_record.id if plan_record is not None else record.plan_id
     record.source_definition_id = (
         workflow_run_record.definition_id
         if workflow_run_record is not None
@@ -17224,20 +17404,17 @@ def _upsert_shadow_run(
     record.source_version_id = (
         workflow_run_record.version_id
         if workflow_run_record is not None
-        else str((job_record.metadata_json or {}).get("workflow_version_id") or "").strip()
-        or None
+        else str((job_record.metadata_json or {}).get("workflow_version_id") or "").strip() or None
     )
     record.source_trigger_id = (
         workflow_run_record.trigger_id
         if workflow_run_record is not None
-        else str((job_record.metadata_json or {}).get("workflow_trigger_id") or "").strip()
-        or None
+        else str((job_record.metadata_json or {}).get("workflow_trigger_id") or "").strip() or None
     )
     record.user_id = (
         workflow_run_record.user_id
         if workflow_run_record is not None
-        else str((job_record.metadata_json or {}).get("semantic_user_id") or "").strip()
-        or None
+        else str((job_record.metadata_json or {}).get("semantic_user_id") or "").strip() or None
     )
     if parsed_run_spec is not None:
         record.run_spec_json = parsed_run_spec.model_dump(mode="json")
@@ -17262,11 +17439,7 @@ def _sync_shadow_run_steps(
     if run_spec is None:
         return
     db.flush()
-    task_records = (
-        db.query(TaskRecord)
-        .filter(TaskRecord.plan_id == plan_record.id)
-        .all()
-    )
+    task_records = db.query(TaskRecord).filter(TaskRecord.plan_id == plan_record.id).all()
     task_by_name = {task.name: task for task in task_records}
     spec_task_ids = {
         step.step_id: task_by_name[step.name].id
@@ -17281,9 +17454,7 @@ def _sync_shadow_run_steps(
     # takes/keeps the step rows; a non-canonical sync never inserts a duplicate
     # nor steals steps from the canonical run.
     synced_task_ids = {
-        task_by_name[step.name].id
-        for step in run_spec.steps
-        if step.name in task_by_name
+        task_by_name[step.name].id for step in run_spec.steps if step.name in task_by_name
     }
     existing = (
         {
@@ -17353,9 +17524,7 @@ def _sync_shadow_run_steps(
         )
         record.retry_policy_json = step.retry_policy.model_dump(mode="json")
         record.acceptance_policy_json = step.acceptance_policy.model_dump(mode="json")
-        record.depends_on_json = [
-            spec_task_ids.get(dep_id, dep_id) for dep_id in step.depends_on
-        ]
+        record.depends_on_json = [spec_task_ids.get(dep_id, dep_id) for dep_id in step.depends_on]
         metadata = dict(record.metadata_json or {})
         metadata.update(dict(step.routing_hints or {}))
         record.metadata_json = metadata
@@ -17509,9 +17678,7 @@ def _sync_execution_request_snapshot(
         request_id, capability_id = _first_request_metadata(execution_request)
         record_id = _execution_request_record_id(run_id, task_id, attempts)
         record = (
-            db.query(ExecutionRequestRecord)
-            .filter(ExecutionRequestRecord.id == record_id)
-            .first()
+            db.query(ExecutionRequestRecord).filter(ExecutionRequestRecord.id == record_id).first()
         )
         now = _utcnow()
         status = "invalid" if task_payload.get("tool_inputs_validation") else "prepared"
@@ -17589,11 +17756,7 @@ def _update_execution_request_status(
         attempts = max(int(task.attempts or 0), 1)
     run_id = _durable_run_id(job, task.job_id)
     record_id = _execution_request_record_id(run_id, task.id, attempts)
-    record = (
-        db.query(ExecutionRequestRecord)
-        .filter(ExecutionRequestRecord.id == record_id)
-        .first()
-    )
+    record = db.query(ExecutionRequestRecord).filter(ExecutionRequestRecord.id == record_id).first()
     if record is None:
         return
     validated_step_attempt_id = _validated_step_attempt_id(
@@ -17829,9 +17992,7 @@ def _upsert_step_attempt_started(
     attempt_number = _payload_attempt_number(payload) or max(int(task.attempts or 0), 1)
     attempt_id = _step_attempt_record_id(task.id, attempt_number)
     worker_id = (
-        payload.get("worker_consumer")
-        if isinstance(payload.get("worker_consumer"), str)
-        else None
+        payload.get("worker_consumer") if isinstance(payload.get("worker_consumer"), str) else None
     )
     lease_expires_at = _lease_expiry_from_payload(payload, occurred_at=occurred_at)
     record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
@@ -17887,9 +18048,7 @@ def _upsert_step_attempt_finished(
     record = db.query(StepAttemptRecord).filter(StepAttemptRecord.id == attempt_id).first()
     started_at = _parse_event_datetime(payload.get("started_at")) or occurred_at
     worker_id = (
-        payload.get("worker_consumer")
-        if isinstance(payload.get("worker_consumer"), str)
-        else None
+        payload.get("worker_consumer") if isinstance(payload.get("worker_consumer"), str) else None
     )
     if record is None:
         record = StepAttemptRecord(
@@ -17951,9 +18110,7 @@ def _touch_step_attempt_heartbeat(
             occurred_at=occurred_at,
         )
     worker_id = (
-        payload.get("worker_consumer")
-        if isinstance(payload.get("worker_consumer"), str)
-        else None
+        payload.get("worker_consumer") if isinstance(payload.get("worker_consumer"), str) else None
     )
     record.worker_id = worker_id or record.worker_id
     record.lease_owner = worker_id or record.lease_owner
@@ -18000,9 +18157,9 @@ def _replace_attempt_invocations(
     task: TaskRecord,
     payload: Mapping[str, Any],
 ) -> None:
-    db.query(InvocationRecord).filter(
-        InvocationRecord.step_attempt_id == attempt.id
-    ).delete(synchronize_session=False)
+    db.query(InvocationRecord).filter(InvocationRecord.step_attempt_id == attempt.id).delete(
+        synchronize_session=False
+    )
     tool_calls = payload.get("tool_calls")
     if not isinstance(tool_calls, list):
         return
@@ -18015,7 +18172,9 @@ def _replace_attempt_invocations(
             continue
         request_id = raw_call.get("request_id")
         if not isinstance(request_id, str) or not request_id.strip():
-            request_id = task.tool_requests[index] if index < len(task.tool_requests or []) else None
+            request_id = (
+                task.tool_requests[index] if index < len(task.tool_requests or []) else None
+            )
         binding = bindings.get(request_id) if isinstance(request_id, str) else None
         tool_name = str(raw_call.get("tool_name") or "").strip()
         capability_id = str(raw_call.get("capability_id") or "").strip()
@@ -18047,9 +18206,13 @@ def _replace_attempt_invocations(
                 step_attempt_id=attempt.id,
                 request_id=request_id if isinstance(request_id, str) else None,
                 capability_id=capability_id,
-                adapter_id=adapter_id.strip() if isinstance(adapter_id, str) and adapter_id.strip() else None,
+                adapter_id=adapter_id.strip()
+                if isinstance(adapter_id, str) and adapter_id.strip()
+                else None,
                 request_json=dict(request_payload) if isinstance(request_payload, Mapping) else {},
-                response_json=dict(response_payload) if isinstance(response_payload, Mapping) else {},
+                response_json=dict(response_payload)
+                if isinstance(response_payload, Mapping)
+                else {},
                 status=str(raw_call.get("status") or ""),
                 started_at=_parse_event_datetime(raw_call.get("started_at")) or attempt.started_at,
                 finished_at=_parse_event_datetime(raw_call.get("finished_at")),
@@ -18193,7 +18356,9 @@ def _run_event_from_record(record: RunEventRecord) -> models.RunEvent:
 def _debugger_timeline_entry_from_run_event(record: RunEventRecord) -> dict[str, Any]:
     payload = record.payload_json if isinstance(record.payload_json, dict) else {}
     status = payload.get("status")
-    status_text = status if isinstance(status, str) and status else record.event_type.replace("task.", "")
+    status_text = (
+        status if isinstance(status, str) and status else record.event_type.replace("task.", "")
+    )
     return {
         "stream_id": record.id,
         "type": record.event_type,
@@ -18206,7 +18371,9 @@ def _debugger_timeline_entry_from_run_event(record: RunEventRecord) -> dict[str,
         "worker_consumer": payload.get("worker_consumer")
         if isinstance(payload.get("worker_consumer"), str)
         else None,
-        "run_id": payload.get("run_id") if isinstance(payload.get("run_id"), str) else record.run_id,
+        "run_id": payload.get("run_id")
+        if isinstance(payload.get("run_id"), str)
+        else record.run_id,
         "error": _task_error_from_payload(payload) or "",
     }
 
@@ -18224,14 +18391,12 @@ def _latest_task_failures_for_jobs(
         else []
     )
     active_plan_ids = {
-        job.id: _active_plan_id_from_metadata(job.metadata_json if isinstance(job.metadata_json, dict) else {})
+        job.id: _active_plan_id_from_metadata(
+            job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        )
         for job in job_records
     }
-    task_records = (
-        db.query(TaskRecord)
-        .filter(TaskRecord.job_id.in_(normalized_job_ids))
-        .all()
-    )
+    task_records = db.query(TaskRecord).filter(TaskRecord.job_id.in_(normalized_job_ids)).all()
     task_name_by_id = {
         record.id: record.name
         for record in task_records
@@ -18397,7 +18562,10 @@ def auth_register(body: Dict[str, Any], db: Session = Depends(get_db)) -> Dict[s
     db.commit()
     db.refresh(user)
     token = auth_service.create_token(redis_client, user.id, user.username, user.display_name)
-    return {"token": token, "user": {"id": user.id, "username": user.username, "display_name": user.display_name}}
+    return {
+        "token": token,
+        "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
+    }
 
 
 @app.post("/auth/login")
@@ -18408,7 +18576,10 @@ def auth_login(body: Dict[str, Any], db: Session = Depends(get_db)) -> Dict[str,
     if not user or not auth_service.verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="invalid_credentials")
     token = auth_service.create_token(redis_client, user.id, user.username, user.display_name)
-    return {"token": token, "user": {"id": user.id, "username": user.username, "display_name": user.display_name}}
+    return {
+        "token": token,
+        "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
+    }
 
 
 @app.get("/auth/me")
@@ -18588,7 +18759,10 @@ def create_chat_message_stream(
     def _run_turn() -> None:
         _t_worker = time.perf_counter()
         _worker_start_local.t = _t_worker
-        logger.info("chat_worker_started", extra={"thread_start_ms": round((_t_worker - _t_request) * 1000, 1)})
+        logger.info(
+            "chat_worker_started",
+            extra={"thread_start_ms": round((_t_worker - _t_request) * 1000, 1)},
+        )
         _stream_callback_local.callback = _stream_callback
         _tool_progress_callback_local.callback = _progress_callback
         try:
@@ -18685,7 +18859,10 @@ def submit_feedback(
         else {}
     )
     boundary_decision = _metrics_label(dimensions.get("boundary_decision"), default="none")
-    if feedback.target_type == models.FeedbackTargetType.chat_message and boundary_decision != "none":
+    if (
+        feedback.target_type == models.FeedbackTargetType.chat_message
+        and boundary_decision != "none"
+    ):
         chat_boundary_feedback_total.labels(
             decision=boundary_decision,
             sentiment=feedback.sentiment.value,
@@ -18978,9 +19155,7 @@ def _create_job_internal(
 ) -> models.Job:
     job_id = str(uuid.uuid4())
     now = _utcnow()
-    context_json_for_job = (
-        dict(job.context_json) if isinstance(job.context_json, dict) else {}
-    )
+    context_json_for_job = dict(job.context_json) if isinstance(job.context_json, dict) else {}
     interaction_summaries_raw: list[dict[str, Any]] = []
     interaction_summaries_compact: list[dict[str, Any]] = []
     interaction_compaction: dict[str, Any] = {}
@@ -19084,7 +19259,9 @@ def _create_job_internal(
     if not isinstance(metadata.get("plan_revision_history"), list):
         metadata["plan_revision_history"] = []
     try:
-        metadata["current_revision_number"] = max(0, int(metadata.get("current_revision_number", 0)))
+        metadata["current_revision_number"] = max(
+            0, int(metadata.get("current_revision_number", 0))
+        )
     except (TypeError, ValueError):
         metadata["current_revision_number"] = 0
     if not _delay_shadow_run_creation(metadata):
@@ -19217,13 +19394,17 @@ def list_capabilities(
     try:
         registry = capability_registry.load_capability_registry()
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"capability_registry_load_failed:{exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"capability_registry_load_failed:{exc}"
+        ) from exc
 
     items: list[dict[str, Any]] = []
     for capability_id, spec in sorted(registry.capabilities.items()):
         if not include_disabled and not spec.enabled:
             continue
-        input_schema, output_schema = _resolve_capability_schemas(spec, include_schemas=with_schemas)
+        input_schema, output_schema = _resolve_capability_schemas(
+            spec, include_schemas=with_schemas
+        )
         required_inputs: list[str] = []
         if isinstance(input_schema, dict):
             required = input_schema.get("required")
@@ -19291,7 +19472,9 @@ def search_capabilities(payload: dict[str, Any] = Body(default_factory=dict)) ->
     try:
         registry = capability_registry.load_capability_registry()
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"capability_registry_load_failed:{exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"capability_registry_load_failed:{exc}"
+        ) from exc
 
     entries = capability_search.build_capability_search_entries(registry.enabled_capabilities())
     started = time.perf_counter()
@@ -19418,7 +19601,9 @@ def get_job_details(job_id: str, db: Session = Depends(get_db)) -> models.JobDet
         normalized_intent_envelope=normalization_fields["normalized_intent_envelope"],
         normalization_trace=normalization_fields["normalization_trace"],
         normalization_clarification=normalization_fields["normalization_clarification"],
-        normalization_candidate_capabilities=normalization_fields["normalization_candidate_capabilities"],
+        normalization_candidate_capabilities=normalization_fields[
+            "normalization_candidate_capabilities"
+        ],
     )
 
 
@@ -19516,11 +19701,15 @@ def get_job_debugger(
                     task_intent_profiles.get(record.id),
                 ).model_dump(mode="json"),
                 "revision_merge": revision_task_annotations.get(record.id),
-                "latest_evaluator_signal": step_metadata_by_id.get(record.id, {}).get("latest_evaluator_signal"),
+                "latest_evaluator_signal": step_metadata_by_id.get(record.id, {}).get(
+                    "latest_evaluator_signal"
+                ),
                 "evaluator_signal_history": _limited_history(
                     step_metadata_by_id.get(record.id, {}).get("evaluator_signal_history")
                 ),
-                "latest_repair_decision": step_metadata_by_id.get(record.id, {}).get("latest_repair_decision"),
+                "latest_repair_decision": step_metadata_by_id.get(record.id, {}).get(
+                    "latest_repair_decision"
+                ),
                 "repair_decision_history": _limited_history(
                     step_metadata_by_id.get(record.id, {}).get("repair_decision_history")
                 ),
@@ -19576,24 +19765,26 @@ def get_job_debugger(
         "normalized_intent_envelope": normalization_fields["normalized_intent_envelope"],
         "normalization_trace": normalization_fields["normalization_trace"],
         "normalization_clarification": normalization_fields["normalization_clarification"],
-        "normalization_candidate_capabilities": normalization_fields["normalization_candidate_capabilities"],
+        "normalization_candidate_capabilities": normalization_fields[
+            "normalization_candidate_capabilities"
+        ],
         "tasks": tasks_payload,
         "run_state": run_context.state.model_dump(mode="json") if run_context else None,
-        "blackboard": [
-            entry.model_dump(mode="json") for entry in run_context.blackboard
-        ] if run_context else [],
-        "handoffs": [
-            handoff.model_dump(mode="json") for handoff in run_context.handoffs
-        ] if run_context else [],
-        "artifacts": [
-            artifact.model_dump(mode="json") for artifact in run_context.artifacts
-        ] if run_context else [],
-        "agents": [
-            agent.model_dump(mode="json") for agent in run_context.agents
-        ] if run_context else [],
-        "locks": [
-            lock.model_dump(mode="json") for lock in run_context.locks
-        ] if run_context else [],
+        "blackboard": [entry.model_dump(mode="json") for entry in run_context.blackboard]
+        if run_context
+        else [],
+        "handoffs": [handoff.model_dump(mode="json") for handoff in run_context.handoffs]
+        if run_context
+        else [],
+        "artifacts": [artifact.model_dump(mode="json") for artifact in run_context.artifacts]
+        if run_context
+        else [],
+        "agents": [agent.model_dump(mode="json") for agent in run_context.agents]
+        if run_context
+        else [],
+        "locks": [lock.model_dump(mode="json") for lock in run_context.locks]
+        if run_context
+        else [],
     }
 
 
@@ -19643,9 +19834,7 @@ def get_job_event_outbox(
     if pending_only:
         base_query = base_query.filter(EventOutboxRecord.published_at.is_(None))
     rows = (
-        base_query.order_by(EventOutboxRecord.created_at.desc())
-        .limit(max(limit * 20, limit))
-        .all()
+        base_query.order_by(EventOutboxRecord.created_at.desc()).limit(max(limit * 20, limit)).all()
     )
     entries: list[dict[str, Any]] = []
     for row in rows:
@@ -19921,16 +20110,13 @@ def list_run_steps(run_id: str, db: Session = Depends(get_db)) -> List[models.Ru
     task_map = {
         task.id: task
         for task in (
-            db.query(TaskRecord)
-            .filter(TaskRecord.id.in_([record.id for record in records]))
-            .all()
+            db.query(TaskRecord).filter(TaskRecord.id.in_([record.id for record in records])).all()
             if records
             else []
         )
     }
     return [
-        _run_step_from_record(record, task_record=task_map.get(record.id))
-        for record in records
+        _run_step_from_record(record, task_record=task_map.get(record.id)) for record in records
     ]
 
 
@@ -20149,6 +20335,7 @@ def cancel_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     db.commit()
     _emit_event("job.canceled", {"job_id": job.id, "correlation_id": str(uuid.uuid4())})
     from libs.core import agent_cancel
+
     agent_cancel.signal_cancel(run_id)
     return _run_from_record(run_record, job_record=job)
 
@@ -20568,7 +20755,9 @@ def write_semantic_memory(
     key = _semantic_normalize_text(payload.get("key"), max_len=200)
     if not key:
         key = _semantic_build_key(namespace, subject, fact)
-    user_id = _semantic_normalize_text(payload.get("user_id"), max_len=120) or _semantic_default_user_id()
+    user_id = (
+        _semantic_normalize_text(payload.get("user_id"), max_len=120) or _semantic_default_user_id()
+    )
     job_id = _semantic_normalize_text(payload.get("job_id"), max_len=120)
 
     metadata_raw = payload.get("metadata")
@@ -20598,7 +20787,9 @@ def write_semantic_memory(
         "source_ref": source_ref,
         "reasoning": reasoning,
         "query_text": " ".join(
-            part for part in [namespace, subject, fact, " ".join(keywords), " ".join(aliases)] if part
+            part
+            for part in [namespace, subject, fact, " ".join(keywords), " ".join(aliases)]
+            if part
         ),
         "captured_at": _utcnow().isoformat(),
     }
@@ -20611,7 +20802,9 @@ def write_semantic_memory(
     )
     if isinstance(write_request.payload, Mapping):
         write_request.metadata["semantic_subject"] = str(
-            write_request.payload.get("subject") or write_request.metadata.get("semantic_subject") or ""
+            write_request.payload.get("subject")
+            or write_request.metadata.get("semantic_subject")
+            or ""
         )
     try:
         entry = memory_store.write_memory(db, write_request)
@@ -20634,7 +20827,9 @@ def search_semantic_memory(
     namespace_filter = _semantic_normalize_text(payload.get("namespace"), max_len=120).lower()
     subject_filter = _semantic_normalize_text(payload.get("subject"), max_len=240).lower()
     key_filter = _semantic_normalize_text(payload.get("key"), max_len=200)
-    user_id = _semantic_normalize_text(payload.get("user_id"), max_len=120) or _semantic_default_user_id()
+    user_id = (
+        _semantic_normalize_text(payload.get("user_id"), max_len=120) or _semantic_default_user_id()
+    )
     include_payload = bool(payload.get("include_payload", True))
 
     limit_raw = payload.get("limit", 10)
@@ -20699,7 +20894,9 @@ def search_semantic_memory(
             continue
         aliases = _semantic_normalize_list(payload_obj.get("aliases"), max_items=24)
         keywords = _semantic_normalize_list(payload_obj.get("keywords"), max_items=48)
-        doc_tokens = _semantic_tokens(subject, fact, " ".join(aliases), " ".join(keywords), namespace)
+        doc_tokens = _semantic_tokens(
+            subject, fact, " ".join(aliases), " ".join(keywords), namespace
+        )
         overlap = len(query_tokens.intersection(doc_tokens))
         score = overlap / max(1, len(query_tokens))
         fact_lc = fact.lower()
@@ -20725,7 +20922,9 @@ def search_semantic_memory(
         ),
         reverse=True,
     )
-    matches = [_semantic_entry_to_match(entry, score, include_payload) for score, entry in ranked[:limit]]
+    matches = [
+        _semantic_entry_to_match(entry, score, include_payload) for score, entry in ranked[:limit]
+    ]
     return {
         "query": query,
         "count": len(matches),
@@ -20883,9 +21082,7 @@ def index_rag_document(payload: dict[str, Any] = Body(default_factory=dict)) -> 
         if not text:
             raise HTTPException(status_code=400, detail="text_required")
         document_id = str(
-            payload.get("document_id")
-            or payload.get("source_uri")
-            or f"manual/{uuid.uuid4()}"
+            payload.get("document_id") or payload.get("source_uri") or f"manual/{uuid.uuid4()}"
         ).strip()
         result = _rag_retriever_request_json(
             "/index/upsert_texts",
@@ -21037,7 +21234,9 @@ def preflight_plan(
         db=db,
         goal=goal_text,
         provided_job_context=job_context if job_context else None,
-        persisted_job_context=job.context_json if job and isinstance(job.context_json, dict) else None,
+        persisted_job_context=job.context_json
+        if job and isinstance(job.context_json, dict)
+        else None,
         normalized_intent_envelope=provided_envelope,
         runtime_metadata={"surface": "plans_preflight"},
     )
@@ -21069,9 +21268,7 @@ def clarify_intent(
     if not goal:
         raise HTTPException(status_code=400, detail="goal_required")
     explicit_user_id = _semantic_normalize_text(payload.get("user_id"), max_len=120)
-    context_obj = _coerce_context_object(
-        payload.get("context_json") or payload.get("job_context")
-    )
+    context_obj = _coerce_context_object(payload.get("context_json") or payload.get("job_context"))
     semantic_user_id = explicit_user_id or _semantic_user_id_from_context(context_obj)
     context_envelope = context_service.build_context_envelope(
         db=db,
@@ -21107,9 +21304,7 @@ def decompose_intent(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     compacted_summaries, compaction = _compact_interaction_summaries(interaction_summaries)
     explicit_user_id = _semantic_normalize_text(payload.get("user_id"), max_len=120)
-    context_obj = _coerce_context_object(
-        payload.get("context_json") or payload.get("job_context")
-    )
+    context_obj = _coerce_context_object(payload.get("context_json") or payload.get("job_context"))
     semantic_user_id = explicit_user_id or _semantic_user_id_from_context(context_obj)
     context_envelope = context_service.build_context_envelope(
         db=db,
@@ -21242,14 +21437,18 @@ def _compile_workflow_definition_version(
                 },
             },
         )
-    return plan, run_spec, {
-        "workflow_interface": workflow_interface,
-        "diagnostics": {
-            "errors": diagnostics_errors,
-            "warnings": diagnostics_warnings,
+    return (
+        plan,
+        run_spec,
+        {
+            "workflow_interface": workflow_interface,
+            "diagnostics": {
+                "errors": diagnostics_errors,
+                "warnings": diagnostics_warnings,
+            },
+            "preflight_errors": preflight_errors,
         },
-        "preflight_errors": preflight_errors,
-    }
+    )
 
 
 @app.post("/agents/definitions", response_model=models.AgentDefinition)
@@ -21323,11 +21522,7 @@ def get_agent_definition(
     agent_id: str,
     db: Session = Depends(get_db),
 ) -> models.AgentDefinition:
-    record = (
-        db.query(AgentDefinitionRecord)
-        .filter(AgentDefinitionRecord.id == agent_id)
-        .first()
-    )
+    record = db.query(AgentDefinitionRecord).filter(AgentDefinitionRecord.id == agent_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="agent_definition_not_found")
     return _agent_definition_from_record(record)
@@ -21339,11 +21534,7 @@ def update_agent_definition(
     payload: models.AgentDefinitionUpdate,
     db: Session = Depends(get_db),
 ) -> models.AgentDefinition:
-    record = (
-        db.query(AgentDefinitionRecord)
-        .filter(AgentDefinitionRecord.id == agent_id)
-        .first()
-    )
+    record = db.query(AgentDefinitionRecord).filter(AgentDefinitionRecord.id == agent_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="agent_definition_not_found")
 
@@ -21414,8 +21605,13 @@ def update_agent_definition(
 
     # Behavioral changes require re-publish — reset status to draft.
     _BEHAVIORAL_FIELDS = {
-        "agent_capability_id", "instructions", "allowed_capability_ids",
-        "llm_config", "memory_policy", "guardrail_policy", "workspace_policy",
+        "agent_capability_id",
+        "instructions",
+        "allowed_capability_ids",
+        "llm_config",
+        "memory_policy",
+        "guardrail_policy",
+        "workspace_policy",
     }
     if record.status == "published" and fields_set & _BEHAVIORAL_FIELDS:
         record.status = "draft"
@@ -21435,11 +21631,7 @@ def publish_agent_definition_version(
     payload: models.AgentDefinitionVersionPublish,
     db: Session = Depends(get_db),
 ) -> models.AgentDefinitionVersion:
-    record = (
-        db.query(AgentDefinitionRecord)
-        .filter(AgentDefinitionRecord.id == agent_id)
-        .first()
-    )
+    record = db.query(AgentDefinitionRecord).filter(AgentDefinitionRecord.id == agent_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="agent_definition_not_found")
     if not record.enabled:
@@ -21468,11 +21660,7 @@ def list_agent_definition_versions(
     agent_id: str,
     db: Session = Depends(get_db),
 ) -> List[models.AgentDefinitionVersion]:
-    exists = (
-        db.query(AgentDefinitionRecord.id)
-        .filter(AgentDefinitionRecord.id == agent_id)
-        .first()
-    )
+    exists = db.query(AgentDefinitionRecord.id).filter(AgentDefinitionRecord.id == agent_id).first()
     if exists is None:
         raise HTTPException(status_code=404, detail="agent_definition_not_found")
     records = (
@@ -21509,11 +21697,7 @@ def delete_agent_definition(
     agent_id: str,
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
-    record = (
-        db.query(AgentDefinitionRecord)
-        .filter(AgentDefinitionRecord.id == agent_id)
-        .first()
-    )
+    record = db.query(AgentDefinitionRecord).filter(AgentDefinitionRecord.id == agent_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="agent_definition_not_found")
     record.enabled = False
@@ -21528,9 +21712,9 @@ def create_workflow_definition(
     db: Session = Depends(get_db),
 ) -> models.WorkflowDefinition:
     now = _utcnow()
-    normalized_user_id = _semantic_normalize_text(payload.user_id, max_len=120) or _semantic_user_id_from_context(
-        payload.context_json
-    )
+    normalized_user_id = _semantic_normalize_text(
+        payload.user_id, max_len=120
+    ) or _semantic_user_id_from_context(payload.context_json)
     record = WorkflowDefinitionRecord(
         id=str(uuid.uuid4()),
         title=_workflow_title_fallback(payload.goal, payload.title),
@@ -21591,9 +21775,7 @@ def update_workflow_definition(
         raise HTTPException(status_code=404, detail="workflow_definition_not_found")
     next_goal = str(payload.goal if payload.goal is not None else record.goal or "").strip()
     next_title = (
-        str(payload.title).strip()
-        if payload.title is not None
-        else str(record.title or "").strip()
+        str(payload.title).strip() if payload.title is not None else str(record.title or "").strip()
     )
     record.title = _workflow_title_fallback(next_goal, next_title)
     record.goal = next_goal
@@ -21623,9 +21805,9 @@ def delete_workflow_definition(
     )
     if record is None:
         raise HTTPException(status_code=404, detail="workflow_definition_not_found")
-    db.query(WorkflowRunRecord).filter(
-        WorkflowRunRecord.definition_id == definition_id
-    ).delete(synchronize_session=False)
+    db.query(WorkflowRunRecord).filter(WorkflowRunRecord.definition_id == definition_id).delete(
+        synchronize_session=False
+    )
     db.query(WorkflowTriggerRecord).filter(
         WorkflowTriggerRecord.definition_id == definition_id
     ).delete(synchronize_session=False)
@@ -21666,16 +21848,12 @@ def delete_workflow_version(
     version_id: str,
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
-    record = (
-        db.query(WorkflowVersionRecord)
-        .filter(WorkflowVersionRecord.id == version_id)
-        .first()
-    )
+    record = db.query(WorkflowVersionRecord).filter(WorkflowVersionRecord.id == version_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="workflow_version_not_found")
-    db.query(WorkflowRunRecord).filter(
-        WorkflowRunRecord.version_id == version_id
-    ).delete(synchronize_session=False)
+    db.query(WorkflowRunRecord).filter(WorkflowRunRecord.version_id == version_id).delete(
+        synchronize_session=False
+    )
     db.delete(record)
     db.commit()
     return {"ok": True}
@@ -21802,11 +21980,7 @@ def update_workflow_trigger(
     payload: models.WorkflowTriggerUpdate,
     db: Session = Depends(get_db),
 ) -> models.WorkflowTrigger:
-    record = (
-        db.query(WorkflowTriggerRecord)
-        .filter(WorkflowTriggerRecord.id == trigger_id)
-        .first()
-    )
+    record = db.query(WorkflowTriggerRecord).filter(WorkflowTriggerRecord.id == trigger_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="workflow_trigger_not_found")
     if payload.title is not None:
@@ -21850,10 +22024,7 @@ def list_workflow_runs(
     )
     job_ids = [record.job_id for record in records if isinstance(record.job_id, str)]
     job_map = (
-        {
-            job.id: job
-            for job in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()
-        }
+        {job.id: job for job in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()}
         if job_ids
         else {}
     )
@@ -21926,7 +22097,9 @@ def _run_workflow_version_internal(
         trigger_context=trigger_context if isinstance(trigger_context, Mapping) else None,
         request_context=request_context if isinstance(request_context, Mapping) else None,
         trigger_inputs=trigger_inputs if isinstance(trigger_inputs, Mapping) else None,
-        explicit_inputs=payload.get("inputs") if isinstance(payload, dict) and isinstance(payload.get("inputs"), dict) else None,
+        explicit_inputs=payload.get("inputs")
+        if isinstance(payload, dict) and isinstance(payload.get("inputs"), dict)
+        else None,
         runtime_metadata={"surface": source},
     )
     context_json = context_service.workflow_runtime_context_view(context_envelope)
@@ -21978,9 +22151,7 @@ def _run_workflow_version_internal(
     except (TypeError, ValueError):
         priority = 0
     idempotency_key = (
-        str(payload.get("idempotency_key") or "").strip()
-        if isinstance(payload, dict)
-        else ""
+        str(payload.get("idempotency_key") or "").strip() if isinstance(payload, dict) else ""
     )
     metadata_overrides = {
         "workflow_source": "studio",
@@ -22102,11 +22273,7 @@ def run_workflow_version(
     payload: dict[str, Any] = Body(default_factory=dict),
     db: Session = Depends(get_db),
 ) -> models.WorkflowRunResult:
-    version = (
-        db.query(WorkflowVersionRecord)
-        .filter(WorkflowVersionRecord.id == version_id)
-        .first()
-    )
+    version = db.query(WorkflowVersionRecord).filter(WorkflowVersionRecord.id == version_id).first()
     if version is None:
         raise HTTPException(status_code=404, detail="workflow_version_not_found")
     definition = (
@@ -22135,11 +22302,7 @@ def invoke_workflow_trigger(
     payload: dict[str, Any] = Body(default_factory=dict),
     db: Session = Depends(get_db),
 ) -> models.WorkflowRunResult:
-    trigger = (
-        db.query(WorkflowTriggerRecord)
-        .filter(WorkflowTriggerRecord.id == trigger_id)
-        .first()
-    )
+    trigger = db.query(WorkflowTriggerRecord).filter(WorkflowTriggerRecord.id == trigger_id).first()
     if trigger is None:
         raise HTTPException(status_code=404, detail="workflow_trigger_not_found")
     if not bool(trigger.enabled):
@@ -22151,7 +22314,9 @@ def invoke_workflow_trigger(
     )
     if definition is None:
         raise HTTPException(status_code=404, detail="workflow_definition_not_found")
-    requested_version_id = str(payload.get("version_id") or "").strip() if isinstance(payload, dict) else ""
+    requested_version_id = (
+        str(payload.get("version_id") or "").strip() if isinstance(payload, dict) else ""
+    )
     version_query = db.query(WorkflowVersionRecord).filter(
         WorkflowVersionRecord.definition_id == definition.id
     )
@@ -22185,7 +22350,9 @@ def compile_composer_draft(
     job_context = _coerce_context_object(payload.get("job_context"))
     if not job_context:
         job_context = _coerce_context_object(
-            raw_draft.get("contextJson") if "contextJson" in raw_draft else raw_draft.get("context_json")
+            raw_draft.get("contextJson")
+            if "contextJson" in raw_draft
+            else raw_draft.get("context_json")
         )
     job: JobRecord | None = None
     if isinstance(job_id, str) and job_id.strip():
@@ -22215,7 +22382,9 @@ def compile_composer_draft(
         db=db,
         goal=goal_text,
         provided_job_context=job_context if job_context else None,
-        persisted_job_context=job.context_json if job and isinstance(job.context_json, dict) else None,
+        persisted_job_context=job.context_json
+        if job and isinstance(job.context_json, dict)
+        else None,
         normalized_intent_envelope=provided_envelope,
         runtime_metadata={"surface": "composer_compile"},
     )
@@ -22295,7 +22464,9 @@ def recommend_composer_capabilities(payload: dict[str, Any]) -> dict[str, Any]:
     goal = str(payload.get("goal") or "").strip()
     context = _coerce_context_object(payload.get("context_json") or payload.get("job_context"))
     raw_draft = payload.get("draft", payload.get("composer_draft"))
-    draft_nodes = _coerce_composer_nodes(raw_draft.get("nodes") if isinstance(raw_draft, dict) else [])
+    draft_nodes = _coerce_composer_nodes(
+        raw_draft.get("nodes") if isinstance(raw_draft, dict) else []
+    )
     include_disabled = bool(payload.get("include_disabled", False))
     max_results_raw = payload.get("max_results", 6)
     try:
@@ -22431,9 +22602,7 @@ def _create_plan_internal(
             acceptance_criteria=task.acceptance_criteria,
             expected_output_schema_ref=task.expected_output_schema_ref,
             status=models.TaskStatus.pending.value,
-            intent=task.intent.value
-            if isinstance(task.intent, models.ToolIntent)
-            else task.intent,
+            intent=task.intent.value if isinstance(task.intent, models.ToolIntent) else task.intent,
             deps=task.deps,
             attempts=0,
             max_attempts=3,
@@ -22452,7 +22621,9 @@ def _create_plan_internal(
         )
         db.add(task_record)
         task_intent_value = (
-            task.intent.value if isinstance(task.intent, models.ToolIntent) else str(task.intent or "")
+            task.intent.value
+            if isinstance(task.intent, models.ToolIntent)
+            else str(task.intent or "")
         )
         normalized_task_intent = (
             intent_contract.normalize_task_intent(task_intent_value)
@@ -22529,13 +22700,9 @@ def _workbench_validate_capability(
         ) from exc
     spec = registry.get(normalized)
     if spec is None:
-        raise HTTPException(
-            status_code=404, detail=f"workbench_capability_not_found:{normalized}"
-        )
+        raise HTTPException(status_code=404, detail=f"workbench_capability_not_found:{normalized}")
     if not spec.enabled:
-        raise HTTPException(
-            status_code=422, detail=f"workbench_capability_disabled:{normalized}"
-        )
+        raise HTTPException(status_code=422, detail=f"workbench_capability_disabled:{normalized}")
     enabled_adapters = [a for a in spec.adapters if a.enabled]
     if not enabled_adapters:
         raise HTTPException(
@@ -22667,9 +22834,8 @@ def _workbench_validate_agent_run_spec(
         if _workbench_step_hydrates_prompt(capability_id, request_id):
             bindings = dict(step.input_bindings or {})
             prompt_value = bindings.get("prompt")
-            has_prompt = (
-                prompt_value is not None
-                and (not isinstance(prompt_value, str) or bool(prompt_value.strip()))
+            has_prompt = prompt_value is not None and (
+                not isinstance(prompt_value, str) or bool(prompt_value.strip())
             )
             goal_value = bindings.get("goal")
             goal_text = str(goal_value or "").strip() if isinstance(goal_value, str) else ""
@@ -22709,11 +22875,7 @@ def _workbench_load_agent_definition(
     normalized = _agent_definition_text(agent_definition_id, max_len=120, collapse=True)
     if not normalized:
         return None
-    record = (
-        db.query(AgentDefinitionRecord)
-        .filter(AgentDefinitionRecord.id == normalized)
-        .first()
-    )
+    record = db.query(AgentDefinitionRecord).filter(AgentDefinitionRecord.id == normalized).first()
     if record is None:
         raise HTTPException(status_code=404, detail="agent_definition_not_found")
     if not record.enabled:
@@ -23086,9 +23248,7 @@ def _workbench_launch_run(
             plan=plan,
             source="workbench_run_spec",
         )
-        envelope_json = workflow_contracts.dump_normalized_intent_envelope(
-            workbench_envelope
-        ) or {}
+        envelope_json = workflow_contracts.dump_normalized_intent_envelope(workbench_envelope) or {}
         run_metadata["goal_intent_profile"] = (
             workflow_contracts.dump_goal_intent_profile(workbench_envelope.profile) or {}
         )
@@ -23202,9 +23362,7 @@ def _workbench_launch_run(
     return run_record, run_spec
 
 
-def _workbench_first_execution_request(
-    run_id: str, db: Session
-) -> dict[str, Any] | None:
+def _workbench_first_execution_request(run_id: str, db: Session) -> dict[str, Any] | None:
     record = (
         db.query(ExecutionRequestRecord)
         .filter(ExecutionRequestRecord.run_id == run_id)
@@ -23508,7 +23666,9 @@ def create_agent_checkpoint(
         messages_json=json.dumps(body.messages, ensure_ascii=False),
         goal=body.goal,
         instructions=body.instructions,
-        allowed_capability_ids_json=json.dumps(body.allowed_capability_ids) if body.allowed_capability_ids is not None else None,
+        allowed_capability_ids_json=json.dumps(body.allowed_capability_ids)
+        if body.allowed_capability_ids is not None
+        else None,
         max_steps=body.max_steps,
         steps_taken=body.steps_taken,
         question=body.question,
@@ -23527,7 +23687,9 @@ def get_agent_checkpoint(
     checkpoint_id: str,
     db: Session = Depends(get_db),
 ) -> models.AgentCheckpoint:
-    record = db.query(AgentCheckpointRecord).filter(AgentCheckpointRecord.id == checkpoint_id).first()
+    record = (
+        db.query(AgentCheckpointRecord).filter(AgentCheckpointRecord.id == checkpoint_id).first()
+    )
     if record is None:
         raise HTTPException(status_code=404, detail="checkpoint_not_found")
     return _checkpoint_from_record(record)
@@ -23636,6 +23798,7 @@ def resume_agent_run(
 # ---------------------------------------------------------------------------
 # Skills endpoints
 # ---------------------------------------------------------------------------
+
 
 def _skill_from_record(record: SkillRecord) -> models.Skill:
     definition = record.definition or {}

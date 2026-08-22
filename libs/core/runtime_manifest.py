@@ -56,9 +56,7 @@ def build_runtime_manifest(service_name: str = "worker") -> RuntimeManifest:
     capabilities: dict[str, RuntimeCapabilityStatus] = {}
     for capability_id, spec in registry.capabilities.items():
         adapter_types = tuple(
-            adapter.type
-            for adapter in spec.adapters
-            if getattr(adapter, "enabled", True)
+            adapter.type for adapter in spec.adapters if getattr(adapter, "enabled", True)
         )
         details: list[str] = []
         reason = ""
@@ -67,9 +65,7 @@ def build_runtime_manifest(service_name: str = "worker") -> RuntimeManifest:
         if capability_mode == "disabled":
             available = False
             reason = "capability_mode_disabled"
-            details.append(
-                f"capability mode is disabled for service '{normalized_service}'"
-            )
+            details.append(f"capability mode is disabled for service '{normalized_service}'")
         elif not spec.enabled:
             available = False
             reason = "capability_disabled"

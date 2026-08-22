@@ -110,7 +110,9 @@ class WorkspaceListFilesInput(BaseModel):
 class ArtifactMoveInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_path: str = Field(min_length=1, description="Source path relative to /shared/artifacts")
-    destination_path: str = Field(min_length=1, description="Destination path relative to workspace")
+    destination_path: str = Field(
+        min_length=1, description="Destination path relative to workspace"
+    )
     overwrite: bool | None = None
 
 
@@ -151,21 +153,27 @@ class WorkspaceDeleteInput(BaseModel):
 class ArtifactRenameInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_path: str = Field(min_length=1, description="Source path relative to /shared/artifacts")
-    destination_path: str = Field(min_length=1, description="Destination path relative to /shared/artifacts")
+    destination_path: str = Field(
+        min_length=1, description="Destination path relative to /shared/artifacts"
+    )
     overwrite: bool | None = None
 
 
 class WorkspaceRenameInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_path: str = Field(min_length=1, description="Source path relative to workspace root")
-    destination_path: str = Field(min_length=1, description="Destination path relative to workspace root")
+    destination_path: str = Field(
+        min_length=1, description="Destination path relative to workspace root"
+    )
     overwrite: bool | None = None
 
 
 class ArtifactCopyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_path: str = Field(min_length=1, description="Source path relative to /shared/artifacts")
-    destination_path: str = Field(min_length=1, description="Destination path relative to /shared/artifacts")
+    destination_path: str = Field(
+        min_length=1, description="Destination path relative to /shared/artifacts"
+    )
     overwrite: bool | None = None
     recursive: bool | None = None
 
@@ -173,7 +181,9 @@ class ArtifactCopyInput(BaseModel):
 class WorkspaceCopyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_path: str = Field(min_length=1, description="Source path relative to workspace root")
-    destination_path: str = Field(min_length=1, description="Destination path relative to workspace root")
+    destination_path: str = Field(
+        min_length=1, description="Destination path relative to workspace root"
+    )
     overwrite: bool | None = None
     recursive: bool | None = None
 
@@ -276,7 +286,9 @@ class MemorySemanticWriteOutput(BaseModel):
 
 class MemorySemanticSearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    query: str = Field(min_length=1, description="Natural-language query for semantic memory search")
+    query: str = Field(
+        min_length=1, description="Natural-language query for semantic memory search"
+    )
     namespace: str | None = None
     subject: str | None = None
     key: str | None = None

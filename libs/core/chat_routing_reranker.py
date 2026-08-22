@@ -142,7 +142,11 @@ def rerank_route_candidates(
                 "score": round(score, 3),
                 "reason_codes": reason_codes,
                 "metadata": {
-                    **(dict(candidate.get("metadata")) if isinstance(candidate.get("metadata"), dict) else {}),
+                    **(
+                        dict(candidate.get("metadata"))
+                        if isinstance(candidate.get("metadata"), dict)
+                        else {}
+                    ),
                     "reranked": True,
                 },
             }

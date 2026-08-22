@@ -199,9 +199,7 @@ def streamable_http_client_kwargs(
         "request_headers": headers,
     }
     kwargs = {
-        name: value
-        for name, value in candidates.items()
-        if name in params and value is not None
+        name: value for name, value in candidates.items() if name in params and value is not None
     }
     # Newer MCP SDK versions only accept an httpx.AsyncClient for request headers/timeouts.
     if "http_client" in params:
@@ -458,7 +456,9 @@ def post_mcp_tool_call(
                             tracing_module.set_span_attributes(
                                 attempt_span, {"mcp.route_status": "ok"}
                             )
-                            tracing_module.set_span_attributes(route_span, {"mcp.route_status": "ok"})
+                            tracing_module.set_span_attributes(
+                                route_span, {"mcp.route_status": "ok"}
+                            )
                             tracing_module.set_span_attributes(
                                 span,
                                 {

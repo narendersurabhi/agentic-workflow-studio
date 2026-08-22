@@ -15,7 +15,6 @@ from services.planner.app.main import (
     _job_goal_intent_sequence,
     _planner_semantic_capability_hints,
     _emit_planner_capability_selection_event,
-    _ensure_renderer_output_extensions,
     _ensure_task_intents,
     _ensure_tool_input_dependencies,
     _llm_prompt,
@@ -428,7 +427,6 @@ def test_validate_plan_ignores_unmatched_goal_segment_for_task() -> None:
     )
     valid, reason = _validate_plan(plan, tools, job)
     assert valid, reason
-
 
 
 def test_ensure_tool_input_dependencies_adds_missing_deps_from_references() -> None:
@@ -984,10 +982,6 @@ def test_validate_plan_accepts_capability_when_segment_requires_tool_inputs(
     )
     valid, reason = _validate_plan(plan, [], job)
     assert valid, reason
-
-
-
-
 
 
 def test_validate_plan_accepts_enabled_capability_with_valid_inputs(

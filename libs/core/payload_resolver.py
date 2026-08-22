@@ -122,7 +122,10 @@ def resolve_tool_payload(
             normalized["context"] = payload.get("context")
         elif context:
             normalized["context"] = context
-        if isinstance(payload.get("system_prompt"), str) and str(payload.get("system_prompt")).strip():
+        if (
+            isinstance(payload.get("system_prompt"), str)
+            and str(payload.get("system_prompt")).strip()
+        ):
             normalized["system_prompt"] = str(payload.get("system_prompt"))
         temperature = payload.get("temperature")
         if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
@@ -230,7 +233,11 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
             value = job_context.get(key)
             if isinstance(value, str) and value.strip():
                 filled[key] = value
-    if "topic" not in filled and isinstance(filled.get("main_topic"), str) and filled["main_topic"].strip():
+    if (
+        "topic" not in filled
+        and isinstance(filled.get("main_topic"), str)
+        and filled["main_topic"].strip()
+    ):
         filled["topic"] = filled["main_topic"].strip()
     if "document_spec" not in filled:
         doc = _extract_document_spec_from_context(context)
@@ -374,9 +381,7 @@ def _resolve_payload_references(value: Any, context: dict[str, Any], *, strict: 
 def _resolve_reference_value(reference: dict[str, Any], context: dict[str, Any]) -> Any:
     extras = set(reference.keys()) - {"$from", "$default"}
     if extras:
-        raise ToolInputReferenceError(
-            f"invalid reference object keys: {', '.join(sorted(extras))}"
-        )
+        raise ToolInputReferenceError(f"invalid reference object keys: {', '.join(sorted(extras))}")
     path_spec = reference.get("$from")
     if path_spec is None:
         raise ToolInputReferenceError("reference is missing $from")
@@ -397,7 +402,9 @@ def _resolve_reference_path(path_spec: Any, context: dict[str, Any]) -> Any:
             return _walk_path(context, segments)
         except ToolInputReferenceError as exc:
             errors.append(str(exc))
-    path_repr = path_spec if isinstance(path_spec, str) else json.dumps(path_spec, ensure_ascii=True)
+    path_repr = (
+        path_spec if isinstance(path_spec, str) else json.dumps(path_spec, ensure_ascii=True)
+    )
     detail = "; ".join(errors) if errors else "path not found"
     raise ToolInputReferenceError(f"path '{path_repr}' could not be resolved ({detail})")
 
@@ -488,9 +495,7 @@ def _walk_path(root: Any, segments: list[Any]) -> Any:
             current = current[index]
             index += 1
             continue
-        raise ToolInputReferenceError(
-            f"cannot traverse segment '{segment}' on non-container value"
-        )
+        raise ToolInputReferenceError(f"cannot traverse segment '{segment}' on non-container value")
     return current
 
 

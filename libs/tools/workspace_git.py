@@ -4,6 +4,7 @@ A worktree gives an agent its own checked-out branch in a temporary directory.
 On failure the worktree is force-removed, leaving the parent repo clean.
 On success the worktree branch stays in place for the caller to inspect/merge.
 """
+
 from __future__ import annotations
 
 import logging

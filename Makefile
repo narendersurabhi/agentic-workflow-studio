@@ -75,7 +75,7 @@ UV_QUALITY_DEPS = \
 	$(UV_EVAL_DEPS) \
 	--with pytest \
 	--with mypy \
-	--with ruff \
+	--with ruff==0.16.4 \
 	--with docxtpl \
 	--with httpx
 
@@ -298,6 +298,9 @@ lint:
 
 format:
 	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) ruff format libs services
+
+format-check:
+	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) ruff format --check libs services
 
 test:
 	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) pytest --import-mode=importlib

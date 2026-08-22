@@ -153,11 +153,7 @@ def decide_task_failure_recovery(
             require_adaptive=True,
             context={
                 **dict(retry_context or {}),
-                **(
-                    {"checkpoint_lineage": checkpoint_lineage}
-                    if checkpoint_lineage
-                    else {}
-                ),
+                **({"checkpoint_lineage": checkpoint_lineage} if checkpoint_lineage else {}),
             },
         )
 
@@ -192,11 +188,12 @@ def decide_task_evaluator_recovery(
         confidence = None
     schema_valid = signal.get("schema_valid")
     output_valid = signal.get("output_valid")
-    schema_invalid = (
-        (isinstance(schema_valid, bool) and not schema_valid)
-        or (isinstance(output_valid, bool) and not output_valid)
+    schema_invalid = (isinstance(schema_valid, bool) and not schema_valid) or (
+        isinstance(output_valid, bool) and not output_valid
     )
-    low_confidence = confidence is not None and confidence < max(0.0, min(1.0, float(min_confidence)))
+    low_confidence = confidence is not None and confidence < max(
+        0.0, min(1.0, float(min_confidence))
+    )
     severe_low_confidence = confidence is not None and confidence < max(
         0.0,
         min(float(min_confidence), float(replan_confidence_floor)),
@@ -211,7 +208,10 @@ def decide_task_evaluator_recovery(
         )
 
     if schema_invalid:
-        if schema_invalid_strategy == models.ReplanStrategy.patch_suffix and replan_budget_available:
+        if (
+            schema_invalid_strategy == models.ReplanStrategy.patch_suffix
+            and replan_budget_available
+        ):
             return RecoveryDecision(
                 strategy=models.ReplanStrategy.patch_suffix,
                 strategy_reason="schema_invalid_policy_requires_suffix_replan",

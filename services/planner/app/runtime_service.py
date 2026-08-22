@@ -8,7 +8,14 @@ from typing import Any, Callable
 
 import redis
 
-from libs.core import events, llm_provider, logging as core_logging, models, run_specs, tool_registry
+from libs.core import (
+    events,
+    llm_provider,
+    logging as core_logging,
+    models,
+    run_specs,
+    tool_registry,
+)
 from libs.core.llm_provider_timing import TimingLLMProvider
 
 

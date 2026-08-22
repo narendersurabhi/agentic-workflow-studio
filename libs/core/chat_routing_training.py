@@ -22,7 +22,9 @@ def _normalize_str_list(value: Any) -> list[str]:
     return items
 
 
-def build_reranker_training_examples(feedback_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def build_reranker_training_examples(
+    feedback_rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
     for row in feedback_rows:
         query = _normalize_str(row.get("query"))

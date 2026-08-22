@@ -201,9 +201,7 @@ def _reference_segments(path_spec: Any) -> list[str] | None:
             raw = raw[2:]
         if raw.startswith("/"):
             segments = [
-                item.replace("~1", "/").replace("~0", "~")
-                for item in raw.split("/")[1:]
-                if item
+                item.replace("~1", "/").replace("~0", "~") for item in raw.split("/")[1:] if item
             ]
         else:
             segments = [item for item in raw.split(".") if item]
@@ -264,7 +262,9 @@ def _failed_step_context(raw: Mapping[str, Any] | None) -> models.FailedStepCont
                     break
     if capability_id is None:
         capability_id = _non_empty_string(raw.get("failing_tool"))
-    error_message = _non_empty_string(raw.get("failed_task_error")) or _non_empty_string(raw.get("error"))
+    error_message = _non_empty_string(raw.get("failed_task_error")) or _non_empty_string(
+        raw.get("error")
+    )
     retry_classification = _non_empty_string(raw.get("retry_classification"))
     retryable = bool(raw.get("retryable"))
     if not retryable and retry_classification == "retryable":
@@ -363,25 +363,37 @@ def parse_revision_context_from_metadata(
         if isinstance(raw_context.get("checkpoint_lineage"), Mapping)
         else {},
         preserved_task_ids=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("preserved_task_ids", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("preserved_task_ids", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("preserved_task_ids"), list)
         else [],
         preserved_task_names=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("preserved_task_names", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("preserved_task_names", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("preserved_task_names"), list)
         else [],
         replacement_task_ids=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("replacement_task_ids", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("replacement_task_ids", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("replacement_task_ids"), list)
         else [],
         replacement_task_names=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("replacement_task_names", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("replacement_task_names", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("replacement_task_names"), list)
@@ -495,14 +507,18 @@ def project_planner_job_context(job: models.Job) -> dict[str, Any]:
 
     interaction_summaries = _planner_interaction_summaries(projected)
     if interaction_summaries:
-        projected["interaction_summaries"] = interaction_summaries[:_PLANNER_INTERACTION_SUMMARY_LIMIT]
+        projected["interaction_summaries"] = interaction_summaries[
+            :_PLANNER_INTERACTION_SUMMARY_LIMIT
+        ]
     else:
         projected.pop("interaction_summaries", None)
 
     normalized_intent_envelope = normalized_intent_envelope_for_job(job)
     capability_candidates = _planner_capability_candidates(projected, normalized_intent_envelope)
     if capability_candidates:
-        projected["capability_candidates"] = capability_candidates[:_PLANNER_CAPABILITY_CANDIDATE_LIMIT]
+        projected["capability_candidates"] = capability_candidates[
+            :_PLANNER_CAPABILITY_CANDIDATE_LIMIT
+        ]
     else:
         projected.pop("capability_candidates", None)
 
@@ -543,7 +559,9 @@ def build_plan_request(
     if normalized_intent_envelope is not None and normalized_intent_envelope.graph.segments:
         goal_intent_graph = normalized_intent_envelope.graph
     if goal_intent_graph is None:
-        goal_intent_graph = workflow_contracts.parse_intent_graph(job_metadata.get("goal_intent_graph"))
+        goal_intent_graph = workflow_contracts.parse_intent_graph(
+            job_metadata.get("goal_intent_graph")
+        )
     return PlanRequest(
         job_id=job.id,
         goal=job.goal,
@@ -625,7 +643,10 @@ def _planner_interaction_summary_is_noisy(item: Mapping[str, Any]) -> bool:
     tokens = [token for token in normalized.split() if token]
     return bool(
         tokens
-        and all(token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"} for token in tokens)
+        and all(
+            token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"}
+            for token in tokens
+        )
     )
 
 
@@ -893,7 +914,9 @@ def canonicalize_planner_request_ids(
 
 
 def planner_task_request_ids(task: Any) -> list[str]:
-    request_ids = getattr(task, "capability_requests", None) or getattr(task, "tool_requests", None) or []
+    request_ids = (
+        getattr(task, "capability_requests", None) or getattr(task, "tool_requests", None) or []
+    )
     normalized: list[str] = []
     seen: set[str] = set()
     for request_id in request_ids:

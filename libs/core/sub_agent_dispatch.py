@@ -8,6 +8,7 @@ call stack is unaffected.
 Set API_URL=http://api:8000 in the worker service environment to enable.
 When API_URL is not set, callers fall back to in-process execution (dev/test).
 """
+
 from __future__ import annotations
 
 import logging
@@ -110,9 +111,7 @@ def _wait_for_completion(
         _sleep(interval, deadline)
         interval = min(interval * 1.5, _POLL_INTERVAL_MAX_S)
 
-    raise ToolExecutionError(
-        f"sub-agent job timed out after {timeout_s}s (run_id={run_id})"
-    )
+    raise ToolExecutionError(f"sub-agent job timed out after {timeout_s}s (run_id={run_id})")
 
 
 def _extract_output(run_id: str, api_url: str) -> dict[str, Any]:

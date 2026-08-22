@@ -9332,7 +9332,7 @@ const openTemplateModal = (template: Template) => {
               {activeTemplate.variables?.filter((variable) => !AUTO_TEMPLATE_KEYS.has(variable.key))
                 .length === 0 ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                  Date fields are auto-filled with today's date.
+                  Date fields are auto-filled with today&apos;s date.
                 </div>
               ) : null}
               {templateInputError ? (
@@ -10723,7 +10723,7 @@ const openTemplateModal = (template: Template) => {
               </div>
               {jobDetailsIntentGraphCollapsed ? (
                 <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
-                  Collapsed. Click Expand to view this job's intent graph.
+                  Collapsed. Click Expand to view this job&apos;s intent graph.
                 </div>
               ) : selectedJob &&
                 selectedJob.metadata &&

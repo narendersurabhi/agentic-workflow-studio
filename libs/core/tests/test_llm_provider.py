@@ -77,9 +77,7 @@ def test_openai_provider_retries_without_temperature_on_unsupported_error(monkey
         captured_payloads.append(body)
         if state["count"] == 0:
             state["count"] += 1
-            error_body = (
-                b'{"error":{"message":"Unsupported parameter: \'temperature\' is not supported with this model."}}'
-            )
+            error_body = b'{"error":{"message":"Unsupported parameter: \'temperature\' is not supported with this model."}}'
             raise HTTPError(
                 url="https://api.openai.com/v1/responses",
                 code=400,
@@ -529,7 +527,9 @@ def test_openai_chat_cached_requests_preserve_json_mode() -> None:
             captured["request"] = request
             return LLMResponse(content="ok")
 
-    _Provider(api_key="test-key", model="gpt-test", base_url="https://example.test").generate_cached(
+    _Provider(
+        api_key="test-key", model="gpt-test", base_url="https://example.test"
+    ).generate_cached(
         [PromptBlock(text="hello", stability=Stability.DYNAMIC)],
         CacheSessionRef(provider="test"),
         LLMRequest(prompt="", json_mode=True, reasoning_effort="low"),

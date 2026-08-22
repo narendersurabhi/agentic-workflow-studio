@@ -62,7 +62,9 @@ class ChatMessageRecord(Base):
     job_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime)
 
-    session: Mapped[ChatSessionRecord] = relationship("ChatSessionRecord", back_populates="messages")
+    session: Mapped[ChatSessionRecord] = relationship(
+        "ChatSessionRecord", back_populates="messages"
+    )
 
 
 class FeedbackRecord(Base):
@@ -179,15 +181,11 @@ class AgentDefinitionRecord(Base):
         "default_constraints", JSON, default=list
     )
     default_max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    model_config_json: Mapped[Dict[str, Any]] = mapped_column(
-        "model_config", JSON, default=dict
-    )
+    model_config_json: Mapped[Dict[str, Any]] = mapped_column("model_config", JSON, default=dict)
     allowed_capability_ids_json: Mapped[List[str]] = mapped_column(
         "allowed_capability_ids", JSON, default=list
     )
-    memory_policy_json: Mapped[Dict[str, Any]] = mapped_column(
-        "memory_policy", JSON, default=dict
-    )
+    memory_policy_json: Mapped[Dict[str, Any]] = mapped_column("memory_policy", JSON, default=dict)
     guardrail_policy_json: Mapped[Dict[str, Any]] = mapped_column(
         "guardrail_policy", JSON, default=dict
     )
@@ -228,15 +226,11 @@ class AgentDefinitionVersionRecord(Base):
         "default_constraints", JSON, default=list
     )
     default_max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    model_config_json: Mapped[Dict[str, Any]] = mapped_column(
-        "model_config", JSON, default=dict
-    )
+    model_config_json: Mapped[Dict[str, Any]] = mapped_column("model_config", JSON, default=dict)
     allowed_capability_ids_json: Mapped[List[str]] = mapped_column(
         "allowed_capability_ids", JSON, default=list
     )
-    memory_policy_json: Mapped[Dict[str, Any]] = mapped_column(
-        "memory_policy", JSON, default=dict
-    )
+    memory_policy_json: Mapped[Dict[str, Any]] = mapped_column("memory_policy", JSON, default=dict)
     guardrail_policy_json: Mapped[Dict[str, Any]] = mapped_column(
         "guardrail_policy", JSON, default=dict
     )
@@ -349,7 +343,9 @@ class RunStepRecord(Base):
     capability_request_id: Mapped[str] = mapped_column(String)
     execution_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
     capability_id: Mapped[str] = mapped_column(String, index=True)
-    input_bindings_json: Mapped[Dict[str, Any]] = mapped_column("input_bindings", JSON, default=dict)
+    input_bindings_json: Mapped[Dict[str, Any]] = mapped_column(
+        "input_bindings", JSON, default=dict
+    )
     execution_gate_json: Mapped[Dict[str, Any] | None] = mapped_column(
         "execution_gate", JSON, nullable=True
     )
@@ -395,7 +391,9 @@ class StepAttemptRecord(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     heartbeat_count: Mapped[int] = mapped_column(Integer, default=0)
-    result_summary_json: Mapped[Dict[str, Any]] = mapped_column("result_summary", JSON, default=dict)
+    result_summary_json: Mapped[Dict[str, Any]] = mapped_column(
+        "result_summary", JSON, default=dict
+    )
 
 
 class ExecutionRequestRecord(Base):
@@ -416,7 +414,9 @@ class ExecutionRequestRecord(Base):
     status: Mapped[str] = mapped_column(String, default="", index=True)
     request_json: Mapped[Dict[str, Any]] = mapped_column("request", JSON, default=dict)
     retry_policy_json: Mapped[Dict[str, Any]] = mapped_column("retry_policy", JSON, default=dict)
-    policy_snapshot_json: Mapped[Dict[str, Any]] = mapped_column("policy_snapshot", JSON, default=dict)
+    policy_snapshot_json: Mapped[Dict[str, Any]] = mapped_column(
+        "policy_snapshot", JSON, default=dict
+    )
     context_provenance_json: Mapped[Dict[str, Any]] = mapped_column(
         "context_provenance", JSON, default=dict
     )
@@ -541,9 +541,7 @@ class ArtifactRecord(Base):
 
 class AgentRegistryRecord(Base):
     __tablename__ = "agent_registry"
-    __table_args__ = (
-        UniqueConstraint("run_id", "agent_id", name="uq_agent_registry_run_agent"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "agent_id", name="uq_agent_registry_run_agent"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
@@ -561,9 +559,7 @@ class AgentRegistryRecord(Base):
 
 class AgentLockRecord(Base):
     __tablename__ = "agent_locks"
-    __table_args__ = (
-        UniqueConstraint("run_id", "resource", name="uq_agent_locks_run_resource"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "resource", name="uq_agent_locks_run_resource"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)

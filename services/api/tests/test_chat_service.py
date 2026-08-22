@@ -56,10 +56,7 @@ def test_merge_session_metadata_for_persistence_preserves_clarification_state_on
     assert merged["pending_clarification"]["known_slot_values"]["audience"] == "Senior AI engineers"
     assert merged["pending_clarification"]["known_slot_values"]["tone"] == "practical"
     assert merged["pending_clarification"]["slot_provenance"]["audience"] == "explicit_user"
-    assert (
-        merged["pending_clarification"]["slot_provenance"]["tone"]
-        == "clarification_normalized"
-    )
+    assert merged["pending_clarification"]["slot_provenance"]["tone"] == "clarification_normalized"
 
 
 def test_merge_session_metadata_for_persistence_respects_cleared_pending_state() -> None:
@@ -127,18 +124,14 @@ def test_persist_chat_session_state_retries_on_updated_at_conflict() -> None:
     db_latest = SessionLocal()
     try:
         stale_record = (
-            db_stale.query(ChatSessionRecord)
-            .filter(ChatSessionRecord.id == session_id)
-            .first()
+            db_stale.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
         )
         assert stale_record is not None
         loaded_updated_at = stale_record.updated_at
         loaded_state_version = chat_service._session_state_version(stale_record.metadata_json)
 
         latest_record = (
-            db_latest.query(ChatSessionRecord)
-            .filter(ChatSessionRecord.id == session_id)
-            .first()
+            db_latest.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
         )
         assert latest_record is not None
         latest_record.metadata_json = {
@@ -189,9 +182,7 @@ def test_persist_chat_session_state_retries_on_updated_at_conflict() -> None:
     db_verify = SessionLocal()
     try:
         persisted = (
-            db_verify.query(ChatSessionRecord)
-            .filter(ChatSessionRecord.id == session_id)
-            .first()
+            db_verify.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
         )
         assert persisted is not None
         assert merged["_chat_state_version"] == 3
@@ -210,7 +201,9 @@ def test_persist_chat_session_state_retries_on_updated_at_conflict() -> None:
             == "practical"
         )
     finally:
-        cleanup = db_verify.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
+        cleanup = (
+            db_verify.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
+        )
         if cleanup is not None:
             db_verify.delete(cleanup)
             db_verify.commit()

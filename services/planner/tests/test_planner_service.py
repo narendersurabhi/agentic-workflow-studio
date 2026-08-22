@@ -23,9 +23,7 @@ class _Provider(llm_provider.LLMProvider):
     def generate_request(self, request: llm_provider.LLMRequest) -> llm_provider.LLMResponse:
         del request
         return llm_provider.LLMResponse(
-            content=(
-                '{"planner_version":"1.0.0","tasks_summary":"demo","dag_edges":[],"tasks":[]}'
-            )
+            content=('{"planner_version":"1.0.0","tasks_summary":"demo","dag_edges":[],"tasks":[]}')
         )
 
 
@@ -676,7 +674,9 @@ def test_build_capability_validation_payload_backfills_document_generate_from_jo
     assert payload["tone"] == "practical"
 
 
-def test_build_capability_validation_payload_defaults_document_generate_fields_when_missing() -> None:
+def test_build_capability_validation_payload_defaults_document_generate_fields_when_missing() -> (
+    None
+):
     request = planner_contracts.PlanRequest(
         job_id="job-1",
         goal="create a document",
@@ -819,7 +819,9 @@ def test_validate_plan_request_prefers_normalized_goal_segment_for_ambiguous_tas
     assert valid, reason
 
 
-def test_select_goal_intent_segment_for_task_skips_capability_match_with_mismatched_intent() -> None:
+def test_select_goal_intent_segment_for_task_skips_capability_match_with_mismatched_intent() -> (
+    None
+):
     task = models.TaskCreate(
         name="RenderPdf",
         description="Render the final PDF",
@@ -1078,6 +1080,4 @@ def test_canonicalize_task_request_ids_rewrites_tool_inputs_to_capability_ids() 
     )
 
     assert updated.tool_requests == ["document.docx.render"]
-    assert updated.tool_inputs == {
-        "document.docx.render": {"path": "artifacts/report.docx"}
-    }
+    assert updated.tool_inputs == {"document.docx.render": {"path": "artifacts/report.docx"}}

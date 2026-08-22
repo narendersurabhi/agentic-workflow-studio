@@ -58,7 +58,9 @@ class ChatDirectExecutor:
         if not normalized_capability_id:
             raise ToolExecutionError("chat_direct_missing_capability_id")
         if normalized_capability_id not in self.config.allowed_capabilities:
-            raise ToolExecutionError(f"chat_direct_capability_not_allowed:{normalized_capability_id}")
+            raise ToolExecutionError(
+                f"chat_direct_capability_not_allowed:{normalized_capability_id}"
+            )
 
         registry = capability_registry.load_capability_registry()
         spec = registry.require(normalized_capability_id)
@@ -82,7 +84,9 @@ class ChatDirectExecutor:
                 tool_spec=tool.spec,
             )
             if not tool_decision.allowed:
-                raise ToolExecutionError(f"chat_direct_tool_blocked:{tool_name}:{tool_decision.reason}")
+                raise ToolExecutionError(
+                    f"chat_direct_tool_blocked:{tool_name}:{tool_decision.reason}"
+                )
             payload = dict(tool_arguments)
             payload["_registry"] = self.registry
             call = self.registry.execute(
@@ -170,14 +174,21 @@ def _render_hint(
         max_items = int(hint.get("max_items") or 10)
         prefix = str(hint.get("prefix") or "Items:")
         labels = [
-            next((str(item.get(f) or "").strip() for f in label_fields if str(item.get(f) or "").strip()), "")
+            next(
+                (
+                    str(item.get(f) or "").strip()
+                    for f in label_fields
+                    if str(item.get(f) or "").strip()
+                ),
+                "",
+            )
             for item in items[:max_items]
             if isinstance(item, dict)
         ]
-        labels = [l for l in labels if l]
+        labels = [label for label in labels if label]
         if not labels:
             return None
-        return prefix + "\n" + "\n".join(f"- {l}" for l in labels)
+        return prefix + "\n" + "\n".join(f"- {label}" for label in labels)
 
     if mode == "entries":
         entries = output.get(str(hint.get("entries_field") or "entries"))
@@ -188,12 +199,15 @@ def _render_hint(
         if not isinstance(entries, list):
             return None
         labels = [
-            next((str(e.get(f) or "").strip() for f in label_fields if str(e.get(f) or "").strip()), "")
+            next(
+                (str(e.get(f) or "").strip() for f in label_fields if str(e.get(f) or "").strip()),
+                "",
+            )
             for e in entries[:max_items]
             if isinstance(e, dict)
         ]
-        labels = [l for l in labels if l]
-        return (prefix + "\n" + "\n".join(f"- {l}" for l in labels)) if labels else empty
+        labels = [label for label in labels if label]
+        return (prefix + "\n" + "\n".join(f"- {label}" for label in labels)) if labels else empty
 
     if mode == "text":
         content = output.get(str(hint.get("content_field") or "content"))
@@ -250,7 +264,11 @@ def _render_hint(
             )
             score = match.get("score")
             text = str(match.get("text") or "").strip()
-            pfx = f"- {label} (score {score:.3f})" if isinstance(score, (int, float)) else f"- {label}"
+            pfx = (
+                f"- {label} (score {score:.3f})"
+                if isinstance(score, (int, float))
+                else f"- {label}"
+            )
             if text:
                 excerpt = text[:excerpt_chars]
                 lines.append(f"{pfx}: {excerpt}{'...' if len(text) > excerpt_chars else ''}")

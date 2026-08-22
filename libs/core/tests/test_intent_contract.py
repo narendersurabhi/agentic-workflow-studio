@@ -527,7 +527,9 @@ def test_validate_intent_segment_contract_treats_document_spec_as_input_data() -
     assert mismatch is None
 
 
-def test_validate_intent_segment_contract_allows_derive_output_filename_without_document_spec() -> None:
+def test_validate_intent_segment_contract_allows_derive_output_filename_without_document_spec() -> (
+    None
+):
     segment = {
         "intent": "transform",
         "objective": "Derive output filename",
@@ -554,7 +556,9 @@ def test_validate_intent_segment_contract_allows_derive_output_filename_without_
     assert mismatch is None
 
 
-def test_normalize_intent_segment_slots_removes_filename_requirements_for_document_spec_generation() -> None:
+def test_normalize_intent_segment_slots_removes_filename_requirements_for_document_spec_generation() -> (
+    None
+):
     slots = intent_contract.normalize_intent_segment_slots(
         raw_slots={
             "entity": "document",
@@ -579,7 +583,9 @@ def test_normalize_intent_segment_slots_removes_filename_requirements_for_docume
     assert slots["must_have_inputs"] == ["title"]
 
 
-def test_normalize_intent_segment_slots_removes_output_format_fallback_for_document_spec_generation() -> None:
+def test_normalize_intent_segment_slots_removes_output_format_fallback_for_document_spec_generation() -> (
+    None
+):
     slots = intent_contract.normalize_intent_segment_slots(
         raw_slots={
             "entity": "document",
@@ -595,7 +601,9 @@ def test_normalize_intent_segment_slots_removes_output_format_fallback_for_docum
     assert slots["must_have_inputs"] == ["instruction"]
 
 
-def test_normalize_intent_segment_slots_removes_format_and_compactness_fallbacks_for_document_spec_generation() -> None:
+def test_normalize_intent_segment_slots_removes_format_and_compactness_fallbacks_for_document_spec_generation() -> (
+    None
+):
     slots = intent_contract.normalize_intent_segment_slots(
         raw_slots={
             "entity": "document",
@@ -642,7 +650,9 @@ def test_normalize_intent_segment_slots_detects_collapsed_documentspec_objective
     assert slots["must_have_inputs"] == ["instruction"]
 
 
-def test_normalize_intent_segment_slots_overrides_wrong_explicit_artifact_for_documentspec_generation() -> None:
+def test_normalize_intent_segment_slots_overrides_wrong_explicit_artifact_for_documentspec_generation() -> (
+    None
+):
     slots = intent_contract.normalize_intent_segment_slots(
         raw_slots={
             "entity": "document",
@@ -699,7 +709,9 @@ def test_validate_intent_segment_contract_accepts_title_alias_from_explicit_payl
     assert mismatch is None
 
 
-def test_validate_intent_segment_contract_ignores_wrong_explicit_artifact_for_documentspec_generation() -> None:
+def test_validate_intent_segment_contract_ignores_wrong_explicit_artifact_for_documentspec_generation() -> (
+    None
+):
     segment = {
         "intent": "generate",
         "objective": "GenerateDocumentSpec",
@@ -723,7 +735,9 @@ def test_validate_intent_segment_contract_ignores_wrong_explicit_artifact_for_do
     assert mismatch is None
 
 
-def test_validate_intent_segment_contract_allows_clarify_output_format_without_authoring_inputs() -> None:
+def test_validate_intent_segment_contract_allows_clarify_output_format_without_authoring_inputs() -> (
+    None
+):
     segment = {
         "intent": "generate",
         "objective": "Clarify output format",
@@ -768,7 +782,9 @@ def test_validate_intent_segment_contract_does_not_accept_generate_title_from_jo
     assert mismatch == "must_have_inputs_missing:title"
 
 
-def test_validate_intent_segment_contract_accepts_collapsed_documentspec_objective_without_format() -> None:
+def test_validate_intent_segment_contract_accepts_collapsed_documentspec_objective_without_format() -> (
+    None
+):
     segment = {
         "intent": "generate",
         "objective": "GenerateDocumentSpec",
@@ -929,7 +945,9 @@ def test_validate_intent_segment_contract_ignores_goal_for_document_spec_generat
     assert mismatch is None
 
 
-def test_validate_intent_segment_contract_ignores_workspace_path_for_document_spec_generation() -> None:
+def test_validate_intent_segment_contract_ignores_workspace_path_for_document_spec_generation() -> (
+    None
+):
     segment = {
         "intent": "generate",
         "objective": "Generate a document spec",
@@ -1049,7 +1067,11 @@ def test_derive_envelope_clarification_requires_instruction_for_generic_document
         profile={
             "intent": "render",
             "low_confidence": False,
-            "slot_values": {"intent_action": "render", "path": "hello.docx", "output_format": "docx"},
+            "slot_values": {
+                "intent_action": "render",
+                "path": "hello.docx",
+                "output_format": "docx",
+            },
             "blocking_slots": [],
             "missing_slots": [],
         },
@@ -1323,7 +1345,9 @@ def test_select_active_execution_target_prefers_segment_with_pending_overlap() -
     assert target.unresolved_fields == ("tone",)
 
 
-def test_select_active_execution_target_shifts_to_render_when_path_is_only_remaining_field() -> None:
+def test_select_active_execution_target_shifts_to_render_when_path_is_only_remaining_field() -> (
+    None
+):
     target = intent_contract.select_active_execution_target(
         graph={
             "segments": [

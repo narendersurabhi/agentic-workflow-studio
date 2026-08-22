@@ -4,7 +4,6 @@ import json
 import logging
 import math
 import os
-import re
 import shutil
 from subprocess import CompletedProcess, run
 from pathlib import Path
@@ -1200,7 +1199,9 @@ def _coding_agent_autonomous(payload: Dict[str, Any], provider: LLMProvider) -> 
     )
 
 
-def _agent(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int = 0) -> Dict[str, Any]:
+def _agent(
+    payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int = 0
+) -> Dict[str, Any]:
     def _execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         # Intercept recursive agent calls: dispatch as an independent job when
         # API_URL is available (true process isolation); fall back to in-process
@@ -1218,6 +1219,7 @@ def _agent(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int
         tool = reg.get(tool_name)
         if tool is None:
             from libs.framework.tool_runtime import ToolExecutionError as _TEE
+
             raise _TEE(f"tool_not_found:{tool_name}")
         return tool.handler(arguments)
 

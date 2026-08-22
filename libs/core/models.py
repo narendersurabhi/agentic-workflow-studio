@@ -1027,9 +1027,15 @@ class FeedbackSummaryResponse(BaseModel):
     clarification_active_families: List[FeedbackBreakdownBucket] = Field(default_factory=list)
     clarification_slot_loss_states: List[FeedbackBreakdownBucket] = Field(default_factory=list)
     clarification_family_alignments: List[FeedbackBreakdownBucket] = Field(default_factory=list)
-    clarification_mapping_resolved_active_field_states: List[FeedbackBreakdownBucket] = Field(default_factory=list)
-    clarification_mapping_queue_advancement_states: List[FeedbackBreakdownBucket] = Field(default_factory=list)
-    clarification_mapping_restart_states: List[FeedbackBreakdownBucket] = Field(default_factory=list)
+    clarification_mapping_resolved_active_field_states: List[FeedbackBreakdownBucket] = Field(
+        default_factory=list
+    )
+    clarification_mapping_queue_advancement_states: List[FeedbackBreakdownBucket] = Field(
+        default_factory=list
+    )
+    clarification_mapping_restart_states: List[FeedbackBreakdownBucket] = Field(
+        default_factory=list
+    )
     routing_decision_routes: List[FeedbackBreakdownBucket] = Field(default_factory=list)
     routing_selected_candidate_types: List[FeedbackBreakdownBucket] = Field(default_factory=list)
     routing_fallback_states: List[FeedbackBreakdownBucket] = Field(default_factory=list)
@@ -1413,6 +1419,7 @@ class TaskUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 # Skills
 # ---------------------------------------------------------------------------
+
 
 class SkillCondition(BaseModel):
     operator: str  # exists | not_exists | contains

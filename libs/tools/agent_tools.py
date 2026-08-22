@@ -29,6 +29,7 @@ def _wait_for_input_handler(payload: dict[str, Any]) -> dict[str, Any]:
         raise ToolExecutionError("wait_for_input: 'question' is required")
     raise AgentPauseSignal(question)
 
+
 _DEFAULT_MAX_STEPS = 12
 _MAX_RECURSION_DEPTH = 4
 _AGENT_RUN_CAPABILITY_ID = "agent.run"
@@ -45,6 +46,8 @@ def _accumulate_spawned_agents(
     child_agents = result.get("agents")
     if isinstance(child_agents, list):
         spawned.extend(agent for agent in child_agents if isinstance(agent, dict))
+
+
 _DEFAULT_INSTRUCTIONS = (
     "You are a helpful agent. Think step by step and use your available tools "
     "to achieve the goal. When you have achieved the goal, respond with your final answer."
@@ -57,6 +60,7 @@ _INPUT_KEY = "input"
 
 
 # ─── Text-based ReAct loop (works with any LLMProvider) ───────────────────────
+
 
 def _build_react_system_prompt(instructions: str, tools: list[dict[str, Any]]) -> str:
     lines = [instructions.strip(), ""]
@@ -196,10 +200,12 @@ def _agent_react_text(
             try:
                 result = invoke_capability(cap_id, tool_input)
                 observation = json.dumps(result) if isinstance(result, dict) else str(result)
-                tool_calls_made.append({
-                    "capability_id": cap_id,
-                    "result_summary": observation[:300],
-                })
+                tool_calls_made.append(
+                    {
+                        "capability_id": cap_id,
+                        "result_summary": observation[:300],
+                    }
+                )
                 _accumulate_spawned_agents(spawned_agents, cap_id, result)
             except AgentPauseSignal as pause:
                 return {
@@ -212,10 +218,12 @@ def _agent_react_text(
                 }
             except Exception as exc:  # noqa: BLE001
                 observation = json.dumps({"error": str(exc)})
-                tool_calls_made.append({
-                    "capability_id": cap_id,
-                    "result_summary": f"error:{exc}",
-                })
+                tool_calls_made.append(
+                    {
+                        "capability_id": cap_id,
+                        "result_summary": f"error:{exc}",
+                    }
+                )
 
         conversation.append(
             f"Thought: {thought}\nAction: {action}\nInput: {json.dumps(tool_input)}\n"
@@ -224,7 +232,9 @@ def _agent_react_text(
 
         if steps_taken >= max_steps:
             # Ask for a final answer given what we know
-            conversation.append("You have reached the maximum number of tool calls. Provide your final answer now.")
+            conversation.append(
+                "You have reached the maximum number of tool calls. Provide your final answer now."
+            )
 
     return {
         "result": final_text or "Agent completed without generating a final response.",
@@ -235,6 +245,7 @@ def _agent_react_text(
 
 
 # ─── Anthropic native tool_use loop ───────────────────────────────────────────
+
 
 def _agent_anthropic(
     goal: str,
@@ -307,12 +318,14 @@ def _agent_anthropic(
             if block_type == "text":
                 assistant_content.append({"type": "text", "text": getattr(block, "text", "")})
             elif block_type == "tool_use":
-                assistant_content.append({
-                    "type": "tool_use",
-                    "id": getattr(block, "id", ""),
-                    "name": getattr(block, "name", ""),
-                    "input": getattr(block, "input", {}) or {},
-                })
+                assistant_content.append(
+                    {
+                        "type": "tool_use",
+                        "id": getattr(block, "id", ""),
+                        "name": getattr(block, "name", ""),
+                        "input": getattr(block, "input", {}) or {},
+                    }
+                )
         messages.append({"role": "assistant", "content": assistant_content})
 
         tool_result_content: list[dict[str, Any]] = []
@@ -330,30 +343,38 @@ def _agent_anthropic(
                 try:
                     result = invoke_capability(cap_id, tool_input)
                     result_text = json.dumps(result) if isinstance(result, dict) else str(result)
-                    tool_calls_made.append({
-                        "capability_id": cap_id,
-                        "result_summary": result_text[:300],
-                    })
+                    tool_calls_made.append(
+                        {
+                            "capability_id": cap_id,
+                            "result_summary": result_text[:300],
+                        }
+                    )
                     _accumulate_spawned_agents(spawned_agents, cap_id, result)
                 except AgentPauseSignal as pause:
                     pause_signal = pause
                     result_text = json.dumps({"status": "paused", "question": pause.question})
-                    tool_calls_made.append({
-                        "capability_id": cap_id,
-                        "result_summary": f"paused:{pause.question[:200]}",
-                    })
+                    tool_calls_made.append(
+                        {
+                            "capability_id": cap_id,
+                            "result_summary": f"paused:{pause.question[:200]}",
+                        }
+                    )
                 except Exception as exc:  # noqa: BLE001
                     result_text = json.dumps({"error": str(exc)})
-                    tool_calls_made.append({
-                        "capability_id": cap_id,
-                        "result_summary": f"error:{exc}",
-                    })
+                    tool_calls_made.append(
+                        {
+                            "capability_id": cap_id,
+                            "result_summary": f"error:{exc}",
+                        }
+                    )
 
-            tool_result_content.append({
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": result_text,
-            })
+            tool_result_content.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result_text,
+                }
+            )
 
             if pause_signal is not None:
                 # Append the assistant turn and the paused tool result so the
@@ -382,6 +403,7 @@ def _agent_anthropic(
 
 
 # ─── Schema resolution ────────────────────────────────────────────────────────
+
 
 def _schema_search_dirs() -> list[Path]:
     """Candidate locations for capability input-schema JSON files.
@@ -418,6 +440,7 @@ def _resolve_input_schema(spec: Any) -> dict[str, Any]:
 
 
 # ─── Public entry point ───────────────────────────────────────────────────────
+
 
 def agent(
     payload: dict[str, Any],
@@ -470,14 +493,13 @@ def agent(
     raw_cap_ids = payload.get("allowed_capability_ids") or []
     if not isinstance(raw_cap_ids, list):
         raw_cap_ids = []
-    allowed_capability_ids: list[str] = [
-        c for c in raw_cap_ids if isinstance(c, str) and c.strip()
-    ]
+    allowed_capability_ids: list[str] = [c for c in raw_cap_ids if isinstance(c, str) and c.strip()]
 
     # Background dispatch: hand off to the job queue and return immediately.
     background = bool(payload.get("background", False))
     if background and _recursion_depth == 0:
         from libs.core import sub_agent_dispatch
+
         api_url = sub_agent_dispatch.get_api_url()
         if api_url:
             # Strip 'background' from the forwarded payload so the child job
@@ -541,11 +563,13 @@ def agent(
         # Tool names must be [a-zA-Z0-9_-], max 64 chars
         tool_name = cap_id.replace(".", "__").replace("/", "__")[:64]
         description = (spec.description or cap_id)[:1024]
-        tools.append({
-            "name": tool_name,
-            "description": description,
-            "input_schema": _resolve_input_schema(spec),
-        })
+        tools.append(
+            {
+                "name": tool_name,
+                "description": description,
+                "input_schema": _resolve_input_schema(spec),
+            }
+        )
         cap_id_by_tool_name[tool_name] = cap_id
 
     def _effective_invoke(cap_id: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -584,12 +608,15 @@ def agent(
 
     if workspace_isolation == "worktree" and workspace_path:
         from libs.tools.workspace_git import worktree_context
+
         with worktree_context(workspace_path, branch_prefix=f"agent-{agent_id}") as isolated_path:
             isolated_str = str(isolated_path)
+
             def _isolated_invoke_ws(cap_id: str, args: dict[str, Any]) -> dict[str, Any]:
                 if "workspace_path" in args:
                     args = {**args, "workspace_path": isolated_str}
                 return _effective_invoke(cap_id, args)
+
             loop_result = _run_loop(_isolated_invoke_ws)
     else:
         loop_result = _run_loop(_effective_invoke)
@@ -670,6 +697,7 @@ def _save_checkpoint(
         return f"local-{uuid.uuid4().hex[:12]}"
     try:
         import httpx
+
         body = {
             "messages": messages,
             "goal": goal,
@@ -699,6 +727,7 @@ def _load_checkpoint_state(checkpoint_id: str) -> tuple[list[Any], int]:
         return [], 0
     try:
         import httpx
+
         resp = httpx.get(
             f"{api_url}/internal/agent-checkpoints/{checkpoint_id}",
             timeout=10.0,

@@ -130,7 +130,9 @@ def project_explicit_inputs_for_tool(
             apply_defaults=True,
         )
     if str(tool_name).strip() in _DOCUMENT_SPEC_MARKDOWN_REQUEST_IDS:
-        return project_markdown_document_generation_inputs(source_payload, default_goal=default_goal)
+        return project_markdown_document_generation_inputs(
+            source_payload, default_goal=default_goal
+        )
     return {}
 
 

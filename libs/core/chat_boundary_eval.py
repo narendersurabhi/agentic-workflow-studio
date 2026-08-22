@@ -123,10 +123,7 @@ def predict_chat_boundary_from_evidence(
     if (
         evidence.conversation_mode_hint == "execution_oriented"
         and evidence.intent not in {"", "other", "inform", "clarify"}
-        and (
-            execution_signal_strength in {"strong", "moderate"}
-            or top_family_score >= 0.8
-        )
+        and (execution_signal_strength in {"strong", "moderate"} or top_family_score >= 0.8)
     ):
         return chat_contracts.ChatBoundaryDecisionType.execution_request
     return chat_contracts.ChatBoundaryDecisionType.chat_reply
@@ -260,11 +257,15 @@ def evaluate_chat_boundary_cases(
     )
 
     expected_counts = {
-        decision.value: sum(1 for result in results if result["expected_decision"] == decision.value)
+        decision.value: sum(
+            1 for result in results if result["expected_decision"] == decision.value
+        )
         for decision in chat_contracts.ChatBoundaryDecisionType
     }
     predicted_counts = {
-        decision.value: sum(1 for result in results if result["predicted_decision"] == decision.value)
+        decision.value: sum(
+            1 for result in results if result["predicted_decision"] == decision.value
+        )
         for decision in chat_contracts.ChatBoundaryDecisionType
     }
 

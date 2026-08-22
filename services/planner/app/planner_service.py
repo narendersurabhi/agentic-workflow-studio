@@ -44,7 +44,9 @@ class PlannerServiceRuntime:
     ensure_task_intents: Callable[
         [models.PlanCreate, planner_contracts.PlanRequest], models.PlanCreate
     ]
-    ensure_job_inputs: Callable[[models.PlanCreate, planner_contracts.PlanRequest], models.PlanCreate]
+    ensure_job_inputs: Callable[
+        [models.PlanCreate, planner_contracts.PlanRequest], models.PlanCreate
+    ]
     ensure_default_value_markers: Callable[
         [models.PlanCreate, planner_contracts.PlanRequest], models.PlanCreate
     ]
@@ -82,8 +84,7 @@ def _format_revision_context_block(
     )
     guidance = [
         "Plan revision context (source of truth for adaptive replanning):",
-        f"{payload}\n"
-        "Revision rules:",
+        f"{payload}\nRevision rules:",
         "- Preserve useful completed_steps. Do not recreate finished work unless the revision context makes it necessary.",
         "- Treat failed_step as the broken boundary for repair and avoid repeating the same failure mode.",
         "- Prefer minimal change to the prior plan shape while keeping dependencies valid.",
@@ -152,7 +153,9 @@ def build_plan_request(
     include_semantic_hints: bool | None = None,
 ) -> planner_contracts.PlanRequest:
     capabilities = _filtered_capabilities_for_job(job, runtime.load_capabilities())
-    use_semantic_hints = config.mode == "llm" if include_semantic_hints is None else include_semantic_hints
+    use_semantic_hints = (
+        config.mode == "llm" if include_semantic_hints is None else include_semantic_hints
+    )
     semantic_hints: list[dict[str, Any]] = []
     if use_semantic_hints and config.semantic_hint_limit > 0:
         semantic_hints = runtime.build_semantic_capability_hints(
@@ -344,10 +347,7 @@ def build_llm_prompt_blocks(
                 for e in cap.exports
             ],
             "planner_hints": dict(cap.planner_hints),
-            "adapters": [
-                {"type": a.type, "server_id": a.server_id}
-                for a in cap.adapters
-            ],
+            "adapters": [{"type": a.type, "server_id": a.server_id} for a in cap.adapters],
         }
         for cap in capabilities.values()
         if cap.capability_id in canonical_capability_ids
@@ -913,7 +913,8 @@ def _fill_payload_context_defaults(
 ) -> None:
     normalized_request_id = str(request_id or "").strip().lower()
     allow_path_defaults = not (
-        normalized_request_id.startswith("document.spec.") or "document_spec" in normalized_request_id
+        normalized_request_id.startswith("document.spec.")
+        or "document_spec" in normalized_request_id
     )
     for key in (
         "instruction",
@@ -986,7 +987,11 @@ def build_validation_payload(
         for key, value in projected_inputs.items():
             payload.setdefault(key, value)
     payload.setdefault("tool_inputs", dict(raw_tool_inputs))
-    if "instruction" not in payload and isinstance(task.instruction, str) and task.instruction.strip():
+    if (
+        "instruction" not in payload
+        and isinstance(task.instruction, str)
+        and task.instruction.strip()
+    ):
         payload["instruction"] = task.instruction.strip()
     schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
     if schema_requires_key(schema, "job"):
@@ -1056,7 +1061,11 @@ def build_capability_validation_payload(
         elif existing_job is None and not isinstance(payload.get("document_spec"), dict):
             payload["job"] = projected_job_payload
     payload.setdefault("tool_inputs", dict(raw_tool_inputs))
-    if "instruction" not in payload and isinstance(task.instruction, str) and task.instruction.strip():
+    if (
+        "instruction" not in payload
+        and isinstance(task.instruction, str)
+        and task.instruction.strip()
+    ):
         payload["instruction"] = task.instruction.strip()
     if task.deps:
         for key, default_value in dependency_fill_defaults().items():
@@ -1170,7 +1179,10 @@ def validate_plan_request(
             tool = tool_map.get(tool_name)
             capability = capabilities.get(tool_name)
             raw_tool_inputs: dict[str, Any] = {}
-            if isinstance(normalized_task.tool_inputs, dict) and tool_name in normalized_task.tool_inputs:
+            if (
+                isinstance(normalized_task.tool_inputs, dict)
+                and tool_name in normalized_task.tool_inputs
+            ):
                 entry = normalized_task.tool_inputs.get(tool_name)
                 if not isinstance(entry, dict):
                     return False, (
@@ -1390,5 +1402,7 @@ def plan_job(
     if config.mode == "llm":
         if provider is None:
             raise ValueError("LLM planner mode requires a provider")
-        return llm_plan(request, provider, config=config, runtime=runtime, session_store=session_store)
+        return llm_plan(
+            request, provider, config=config, runtime=runtime, session_store=session_store
+        )
     return rule_based_plan(request)

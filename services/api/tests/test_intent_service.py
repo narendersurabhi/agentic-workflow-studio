@@ -38,7 +38,12 @@ def test_assess_goal_intent_only_blocks_safety_constraints_for_high_risk_write()
             min_confidence=0.7,
             min_confidence_by_intent={},
             min_confidence_by_risk={},
-            clarification_blocking_slots={"intent_action", "output_format", "target_system", "safety_constraints"},
+            clarification_blocking_slots={
+                "intent_action",
+                "output_format",
+                "target_system",
+                "safety_constraints",
+            },
         ),
         runtime=intent_service.GoalIntentRuntime(
             infer_task_intent=lambda _goal: type(
@@ -89,8 +94,12 @@ def test_decompose_goal_intent_returns_llm_graph_with_summary_fields() -> None:
         ),
         runtime=intent_service.IntentDecomposeRuntime(
             provider=object(),
-            heuristic_decompose=lambda goal: {"segments": [{"id": "fallback", "intent": "generate"}]},
-            capability_entries=lambda: [{"id": "document.spec.generate", "description": "Generate doc"}],
+            heuristic_decompose=lambda goal: {
+                "segments": [{"id": "fallback", "intent": "generate"}]
+            },
+            capability_entries=lambda: [
+                {"id": "document.spec.generate", "description": "Generate doc"}
+            ],
             capability_ids=lambda: {"document.spec.generate"},
             normalize_user_id=lambda user_id: user_id or "default-user",
             retrieve_workflow_hints=lambda *_args: [{"key": "wf-1"}],
@@ -139,7 +148,9 @@ def test_decompose_goal_intent_falls_back_when_llm_fails() -> None:
         ),
         runtime=intent_service.IntentDecomposeRuntime(
             provider=object(),
-            heuristic_decompose=lambda goal: {"segments": [{"id": "fallback", "intent": "generate"}]},
+            heuristic_decompose=lambda goal: {
+                "segments": [{"id": "fallback", "intent": "generate"}]
+            },
             capability_entries=lambda: [],
             capability_ids=lambda: set(),
             normalize_user_id=lambda user_id: user_id or "default-user",
@@ -184,17 +195,17 @@ def test_normalize_goal_intent_returns_envelope() -> None:
                 slot_values={"intent_action": "generate", "instruction": "Create a report"},
                 clarification_mode="targeted_slot_filling",
             ),
-                decompose_goal_intent=lambda _goal, **_kwargs: workflow_contracts.IntentGraph(
-                    segments=[
-                        workflow_contracts.IntentGraphSegment(
-                            id="s1",
-                            intent="generate",
-                            required_inputs=["instruction"],
-                            suggested_capabilities=["document.spec.generate", "document.spec.generate"],
-                        )
-                    ],
-                    source="llm",
-                ),
+            decompose_goal_intent=lambda _goal, **_kwargs: workflow_contracts.IntentGraph(
+                segments=[
+                    workflow_contracts.IntentGraphSegment(
+                        id="s1",
+                        intent="generate",
+                        required_inputs=["instruction"],
+                        suggested_capabilities=["document.spec.generate", "document.spec.generate"],
+                    )
+                ],
+                source="llm",
+            ),
             capability_required_inputs=lambda capability_id: (
                 ["topic"] if capability_id == "document.spec.generate" else []
             ),
@@ -319,7 +330,9 @@ def test_normalize_goal_intent_uses_capability_required_inputs_for_clarification
     assert envelope.clarification.questions == ["What output path or filename should be used?"]
 
 
-def test_normalize_goal_intent_does_not_expand_direct_segment_inputs_with_capability_fields() -> None:
+def test_normalize_goal_intent_does_not_expand_direct_segment_inputs_with_capability_fields() -> (
+    None
+):
     envelope = intent_service.normalize_goal_intent(
         "Create a deployment report.",
         config=intent_service.IntentNormalizeConfig(

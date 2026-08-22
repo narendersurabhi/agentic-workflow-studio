@@ -20,7 +20,9 @@ def test_execute_task_delegates_through_execution_request_boundary(monkeypatch) 
     )
     seen: list[execution_contracts.TaskExecutionRequest] = []
 
-    def fake_build(payload: dict, *, default_max_attempts: int) -> execution_contracts.TaskExecutionRequest:
+    def fake_build(
+        payload: dict, *, default_max_attempts: int
+    ) -> execution_contracts.TaskExecutionRequest:
         assert payload == {"task_id": "task-1"}
         assert default_max_attempts == main.WORKER_DEFAULT_MAX_ATTEMPTS
         return request
