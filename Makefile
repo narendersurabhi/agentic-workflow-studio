@@ -74,6 +74,7 @@ AGENT_REGISTRY_E2E_OUTPUT ?= artifacts/evals/agent_registry_staging_e2e_report.j
 UV_QUALITY_DEPS = \
 	$(UV_EVAL_DEPS) \
 	--with pytest \
+	--with pytest-mock \
 	--with mypy \
 	--with ruff==0.16.4 \
 	--with docxtpl \
