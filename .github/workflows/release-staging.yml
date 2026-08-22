@@ -41,6 +41,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # workflow_run.conclusion is 'failure' if ANY job in ci.yml fails, including
+  # the `ui` job (no continue-on-error on it) -- this is what gates staging
+  # deploys on the UI lint/typecheck/test passing, not a separate check here.
+  # Don't split `ui` out of ci.yml or add continue-on-error to it without
+  # updating this gate.
   prepare:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
@@ -102,7 +107,7 @@ jobs:
     if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
 
@@ -138,7 +143,7 @@ jobs:
           make images-list > artifacts/release/staging-images.txt
 
       - name: Upload image manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: staging-images-${{ needs.prepare.outputs.image_tag }}
           path: artifacts/release/staging-images.txt
@@ -149,7 +154,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
 
@@ -192,7 +197,7 @@ jobs:
 
       - name: Upload staging cluster snapshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: staging-cluster-snapshot-${{ needs.prepare.outputs.image_tag }}
           path: artifacts/release/staging-cluster-snapshot.txt
@@ -203,11 +208,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -231,7 +236,7 @@ jobs:
 
       - name: Upload Agent Registry e2e report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-registry-staging-e2e-${{ needs.prepare.outputs.image_tag }}
           if-no-files-found: ignore
