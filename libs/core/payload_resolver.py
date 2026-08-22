@@ -145,15 +145,14 @@ def resolve_tool_payload(
         return {"text": base_text}
     if has_tool_inputs:
         return payload
-    if payload:
-        return payload
-    if not context:
-        return {"text": instruction}
-    try:
-        context_blob = json.dumps(context, indent=2, ensure_ascii=True)
-    except (TypeError, ValueError):
-        context_blob = str(context)
-    return {"text": f"{instruction}\n\nContext (JSON):\n{context_blob}"}
+    # No fields were explicitly bound or promoted from task/context. Only
+    # "llm_generate"/"llm_generate_with_context" (handled above) accept a
+    # top-level "text" field; every other tool's schema uses extra="forbid",
+    # so guessing {"text": instruction} here made every such tool fail input
+    # validation. Return what was gathered as-is (often {}, which is valid
+    # for tools whose inputs are all optional) and let the tool's own schema
+    # validation report anything genuinely missing.
+    return payload
 
 
 def _merge_payload_from_task(payload: dict, task_payload: dict, instruction: str) -> dict:
