@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload production cluster snapshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-cluster-snapshot-${{ github.event.inputs.image_tag }}
           path: artifacts/release/production-cluster-snapshot.txt
