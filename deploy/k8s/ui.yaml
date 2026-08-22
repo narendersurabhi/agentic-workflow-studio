@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: ui
-          image: ghcr.io/your-org/awe-ui:latest
+          image: ghcr.io/narendersurabhi/awe-ui:v0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
