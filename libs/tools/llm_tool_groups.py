@@ -13,9 +13,33 @@ from libs.framework.tool_runtime import Tool
 PayloadHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+class LlmUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
+
+
 class LlmGenerateOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(description="Raw LLM completion text")
+    usage: LlmUsage | None = Field(
+        default=None,
+        description="Token usage for the request, when available",
+    )
+
+
+class LlmGenerateWithContextInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt: str = Field(min_length=1, description="The instruction/prompt to send to the LLM")
+    context: Any | None = Field(
+        default=None,
+        description="Optional context object/string rendered into the prompt",
+    )
+    system_prompt: str | None = Field(default=None, min_length=1)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=16384)
 
 
 class CodingAgentGenerateInput(BaseModel):
@@ -157,6 +181,34 @@ def register_llm_text_tool(
                     },
                     "anyOf": [{"required": ["text"]}, {"required": ["prompt"]}],
                 },
+                output_schema=LlmGenerateOutput.model_json_schema(),
+                timeout_s=timeout_s,
+                risk_level=RiskLevel.high,
+                tool_intent=ToolIntent.generate,
+            ),
+            handler=handler,
+        )
+    )
+
+
+def register_llm_contextual_text_tool(
+    registry,
+    *,
+    timeout_s: int,
+    handler: PayloadHandler,
+) -> None:
+    registry.register(
+        Tool(
+            spec=ToolSpec(
+                name="llm_generate_with_context",
+                description="Generate text with an LLM using an explicit prompt and context payload",
+                usage_guidance=(
+                    "Use when the workflow should pass a prompt and a separate context object "
+                    "or string explicitly. Provide 'prompt', optional 'context', and optional "
+                    "'system_prompt', 'temperature', or 'max_output_tokens'. Returns the raw "
+                    "completion in the 'text' field."
+                ),
+                input_schema=LlmGenerateWithContextInput.model_json_schema(),
                 output_schema=LlmGenerateOutput.model_json_schema(),
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from libs.core import prompts
+from libs.core.job_projection import project_document_generation_inputs
 from pydantic import BaseModel, ConfigDict, Field
 
 from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
@@ -164,8 +165,14 @@ def llm_iterative_improve_document_spec(
     else:
         if not isinstance(job, dict):
             raise ToolExecutionError("job must be an object when document_spec is not provided")
+        # llm_generate_document_spec rejects a raw "job" payload (requires explicit
+        # instruction/topic/audience/tone fields) — project job into that shape here
+        # rather than forwarding it, matching what payload_resolver does for direct calls.
+        generation_inputs = project_document_generation_inputs(job, apply_defaults=True)
+        if not generation_inputs.get("instruction") and not generation_inputs.get("topic"):
+            raise ToolExecutionError("job must include enough detail to derive instruction/topic")
         current_spec = generate_document_spec(
-            {"job": job, "allowed_block_types": allowed}, provider
+            {**generation_inputs, "allowed_block_types": allowed}, provider
         )["document_spec"]
 
     history: list[dict[str, Any]] = []

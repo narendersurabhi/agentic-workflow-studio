@@ -16,9 +16,11 @@ PayloadHandler = Callable[[dict[str, Any]], dict[str, Any]]
 class CoreOpsHandlers:
     math_eval: PayloadHandler
     file_write_text: PayloadHandler
+    file_write_code: PayloadHandler
     file_read_text: PayloadHandler
     list_files: PayloadHandler
     workspace_write_text: PayloadHandler
+    workspace_write_code: PayloadHandler
     workspace_read_text: PayloadHandler
     workspace_list_files: PayloadHandler
     artifact_mkdir: PayloadHandler
@@ -30,6 +32,7 @@ class CoreOpsHandlers:
     artifact_copy: PayloadHandler
     workspace_copy: PayloadHandler
     artifact_move: PayloadHandler
+    derive_output_filename: PayloadHandler
     run_tests: PayloadHandler
     search_text: PayloadHandler
     memory_read: PayloadHandler
@@ -186,6 +189,37 @@ class WorkspaceCopyInput(BaseModel):
     )
     overwrite: bool | None = None
     recursive: bool | None = None
+
+
+class DeriveOutputFilenameInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_role_name: str | None = Field(default=None, min_length=1)
+    role_name: str | None = Field(default=None, min_length=1)
+    topic: str | None = Field(default=None, min_length=1)
+    candidate_name: str | None = Field(default=None, min_length=1)
+    first_name: str | None = Field(default=None, min_length=1)
+    last_name: str | None = Field(default=None, min_length=1)
+    company_name: str | None = Field(default=None, min_length=1)
+    company: str | None = Field(default=None, min_length=1)
+    job_description: str | None = Field(default=None, min_length=1)
+    date: str | None = Field(default=None, min_length=4)
+    today: str | None = Field(default=None, min_length=4)
+    output_dir: str | None = None
+    document_type: str | None = None
+    output_extension: str | None = None
+    file_extension: str | None = None
+    extension: str | None = None
+    format: str | None = None
+    memory: dict[str, Any] | None = Field(
+        default=None, description="Job context memory to derive role/date/output fields from"
+    )
+
+
+class DeriveOutputFilenameOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    document_type: str
+    output_extension: str
 
 
 class RunTestsInput(BaseModel):
@@ -361,6 +395,26 @@ def register_core_ops_tools(
     registry.register(
         Tool(
             spec=ToolSpec(
+                name="file_write_code",
+                description="Write code content to a file under /shared/artifacts",
+                usage_guidance=(
+                    "Use to write code files to /shared/artifacts. Provide 'content' and 'path' "
+                    "(required, include the filename). The tool creates missing directories and "
+                    "expects a code file extension (e.g., .py, .js, .ts, .html, .css)."
+                ),
+                input_schema=FileWriteTextInput.model_json_schema(),
+                output_schema=FilePathOutput.model_json_schema(),
+                timeout_s=5,
+                risk_level=RiskLevel.medium,
+                tool_intent=ToolIntent.io,
+            ),
+            handler=handlers.file_write_code,
+        )
+    )
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(
                 name="file_read_text",
                 description="Read text content from a file under /shared/artifacts",
                 usage_guidance=(
@@ -412,6 +466,26 @@ def register_core_ops_tools(
                 tool_intent=ToolIntent.io,
             ),
             handler=handlers.workspace_write_text,
+        )
+    )
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(
+                name="workspace_write_code",
+                description="Write code content to a file under the workspace",
+                usage_guidance=(
+                    "Use to write code files to the workspace. Provide 'content' and 'path' "
+                    "(required, include the filename). The tool creates missing directories and "
+                    "expects a code file extension (e.g., .py, .js, .ts, .html, .css)."
+                ),
+                input_schema=WorkspaceWriteTextInput.model_json_schema(),
+                output_schema=FilePathOutput.model_json_schema(),
+                timeout_s=5,
+                risk_level=RiskLevel.medium,
+                tool_intent=ToolIntent.io,
+            ),
+            handler=handlers.workspace_write_code,
         )
     )
 
@@ -626,6 +700,32 @@ def register_core_ops_tools(
                 tool_intent=ToolIntent.io,
             ),
             handler=handlers.workspace_copy,
+        )
+    )
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(
+                name="derive_output_filename",
+                description="Derive a filesystem-safe output path for generated documents",
+                usage_guidance=(
+                    "Use to create a safe output path for render tools. "
+                    "Provide target_role_name (or role_name or topic) and date/today (YYYY-MM-DD) "
+                    "to get role_date naming. If date/today is omitted, "
+                    "the tool defaults to the current UTC date. "
+                    "Optionally provide 'output_dir' (default: documents). "
+                    "Optionally provide output_extension (or file_extension/extension/format) "
+                    "to control the file extension (default: docx)."
+                ),
+                input_schema=DeriveOutputFilenameInput.model_json_schema(),
+                output_schema=DeriveOutputFilenameOutput.model_json_schema(),
+                memory_reads=["job_context", "task_outputs"],
+                memory_writes=["task_outputs"],
+                timeout_s=2,
+                risk_level=RiskLevel.low,
+                tool_intent=ToolIntent.transform,
+            ),
+            handler=handlers.derive_output_filename,
         )
     )
 

@@ -15598,16 +15598,22 @@ def _task_request_ids_for_preflight(task: models.TaskCreate) -> list[str]:
 
 
 def _build_preflight_dependency_output(task: models.TaskCreate) -> dict[str, Any]:
+    # No file extension on this placeholder: a hardcoded ".pdf" here caused
+    # false-positive output_format_mismatch preflight errors for any
+    # non-PDF render pipeline (e.g. DOCX) whose output path is derived by an
+    # earlier step, since intent_contract.validate_intent_segment_contract
+    # compares this stub's extension against the render capability's
+    # expected output_format.
     output: dict[str, Any] = {
         "document_spec": {},
         "validation_report": {"valid": True, "errors": [], "warnings": []},
-        "path": "documents/preflight.pdf",
+        "path": "documents/preflight",
     }
     for tool_name in _task_request_ids_for_preflight(task):
         output[tool_name] = {
             "document_spec": {},
             "validation_report": {"valid": True, "errors": [], "warnings": []},
-            "path": "documents/preflight.pdf",
+            "path": "documents/preflight",
             "result": {},
             "text": "preflight",
         }

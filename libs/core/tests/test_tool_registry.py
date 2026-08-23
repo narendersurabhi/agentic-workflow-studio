@@ -957,7 +957,15 @@ def test_llm_generate_tool_uses_request_based_provider() -> None:
     call = registry.execute("llm_generate", {"text": "hello world"}, "id", "trace")
 
     assert call.status == "completed"
-    assert call.output_or_error == {"text": "generated text"}
+    assert call.output_or_error == {
+        "text": "generated text",
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+        },
+    }
     assert provider.requests
     assert provider.requests[0].metadata == {
         "component": "tools",
@@ -985,7 +993,15 @@ def test_llm_generate_with_context_tool_uses_request_based_provider() -> None:
     )
 
     assert call.status == "completed"
-    assert call.output_or_error == {"text": "generated text"}
+    assert call.output_or_error == {
+        "text": "generated text",
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+        },
+    }
     assert provider.requests
     request = provider.requests[0]
     assert request.system_prompt == "You are a concise release assistant."
