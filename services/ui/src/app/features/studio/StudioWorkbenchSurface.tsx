@@ -3,6 +3,9 @@
 import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import Button from "../../components/ui/Button";
+import Input from "../../components/ui/Input";
+import Textarea from "../../components/ui/Textarea";
 import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
 import {
   createAgentDefinition,
@@ -585,6 +588,7 @@ export default function StudioWorkbenchSurface({
   const [showDevPreview, setShowDevPreview] = useState(false);
   const [showAgentAdvanced, setShowAgentAdvanced] = useState(false);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
+  const [confirmDeleteProfile, setConfirmDeleteProfile] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState("all");
   const [riskFilter, setRiskFilter] = useState("all");
@@ -637,6 +641,10 @@ export default function StudioWorkbenchSurface({
       setAgentUserId(workspaceUserId);
     }
   }, [agentUserId, workspaceUserId]);
+
+  useEffect(() => {
+    setConfirmDeleteProfile(false);
+  }, [selectedAgentDefinitionId]);
 
   const catalogQueryResult = useQuery({
     queryKey: studioWorkbenchKeys.capabilityCatalog(),
@@ -1294,10 +1302,7 @@ export default function StudioWorkbenchSurface({
     if (!selectedAgentDefinitionId) {
       return;
     }
-    const definitionName = selectedAgentDefinition?.name || "this agent profile";
-    if (!window.confirm(`Delete ${definitionName}?`)) {
-      return;
-    }
+    setConfirmDeleteProfile(false);
     setAgentProfileDeleting(true);
     setAgentProfileError(null);
     try {
@@ -2115,54 +2120,87 @@ export default function StudioWorkbenchSurface({
                       <div className="relative z-10 flex w-full max-w-sm flex-col gap-4 border-l border-subtle bg-surface-1 p-6 shadow-[0_0_48px_rgba(15,23,42,0.4)]">
                         <div className="flex items-center justify-between">
                           <div className="text-sm font-semibold text-text-hi">Manage Profile</div>
-                          <button
+                          <Button
                             type="button"
-                            className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-xs text-text-lo hover:text-text-hi"
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Close profile drawer"
                             onClick={() => setProfileDrawerOpen(false)}
                           >
                             ✕
-                          </button>
+                          </Button>
                         </div>
                         <div className="flex flex-col gap-2">
-                          <button
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-sky-300/26 bg-accent-sky px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                            variant="primary"
+                            className="w-full uppercase tracking-[0.14em]"
                             onClick={() => { void handleSaveAgentProfileAs(); setProfileDrawerOpen(false); }}
                             disabled={agentProfileSaving}
                           >
                             {agentProfileSaving ? "Saving…" : "Save as new profile"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+                            variant="secondary"
+                            className="w-full uppercase tracking-[0.14em]"
                             onClick={() => { void handleSaveAgentProfile(); }}
                             disabled={!selectedAgentDefinitionId || agentProfileSaving}
                           >
                             {agentProfileSaving ? "Saving…" : "Save (update in-place)"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-emerald-300/24 bg-accent-emerald px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-emerald-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                            variant="primary"
+                            className="w-full border-emerald-300/24 bg-accent-emerald uppercase tracking-[0.14em] hover:border-emerald-300/36 hover:bg-accent-emerald/80"
                             onClick={() => void handlePublishAgentProfile()}
                             disabled={!selectedAgentDefinitionId || agentProfileSaving || agentProfilePublishing}
                           >
                             {agentProfilePublishing ? "Publishing…" : "Publish version"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35"
+                            variant="secondary"
+                            className="w-full uppercase tracking-[0.14em]"
                             onClick={() => { handleNewAgentProfile(); setProfileDrawerOpen(false); }}
                           >
                             New profile
-                          </button>
-                          <button
-                            type="button"
-                            className="w-full rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => { void handleDeleteAgentProfile(); setProfileDrawerOpen(false); }}
-                            disabled={!selectedAgentDefinitionId || agentProfileDeleting}
-                          >
-                            {agentProfileDeleting ? "Deleting…" : "Delete profile"}
-                          </button>
+                          </Button>
+                          {confirmDeleteProfile ? (
+                            <div className="flex items-center gap-2">
+                              <span className="flex-1 text-[11px] text-text-rose-token">Delete this profile?</span>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => {
+                                  void handleDeleteAgentProfile();
+                                  setProfileDrawerOpen(false);
+                                }}
+                                disabled={agentProfileDeleting}
+                              >
+                                {agentProfileDeleting ? "Deleting…" : "Yes, delete"}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setConfirmDeleteProfile(false)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              className="w-full uppercase tracking-[0.14em]"
+                              onClick={() => setConfirmDeleteProfile(true)}
+                              disabled={!selectedAgentDefinitionId || agentProfileDeleting}
+                            >
+                              Delete profile
+                            </Button>
+                          )}
                         </div>
                         {agentProfileError ? (
                           <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
@@ -2774,15 +2812,16 @@ export default function StudioWorkbenchSurface({
               ) : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button
+                <Button
                   type="button"
-                  className="inline-flex items-center gap-2 rounded-xl border border-sky-300/26 bg-accent-sky px-5 py-2.5 text-[12px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                  variant="primary"
+                  className="gap-2 px-5 uppercase tracking-[0.16em]"
                   onClick={() => void launchCurrentWorkbenchRun()}
                   disabled={launchLoading}
                 >
                   <StudioWorkbenchIcon kind="run" className="h-4 w-4" />
                   {launchLoading ? "Running..." : workbenchMode === "agent" ? "Run Agent" : "Run"}
-                </button>
+                </Button>
                 {launchError ? <div className="text-xs text-text-rose-token">{launchError}</div> : null}
               </div>
             </SurfacePanel>
