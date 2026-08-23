@@ -125,8 +125,8 @@ def test_execute_task_request_runs_native_tool(monkeypatch) -> None:
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -210,8 +210,8 @@ def test_execute_task_request_late_binds_secret_refs_for_native_tools(monkeypatc
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -323,8 +323,8 @@ def test_execute_task_request_runs_capability_tool(monkeypatch) -> None:
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -447,8 +447,8 @@ def test_execute_task_request_late_binds_secret_refs_for_capabilities(monkeypatc
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=_enforce_capability_input_contract,
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -534,8 +534,8 @@ def test_execute_task_request_uses_bound_native_tool_name(monkeypatch) -> None:
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -628,8 +628,8 @@ def test_execute_task_request_prefers_native_tool_for_tool_adapter_binding(
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -747,8 +747,8 @@ def test_execute_task_request_uses_bound_capability_id(monkeypatch) -> None:
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -827,8 +827,8 @@ def test_execute_task_request_skips_when_execution_gate_is_false(monkeypatch) ->
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -908,8 +908,8 @@ def test_execute_task_request_runs_when_execution_gate_is_negated(monkeypatch) -
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -988,8 +988,8 @@ def test_execute_task_request_skips_when_execution_gate_uses_workflow_variable(m
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},
@@ -1011,7 +1011,9 @@ def test_execute_task_request_skips_when_execution_gate_uses_workflow_variable(m
     assert tool_runtime.executed_payloads == []
 
 
-def test_execute_task_request_skips_when_execution_gate_uses_nested_job_context(monkeypatch) -> None:
+def test_execute_task_request_skips_when_execution_gate_uses_nested_job_context(
+    monkeypatch,
+) -> None:
     tool_runtime = _FakeToolRuntime()
     request = execution_contracts.TaskExecutionRequest(
         task_id="task-1",
@@ -1069,8 +1071,8 @@ def test_execute_task_request_skips_when_execution_gate_uses_nested_job_context(
             intent_segment=lambda _request: None,
             capability_intent_mismatch=lambda _intent, _spec: None,
             enforce_capability_input_contract=lambda spec, payload: (payload, None, []),
-            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: dict(
-                tool_inputs.get(tool_name, {})
+            build_tool_payload=lambda tool_name, instruction, context, task_payload, tool_inputs: (
+                dict(tool_inputs.get(tool_name, {}))
             ),
             intent_mismatch=lambda _intent, _tool_intent, _tool_name: None,
             load_memory_inputs=lambda _tool, _task_payload, _trace_id: {},

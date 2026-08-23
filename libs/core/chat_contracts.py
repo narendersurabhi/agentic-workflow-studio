@@ -392,7 +392,13 @@ class ChatRouteDecision(BaseModel):
     def _normalize_assistant_response(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("top_k_candidates", "missing_inputs", "reason_codes", "clarification_questions", mode="before")
+    @field_validator(
+        "top_k_candidates",
+        "missing_inputs",
+        "reason_codes",
+        "clarification_questions",
+        mode="before",
+    )
     @classmethod
     def _normalize_decision_string_lists(cls, value: Any) -> list[str]:
         if not isinstance(value, list):

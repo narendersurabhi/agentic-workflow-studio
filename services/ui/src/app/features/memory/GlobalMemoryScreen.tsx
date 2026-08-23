@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, useAuth } from "../../lib/auth";
 
-import AppShell from "../../components/AppShell";
+import { useShell, ShellActions } from "../../lib/shell";
 import ScreenHeader from "../../components/ScreenHeader";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
@@ -257,40 +257,39 @@ export default function GlobalMemoryScreen() {
     }
   };
 
+  useShell({
+    title: "User Context Memory",
+    breadcrumbs: [
+      { label: "Project", href: "/project" },
+      { label: "User Context Memory" },
+    ],
+  });
+
   return (
-    <AppShell
-      activeScreen="memory"
-      title="User Context Memory"
-      breadcrumbs={[
-        { label: "Project", href: "/project" },
-        { label: "User Context Memory" },
-      ]}
-      actions={
-        <>
-          <button
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={resetEditor}
-            disabled={saving || deleting}
-          >
-            New Entry
-          </button>
-          <button
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void refreshEntries()}
-            disabled={entriesLoading}
-          >
-            {entriesLoading ? "Refreshing..." : "Refresh"}
-          </button>
-          <button
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={saveEntry}
-            disabled={saving}
-          >
-            {saving ? "Saving..." : "Save Context"}
-          </button>
-        </>
-      }
-    >
+    <>
+      <ShellActions>
+        <button
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={resetEditor}
+          disabled={saving || deleting}
+        >
+          New Entry
+        </button>
+        <button
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void refreshEntries()}
+          disabled={entriesLoading}
+        >
+          {entriesLoading ? "Refreshing..." : "Refresh"}
+        </button>
+        <button
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={saveEntry}
+          disabled={saving}
+        >
+          {saving ? "Saving..." : "Save Context"}
+        </button>
+      </ShellActions>
       <div className="space-y-5">
       <ScreenHeader
         eyebrow="User Context Memory"
@@ -440,6 +439,6 @@ export default function GlobalMemoryScreen() {
         </section>
       </div>
       </div>
-    </AppShell>
+    </>
   );
 }

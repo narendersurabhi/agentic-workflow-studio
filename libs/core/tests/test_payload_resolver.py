@@ -31,7 +31,9 @@ def test_resolve_tool_payload_drops_final_artifact_fields_for_document_spec_gene
     }
 
 
-def test_reference_payload_validation_drops_final_artifact_fields_for_document_spec_generation() -> None:
+def test_reference_payload_validation_drops_final_artifact_fields_for_document_spec_generation() -> (
+    None
+):
     payload = payload_resolver.normalize_reference_payload_for_validation(
         {
             "instruction": "Create a document spec.",

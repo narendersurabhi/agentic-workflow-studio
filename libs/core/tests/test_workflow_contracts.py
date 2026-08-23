@@ -136,7 +136,9 @@ def test_parse_normalized_intent_envelope_canonicalizes_legacy_render_capabiliti
 
     assert envelope is not None
     assert envelope.graph.segments[0].suggested_capabilities == ["document.pdf.render"]
-    assert envelope.graph.segments[0].suggested_capability_rankings[0]["id"] == "document.pdf.render"
+    assert (
+        envelope.graph.segments[0].suggested_capability_rankings[0]["id"] == "document.pdf.render"
+    )
     assert envelope.candidate_capabilities["s1"] == ["document.pdf.render"]
 
 

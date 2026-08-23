@@ -75,7 +75,9 @@ def load_capability_search_eval_cases(path: Path) -> list[CapabilitySearchEvalCa
             raise ValueError(f"capability_search_eval_case_invalid_root:line={line_number}")
         case_id = _normalize_string(payload.get("id") or f"case_{line_number}")
         query = _normalize_string(payload.get("query"))
-        expected_capability_ids = tuple(_normalize_string_list(payload.get("expected_capability_ids")))
+        expected_capability_ids = tuple(
+            _normalize_string_list(payload.get("expected_capability_ids"))
+        )
         acceptable_alternates = tuple(_normalize_string_list(payload.get("acceptable_alternates")))
         must_have = tuple(_normalize_string_list(payload.get("must_have")))
         if not case_id:
@@ -117,13 +119,17 @@ def evaluate_capability_search_case(
         limit=max(1, limit),
         intent_hint=case.intent,
     )
-    predicted_ids = [str(item.get("id") or "").strip() for item in results if str(item.get("id") or "").strip()]
+    predicted_ids = [
+        str(item.get("id") or "").strip() for item in results if str(item.get("id") or "").strip()
+    ]
     relevant_ids = set(case.expected_capability_ids).union(case.acceptable_alternates)
     top_k = predicted_ids[: max(1, limit)]
     hits = [1 if capability_id in relevant_ids else 0 for capability_id in top_k]
     hit_at_1 = 1.0 if hits[:1] and hits[0] else 0.0
     hit_at_3 = 1.0 if any(hits[:3]) else 0.0
-    recall_at_5 = _safe_div(sum(1 for capability_id in top_k[:5] if capability_id in relevant_ids), len(relevant_ids))
+    recall_at_5 = _safe_div(
+        sum(1 for capability_id in top_k[:5] if capability_id in relevant_ids), len(relevant_ids)
+    )
 
     reciprocal_rank = 0.0
     for index, capability_id in enumerate(top_k, start=1):
@@ -136,7 +142,9 @@ def evaluate_capability_search_case(
 
     must_have_ids = set(case.must_have or case.expected_capability_ids)
     must_have_hit = 1.0 if any(capability_id in must_have_ids for capability_id in top_k) else 0.0
-    planner_useful_candidates = [capability_id for capability_id in top_k if capability_id in relevant_ids]
+    planner_useful_candidates = [
+        capability_id for capability_id in top_k if capability_id in relevant_ids
+    ]
 
     return {
         "case_id": case.case_id,

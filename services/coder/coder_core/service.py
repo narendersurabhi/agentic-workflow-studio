@@ -62,9 +62,7 @@ class CoderServiceConfig:
         return cls(
             provider_name=provider.provider_name,
             model=provider.model,
-            llm_max_retries=_parse_optional_int_with_default(
-                os.getenv("CODER_LLM_MAX_RETRIES"), 2
-            ),
+            llm_max_retries=_parse_optional_int_with_default(os.getenv("CODER_LLM_MAX_RETRIES"), 2),
             llm_retry_sleep_s=_parse_optional_float_with_default(
                 os.getenv("CODER_LLM_RETRY_SLEEP_S"), 1.5
             ),
@@ -83,9 +81,7 @@ class PromptBuilder:
                 + "\n- ".join(request.files)
                 + "\n"
             )
-        constraints = (
-            f"Constraints:\n{request.constraints}\n" if request.constraints else ""
-        )
+        constraints = f"Constraints:\n{request.constraints}\n" if request.constraints else ""
         return (
             "You are a coding agent. Return ONLY JSON (no prose, no markdown).\n"
             "Output must be a single JSON object with this shape:\n"
@@ -287,7 +283,11 @@ def generate_code(
     try:
         parsed = ResponseParser().parse(response.content)
     except CoderError as exc:
-        event = "codegen_schema_error" if exc.detail.startswith("invalid_schema:") else "codegen_parse_error"
+        event = (
+            "codegen_schema_error"
+            if exc.detail.startswith("invalid_schema:")
+            else "codegen_parse_error"
+        )
         logger.error(event, extra={"error": exc.detail})
         raise
     logger.info("codegen_success", extra={"files_count": len(parsed.files)})

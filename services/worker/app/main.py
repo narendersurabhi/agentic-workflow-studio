@@ -103,6 +103,7 @@ DEFAULT_ALLOWED_BLOCK_TYPES = [
     "repeat",
 ]
 
+
 def _parse_optional_float(value: str | None) -> float | None:
     if value is None or value == "":
         return None
@@ -145,7 +146,9 @@ SEMANTIC_MEMORY_AUTO_WRITE_MAX_FACTS = max(1, min(SEMANTIC_MEMORY_AUTO_WRITE_MAX
 SEMANTIC_MEMORY_AUTO_WRITE_MAX_FACT_CHARS = (
     _parse_optional_int(os.getenv("SEMANTIC_MEMORY_AUTO_WRITE_MAX_FACT_CHARS", "280")) or 280
 )
-SEMANTIC_MEMORY_AUTO_WRITE_MAX_FACT_CHARS = max(80, min(SEMANTIC_MEMORY_AUTO_WRITE_MAX_FACT_CHARS, 1200))
+SEMANTIC_MEMORY_AUTO_WRITE_MAX_FACT_CHARS = max(
+    80, min(SEMANTIC_MEMORY_AUTO_WRITE_MAX_FACT_CHARS, 1200)
+)
 SEMANTIC_MEMORY_AUTO_WRITE_NAMESPACE = (
     os.getenv("SEMANTIC_MEMORY_AUTO_WRITE_NAMESPACE", "runtime").strip() or "runtime"
 )
@@ -473,11 +476,7 @@ def _capability_intent_mismatch(
     task_intent: str,
     capability_spec: capability_registry.CapabilitySpec,
 ) -> str | None:
-    hints = (
-        capability_spec.planner_hints
-        if isinstance(capability_spec.planner_hints, dict)
-        else {}
-    )
+    hints = capability_spec.planner_hints if isinstance(capability_spec.planner_hints, dict) else {}
     raw_allowed = hints.get("task_intents")
     if not isinstance(raw_allowed, list) or not raw_allowed:
         return None

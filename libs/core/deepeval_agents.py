@@ -167,20 +167,22 @@ def build_chat_gold_bundle(
     clarification_report = chat_clarification_eval.evaluate_chat_clarification_cases(
         clarification_cases
     )
-    clarification_case_by_id = {case.case_id: case for case in clarification_cases}
+    clarification_case_by_id = {
+        clarification_case.case_id: clarification_case for clarification_case in clarification_cases
+    }
     for raw_result in clarification_report.get("cases", []):
         if not isinstance(raw_result, Mapping):
             continue
         case_id = _normalize_string(raw_result.get("case_id"))
-        case = clarification_case_by_id.get(case_id)
-        if case is None:
+        clarification_case = clarification_case_by_id.get(case_id)
+        if clarification_case is None:
             continue
         deep_eval_cases.append(
             DeepEvalCase(
-                case_id=case.case_id,
+                case_id=clarification_case.case_id,
                 surface="chat_clarification",
                 source_dataset_id=clarification_gold.stem,
-                input_text=f"User clarification turn: {case.content}",
+                input_text=f"User clarification turn: {clarification_case.content}",
                 actual_output=dumps_json(
                     {
                         "restarted": bool(raw_result.get("predicted_restarted")),
@@ -195,18 +197,18 @@ def build_chat_gold_bundle(
                 ),
                 expected_output=dumps_json(
                     {
-                        "restarted": case.expected_restarted,
-                        "resolved_active_field": case.expected_resolved_active_field,
-                        "queue_advanced": case.expected_queue_advanced,
-                        "active_field_before": case.active_field_before,
-                        "active_field_after": case.active_field_after,
+                        "restarted": clarification_case.expected_restarted,
+                        "resolved_active_field": clarification_case.expected_resolved_active_field,
+                        "queue_advanced": clarification_case.expected_queue_advanced,
+                        "active_field_before": clarification_case.active_field_before,
+                        "active_field_after": clarification_case.active_field_after,
                     }
                 ),
                 context=_context_lines(
                     (
                         "Case type: chat clarification gold replay.",
-                        f"Resolved fields: {', '.join(case.resolved_fields) or 'none'}",
-                        case.notes,
+                        f"Resolved fields: {', '.join(clarification_case.resolved_fields) or 'none'}",
+                        clarification_case.notes,
                     )
                 ),
                 local_scores={
@@ -219,10 +221,10 @@ def build_chat_gold_bundle(
                 },
                 local_pass=bool(raw_result.get("overall_match")),
                 metadata={
-                    "active_field_before": case.active_field_before,
-                    "active_field_after": case.active_field_after,
-                    "resolved_fields": list(case.resolved_fields),
-                    "notes": case.notes,
+                    "active_field_before": clarification_case.active_field_before,
+                    "active_field_after": clarification_case.active_field_after,
+                    "resolved_fields": list(clarification_case.resolved_fields),
+                    "notes": clarification_case.notes,
                 },
             )
         )
@@ -321,9 +323,7 @@ def build_planner_gold_bundle(
                         "predicted_capabilities": normalization["capability_alignment"][
                             "predicted_capabilities"
                         ],
-                        "top_capability": normalization["capability_alignment"][
-                            "top_capability"
-                        ],
+                        "top_capability": normalization["capability_alignment"]["top_capability"],
                         "missing_inputs": normalization["missing_inputs"]["actual"],
                         "requires_clarification": normalization["clarification"][
                             "actual_requires_clarification"
@@ -393,9 +393,7 @@ def build_planner_gold_bundle(
                 missing_tp / (missing_tp + missing_fn) if (missing_tp + missing_fn) else 0.0,
                 4,
             ),
-            "requires_clarification_accuracy": round(
-                _avg(aggregate_requires_clarification), 4
-            ),
+            "requires_clarification_accuracy": round(_avg(aggregate_requires_clarification), 4),
             "clarification_mode_accuracy": round(_avg(aggregate_clarification_mode), 4),
             "disagreement_reason_accuracy": round(_avg(aggregate_disagreement_reason), 4),
         },
@@ -428,9 +426,7 @@ def build_chat_feedback_bundle(
             "clarification_active_field_before": row.get(
                 "clarification_mapping_active_field_before"
             ),
-            "clarification_active_field_after": row.get(
-                "clarification_mapping_active_field_after"
-            ),
+            "clarification_active_field_after": row.get("clarification_mapping_active_field_after"),
             "clarification_restarted": row.get("clarification_mapping_restarted"),
             "clarification_queue_advanced": row.get("clarification_mapping_queue_advanced"),
             "clarification_resolved_active_field": row.get(

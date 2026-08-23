@@ -61,7 +61,9 @@ class IntentNormalizeRuntime:
     assess_goal_intent: Callable[[str], workflow_contracts.GoalIntentProfile]
     decompose_goal_intent: Callable[..., workflow_contracts.IntentGraph]
     capability_required_inputs: Callable[[str], list[str]]
-    assess_goal_intent_heuristic: Callable[[str], workflow_contracts.GoalIntentProfile] | None = None
+    assess_goal_intent_heuristic: Callable[[str], workflow_contracts.GoalIntentProfile] | None = (
+        None
+    )
 
 
 def normalize_goal_intent(
@@ -167,7 +169,9 @@ def normalize_goal_intent(
             "questions": list(clarification.get("questions") or []),
             "blocking_slots": list(clarification.get("blocking_slots") or []),
             "missing_slots": list(clarification.get("missing_inputs") or []),
-            "slot_values": dict(clarification.get("slot_values") or dict(initial_profile.slot_values)),
+            "slot_values": dict(
+                clarification.get("slot_values") or dict(initial_profile.slot_values)
+            ),
             "clarification_mode": str(
                 clarification.get("clarification_mode") or initial_profile.clarification_mode or ""
             )
@@ -316,7 +320,11 @@ def assess_goal_intent(
         if not str(slot_values.get(slot_name) or "").strip()
     ]
     low_confidence = confidence < threshold
-    if low_confidence and "intent_action" in blocking_slots and "intent_action" not in missing_slots:
+    if (
+        low_confidence
+        and "intent_action" in blocking_slots
+        and "intent_action" not in missing_slots
+    ):
         missing_slots.append("intent_action")
     questions = [slot_question(slot_name, goal) for slot_name in missing_slots]
     profile = workflow_contracts.GoalIntentProfile(

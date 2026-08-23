@@ -284,9 +284,7 @@ def test_validate_render_path_requirement_rejects_dependency_reference() -> None
     error = planner_contracts.validate_render_path_requirement(
         request_id="docx_render_from_spec",
         raw_payload={
-            "path": {
-                "$from": "dependencies_by_name.DeriveOutputPath.derive_output_filename.path"
-            }
+            "path": {"$from": "dependencies_by_name.DeriveOutputPath.derive_output_filename.path"}
         },
         resolved_payload={"path": "documents/report.docx"},
         job_context={},
@@ -356,9 +354,7 @@ def test_compile_task_request_payloads_compiles_capability_requests_to_runtime_t
     )
 
     assert compiled.request_ids == ["llm_generate_document_spec"]
-    assert compiled.request_id_rewrites == {
-        "document.spec.generate": "llm_generate_document_spec"
-    }
+    assert compiled.request_id_rewrites == {"document.spec.generate": "llm_generate_document_spec"}
     assert compiled.tool_inputs == {
         "llm_generate_document_spec": {"instruction": "Generate a document"}
     }

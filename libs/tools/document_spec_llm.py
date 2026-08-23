@@ -8,6 +8,8 @@ from libs.core.job_projection import (
     project_document_generation_inputs,
     project_markdown_document_generation_inputs,
 )
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolExecutionError
@@ -34,6 +36,27 @@ _DOCUMENT_SPEC_REQUIRED_INPUTS = (
 _DOCUMENT_SPEC_MARKDOWN_REQUIRED_INPUTS = ("markdown_text",)
 
 
+class LlmRepairDocumentSpecInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    errors: list[dict[str, Any]] = Field(description="Validation errors to fix")
+    original_spec: dict[str, Any] = Field(description="The original DocumentSpec to repair")
+    allowed_block_types: list[str] | None = None
+
+
+class LlmDocumentSpecOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_spec: dict[str, Any] = Field(description="The resulting DocumentSpec object")
+
+
+class LlmImproveDocumentSpecInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_spec: dict[str, Any] = Field(description="The DocumentSpec to improve")
+    validation_report: dict[str, Any] = Field(
+        description="Validation report from document_spec_validate"
+    )
+    allowed_block_types: list[str] | None = None
+
+
 def register_document_spec_llm_tools(
     registry,
     llm_provider: LLMProvider,
@@ -50,20 +73,8 @@ def register_document_spec_llm_tools(
                     "Provide original_spec and validation errors. "
                     "Returns a repaired JSON object in document_spec."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "errors": {"type": "array", "items": {"type": "object"}},
-                        "original_spec": {"type": "object"},
-                        "allowed_block_types": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["errors", "original_spec"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"document_spec": {"type": "object"}},
-                    "required": ["document_spec"],
-                },
+                input_schema=LlmRepairDocumentSpecInput.model_json_schema(),
+                output_schema=LlmDocumentSpecOutput.model_json_schema(),
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.transform,
@@ -87,6 +98,7 @@ def register_document_spec_llm_tools(
                     "optional allowed_block_types. Returns a document_spec object."
                 ),
                 input_schema={
+                    # complex validation: keep as raw dict — "not" keyword at top level
                     "type": "object",
                     "properties": {
                         "markdown_text": {"type": "string", "minLength": 1},
@@ -100,11 +112,7 @@ def register_document_spec_llm_tools(
                     "required": list(_DOCUMENT_SPEC_MARKDOWN_REQUIRED_INPUTS),
                     "not": {"required": ["job"]},
                 },
-                output_schema={
-                    "type": "object",
-                    "properties": {"document_spec": {"type": "object"}},
-                    "required": ["document_spec"],
-                },
+                output_schema=LlmDocumentSpecOutput.model_json_schema(),
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.transform,
@@ -128,6 +136,7 @@ def register_document_spec_llm_tools(
                     "plus optional allowed_block_types. Returns a document_spec object."
                 ),
                 input_schema={
+                    # complex validation: keep as raw dict — "not" keyword at top level
                     "type": "object",
                     "properties": {
                         "instruction": {"type": "string", "minLength": 1},
@@ -139,11 +148,7 @@ def register_document_spec_llm_tools(
                     "required": list(_DOCUMENT_SPEC_REQUIRED_INPUTS),
                     "not": {"required": ["job"]},
                 },
-                output_schema={
-                    "type": "object",
-                    "properties": {"document_spec": {"type": "object"}},
-                    "required": ["document_spec"],
-                },
+                output_schema=LlmDocumentSpecOutput.model_json_schema(),
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.generate,
@@ -165,20 +170,8 @@ def register_document_spec_llm_tools(
                     "Provide document_spec and validation_report (output from "
                     "document_spec_validate). Returns an improved document_spec."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "document_spec": {"type": "object"},
-                        "validation_report": {"type": "object"},
-                        "allowed_block_types": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["document_spec", "validation_report"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {"document_spec": {"type": "object"}},
-                    "required": ["document_spec"],
-                },
+                input_schema=LlmImproveDocumentSpecInput.model_json_schema(),
+                output_schema=LlmDocumentSpecOutput.model_json_schema(),
                 timeout_s=timeout_s,
                 risk_level=RiskLevel.high,
                 tool_intent=ToolIntent.transform,
@@ -241,11 +234,14 @@ def llm_generate_document_spec(
         )
     allowed = _resolve_allowed_block_types(payload.get("allowed_block_types"))
     explicit_inputs = _compact_document_spec_inputs(payload)
-    missing = [key for key in _DOCUMENT_SPEC_REQUIRED_INPUTS if not _non_empty_string(explicit_inputs.get(key))]
+    missing = [
+        key
+        for key in _DOCUMENT_SPEC_REQUIRED_INPUTS
+        if not _non_empty_string(explicit_inputs.get(key))
+    ]
     if missing:
         raise ToolExecutionError(
-            "Missing required explicit fields for llm_generate_document_spec: "
-            + ", ".join(missing)
+            "Missing required explicit fields for llm_generate_document_spec: " + ", ".join(missing)
         )
     prompt = prompts.document_spec_prompt(explicit_inputs, allowed)
     job_id = payload.get("job_id")
@@ -292,15 +288,11 @@ def llm_generate_document_spec_from_markdown(
     return {"document_spec": sanitize_document_spec(document_spec)}
 
 
-def _compact_document_spec_inputs(
-    payload: dict[str, Any]
-) -> dict[str, Any]:
+def _compact_document_spec_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     return project_document_generation_inputs(payload)
 
 
-def _compact_markdown_document_spec_inputs(
-    payload: dict[str, Any]
-) -> dict[str, Any]:
+def _compact_markdown_document_spec_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     return project_markdown_document_generation_inputs(payload)
 
 

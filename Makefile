@@ -74,8 +74,9 @@ AGENT_REGISTRY_E2E_OUTPUT ?= artifacts/evals/agent_registry_staging_e2e_report.j
 UV_QUALITY_DEPS = \
 	$(UV_EVAL_DEPS) \
 	--with pytest \
+	--with pytest-mock \
 	--with mypy \
-	--with ruff \
+	--with ruff==0.16.4 \
 	--with docxtpl \
 	--with httpx
 
@@ -298,6 +299,9 @@ lint:
 
 format:
 	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) ruff format libs services
+
+format-check:
+	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) ruff format --check libs services
 
 test:
 	PYTHONPATH=. uv run $(UV_QUALITY_DEPS) pytest --import-mode=importlib

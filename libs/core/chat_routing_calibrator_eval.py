@@ -129,14 +129,19 @@ def evaluate_feedback_rows(
         )
         shadow_summary = dict(shadow.get("summary") or {})
         live_summary = dict(live.get("summary") or {})
-        shadow_selected_candidate_id = _normalize_str(shadow_summary.get("shadow_selected_candidate_id")) or None
+        shadow_selected_candidate_id = (
+            _normalize_str(shadow_summary.get("shadow_selected_candidate_id")) or None
+        )
         live_selected_candidate_id = (
             _normalize_str(live_summary.get("shadow_selected_candidate_id"))
             if bool(live_summary.get("live_override_used"))
             else base_selected_candidate_id
         ) or None
 
-        if shadow_selected_candidate_id and shadow_selected_candidate_id != base_selected_candidate_id:
+        if (
+            shadow_selected_candidate_id
+            and shadow_selected_candidate_id != base_selected_candidate_id
+        ):
             disagreement_count += 1
         if bool(live_summary.get("live_override_used")):
             live_override_count += 1

@@ -141,9 +141,7 @@ def search_capabilities(
         if not capability_id:
             continue
         entry_tokens = {
-            token
-            for token in entry.get("tokens", [])
-            if isinstance(token, str) and token.strip()
+            token for token in entry.get("tokens", []) if isinstance(token, str) and token.strip()
         }
         if not entry_tokens:
             entry_tokens = set(_tokenize(str(entry.get("search_blob") or capability_id)))
@@ -180,7 +178,10 @@ def search_capabilities(
             }
         )
     results.sort(key=lambda item: (-float(item["score"]), str(item["id"])))
-    if rerank_feedback_rows is None and os.getenv("CAPABILITY_SEARCH_RERANK_ENABLED", "true").lower() == "true":
+    if (
+        rerank_feedback_rows is None
+        and os.getenv("CAPABILITY_SEARCH_RERANK_ENABLED", "true").lower() == "true"
+    ):
         rerank_feedback_rows = capability_reranker.load_feedback_rows(_DEFAULT_RERANK_FEEDBACK_PATH)
     return capability_reranker.rerank_capability_results(
         query=query,

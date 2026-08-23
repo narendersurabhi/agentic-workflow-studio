@@ -1,0 +1,52 @@
+# Python bytecode and caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.egg-info/
+
+# Virtual environments
+**/.venv/
+**/venv/
+
+# Node
+**/node_modules/
+**/.next/
+**/test-results/
+
+# Lock files (large, not useful for navigation)
+uv.lock
+**/package-lock.json
+**/yarn.lock
+**/pnpm-lock.yaml
+
+# Generated runtime artifacts
+artifacts/
+output/
+workspace/
+
+# Evaluation results
+.deepeval/
+eval/
+
+# Claude internals
+.claude/
+
+# Binary outputs
+**/*.docx
+**/*.pdf
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.ico
+**/*.woff
+**/*.woff2
+
+# Logs
+**/*.log
+
+# OS artifacts
+.DS_Store
+**/.DS_Store

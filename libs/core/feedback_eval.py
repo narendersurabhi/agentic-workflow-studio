@@ -22,9 +22,10 @@ def build_feedback_eval_rows(examples: Iterable[Mapping[str, Any]]) -> list[dict
             raw_boundary = snapshot_metadata.get("boundary_decision")
             if isinstance(raw_boundary, Mapping):
                 boundary_decision = str(raw_boundary.get("decision") or "").strip() or None
+                raw_boundary_evidence = raw_boundary.get("evidence")
                 boundary_evidence = (
-                    dict(raw_boundary.get("evidence"))
-                    if isinstance(raw_boundary.get("evidence"), Mapping)
+                    dict(raw_boundary_evidence)
+                    if isinstance(raw_boundary_evidence, Mapping)
                     else None
                 )
         rows.append(

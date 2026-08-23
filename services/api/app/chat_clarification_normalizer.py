@@ -48,9 +48,7 @@ def build_capability_normalization_contracts(
         capability_id = str(raw_contract.get("capability_id") or "").strip()
         if not capability_id:
             continue
-        collectible_fields = _normalized_field_list(
-            raw_contract.get("chat_collectible_fields")
-        )
+        collectible_fields = _normalized_field_list(raw_contract.get("chat_collectible_fields"))
         if not collectible_fields:
             continue
         required_inputs = _normalized_field_list(raw_contract.get("required_inputs"))
@@ -71,9 +69,7 @@ def build_capability_normalization_contracts(
             if field in required_inputs or field in chat_required_fields
         )
         missing_fields = tuple(
-            field
-            for field in collectible_fields
-            if not existing_fields.get(field)
+            field for field in collectible_fields if not existing_fields.get(field)
         )
         if not missing_fields:
             continue
@@ -123,11 +119,12 @@ def normalize_contract_fields_with_llm(
     normalized_preferred_field = intent_contract.normalize_required_input_key(preferred_field)
     prioritized_missing_fields_list: list[str] = []
     ordered_candidates = (
-        ([normalized_preferred_field] if normalized_preferred_field in contract.missing_fields else [])
-        + [field for field in contract.missing_fields if field != normalized_preferred_field]
-    )
-    for field in ordered_candidates:
-        field_name = intent_contract.normalize_required_input_key(field)
+        [normalized_preferred_field]
+        if normalized_preferred_field in contract.missing_fields
+        else []
+    ) + [field for field in contract.missing_fields if field != normalized_preferred_field]
+    for candidate_field in ordered_candidates:
+        field_name = intent_contract.normalize_required_input_key(candidate_field)
         if field_name and field_name not in prioritized_missing_fields_list:
             prioritized_missing_fields_list.append(field_name)
     prioritized_missing_fields = tuple(prioritized_missing_fields_list)
@@ -158,9 +155,7 @@ def normalize_contract_fields_with_llm(
         ),
         "field_descriptions": contract.field_descriptions,
         "field_examples": {
-            key: list(values)
-            for key, values in contract.field_examples.items()
-            if values
+            key: list(values) for key, values in contract.field_examples.items() if values
         },
         "response_schema": {
             "normalized_slots": {field: "string" for field in effective_missing_fields},
@@ -199,7 +194,8 @@ def normalize_contract_fields_with_llm(
     unresolved = {
         str(field).strip()
         for field in raw_unresolved
-        if isinstance(field, str) and str(field).strip() in contract.missing_fields
+        if isinstance(field, str)
+        and str(field).strip() in contract.missing_fields
         and str(field).strip() in contract.required_fields
     }
 
@@ -252,9 +248,9 @@ def normalize_clarification_field_key(value: Any) -> str:
     normalized = intent_contract.normalize_required_input_key(value)
     if not normalized:
         return ""
-    for field, aliases in _chat_field_metadata().field_aliases.items():
-        if normalized == field or normalized in aliases:
-            return field
+    for candidate_field, aliases in _chat_field_metadata().field_aliases.items():
+        if normalized == candidate_field or normalized in aliases:
+            return candidate_field
     return normalized
 
 
@@ -284,13 +280,17 @@ def heuristic_field_updates_for_answer(
     if normalized_preferred == "instruction" and _looks_like_substantive_instruction(answer):
         return {"instruction": answer}
     if normalized_preferred in {"topic", "audience"}:
-        if _looks_like_meta_clarification_answer(answer) or _looks_like_bundled_execution_answer(answer):
+        if _looks_like_meta_clarification_answer(answer) or _looks_like_bundled_execution_answer(
+            answer
+        ):
             return {}
         if not _looks_like_simple_field_answer(answer, max_tokens=16):
             return {}
         return {normalized_preferred: " ".join(answer.split())}
     if normalized_preferred == "tone":
-        if _looks_like_meta_clarification_answer(answer) or _looks_like_bundled_execution_answer(answer):
+        if _looks_like_meta_clarification_answer(answer) or _looks_like_bundled_execution_answer(
+            answer
+        ):
             return {}
         if not _looks_like_simple_field_answer(answer, max_tokens=8):
             return {}
@@ -511,7 +511,11 @@ def _normalize_field_value(field: str, value: str) -> str:
     if field == "tone":
         return normalized.lower()
     if field == "path":
-        if "." not in normalized and "/" not in normalized and _normalize_output_format_token(normalized):
+        if (
+            "." not in normalized
+            and "/" not in normalized
+            and _normalize_output_format_token(normalized)
+        ):
             return ""
         return normalized.strip("\"'")
     return normalized

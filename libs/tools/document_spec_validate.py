@@ -3,10 +3,30 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
+
+
+class DocumentSpecValidateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_spec: dict[str, Any] | None = None
+    render_context: dict[str, Any] | None = None
+    strict: bool | None = None
+    allowed_block_types: list[str] | None = None
+    max_depth: int | None = None
+    max_blocks: int | None = None
+
+
+class DocumentSpecValidateOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    valid: bool = Field(description="Whether the document spec is valid")
+    errors: list[dict[str, Any]] = Field(description="List of validation errors")
+    warnings: list[dict[str, Any]] = Field(description="List of validation warnings")
+    stats: dict[str, Any] = Field(description="Validation statistics")
 
 
 def register_document_spec_tools(registry) -> None:
@@ -24,27 +44,8 @@ def register_document_spec_tools(registry) -> None:
                     "optional_paragraph, repeat. If document_spec is omitted, it is resolved from "
                     "memory (document_spec:latest)."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "document_spec": {"type": "object"},
-                        "render_context": {"type": "object"},
-                        "strict": {"type": "boolean"},
-                        "allowed_block_types": {"type": "array", "items": {"type": "string"}},
-                        "max_depth": {"type": "integer"},
-                        "max_blocks": {"type": "integer"},
-                    },
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "valid": {"type": "boolean"},
-                        "errors": {"type": "array", "items": {"type": "object"}},
-                        "warnings": {"type": "array", "items": {"type": "object"}},
-                        "stats": {"type": "object"},
-                    },
-                    "required": ["valid", "errors", "warnings", "stats"],
-                },
+                input_schema=DocumentSpecValidateInput.model_json_schema(),
+                output_schema=DocumentSpecValidateOutput.model_json_schema(),
                 memory_reads=["job_context", "task_outputs"],
                 timeout_s=10,
                 risk_level=RiskLevel.low,

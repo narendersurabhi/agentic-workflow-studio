@@ -20,7 +20,9 @@ def test_execute_task_delegates_through_execution_request_boundary(monkeypatch) 
     )
     seen: list[execution_contracts.TaskExecutionRequest] = []
 
-    def fake_build(payload: dict, *, default_max_attempts: int) -> execution_contracts.TaskExecutionRequest:
+    def fake_build(
+        payload: dict, *, default_max_attempts: int
+    ) -> execution_contracts.TaskExecutionRequest:
         assert payload == {"task_id": "task-1"}
         assert default_max_attempts == main.WORKER_DEFAULT_MAX_ATTEMPTS
         return request
@@ -162,7 +164,14 @@ def test_intent_segment_from_payload_prefers_direct_segment() -> None:
     assert segment["intent"] == "render"
 
 
-def test_intent_segment_contract_allows_renderer_without_explicit_path() -> None:
+def test_intent_segment_contract_requires_explicit_path_when_payload_has_none() -> None:
+    # validate_intent_segment_contract has no capability-level "renderer auto-derives
+    # its own path" exemption (that existed pre-refactor via a now-removed
+    # _capability_auto_derives_output_path allowlist — see git history on
+    # libs/core/intent_contract.py commit d05b3d1 "Intent normalization architecture",
+    # which replaced it with a narrower document_spec-generation exemption and pushed
+    # "path derived by an earlier step" handling to the callers instead). A bare
+    # payload with no path key at all is therefore correctly rejected here.
     segment = {
         "id": "s1",
         "intent": "render",
@@ -181,6 +190,42 @@ def test_intent_segment_contract_allows_renderer_without_explicit_path() -> None
         task_intent="render",
         tool_name="document.pdf.render",
         payload={"document_spec": {"blocks": []}},
+        capability_id="document.pdf.render",
+        capability_risk_tier="bounded_write",
+    )
+    assert mismatch == "must_have_inputs_missing:path"
+
+
+def test_intent_segment_contract_allows_renderer_without_explicit_path() -> None:
+    # A render step's path genuinely CAN be absent at plan-validation time when it's
+    # derived by an earlier step (e.g. a derive_output_filename task feeding path via
+    # a `$from` dependency reference). That tolerance is real and lives in the callers
+    # of validate_intent_segment_contract, not inside it: planner_service.py resolves
+    # unresolved `$from` references into a placeholder before calling this function
+    # (payload_resolver.normalize_reference_payload_for_validation's `unknown_default`,
+    # "__dependency__" by default), and services/api/app/main.py's
+    # _build_preflight_dependency_output does the same for API-side preflight. This
+    # test simulates that placeholder-substitution contract: by the time
+    # validate_intent_segment_contract sees the payload, `path` is a non-empty string
+    # placeholder rather than a raw `$from` reference or a missing key.
+    segment = {
+        "id": "s1",
+        "intent": "render",
+        "objective": "Render final PDF",
+        "required_inputs": ["document_spec", "path"],
+        "slots": {
+            "entity": "report",
+            "artifact_type": "document",
+            "output_format": "pdf",
+            "risk_level": "bounded_write",
+            "must_have_inputs": ["document_spec", "path"],
+        },
+    }
+    mismatch = intent_contract.validate_intent_segment_contract(
+        segment=segment,
+        task_intent="render",
+        tool_name="document.pdf.render",
+        payload={"document_spec": {"blocks": []}, "path": "__dependency__"},
         capability_id="document.pdf.render",
         capability_risk_tier="bounded_write",
     )

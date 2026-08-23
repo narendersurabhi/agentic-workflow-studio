@@ -260,8 +260,6 @@ def test_derive_output_filename() -> None:
     assert call.output_or_error["path"] == "documents/senior_ai_ml_engineer_2026_02_09.docx"
 
 
-
-
 def test_derive_output_filename_with_output_extension_pdf() -> None:
     registry = default_registry()
     call = registry.execute(
@@ -492,8 +490,7 @@ def test_evaluate_tool_allowlist_dry_run_does_not_block(monkeypatch, tmp_path) -
 def test_default_registry_plugin_fail_fast_toggle(monkeypatch, tmp_path) -> None:
     plugin_path = tmp_path / "bad_plugin.py"
     plugin_path.write_text(
-        "def register_tools(registry):\n"
-        "    raise RuntimeError('boom')\n",
+        "def register_tools(registry):\n    raise RuntimeError('boom')\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -507,8 +504,7 @@ def test_default_registry_plugin_fail_fast_toggle(monkeypatch, tmp_path) -> None
 def test_default_registry_plugin_fail_fast_raises(monkeypatch, tmp_path) -> None:
     plugin_path = tmp_path / "bad_plugin_raise.py"
     plugin_path.write_text(
-        "def register_tools(registry):\n"
-        "    raise RuntimeError('boom')\n",
+        "def register_tools(registry):\n    raise RuntimeError('boom')\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -516,7 +512,6 @@ def test_default_registry_plugin_fail_fast_raises(monkeypatch, tmp_path) -> None
     monkeypatch.setenv("TOOL_PLUGIN_FAIL_FAST", "true")
     with pytest.raises(RuntimeError):
         default_registry()
-
 
 
 def test_derive_output_filename_reads_from_job_context_memory() -> None:
@@ -717,8 +712,6 @@ def test_post_mcp_tool_call_bounds_retries_by_deadline(monkeypatch) -> None:
 def test_resolve_mcp_isolation_mode_defaults_to_process(monkeypatch) -> None:
     monkeypatch.delenv("MCP_TOOL_ISOLATION_MODE", raising=False)
     assert tool_registry_module._resolve_mcp_isolation_mode() == "process"
-
-
 
 
 def test_extract_mcp_sdk_result_includes_error_detail() -> None:
@@ -964,7 +957,15 @@ def test_llm_generate_tool_uses_request_based_provider() -> None:
     call = registry.execute("llm_generate", {"text": "hello world"}, "id", "trace")
 
     assert call.status == "completed"
-    assert call.output_or_error == {"text": "generated text"}
+    assert call.output_or_error == {
+        "text": "generated text",
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+        },
+    }
     assert provider.requests
     assert provider.requests[0].metadata == {
         "component": "tools",
@@ -992,7 +993,15 @@ def test_llm_generate_with_context_tool_uses_request_based_provider() -> None:
     )
 
     assert call.status == "completed"
-    assert call.output_or_error == {"text": "generated text"}
+    assert call.output_or_error == {
+        "text": "generated text",
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+        },
+    }
     assert provider.requests
     request = provider.requests[0]
     assert request.system_prompt == "You are a concise release assistant."

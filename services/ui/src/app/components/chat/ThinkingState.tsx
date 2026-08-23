@@ -1,6 +1,6 @@
 export function ThinkingState() {
   return (
-    <div className="max-w-[92%] rounded-[24px] border border-subtle bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_rgba(15,23,42,0.92)_55%,_rgba(14,116,144,0.2)_100%)] px-4 py-3 text-sm text-text-hi shadow-[0_18px_45px_rgba(15,23,42,0.35)]">
+    <div className="max-w-[92%] rounded-[24px] border border-subtle bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.18),rgba(15,23,42,0.92)_55%,rgba(14,116,144,0.2)_100%)] px-4 py-3 text-sm text-text-hi shadow-[0_18px_45px_rgba(15,23,42,0.35)]">
       <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
         <div className="flex items-center gap-2 text-text-md">
           <span>assistant</span>
@@ -19,7 +19,7 @@ export function ThinkingState() {
             <span className="h-2.5 w-2.5 rounded-full bg-amber-200 thinking-dot thinking-dot-delay-2" />
           </div>
           <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-surface-1">
-            <span className="absolute inset-y-0 left-[-35%] w-[38%] rounded-full bg-gradient-to-r from-transparent via-sky-300/80 to-transparent animate-thinking-beam" />
+            <span className="absolute inset-y-0 left-[-35%] w-[38%] rounded-full bg-linear-to-r from-transparent via-sky-300/80 to-transparent animate-thinking-beam" />
           </div>
         </div>
 

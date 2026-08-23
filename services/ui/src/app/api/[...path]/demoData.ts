@@ -925,6 +925,9 @@ function feedbackSummary() {
   };
 }
 
+const demoDeletedDefinitionIds = new Set<string>();
+const demoDeletedVersionIds = new Set<string>();
+
 export async function demoResponse(
   request: Request,
   path: string[] | undefined
@@ -1108,9 +1111,13 @@ export async function demoResponse(
   }
 
   if (method === "GET" && pathname === "workflows/definitions") {
-    return json([workflowDefinition]);
+    const definitions = demoDeletedDefinitionIds.has(workflowDefinition.id) ? [] : [workflowDefinition];
+    return json(definitions);
   }
   if (method === "GET" && segments[0] === "workflows" && segments[1] === "definitions" && segments.length === 3) {
+    if (demoDeletedDefinitionIds.has(segments[2])) {
+      return json({ detail: "workflow_definition_not_found" }, 404);
+    }
     return json(workflowDefinition);
   }
   if (method === "POST" && pathname === "workflows/definitions") {
@@ -1120,10 +1127,16 @@ export async function demoResponse(
     return json(workflowDefinitionResponse(await readBody(request)));
   }
   if (method === "DELETE" && segments[0] === "workflows" && segments[1] === "definitions" && segments.length === 3) {
+    demoDeletedDefinitionIds.add(segments[2]);
     return empty();
   }
   if (method === "GET" && segments[0] === "workflows" && segments[1] === "definitions" && segments[3] === "versions") {
-    return json([workflowVersion]);
+    const versions = demoDeletedVersionIds.has(workflowVersion.id) ? [] : [workflowVersion];
+    return json(versions);
+  }
+  if (method === "DELETE" && segments[0] === "workflows" && segments[1] === "versions" && segments.length === 3) {
+    demoDeletedVersionIds.add(segments[2]);
+    return empty();
   }
   if (method === "GET" && segments[0] === "workflows" && segments[1] === "definitions" && segments[3] === "triggers") {
     return json([workflowTrigger]);

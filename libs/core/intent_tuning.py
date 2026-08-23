@@ -61,16 +61,10 @@ def build_intent_tuning_rows(items: Iterable[Mapping[str, Any]]) -> list[dict[st
                 "observed_profile_intent": _non_empty_string(observed_case.get("profile_intent")),
                 "observed_profile_source": _non_empty_string(observed_case.get("profile_source")),
                 "observed_graph_intents": _string_list(observed_case.get("graph_intents")),
-                "candidate_capabilities": _string_list(
-                    observed_case.get("candidate_capabilities")
-                ),
+                "candidate_capabilities": _string_list(observed_case.get("candidate_capabilities")),
                 "missing_inputs": _string_list(observed_case.get("missing_inputs")),
-                "clarification_mode": _non_empty_string(
-                    observed_case.get("clarification_mode")
-                ),
-                "disagreement_reason": _non_empty_string(
-                    observed_case.get("disagreement_reason")
-                ),
+                "clarification_mode": _non_empty_string(observed_case.get("clarification_mode")),
+                "disagreement_reason": _non_empty_string(observed_case.get("disagreement_reason")),
                 "intent_assessment_intent": _non_empty_string(
                     dimensions.get("intent_assessment_intent")
                 ),
@@ -107,8 +101,7 @@ def build_intent_tuning_gold_bundle(
 ) -> dict[str, Any]:
     return {
         "version": 1,
-        "description": description
-        or "Intent tuning candidates exported from reviewed feedback.",
+        "description": description or "Intent tuning candidates exported from reviewed feedback.",
         "cases": build_intent_tuning_gold_cases(items),
     }
 

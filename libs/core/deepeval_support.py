@@ -98,8 +98,7 @@ def load_settings_from_env() -> DeepEvalSettings:
     mode = _normalize_string(os.getenv("DEEPEVAL_MODE", "local")).lower() or "local"
     if mode not in _VALID_MODES:
         raise ValueError(
-            "deepeval_mode_invalid:"
-            f" expected one of {sorted(_VALID_MODES)} got={mode or '<empty>'}"
+            f"deepeval_mode_invalid: expected one of {sorted(_VALID_MODES)} got={mode or '<empty>'}"
         )
     return DeepEvalSettings(
         enabled=_read_bool_env("DEEPEVAL_ENABLED", False),
@@ -130,8 +129,7 @@ def judge_requested(settings: DeepEvalSettings) -> bool:
 def validate_settings(settings: DeepEvalSettings) -> None:
     if settings.mode not in _VALID_MODES:
         raise ValueError(
-            "deepeval_mode_invalid:"
-            f" expected one of {sorted(_VALID_MODES)} got={settings.mode}"
+            f"deepeval_mode_invalid: expected one of {sorted(_VALID_MODES)} got={settings.mode}"
         )
     if not judge_requested(settings):
         return
@@ -142,13 +140,11 @@ def validate_settings(settings: DeepEvalSettings) -> None:
         )
     if not settings.judge_model:
         raise ValueError(
-            "deepeval_judge_model_missing:"
-            " set DEEPEVAL_JUDGE_MODEL when DEEPEVAL_ENABLED=true"
+            "deepeval_judge_model_missing: set DEEPEVAL_JUDGE_MODEL when DEEPEVAL_ENABLED=true"
         )
     if not settings.judge_api_key:
         raise ValueError(
-            "deepeval_judge_api_key_missing:"
-            " set DEEPEVAL_JUDGE_API_KEY when DEEPEVAL_ENABLED=true"
+            "deepeval_judge_api_key_missing: set DEEPEVAL_JUDGE_API_KEY when DEEPEVAL_ENABLED=true"
         )
     if settings.judge_provider == "openai_compatible" and not settings.judge_base_url:
         raise ValueError(
@@ -282,7 +278,6 @@ def _normalize_vendor_results(
     cases: Sequence[DeepEvalCase],
     evaluation_result: Any,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    case_lookup = {case.case_id: case for case in cases}
     vendor_lookup: dict[str, Any] = {}
     raw_test_results = getattr(evaluation_result, "test_results", None)
     if isinstance(raw_test_results, list):
@@ -494,7 +489,9 @@ def run_deepeval_cases(
             " install with `uv run --with deepeval ...` or disable DEEPEVAL_ENABLED"
         ) from exc
 
-    class _ProviderJudgeModel(DeepEvalBaseLLM):  # pragma: no cover - exercised via optional dependency
+    class _ProviderJudgeModel(
+        DeepEvalBaseLLM
+    ):  # pragma: no cover - exercised via optional dependency
         def __init__(self, current_settings: DeepEvalSettings) -> None:
             self._settings = current_settings
             self._provider: llm_provider.LLMProvider | None = None

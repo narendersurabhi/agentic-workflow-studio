@@ -49,9 +49,9 @@ images:
   - name: ghcr.io/your-org/awe-rag-retriever-mcp
     newName: localhost:5001/localhost/awe-rag-retriever-mcp
     newTag: latest
-  - name: ghcr.io/your-org/awe-ui
+  - name: ghcr.io/narendersurabhi/awe-ui
     newName: localhost:5001/localhost/awe-ui
-    newTag: latest
+    newTag: v0.1.0
   - name: ghcr.io/your-org/awe-policy
     newName: localhost:5001/localhost/awe-policy
     newTag: latest

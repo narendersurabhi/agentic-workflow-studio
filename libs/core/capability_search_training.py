@@ -22,7 +22,9 @@ def _normalize_str_list(value: Any) -> list[str]:
     return items
 
 
-def build_reranker_training_examples(feedback_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def build_reranker_training_examples(
+    feedback_rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
     for row in feedback_rows:
         query_candidates = _normalize_str_list(row.get("search_queries"))
@@ -37,7 +39,11 @@ def build_reranker_training_examples(feedback_rows: Iterable[Mapping[str, Any]])
                     continue
                 capability_id = _normalize_str(entry.get("id"))
                 status = _normalize_str(entry.get("status"))
-                if capability_id and status == "completed" and capability_id not in executed_capabilities:
+                if (
+                    capability_id
+                    and status == "completed"
+                    and capability_id not in executed_capabilities
+                ):
                     executed_capabilities.append(capability_id)
         retrieved_selected = _normalize_str_list(row.get("retrieved_selected"))
         positives = executed_capabilities or retrieved_selected
@@ -55,7 +61,9 @@ def build_reranker_training_examples(feedback_rows: Iterable[Mapping[str, Any]])
                     "positive_capability_id": positive_id,
                     "negative_capability_ids": negatives,
                     "selected_capabilities": _normalize_str_list(row.get("selected_capabilities")),
-                    "retrieved_capabilities": _normalize_str_list(row.get("retrieved_capabilities")),
+                    "retrieved_capabilities": _normalize_str_list(
+                        row.get("retrieved_capabilities")
+                    ),
                     "execution_succeeded": bool(row.get("execution_succeeded")),
                     "source": "feedback",
                 }

@@ -97,7 +97,11 @@ def build_pointwise_examples(
             label = 1 if candidate_id == positive_candidate_id else 0
             if label == 0 and candidate_id not in negative_candidate_ids:
                 continue
-            rank = top_k_candidates.index(candidate_id) if candidate_id in top_k_candidates else len(top_k_candidates)
+            rank = (
+                top_k_candidates.index(candidate_id)
+                if candidate_id in top_k_candidates
+                else len(top_k_candidates)
+            )
             candidate_type = _candidate_type(candidate_id)
             examples.append(
                 {
@@ -261,11 +265,8 @@ def calibrate_route_candidates(
         )
         reason_codes = _normalize_str_list(candidate.get("reason_codes"))
         reason_codes.append(f"routing_calibration={probability:.3f}")
-        metadata = (
-            dict(candidate.get("metadata"))
-            if isinstance(candidate.get("metadata"), dict)
-            else {}
-        )
+        candidate_metadata = candidate.get("metadata")
+        metadata = dict(candidate_metadata) if isinstance(candidate_metadata, dict) else {}
         metadata.update(
             {
                 "calibration_probability": probability,

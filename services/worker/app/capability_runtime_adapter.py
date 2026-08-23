@@ -83,9 +83,7 @@ class WorkerCapabilityRuntime:
             memory_payload = self.hooks.load_memory_inputs(tool, task_payload, trace_id)
             if memory_payload:
                 existing_memory = tool_payload.get("memory")
-                merged_memory = (
-                    dict(existing_memory) if isinstance(existing_memory, dict) else {}
-                )
+                merged_memory = dict(existing_memory) if isinstance(existing_memory, dict) else {}
                 merged_memory.update(memory_payload)
                 tool_payload["memory"] = merged_memory
             tool_payload = self.hooks.apply_memory_defaults(tool.spec.name, tool_payload)

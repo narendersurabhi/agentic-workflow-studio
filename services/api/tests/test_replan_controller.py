@@ -24,7 +24,9 @@ def test_decide_task_failure_recovery_returns_retry_same_step_when_retry_budget_
     assert decision.should_replan is False
 
 
-def test_decide_task_failure_recovery_prefers_checkpoint_replay_when_retry_budget_is_exhausted() -> None:
+def test_decide_task_failure_recovery_prefers_checkpoint_replay_when_retry_budget_is_exhausted() -> (
+    None
+):
     decision = replan_controller.decide_task_failure_recovery(
         planning_mode=models.PlanningMode.adaptive,
         has_pending_replan=False,
@@ -133,7 +135,9 @@ def test_decide_task_evaluator_recovery_returns_rework_for_low_confidence() -> N
     assert decision.should_replan is False
 
 
-def test_decide_task_evaluator_recovery_returns_patch_suffix_for_schema_invalid_replan_policy() -> None:
+def test_decide_task_evaluator_recovery_returns_patch_suffix_for_schema_invalid_replan_policy() -> (
+    None
+):
     decision = replan_controller.decide_task_evaluator_recovery(
         planning_mode=models.PlanningMode.adaptive,
         has_pending_replan=False,

@@ -50,12 +50,12 @@ def plan_to_run_spec(
         planner_request_id = source_request_ids[0] if source_request_ids else capability_id
         if planner_request_id:
             routing_hints["planner_request_field"] = planner_request_field
-        execution_gate = execution_contracts.normalize_execution_gates(
+        execution_gates = execution_contracts.normalize_execution_gates(
             {"tool_inputs": task.tool_inputs},
             request_ids=source_request_ids,
         )
         execution_gate = planner_contracts.rewrite_request_keyed_mapping(
-            execution_gate,
+            execution_gates,
             compiled.request_id_rewrites,
         ).get(execution_request_id)
         step = models.StepSpec(
@@ -157,9 +157,7 @@ def run_spec_to_plan(run_spec: models.RunSpec) -> models.PlanCreate:
                     if dependency_id in step_by_id
                 ],
                 capability_requests=(
-                    [restored_request_id]
-                    if restored_request_field == "capability_requests"
-                    else []
+                    [restored_request_id] if restored_request_field == "capability_requests" else []
                 ),
                 tool_requests=(
                     [restored_request_id] if restored_request_field == "tool_requests" else []

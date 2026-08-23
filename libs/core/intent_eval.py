@@ -118,21 +118,23 @@ def _flatten_envelope_capabilities(envelope: Mapping[str, Any] | None) -> list[s
     envelope_map = envelope if isinstance(envelope, Mapping) else {}
     ordered: list[str] = []
     seen_segment_ids: set[str] = set()
+    raw_candidate_capabilities = envelope_map.get("candidate_capabilities")
     candidate_capabilities = (
-        envelope_map.get("candidate_capabilities")
-        if isinstance(envelope_map.get("candidate_capabilities"), Mapping)
-        else {}
+        raw_candidate_capabilities if isinstance(raw_candidate_capabilities, Mapping) else {}
     )
-    graph_map = envelope_map.get("graph") if isinstance(envelope_map.get("graph"), Mapping) else {}
-    segments = graph_map.get("segments") if isinstance(graph_map.get("segments"), list) else []
+    raw_graph = envelope_map.get("graph")
+    graph_map = raw_graph if isinstance(raw_graph, Mapping) else {}
+    raw_segments = graph_map.get("segments")
+    segments = raw_segments if isinstance(raw_segments, list) else []
     for raw_segment in segments:
         if not isinstance(raw_segment, Mapping):
             continue
         segment_id = str(raw_segment.get("id") or "").strip()
         segment_capabilities: list[str] = []
-        if segment_id and isinstance(candidate_capabilities.get(segment_id), list):
+        segment_candidate_capabilities = candidate_capabilities.get(segment_id)
+        if segment_id and isinstance(segment_candidate_capabilities, list):
             seen_segment_ids.add(segment_id)
-            segment_capabilities = _coerce_string_list(candidate_capabilities.get(segment_id))
+            segment_capabilities = _coerce_string_list(segment_candidate_capabilities)
         if not segment_capabilities:
             segment_capabilities = _coerce_string_list(raw_segment.get("suggested_capabilities"))
         ordered.extend(segment_capabilities)
@@ -164,7 +166,9 @@ def load_intent_eval_cases(path: Path) -> list[IntentEvalCase]:
             raw_case.get("expected_capabilities_by_segment")
         )
         expected_profile_intent = str(raw_case.get("expected_profile_intent") or "").strip() or None
-        expected_missing_inputs = tuple(_coerce_string_list(raw_case.get("expected_missing_inputs")))
+        expected_missing_inputs = tuple(
+            _coerce_string_list(raw_case.get("expected_missing_inputs"))
+        )
         expected_requires_clarification_raw = raw_case.get("expected_requires_clarification")
         expected_requires_clarification = (
             bool(expected_requires_clarification_raw)
@@ -305,16 +309,14 @@ def evaluate_intent_normalization_case(
     envelope: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     envelope_map = envelope if isinstance(envelope, Mapping) else {}
-    profile_map = envelope_map.get("profile") if isinstance(envelope_map.get("profile"), Mapping) else {}
-    clarification_map = (
-        envelope_map.get("clarification")
-        if isinstance(envelope_map.get("clarification"), Mapping)
-        else {}
-    )
-    trace_map = envelope_map.get("trace") if isinstance(envelope_map.get("trace"), Mapping) else {}
-    disagreement_map = (
-        trace_map.get("disagreement") if isinstance(trace_map.get("disagreement"), Mapping) else {}
-    )
+    raw_profile = envelope_map.get("profile")
+    profile_map = raw_profile if isinstance(raw_profile, Mapping) else {}
+    raw_clarification = envelope_map.get("clarification")
+    clarification_map = raw_clarification if isinstance(raw_clarification, Mapping) else {}
+    raw_trace = envelope_map.get("trace")
+    trace_map = raw_trace if isinstance(raw_trace, Mapping) else {}
+    raw_disagreement = trace_map.get("disagreement")
+    disagreement_map = raw_disagreement if isinstance(raw_disagreement, Mapping) else {}
 
     predicted_capabilities = _flatten_envelope_capabilities(envelope_map)
     expected_capability_set = set(case.expected_capabilities)
@@ -344,9 +346,7 @@ def evaluate_intent_normalization_case(
         ).strip()
         or None
     )
-    actual_disagreement_reason = (
-        str(disagreement_map.get("reason_code") or "").strip() or None
-    )
+    actual_disagreement_reason = str(disagreement_map.get("reason_code") or "").strip() or None
     expected_disagreement = bool(
         case.expected_disagreement_reason
         or case.expected_clarification_mode == "intent_disagreement"
@@ -456,9 +456,7 @@ def evaluate_intent_cases(
             allowed_capability_ids=allowed_capability_ids,
         )
         if normalize_goal_intent is not None:
-            envelope = _coerce_report_mapping(
-                normalize_goal_intent(case.goal, case.intent_context)
-            )
+            envelope = _coerce_report_mapping(normalize_goal_intent(case.goal, case.intent_context))
             normalization_result = evaluate_intent_normalization_case(case, envelope)
             result["normalization"] = normalization_result
             profile_match = normalization_result["profile_intent"]["match"]
@@ -472,7 +470,9 @@ def evaluate_intent_cases(
             normalization_missing_tp += int(normalization_result["missing_inputs"]["tp"])
             normalization_missing_fp += int(normalization_result["missing_inputs"]["fp"])
             normalization_missing_fn += int(normalization_result["missing_inputs"]["fn"])
-            clarification_match = normalization_result["clarification"]["requires_clarification_match"]
+            clarification_match = normalization_result["clarification"][
+                "requires_clarification_match"
+            ]
             if clarification_match is not None:
                 normalization_clarification_total += 1
                 normalization_clarification_hits += int(bool(clarification_match))

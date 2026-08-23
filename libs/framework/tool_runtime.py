@@ -167,7 +167,9 @@ def sanitize_payload(payload: Any) -> dict[str, Any]:
     return sanitize(payload) or {}
 
 
-def run_with_timeout(handler: Callable[[], tool_output_type], timeout_s: int | None) -> tool_output_type:
+def run_with_timeout(
+    handler: Callable[[], tool_output_type], timeout_s: int | None
+) -> tool_output_type:
     if not timeout_s or timeout_s <= 0:
         return handler()
     executor = ThreadPoolExecutor(max_workers=1)

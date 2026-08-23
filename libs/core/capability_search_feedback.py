@@ -105,7 +105,10 @@ def build_feedback_rows(envelopes: Iterable[Mapping[str, Any]]) -> list[dict[str
                             call_names.append(tool_name)
             for capability_id in call_names:
                 row["executed_capabilities"].append(
-                    {"id": capability_id, "status": "completed" if event_type == "task.completed" else "failed"}
+                    {
+                        "id": capability_id,
+                        "status": "completed" if event_type == "task.completed" else "failed",
+                    }
                 )
             if event_type == "task.completed":
                 row["execution_succeeded"] = True
@@ -123,7 +126,9 @@ def build_feedback_rows(envelopes: Iterable[Mapping[str, Any]]) -> list[dict[str
         row["retrieved_executed"] = [cap for cap in executed if cap in retrieved]
         row["planner_override"] = [cap for cap in selected if cap not in retrieved]
         row["hard_negative_ids"] = [
-            cap for cap in retrieved if cap not in row["retrieved_selected"] and cap not in row["retrieved_executed"]
+            cap
+            for cap in retrieved
+            if cap not in row["retrieved_selected"] and cap not in row["retrieved_executed"]
         ]
         rows.append(row)
     rows.sort(key=lambda item: (item["job_id"], item["correlation_id"]))

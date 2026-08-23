@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from libs.core import (
+    agent_cancel,
     capability_registry,
     execution_contracts,
     intent_contract,
@@ -156,11 +157,11 @@ def execute_task_request(
                     bound_capability_id
                 )
             elif binding is None:
-                capability_spec = context.capability_runtime.resolve_enabled_capability(
-                    request_id
-                )
+                capability_spec = context.capability_runtime.resolve_enabled_capability(request_id)
             execution_name = (
-                capability_spec.capability_id if capability_spec is not None else native_execution_name
+                capability_spec.capability_id
+                if capability_spec is not None
+                else native_execution_name
             )
             with core_tracing.start_span(
                 "worker.execute_tool",
@@ -305,7 +306,9 @@ def _evaluate_execution_gate(
     return {
         "allowed": allowed,
         "expression": expression,
-        "reason": "execution_gate_condition_false" if not negate else "execution_gate_condition_negated_false",
+        "reason": "execution_gate_condition_false"
+        if not negate
+        else "execution_gate_condition_negated_false",
     }
 
 
@@ -431,7 +434,11 @@ def _parse_expression_literal(token: str, context: Mapping[str, Any]) -> Any:
         return None
     if normalized.startswith(("context.", "workflow.input.", "workflow.variable.", "step.")):
         return _resolve_context_operand(normalized, context)
-    if normalized.startswith(("'", '"')) and normalized.endswith(("'", '"')) and len(normalized) >= 2:
+    if (
+        normalized.startswith(("'", '"'))
+        and normalized.endswith(("'", '"'))
+        and len(normalized) >= 2
+    ):
         return normalized[1:-1]
     try:
         if "." in normalized:
@@ -688,6 +695,7 @@ def _execute_capability_tool(
             },
         )
         return tool_error
+    agent_cancel.set_current_run_id(run_id)
     idempotency_key = str(uuid.uuid4())
     tool_started_at = time.monotonic()
     core_logging.log_event(
@@ -925,9 +933,7 @@ def _execute_native_tool(
         missing = callbacks.missing_memory_only_inputs(tool.spec.name, payload)
         recorded_payload = _sanitize_recorded_payload(payload)
         if missing:
-            tool_error = (
-                f"contract.input_missing:memory_only_inputs_missing:{','.join(missing)}"
-            )
+            tool_error = f"contract.input_missing:memory_only_inputs_missing:{','.join(missing)}"
             outputs[request_id] = {"error": tool_error}
             tool_calls.append(
                 _failed_tool_call(
@@ -1236,9 +1242,7 @@ def _native_adapter_id(tool_name: str) -> str:
 def _normalize_timeout_error(error: str) -> str:
     lowered = error.lower()
     if (
-        "timed out" in lowered
-        or "timeout" in lowered
-        or "mcp_sdk_timeout:" in lowered
+        "timed out" in lowered or "timeout" in lowered or "mcp_sdk_timeout:" in lowered
     ) and not error.startswith("tool_call_timed_out"):
         return f"tool_call_timed_out:{error}"
     return error

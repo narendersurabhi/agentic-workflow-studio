@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from libs.core import prompts
+from libs.core.job_projection import project_document_generation_inputs
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolExecutionError
@@ -21,6 +24,25 @@ _DEFAULT_ALLOWED_BLOCK_TYPES = [
     "optional_paragraph",
     "repeat",
 ]
+
+
+class IterativeDocumentSpecHistoryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    iteration: int
+    valid: bool
+    error_count: int
+    warning_count: int
+
+
+class LlmIterativeImproveDocumentSpecOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_spec: dict[str, Any] = Field(description="The resulting DocumentSpec object")
+    validation_report: dict[str, Any] = Field(
+        description="Validation report from the last iteration"
+    )
+    iterations: int = Field(description="Number of iterations performed")
+    reached_threshold: bool = Field(description="Whether the spec reached valid threshold")
+    history: list[IterativeDocumentSpecHistoryItem] = Field(description="Per-iteration history")
 
 
 def register_document_spec_iterative_tools(
@@ -43,6 +65,7 @@ def register_document_spec_iterative_tools(
                     "until valid or max_iterations is reached."
                 ),
                 input_schema={
+                    # complex validation: keep as raw dict — anyOf at top level
                     "type": "object",
                     "properties": {
                         "job": {"type": "object"},
@@ -55,40 +78,7 @@ def register_document_spec_iterative_tools(
                     },
                     "anyOf": [{"required": ["job"]}, {"required": ["document_spec"]}],
                 },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "document_spec": {"type": "object"},
-                        "validation_report": {"type": "object"},
-                        "iterations": {"type": "integer"},
-                        "reached_threshold": {"type": "boolean"},
-                        "history": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "iteration": {"type": "integer"},
-                                    "valid": {"type": "boolean"},
-                                    "error_count": {"type": "integer"},
-                                    "warning_count": {"type": "integer"},
-                                },
-                                "required": [
-                                    "iteration",
-                                    "valid",
-                                    "error_count",
-                                    "warning_count",
-                                ],
-                            },
-                        },
-                    },
-                    "required": [
-                        "document_spec",
-                        "validation_report",
-                        "iterations",
-                        "reached_threshold",
-                        "history",
-                    ],
-                },
+                output_schema=LlmIterativeImproveDocumentSpecOutput.model_json_schema(),
                 memory_reads=["job_context", "task_outputs"],
                 memory_writes=["task_outputs"],
                 timeout_s=timeout_s,
@@ -127,40 +117,7 @@ def register_document_spec_iterative_tools(
                     },
                     "required": ["job"],
                 },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "document_spec": {"type": "object"},
-                        "validation_report": {"type": "object"},
-                        "iterations": {"type": "integer"},
-                        "reached_threshold": {"type": "boolean"},
-                        "history": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "iteration": {"type": "integer"},
-                                    "valid": {"type": "boolean"},
-                                    "error_count": {"type": "integer"},
-                                    "warning_count": {"type": "integer"},
-                                },
-                                "required": [
-                                    "iteration",
-                                    "valid",
-                                    "error_count",
-                                    "warning_count",
-                                ],
-                            },
-                        },
-                    },
-                    "required": [
-                        "document_spec",
-                        "validation_report",
-                        "iterations",
-                        "reached_threshold",
-                        "history",
-                    ],
-                },
+                output_schema=LlmIterativeImproveDocumentSpecOutput.model_json_schema(),
                 memory_reads=["job_context", "task_outputs"],
                 memory_writes=["task_outputs"],
                 timeout_s=timeout_s,
@@ -208,8 +165,14 @@ def llm_iterative_improve_document_spec(
     else:
         if not isinstance(job, dict):
             raise ToolExecutionError("job must be an object when document_spec is not provided")
+        # llm_generate_document_spec rejects a raw "job" payload (requires explicit
+        # instruction/topic/audience/tone fields) — project job into that shape here
+        # rather than forwarding it, matching what payload_resolver does for direct calls.
+        generation_inputs = project_document_generation_inputs(job, apply_defaults=True)
+        if not generation_inputs.get("instruction") and not generation_inputs.get("topic"):
+            raise ToolExecutionError("job must include enough detail to derive instruction/topic")
         current_spec = generate_document_spec(
-            {"job": job, "allowed_block_types": allowed}, provider
+            {**generation_inputs, "allowed_block_types": allowed}, provider
         )["document_spec"]
 
     history: list[dict[str, Any]] = []
@@ -445,6 +408,8 @@ def _filter_document_spec_validation_report(
     filtered = dict(report)
     filtered["warnings"] = filtered_warnings
     return filtered
+
+
 def _resolve_allowed_block_types(raw: Any) -> list[str]:
     if raw is None:
         return list(_DEFAULT_ALLOWED_BLOCK_TYPES)

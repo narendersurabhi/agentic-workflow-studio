@@ -177,9 +177,7 @@ def load_chat_clarification_eval_cases(path: Path) -> list[ChatClarificationEval
                 active_field_after=active_field_after,
                 resolved_fields=tuple(resolved_fields),
                 expected_restarted=bool(raw_case.get("expected_restarted")),
-                expected_resolved_active_field=bool(
-                    raw_case.get("expected_resolved_active_field")
-                ),
+                expected_resolved_active_field=bool(raw_case.get("expected_resolved_active_field")),
                 expected_queue_advanced=bool(raw_case.get("expected_queue_advanced")),
                 notes=_normalize_string(raw_case.get("notes")) or None,
             )
@@ -200,9 +198,7 @@ def evaluate_chat_clarification_case(
     active_field_after = _normalize_field(case.active_field_after)
     resolved_fields = list(case.resolved_fields)
     resolved_active_field = bool(
-        not restarted
-        and active_field_before
-        and active_field_before in set(resolved_fields)
+        not restarted and active_field_before and active_field_before in set(resolved_fields)
     )
     queue_advanced = bool(
         not restarted
@@ -210,9 +206,7 @@ def evaluate_chat_clarification_case(
         and (active_field_after is None or active_field_after != active_field_before)
     )
     restart_match = restarted == case.expected_restarted
-    resolved_active_field_match = (
-        resolved_active_field == case.expected_resolved_active_field
-    )
+    resolved_active_field_match = resolved_active_field == case.expected_resolved_active_field
     queue_advanced_match = queue_advanced == case.expected_queue_advanced
     wrong_field_assignment = bool(
         not restarted
@@ -251,18 +245,12 @@ def evaluate_chat_clarification_cases(
     resolved_active_field_matches = sum(
         1 for result in results if bool(result["resolved_active_field_match"])
     )
-    queue_advanced_matches = sum(
-        1 for result in results if bool(result["queue_advanced_match"])
-    )
-    wrong_field_assignments = sum(
-        1 for result in results if bool(result["wrong_field_assignment"])
-    )
+    queue_advanced_matches = sum(1 for result in results if bool(result["queue_advanced_match"]))
+    wrong_field_assignments = sum(1 for result in results if bool(result["wrong_field_assignment"]))
     resolved_active_field_count = sum(
         1 for result in results if bool(result["predicted_resolved_active_field"])
     )
-    queue_advanced_count = sum(
-        1 for result in results if bool(result["predicted_queue_advanced"])
-    )
+    queue_advanced_count = sum(1 for result in results if bool(result["predicted_queue_advanced"]))
     restart_count = sum(1 for result in results if bool(result["predicted_restarted"]))
     summary = {
         "case_count": case_count,
