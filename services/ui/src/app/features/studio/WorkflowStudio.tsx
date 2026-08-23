@@ -24,7 +24,7 @@ import {
 import StudioCapabilityPalette from "./StudioCapabilityPalette";
 import StudioCompilePanel from "./StudioCompilePanel";
 import StudioWorkbenchSurface from "./StudioWorkbenchSurface";
-import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
+import StudioPanelDrawer from "./StudioPanelDrawer";
 import StudioWorkflowInterfacePanel from "./StudioWorkflowInterfacePanel";
 import StudioNodeInspector from "./StudioNodeInspector";
 import type {
@@ -6715,100 +6715,23 @@ export default function WorkflowStudio() {
                     />
                   </div>
 
-                  {/* ── Panel icon strip (left side of stage) ── */}
-                  <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-col gap-1.5">
-                    {(["palette", "compile", "setup", "interface", "library"] as FloatingStudioPanelId[]).map((panelId) => {
-                      const isActive = drawerPanelId === panelId;
-                      const badge = getWorkspacePanelBadge(panelId);
-                      const iconKind: Record<string, "palette" | "inspect" | "zap" | "library" | "activity" | "menu"> = {
-                        palette: "palette",
-                        compile: "activity",
-                        setup: "menu",
-                        interface: "zap",
-                        library: "library",
-                      };
-                      return (
-                        <button
-                          key={panelId}
-                          type="button"
-                          title={getWorkspacePanelTitle(panelId)}
-                          aria-label={getWorkspacePanelTitle(panelId)}
-                          className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition ${
-                            isActive
-                              ? "border-sky-300/40 bg-accent-sky text-text-sky-token shadow-[0_0_0_2px_rgba(56,189,248,0.18)]"
-                              : "border-white/12 bg-[rgba(9,16,27,0.65)] text-text-md hover:border-white/20 hover:bg-[rgba(9,16,27,0.85)] hover:text-text-hi"
-                          } backdrop-blur-sm`}
-                          onClick={() => setDrawerPanelId((prev) => (prev === panelId ? null : panelId))}
-                        >
-                          <StudioWorkbenchIcon kind={iconKind[panelId] ?? "menu"} className="h-4 w-4" />
-                          {badge ? (
-                            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/20 bg-sky-500 text-[8px] font-bold text-white">
-                              {badge}
-                            </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* ── Right-side overlay drawer ── */}
-                  {(() => {
-                    const definition = drawerPanelId ? getWorkspacePanelDefinition(drawerPanelId) : null;
-                    const isOpen = Boolean(drawerPanelId && definition);
-                    return (
-                      <div
-                        className={`pointer-events-auto absolute right-0 top-0 z-30 flex h-full flex-col overflow-hidden rounded-r-[24px] border-l border-white/10 bg-[rgba(9,14,23,0.88)] shadow-[-12px_0_40px_rgba(9,14,23,0.4)] backdrop-blur-xl transition-transform duration-200 ${
-                          isOpen ? "translate-x-0" : "translate-x-full"
-                        }`}
-                        style={{ width: drawerWidth }}
-                      >
-                        {/* Left resize handle */}
-                        <div
-                          className="absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize transition hover:bg-sky-300/30 active:bg-sky-300/50"
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            drawerResizeRef.current = { startX: event.clientX, startWidth: drawerWidth };
-                          }}
-                          title="Drag to resize"
-                        />
-                        {definition ? (
-                          <>
-                            {/* Drawer header */}
-                            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.6)] px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-hi">
-                                  {definition.title}
-                                </div>
-                                {definition.badge ? (
-                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.14em] text-text-md">
-                                    {definition.badge}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <button
-                                type="button"
-                                className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-text-lo transition hover:bg-white/10 hover:text-text-hi"
-                                onClick={() => {
-                                  setDrawerPanelId(null);
-                                  if (drawerPanelId === "inspector") setSelectedDagNodeId(null);
-                                }}
-                                aria-label="Close panel"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                            {/* Drawer content */}
-                            <div
-                              id={definition.panelDomId}
-                              className={`min-h-0 flex-1 overflow-auto ${definition.bodyClassName || ""}`.trim()}
-                            >
-                              {definition.content}
-                            </div>
-                          </>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
+                  <StudioPanelDrawer
+                    activePanelId={drawerPanelId}
+                    onSelectPanel={(panelId) =>
+                      setDrawerPanelId((prev) => (prev === panelId ? null : panelId))
+                    }
+                    getPanelTitle={getWorkspacePanelTitle}
+                    getPanelBadge={getWorkspacePanelBadge}
+                    activeDefinition={drawerPanelId ? getWorkspacePanelDefinition(drawerPanelId) : null}
+                    drawerWidth={drawerWidth}
+                    onResizeStart={(event) => {
+                      drawerResizeRef.current = { startX: event.clientX, startWidth: drawerWidth };
+                    }}
+                    onClose={() => {
+                      setDrawerPanelId(null);
+                      if (drawerPanelId === "inspector") setSelectedDagNodeId(null);
+                    }}
+                  />
                 </div>
               </div>
       </section>
