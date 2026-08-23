@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.server import TransportSecuritySettings
+from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 from rag_retriever_core import (
     EnsureCollectionRequest,
@@ -32,10 +32,7 @@ def create_mcp_asgi_app(service: Any, logger: Any):
     ]
     raw_allowed_hosts = os.getenv("MCP_ALLOWED_HOSTS", "")
     allowed_hosts = [h.strip() for h in raw_allowed_hosts.split(",") if h.strip()] or default_hosts
-    mcp = FastMCP(
-        "agentic-rag-retriever",
-        transport_security=TransportSecuritySettings(allowed_hosts=allowed_hosts),
-    )
+    mcp = MCPServer("agentic-rag-retriever")
 
     @mcp.tool()
     def retrieve(
@@ -262,6 +259,8 @@ def create_mcp_asgi_app(service: Any, logger: Any):
             raise RuntimeError(exc.detail) from exc
         return result.model_dump()
 
-    mcp_app = mcp.streamable_http_app()
+    mcp_app = mcp.streamable_http_app(
+        transport_security=TransportSecuritySettings(allowed_hosts=allowed_hosts)
+    )
     session_manager = mcp_app.routes[0].app.session_manager
     return mcp_app, session_manager

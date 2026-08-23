@@ -6,7 +6,7 @@ dependencies = [
   "fastapi>=0.141",
   "uvicorn>=0.27",
   "pydantic>=2.13",
-  "mcp>=1.0.0,<2.0.0",
+  "mcp>=2.0.0",
   "prometheus-client>=0.19",
   "structlog>=24.1.0",
 ]

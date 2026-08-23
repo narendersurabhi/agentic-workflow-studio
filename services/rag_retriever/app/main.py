@@ -68,9 +68,8 @@ app = FastAPI(title="Agentic RAG Retriever Service", lifespan=_app_lifespan)
 app.state.retriever_service = RETRIEVER_SERVICE
 app.state.retriever_logger = LOGGER
 app.mount("/metrics", make_asgi_app())
-app.mount("/mcp", MCP_APP)
 app.mount("/mcp/rpc", MCP_APP)
-app.mount("/mcp/rpc/mcp", MCP_APP)
+app.mount("/mcp", MCP_APP)
 
 
 @app.middleware("http")

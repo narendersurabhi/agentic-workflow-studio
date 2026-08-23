@@ -204,7 +204,10 @@ def streamable_http_client_kwargs(
     # Newer MCP SDK versions only accept an httpx.AsyncClient for request headers/timeouts.
     if "http_client" in params:
         try:
-            import httpx
+            try:
+                import httpx2 as httpx
+            except ModuleNotFoundError:
+                import httpx
 
             client_kwargs: dict[str, Any] = {"timeout": transport_timeout}
             if headers:
@@ -643,11 +646,8 @@ def call_mcp_tool_sdk_inproc(
 
         async def _run_call() -> Any:
             nonlocal phase
-            async with streamable_http_client(mcp_url, **streamable_kwargs) as (
-                read_stream,
-                write_stream,
-                _session_id,
-            ):
+            async with streamable_http_client(mcp_url, **streamable_kwargs) as streams:
+                read_stream, write_stream = streams[:2]
                 async with ClientSession(read_stream, write_stream) as session:
                     phase = "initialize"
                     with tracing_module.start_span(
@@ -815,14 +815,14 @@ def flatten_exception_messages(exc: BaseException) -> list[str]:
 
 
 def extract_mcp_sdk_result(result: Any) -> dict[str, Any]:
-    is_error = getattr(result, "isError", False)
+    is_error = getattr(result, "is_error", getattr(result, "isError", False))
     if is_error:
         error_detail = extract_mcp_error_detail(result)
         if error_detail:
             raise ToolExecutionError(f"mcp_tool_error:{error_detail}")
         raise ToolExecutionError("mcp_tool_error")
 
-    structured = getattr(result, "structuredContent", None)
+    structured = getattr(result, "structured_content", getattr(result, "structuredContent", None))
     if isinstance(structured, dict):
         return normalize_mcp_structured_result(structured)
 
@@ -851,7 +851,7 @@ def normalize_mcp_structured_result(structured: dict[str, Any]) -> dict[str, Any
 
 
 def extract_mcp_error_detail(result: Any) -> str:
-    structured = getattr(result, "structuredContent", None)
+    structured = getattr(result, "structured_content", getattr(result, "structuredContent", None))
     if isinstance(structured, dict):
         return json.dumps(structured, ensure_ascii=True)
     content = getattr(result, "content", None)
