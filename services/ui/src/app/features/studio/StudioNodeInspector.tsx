@@ -42,7 +42,7 @@ type StudioNodeInspectorProps = {
   workflowInterface: WorkflowInterface;
   autoWireNodeBindings: (nodeId: string) => void;
   quickFixNodeBindings: (nodeId: string) => void;
-  setSelectedDagNodeId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedDagNodeId: (nodeId: string | null) => void;
   capabilityIdOptionsId?: string;
   compactMode?: boolean;
   onDeleteNode?: (nodeId: string) => void;

@@ -4,9 +4,30 @@ import Link from "next/link";
 import { apiFetch } from "../../lib/auth";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useShell, ShellActions } from "../../lib/shell";
 import ComposerDagCanvas from "../../components/composer/ComposerDagCanvas";
+import {
+  workflowLibraryKeys,
+  fetchWorkflowDefinitions,
+  fetchWorkflowVersions,
+  fetchWorkflowTriggers,
+  fetchWorkflowRuns,
+} from "./workflowLibraryQueries";
+import { useStudioCanvasStore } from "./studioCanvasStore";
+import Button from "../../components/ui/Button";
+import Input from "../../components/ui/Input";
+import Textarea from "../../components/ui/Textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogBody,
+  DialogTitle,
+  DialogDescription,
+} from "../../components/ui/Dialog";
 import ComposerValidationPanel from "../../components/composer/ComposerValidationPanel";
 import {
   WorkflowNodeIcon,
@@ -15,7 +36,7 @@ import {
 import StudioCapabilityPalette from "./StudioCapabilityPalette";
 import StudioCompilePanel from "./StudioCompilePanel";
 import StudioWorkbenchSurface from "./StudioWorkbenchSurface";
-import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
+import StudioPanelDrawer from "./StudioPanelDrawer";
 import StudioWorkflowInterfacePanel from "./StudioWorkflowInterfacePanel";
 import StudioNodeInspector from "./StudioNodeInspector";
 import type {
@@ -170,14 +191,6 @@ const defaultControlConfig = (kind: StudioControlKind): StudioControlConfig => {
     return { expression: "", switchCases: [createStudioControlCase()] };
   }
   return { expression: "", parallelMode: "fan_out" };
-};
-
-type DagConnectorDragState = {
-  sourceNodeId: string;
-  x: number;
-  y: number;
-  branchLabel?: string;
-  sourcePortY?: number;
 };
 
 const dagNodeOutputAnchorY = (
@@ -1680,7 +1693,6 @@ export default function WorkflowStudio() {
   const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteGroup, setPaletteGroup] = useState("all");
-  const [selectedDagNodeId, setSelectedDagNodeId] = useState<string | null>(null);
   const [studioNotice, setStudioNotice] = useState<string | null>(null);
   const [lastStartedJobId, setLastStartedJobId] = useState<string | null>(null);
   const [chainPreflightLoading, setChainPreflightLoading] = useState(false);
@@ -1693,19 +1705,15 @@ export default function WorkflowStudio() {
   const [saveDialogGoal, setSaveDialogGoal] = useState("");
   const [publishedWorkflowVersion, setPublishedWorkflowVersion] = useState<WorkflowVersion | null>(null);
   const [loadedWorkflowVersionId, setLoadedWorkflowVersionId] = useState<string | null>(null);
-  const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([]);
-  const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] = useState(true);
-  const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<string | null>(null);
-  const [demoDataDetected, setDemoDataDetected] = useState(DEMO_DATA_ENABLED);
-  const [workflowVersions, setWorkflowVersions] = useState<WorkflowVersion[]>([]);
-  const [workflowVersionsLoading, setWorkflowVersionsLoading] = useState(false);
-  const [workflowVersionsError, setWorkflowVersionsError] = useState<string | null>(null);
-  const [workflowTriggers, setWorkflowTriggers] = useState<WorkflowTrigger[]>([]);
-  const [workflowTriggersLoading, setWorkflowTriggersLoading] = useState(false);
-  const [workflowTriggersError, setWorkflowTriggersError] = useState<string | null>(null);
-  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>([]);
-  const [workflowRunsLoading, setWorkflowRunsLoading] = useState(false);
-  const [workflowRunsError, setWorkflowRunsError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const definitionsQuery = useQuery({
+    queryKey: workflowLibraryKeys.definitions(workspaceUserId),
+    queryFn: () => fetchWorkflowDefinitions(workspaceUserId),
+  });
+  const workflowDefinitions = useMemo(() => definitionsQuery.data ?? [], [definitionsQuery.data]);
+  const workflowDefinitionsLoading = definitionsQuery.isLoading;
+  const workflowDefinitionsError =
+    definitionsQuery.error instanceof Error ? definitionsQuery.error.message : null;
   const [workflowActionLoading, setWorkflowActionLoading] = useState<
     "save" | "publish" | "run" | null
   >(null);
@@ -1715,14 +1723,25 @@ export default function WorkflowStudio() {
     null
   );
   const [composerNodePositions, setComposerNodePositions] = useState<Record<string, CanvasPoint>>({});
-  const [hoveredDagEdgeKey, setHoveredDagEdgeKey] = useState<string | null>(null);
-  const [dagEdgeDraftSourceNodeId, setDagEdgeDraftSourceNodeId] = useState<string | null>(null);
-  const [dagConnectorDrag, setDagConnectorDrag] = useState<DagConnectorDragState | null>(null);
-  const [dagCanvasDraggingNodeId, setDagCanvasDraggingNodeId] = useState<string | null>(null);
-  const [dagConnectorHoverTargetNodeId, setDagConnectorHoverTargetNodeId] = useState<string | null>(
-    null
+  // Canvas-local interaction state (selection, drag, zoom) lives in a Zustand
+  // store rather than component state — see studioCanvasStore.ts for why.
+  const selectedDagNodeId = useStudioCanvasStore((s) => s.selectedDagNodeId);
+  const setSelectedDagNodeId = useStudioCanvasStore((s) => s.setSelectedDagNodeId);
+  const dagCanvasDraggingNodeId = useStudioCanvasStore((s) => s.dagCanvasDraggingNodeId);
+  const setDagCanvasDraggingNodeId = useStudioCanvasStore((s) => s.setDagCanvasDraggingNodeId);
+  const dagConnectorDrag = useStudioCanvasStore((s) => s.dagConnectorDrag);
+  const setDagConnectorDrag = useStudioCanvasStore((s) => s.setDagConnectorDrag);
+  const dagConnectorHoverTargetNodeId = useStudioCanvasStore((s) => s.dagConnectorHoverTargetNodeId);
+  const setDagConnectorHoverTargetNodeId = useStudioCanvasStore(
+    (s) => s.setDagConnectorHoverTargetNodeId
   );
-  const [dagCanvasZoom, setDagCanvasZoom] = useState(1);
+  const dagEdgeDraftSourceNodeId = useStudioCanvasStore((s) => s.dagEdgeDraftSourceNodeId);
+  const setDagEdgeDraftSourceNodeId = useStudioCanvasStore((s) => s.setDagEdgeDraftSourceNodeId);
+  const hoveredDagEdgeKey = useStudioCanvasStore((s) => s.hoveredDagEdgeKey);
+  const setHoveredDagEdgeKey = useStudioCanvasStore((s) => s.setHoveredDagEdgeKey);
+  const dagCanvasZoom = useStudioCanvasStore((s) => s.dagCanvasZoom);
+  const setDagCanvasZoom = useStudioCanvasStore((s) => s.setDagCanvasZoom);
+  const resetDagCanvasInteractionState = useStudioCanvasStore((s) => s.resetDragState);
   const [studioWorkspaceMode, setStudioWorkspaceMode] =
     useState<StudioWorkspaceMode>("default");
   const [workflowSetupExpanded, setWorkflowSetupExpanded] = useState(false);
@@ -1852,6 +1871,51 @@ export default function WorkflowStudio() {
   );
   const activeWorkflowDefinitionId = savedWorkflowDefinition?.id || null;
   const activeWorkflowVersionId = loadedWorkflowVersionId || publishedWorkflowVersion?.id || null;
+
+  const versionsQuery = useQuery({
+    queryKey: workflowLibraryKeys.versions(activeWorkflowDefinitionId ?? ""),
+    queryFn: () => fetchWorkflowVersions(activeWorkflowDefinitionId as string),
+    enabled: Boolean(activeWorkflowDefinitionId),
+  });
+  const workflowVersions = useMemo(
+    () => (activeWorkflowDefinitionId ? versionsQuery.data ?? [] : []),
+    [activeWorkflowDefinitionId, versionsQuery.data]
+  );
+  const workflowVersionsLoading = versionsQuery.isLoading;
+  const workflowVersionsError =
+    versionsQuery.error instanceof Error ? versionsQuery.error.message : null;
+
+  const triggersQuery = useQuery({
+    queryKey: workflowLibraryKeys.triggers(activeWorkflowDefinitionId ?? ""),
+    queryFn: () => fetchWorkflowTriggers(activeWorkflowDefinitionId as string),
+    enabled: Boolean(activeWorkflowDefinitionId),
+  });
+  const workflowTriggers = useMemo(
+    () => (activeWorkflowDefinitionId ? triggersQuery.data ?? [] : []),
+    [activeWorkflowDefinitionId, triggersQuery.data]
+  );
+  const workflowTriggersLoading = triggersQuery.isLoading;
+  const workflowTriggersError =
+    triggersQuery.error instanceof Error ? triggersQuery.error.message : null;
+
+  const runsQuery = useQuery({
+    queryKey: workflowLibraryKeys.runs(activeWorkflowDefinitionId ?? ""),
+    queryFn: () => fetchWorkflowRuns(activeWorkflowDefinitionId as string),
+    enabled: Boolean(activeWorkflowDefinitionId),
+  });
+  const workflowRuns = useMemo(
+    () => (activeWorkflowDefinitionId ? runsQuery.data ?? [] : []),
+    [activeWorkflowDefinitionId, runsQuery.data]
+  );
+  const workflowRunsLoading = runsQuery.isLoading;
+  const workflowRunsError = runsQuery.error instanceof Error ? runsQuery.error.message : null;
+
+  const invalidateActiveDefinitionQueries = () => {
+    if (!activeWorkflowDefinitionId) return;
+    void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.versions(activeWorkflowDefinitionId) });
+    void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.triggers(activeWorkflowDefinitionId) });
+    void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.runs(activeWorkflowDefinitionId) });
+  };
   const isTypingTarget = (target: EventTarget | null) => {
     const element = target instanceof HTMLElement ? target : null;
     if (!element) {
@@ -1941,162 +2005,6 @@ export default function WorkflowStudio() {
       cancelled = true;
     };
   }, []);
-
-  const refreshWorkflowDefinitions = async (nextUserId?: string) => {
-    setWorkflowDefinitionsLoading(true);
-    setWorkflowDefinitionsError(null);
-    try {
-      const params = new URLSearchParams();
-      const normalizedUserId = (nextUserId ?? workspaceUserId).trim();
-      if (normalizedUserId) {
-        params.set("user_id", normalizedUserId);
-      }
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions${params.size > 0 ? `?${params.toString()}` : ""}`
-      );
-      const body = (await response.json()) as WorkflowDefinition[] | { detail?: unknown };
-      if (response.headers.get("x-demo-data") === "true") {
-        setDemoDataDetected(true);
-      }
-      if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
-        throw new Error(
-          typeof detail === "string"
-            ? detail
-            : `Workflow library request failed (${response.status}).`
-        );
-      }
-      setWorkflowDefinitions(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowDefinitionsError(
-        error instanceof Error ? error.message : "Failed to load saved workflows."
-      );
-      setWorkflowDefinitions([]);
-    } finally {
-      setWorkflowDefinitionsLoading(false);
-    }
-  };
-
-  const refreshWorkflowVersions = async (definitionId: string) => {
-    if (!definitionId.trim()) {
-      setWorkflowVersions([]);
-      setWorkflowVersionsError(null);
-      setWorkflowVersionsLoading(false);
-      return;
-    }
-    setWorkflowVersionsLoading(true);
-    setWorkflowVersionsError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/versions`
-      );
-      const body = (await response.json()) as WorkflowVersion[] | { detail?: unknown };
-      if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
-        throw new Error(
-          typeof detail === "string"
-            ? detail
-            : `Workflow version history request failed (${response.status}).`
-        );
-      }
-      setWorkflowVersions(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowVersionsError(
-        error instanceof Error ? error.message : "Failed to load workflow versions."
-      );
-      setWorkflowVersions([]);
-    } finally {
-      setWorkflowVersionsLoading(false);
-    }
-  };
-
-  const refreshWorkflowTriggers = async (definitionId: string) => {
-    if (!definitionId.trim()) {
-      setWorkflowTriggers([]);
-      setWorkflowTriggersError(null);
-      setWorkflowTriggersLoading(false);
-      return;
-    }
-    setWorkflowTriggersLoading(true);
-    setWorkflowTriggersError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/triggers`
-      );
-      const body = (await response.json()) as WorkflowTrigger[] | { detail?: unknown };
-      if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
-        throw new Error(
-          typeof detail === "string"
-            ? detail
-            : `Workflow trigger request failed (${response.status}).`
-        );
-      }
-      setWorkflowTriggers(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowTriggersError(
-        error instanceof Error ? error.message : "Failed to load workflow triggers."
-      );
-      setWorkflowTriggers([]);
-    } finally {
-      setWorkflowTriggersLoading(false);
-    }
-  };
-
-  const refreshWorkflowRuns = async (definitionId: string) => {
-    if (!definitionId.trim()) {
-      setWorkflowRuns([]);
-      setWorkflowRunsError(null);
-      setWorkflowRunsLoading(false);
-      return;
-    }
-    setWorkflowRunsLoading(true);
-    setWorkflowRunsError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/runs?limit=12`
-      );
-      const body = (await response.json()) as WorkflowRun[] | { detail?: unknown };
-      if (!response.ok) {
-        const detail = (body as { detail?: unknown }).detail;
-        throw new Error(
-          typeof detail === "string"
-            ? detail
-            : `Workflow run history request failed (${response.status}).`
-        );
-      }
-      setWorkflowRuns(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowRunsError(
-        error instanceof Error ? error.message : "Failed to load workflow run history."
-      );
-      setWorkflowRuns([]);
-    } finally {
-      setWorkflowRunsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void refreshWorkflowDefinitions();
-  }, [workspaceUserId]);
-
-  useEffect(() => {
-    if (!activeWorkflowDefinitionId) {
-      setWorkflowVersions([]);
-      setWorkflowVersionsError(null);
-      setWorkflowVersionsLoading(false);
-      setWorkflowTriggers([]);
-      setWorkflowTriggersError(null);
-      setWorkflowTriggersLoading(false);
-      setWorkflowRuns([]);
-      setWorkflowRunsError(null);
-      setWorkflowRunsLoading(false);
-      return;
-    }
-    void refreshWorkflowVersions(activeWorkflowDefinitionId);
-    void refreshWorkflowTriggers(activeWorkflowDefinitionId);
-    void refreshWorkflowRuns(activeWorkflowDefinitionId);
-  }, [activeWorkflowDefinitionId]);
 
   const availableCapabilities = useMemo(() => {
     const items = capabilityCatalog?.items || [];
@@ -2259,15 +2167,11 @@ export default function WorkflowStudio() {
         }));
       }
       if (dagConnectorDrag) {
-        setDagConnectorDrag((prev) =>
-          prev
-            ? {
-                ...prev,
-                x: pointerX,
-                y: pointerY,
-              }
-            : prev
-        );
+        setDagConnectorDrag({
+          ...dagConnectorDrag,
+          x: pointerX,
+          y: pointerY,
+        });
       }
     };
 
@@ -3597,7 +3501,9 @@ export default function WorkflowStudio() {
       delete next[nodeId];
       return next;
     });
-    setSelectedDagNodeId((prev) => (prev === nodeId ? null : prev));
+    if (selectedDagNodeId === nodeId) {
+      setSelectedDagNodeId(null);
+    }
     setStudioNotice("Removed step from workflow.");
   };
 
@@ -4396,10 +4302,7 @@ export default function WorkflowStudio() {
     setComposerCompileResult(null);
     setActiveComposerIssueFocus(null);
     setHoveredDagEdgeKey(null);
-    setDagEdgeDraftSourceNodeId(null);
-    setDagConnectorDrag(null);
-    setDagCanvasDraggingNodeId(null);
-    setDagConnectorHoverTargetNodeId(null);
+    resetDagCanvasInteractionState();
   };
 
   const startFreshStudioDraft = () => {
@@ -4413,9 +4316,6 @@ export default function WorkflowStudio() {
     setSavedWorkflowDefinition(null);
     setPublishedWorkflowVersion(null);
     setLoadedWorkflowVersionId(null);
-    setWorkflowVersions([]);
-    setWorkflowTriggers([]);
-    setWorkflowRuns([]);
     resetStudioTransientState();
     setStudioNotice("Started a fresh studio draft.");
   };
@@ -4452,7 +4352,7 @@ export default function WorkflowStudio() {
 
   useEffect(() => {
     if (
-      !demoDataDetected ||
+      !DEMO_DATA_ENABLED ||
       handledDemoWorkflowSelectionRef.current ||
       workflowDefinitionsLoading ||
       requestedWorkflowDefinitionId ||
@@ -4471,7 +4371,6 @@ export default function WorkflowStudio() {
     handledDemoWorkflowSelectionRef.current = true;
     restoreWorkflowDefinition(demoDefinition);
   }, [
-    demoDataDetected,
     requestedStudioMode,
     requestedWorkflowDefinitionId,
     requestedWorkflowVersionId,
@@ -4724,9 +4623,6 @@ export default function WorkflowStudio() {
     setSavedWorkflowDefinition(null);
     setPublishedWorkflowVersion(null);
     setLoadedWorkflowVersionId(null);
-    setWorkflowVersions([]);
-    setWorkflowTriggers([]);
-    setWorkflowRuns([]);
     resetStudioTransientState();
     setStudioNotice(pendingWorkbenchWorkflowDraft.notice || "Imported from workbench run.");
     switchStudioSurface("workflow", { clearWorkflowSelection: true });
@@ -4773,9 +4669,9 @@ export default function WorkflowStudio() {
       setSavedWorkflowDefinition(definition);
       setPublishedWorkflowVersion(null);
       setLoadedWorkflowVersionId(null);
-      void refreshWorkflowDefinitions();
-      void refreshWorkflowTriggers(definition.id);
-      void refreshWorkflowRuns(definition.id);
+      void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.definitions(workspaceUserId) });
+      void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.triggers(definition.id) });
+      void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.runs(definition.id) });
       setStudioNotice(`Saved draft "${definition.title}".`);
       return definition;
     } catch (error) {
@@ -4826,9 +4722,9 @@ export default function WorkflowStudio() {
       const version = body as WorkflowVersion;
       setPublishedWorkflowVersion(version);
       setLoadedWorkflowVersionId(version.id);
-      void refreshWorkflowDefinitions();
-      void refreshWorkflowVersions(definition.id);
-      void refreshWorkflowRuns(definition.id);
+      void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.definitions(workspaceUserId) });
+      void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.versions(definition.id) });
+      void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.runs(definition.id) });
       setStudioNotice(`Published workflow version v${version.version_number}.`);
       return version;
     } catch (error) {
@@ -4868,7 +4764,9 @@ export default function WorkflowStudio() {
       const result = body as WorkflowRunResult;
       setPublishedWorkflowVersion(result.workflow_version);
       setLoadedWorkflowVersionId(result.workflow_version.id);
-      void refreshWorkflowRuns(result.workflow_definition.id);
+      void queryClient.invalidateQueries({
+        queryKey: workflowLibraryKeys.runs(result.workflow_definition.id),
+      });
       setLastStartedJobId(result.job.id);
       setStudioNotice(
         `Started job ${result.job.id} from workflow version v${result.workflow_version.version_number}.`
@@ -5437,11 +5335,11 @@ export default function WorkflowStudio() {
         <button
           className="rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
           onClick={() => {
-            void refreshWorkflowDefinitions();
+            void queryClient.invalidateQueries({
+              queryKey: workflowLibraryKeys.definitions(workspaceUserId),
+            });
             if (activeWorkflowDefinitionId) {
-              void refreshWorkflowVersions(activeWorkflowDefinitionId);
-              void refreshWorkflowTriggers(activeWorkflowDefinitionId);
-              void refreshWorkflowRuns(activeWorkflowDefinitionId);
+              invalidateActiveDefinitionQueries();
             }
           }}
         >
@@ -5971,10 +5869,7 @@ export default function WorkflowStudio() {
       if (normalizedKey === "escape") {
         event.preventDefault();
         setActiveStudioPanelMenuId(null);
-        setDagEdgeDraftSourceNodeId(null);
-        setDagConnectorDrag(null);
-        setDagCanvasDraggingNodeId(null);
-        setDagConnectorHoverTargetNodeId(null);
+        resetDagCanvasInteractionState();
         setSelectedDagNodeId(null);
         setStudioNotice("Transient graph interactions cleared.");
         return;
@@ -6587,33 +6482,41 @@ export default function WorkflowStudio() {
         </div>
         {activeStudioSurface === "workflow" ? (
           <>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={startFreshStudioDraft}
             >
               New Workflow
-            </button>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={saveWorkflowDefinition}
               disabled={workflowActionLoading !== null}
             >
               {workflowActionLoading === "save" ? "Saving..." : "Save"}
-            </button>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={publishWorkflowVersion}
               disabled={workflowActionLoading !== null}
             >
               {workflowActionLoading === "publish" ? "Publishing..." : "Publish"}
-            </button>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={runWorkflowVersion}
               disabled={workflowActionLoading !== null}
             >
               {workflowActionLoading === "run" ? "Starting..." : "Run Workflow"}
-            </button>
+            </Button>
           </>
         ) : null}
       </ShellActions>
@@ -6832,100 +6735,23 @@ export default function WorkflowStudio() {
                     />
                   </div>
 
-                  {/* ── Panel icon strip (left side of stage) ── */}
-                  <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-col gap-1.5">
-                    {(["palette", "compile", "setup", "interface", "library"] as FloatingStudioPanelId[]).map((panelId) => {
-                      const isActive = drawerPanelId === panelId;
-                      const badge = getWorkspacePanelBadge(panelId);
-                      const iconKind: Record<string, "palette" | "inspect" | "zap" | "library" | "activity" | "menu"> = {
-                        palette: "palette",
-                        compile: "activity",
-                        setup: "menu",
-                        interface: "zap",
-                        library: "library",
-                      };
-                      return (
-                        <button
-                          key={panelId}
-                          type="button"
-                          title={getWorkspacePanelTitle(panelId)}
-                          aria-label={getWorkspacePanelTitle(panelId)}
-                          className={`relative flex h-9 w-9 items-center justify-center rounded-xl border transition ${
-                            isActive
-                              ? "border-sky-300/40 bg-accent-sky text-text-sky-token shadow-[0_0_0_2px_rgba(56,189,248,0.18)]"
-                              : "border-white/12 bg-[rgba(9,16,27,0.65)] text-text-md hover:border-white/20 hover:bg-[rgba(9,16,27,0.85)] hover:text-text-hi"
-                          } backdrop-blur-sm`}
-                          onClick={() => setDrawerPanelId((prev) => (prev === panelId ? null : panelId))}
-                        >
-                          <StudioWorkbenchIcon kind={iconKind[panelId] ?? "menu"} className="h-4 w-4" />
-                          {badge ? (
-                            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/20 bg-sky-500 text-[8px] font-bold text-white">
-                              {badge}
-                            </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* ── Right-side overlay drawer ── */}
-                  {(() => {
-                    const definition = drawerPanelId ? getWorkspacePanelDefinition(drawerPanelId) : null;
-                    const isOpen = Boolean(drawerPanelId && definition);
-                    return (
-                      <div
-                        className={`pointer-events-auto absolute right-0 top-0 z-30 flex h-full flex-col overflow-hidden rounded-r-[24px] border-l border-white/10 bg-[rgba(9,14,23,0.88)] shadow-[-12px_0_40px_rgba(9,14,23,0.4)] backdrop-blur-xl transition-transform duration-200 ${
-                          isOpen ? "translate-x-0" : "translate-x-full"
-                        }`}
-                        style={{ width: drawerWidth }}
-                      >
-                        {/* Left resize handle */}
-                        <div
-                          className="absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize transition hover:bg-sky-300/30 active:bg-sky-300/50"
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            drawerResizeRef.current = { startX: event.clientX, startWidth: drawerWidth };
-                          }}
-                          title="Drag to resize"
-                        />
-                        {definition ? (
-                          <>
-                            {/* Drawer header */}
-                            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/8 bg-[rgba(9,16,27,0.6)] px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-hi">
-                                  {definition.title}
-                                </div>
-                                {definition.badge ? (
-                                  <span className="rounded-full border border-subtle bg-surface-1 px-2 py-0.5 text-[9px] tracking-[0.14em] text-text-md">
-                                    {definition.badge}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <button
-                                type="button"
-                                className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-text-lo transition hover:bg-white/10 hover:text-text-hi"
-                                onClick={() => {
-                                  setDrawerPanelId(null);
-                                  if (drawerPanelId === "inspector") setSelectedDagNodeId(null);
-                                }}
-                                aria-label="Close panel"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                            {/* Drawer content */}
-                            <div
-                              id={definition.panelDomId}
-                              className={`min-h-0 flex-1 overflow-auto ${definition.bodyClassName || ""}`.trim()}
-                            >
-                              {definition.content}
-                            </div>
-                          </>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
+                  <StudioPanelDrawer
+                    activePanelId={drawerPanelId}
+                    onSelectPanel={(panelId) =>
+                      setDrawerPanelId((prev) => (prev === panelId ? null : panelId))
+                    }
+                    getPanelTitle={getWorkspacePanelTitle}
+                    getPanelBadge={getWorkspacePanelBadge}
+                    activeDefinition={drawerPanelId ? getWorkspacePanelDefinition(drawerPanelId) : null}
+                    drawerWidth={drawerWidth}
+                    onResizeStart={(event) => {
+                      drawerResizeRef.current = { startX: event.clientX, startWidth: drawerWidth };
+                    }}
+                    onClose={() => {
+                      setDrawerPanelId(null);
+                      if (drawerPanelId === "inspector") setSelectedDagNodeId(null);
+                    }}
+                  />
                 </div>
               </div>
       </section>
@@ -6945,83 +6771,68 @@ export default function WorkflowStudio() {
       </datalist>
 
       {/* ── Save workflow dialog ── */}
-      {saveDialogOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <button
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={() => setSaveDialogOpen(false)}
-            aria-label="Cancel"
-          />
-          <div className="relative z-10 w-full max-w-md rounded-[24px] border border-white/12 bg-[rgba(9,14,23,0.95)] p-6 shadow-[0_32px_80px_rgba(9,14,23,0.7)] backdrop-blur-xl">
-            <div className="mb-5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
-                Workflow Studio
+      <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+              Workflow Studio
+            </div>
+            <DialogTitle>Save workflow</DialogTitle>
+            <DialogDescription>
+              Give this workflow a name before saving. You can rename it later from the Workflows page.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            <label className="block">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                Name <span className="text-rose-400">*</span>
               </div>
-              <h2 className="mt-1 text-lg font-semibold tracking-tight text-text-hi">
-                Save workflow
-              </h2>
-              <p className="mt-0.5 text-xs text-text-md">
-                Give this workflow a name before saving. You can rename it later from the Workflows page.
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              <label className="block">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
-                  Name <span className="text-rose-400">*</span>
-                </div>
-                <input
-                  autoFocus
-                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10"
-                  placeholder="e.g. Document generation pipeline"
-                  value={saveDialogTitle}
-                  onChange={(e) => setSaveDialogTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && saveDialogTitle.trim()) {
-                      setSaveDialogOpen(false);
-                      void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
-                    }
-                    if (e.key === "Escape") setSaveDialogOpen(false);
-                  }}
-                />
-              </label>
-              <label className="block">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
-                  Goal <span className="text-text-lo">(optional)</span>
-                </div>
-                <textarea
-                  rows={2}
-                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10 resize-none"
-                  placeholder="What does this workflow accomplish?"
-                  value={saveDialogGoal}
-                  onChange={(e) => setSaveDialogGoal(e.target.value)}
-                />
-              </label>
-            </div>
-
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-xl border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-md transition hover:text-text-hi"
-                onClick={() => setSaveDialogOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="rounded-xl border border-sky-300/35 bg-accent-sky px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/55 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!saveDialogTitle.trim()}
-                onClick={() => {
-                  setSaveDialogOpen(false);
-                  void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+              <Input
+                autoFocus
+                className="mt-1.5"
+                placeholder="e.g. Document generation pipeline"
+                value={saveDialogTitle}
+                onChange={(e) => setSaveDialogTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && saveDialogTitle.trim()) {
+                    setSaveDialogOpen(false);
+                    void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+                  }
                 }}
-              >
-                Save workflow
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+              />
+            </label>
+            <label className="block">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                Goal <span className="text-text-lo">(optional)</span>
+              </div>
+              <Textarea
+                rows={2}
+                className="mt-1.5"
+                placeholder="What does this workflow accomplish?"
+                value={saveDialogGoal}
+                onChange={(e) => setSaveDialogGoal(e.target.value)}
+              />
+            </label>
+          </DialogBody>
+
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setSaveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!saveDialogTitle.trim()}
+              onClick={() => {
+                setSaveDialogOpen(false);
+                void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+              }}
+            >
+              Save workflow
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
