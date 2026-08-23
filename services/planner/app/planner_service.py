@@ -20,9 +20,9 @@ from libs.core import (
     models,
     payload_resolver,
     planner_contracts,
-    tool_registry,
 )
 from libs.core.cache_session_store import CacheSessionStore
+from libs.tool_manager import tool_governance
 
 
 @dataclass(frozen=True)
@@ -1256,7 +1256,7 @@ def validate_plan_request(
                         f"capability_inputs_invalid:{tool_name}:{normalized_task.name}:{validation_error}",
                     )
                 continue
-            allow_decision = tool_registry.evaluate_tool_allowlist(
+            allow_decision = tool_governance.evaluate_tool_allowlist(
                 tool_name,
                 "planner",
                 context=planner_contracts.governance_context(request),

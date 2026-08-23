@@ -1,5 +1,5 @@
-from libs.core.memory_registry import DEFAULT_MEMORY_SPECS, MemoryRegistry, default_memory_registry
 from libs.core.models import MemoryScope, MemorySpec
+from libs.memory.memory_registry import DEFAULT_MEMORY_SPECS, MemoryRegistry, default_memory_registry
 
 
 def test_register_and_get_trims_name() -> None:

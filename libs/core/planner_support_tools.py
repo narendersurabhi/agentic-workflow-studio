@@ -9,10 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from libs.core import (
     capability_registry,
     capability_search,
-    memory_registry,
     models,
     run_specs,
 )
+from libs.memory import memory_registry
 
 
 class SearchCapabilitiesInput(BaseModel):

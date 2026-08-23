@@ -15,7 +15,7 @@ except Exception:  # noqa: BLE001
 from libs.core import capability_registry as cap_registry
 from libs.core import tracing as core_tracing
 from libs.framework.tool_runtime import ToolExecutionError, classify_tool_error
-from libs.tools import mcp_client
+from libs.mcp import mcp_client
 
 
 LOGGER = logging.getLogger(__name__)

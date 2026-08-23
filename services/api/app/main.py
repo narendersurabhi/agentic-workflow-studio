@@ -40,7 +40,6 @@ from libs.core import (
     intent_contract,
     llm_provider,
     logging as core_logging,
-    mcp_gateway,
     models,
     payload_resolver,
     planner_contracts,
@@ -60,6 +59,7 @@ from libs.core.llm_provider import (
 )
 from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
 from libs.core.llm_provider_timing import TimingLLMProvider
+from libs.mcp import mcp_gateway
 from .database import Base, SessionLocal, engine
 from .models import (
     AgentCheckpointRecord,
@@ -20503,7 +20503,7 @@ def cancel_run(run_id: str, db: Session = Depends(get_db)) -> models.Run:
     _sync_shadow_run_status(db, job)
     db.commit()
     _emit_event("job.canceled", {"job_id": job.id, "correlation_id": str(uuid.uuid4())})
-    from libs.core import agent_cancel
+    from libs.harness import agent_cancel
 
     agent_cancel.signal_cancel(run_id)
     return _run_from_record(run_record, job_record=job)

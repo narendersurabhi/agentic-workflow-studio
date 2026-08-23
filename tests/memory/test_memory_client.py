@@ -1,6 +1,6 @@
 import json
 
-from libs.core import memory_client
+from libs.memory import memory_client
 
 
 class FakeResponse:

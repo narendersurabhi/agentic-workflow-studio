@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List
 from pydantic import BaseModel, ConfigDict, Field
 
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
+from libs.framework.tool_runtime import Tool, ToolExecutionError
 
 
 def _artifacts_dir() -> Path:
@@ -30,8 +31,6 @@ class PdfRenderFromSpecOutput(BaseModel):
 
 
 def register_pdf_tools(registry) -> None:
-    from libs.core.tool_registry import Tool
-
     registry.register(
         Tool(
             spec=ToolSpec(
@@ -455,6 +454,4 @@ def _tokenize_path(expr: str) -> List[Any]:
 
 
 def _tool_error(message: str) -> None:
-    from libs.core.tool_registry import ToolExecutionError
-
     raise ToolExecutionError(message)

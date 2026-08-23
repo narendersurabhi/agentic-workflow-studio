@@ -8,9 +8,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from libs.core import agent_cancel
 from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 from libs.framework.tool_runtime import ToolExecutionError
+from libs.harness import agent_cancel
 
 LOGGER = logging.getLogger(__name__)
 
@@ -498,7 +498,7 @@ def agent(
     # Background dispatch: hand off to the job queue and return immediately.
     background = bool(payload.get("background", False))
     if background and _recursion_depth == 0:
-        from libs.core import sub_agent_dispatch
+        from libs.harness import sub_agent_dispatch
 
         api_url = sub_agent_dispatch.get_api_url()
         if api_url:

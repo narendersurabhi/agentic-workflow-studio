@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from libs.core import llm_provider, models, tool_registry
+from libs.tool_manager import tool_governance
 from libs.framework.tool_runtime import Tool, ToolRegistry
 
 
@@ -38,8 +39,8 @@ class WorkerToolRuntime:
         *,
         context: dict[str, Any] | None = None,
         tool_spec: models.ToolSpec | None = None,
-    ) -> tool_registry.ToolAllowDecision:
-        return tool_registry.evaluate_tool_allowlist(
+    ) -> tool_governance.ToolAllowDecision:
+        return tool_governance.evaluate_tool_allowlist(
             tool_name,
             self.service_name,
             context=context,

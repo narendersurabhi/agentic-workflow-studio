@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable
 
-from libs.core import capability_registry, logging as core_logging, mcp_gateway, models
+from libs.core import capability_registry, logging as core_logging, models
 from libs.framework.tool_runtime import ToolExecutionError, classify_tool_error
+from libs.mcp import mcp_gateway
 from services.worker.app import tool_runtime_adapter
 
 

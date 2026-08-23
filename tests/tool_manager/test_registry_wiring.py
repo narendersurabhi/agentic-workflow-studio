@@ -1,5 +1,5 @@
-from libs.core import tool_registry
 from libs.framework.tool_runtime import ToolRegistry
+from libs.tool_manager import registry as tool_registry
 
 
 def test_build_tool_registry_wires_catalog_plugins_and_governance(monkeypatch) -> None:

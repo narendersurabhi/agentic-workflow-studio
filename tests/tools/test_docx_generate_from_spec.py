@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 
-from libs.core.tool_registry import ToolExecutionError, ToolRegistry
+from libs.framework.tool_runtime import ToolExecutionError, ToolRegistry
 from libs.tools.docx_generate import register_docx_tools
 
 

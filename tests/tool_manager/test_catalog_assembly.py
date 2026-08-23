@@ -1,7 +1,7 @@
 import pytest
 
-from libs.core import tool_registry
 from libs.framework.tool_runtime import ToolRegistry
+from libs.tool_manager import registry as tool_registry
 
 
 def test_register_default_tools_adds_builtin_specs() -> None:

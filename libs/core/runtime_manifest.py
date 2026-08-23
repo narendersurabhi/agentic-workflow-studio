@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 
 from libs.framework.tool_runtime import ToolRegistry
 
-from . import capability_registry, mcp_gateway, tool_registry
+from . import capability_registry, tool_registry
+from libs.mcp import mcp_gateway
 from .llm_provider import MockLLMProvider
 
 SCHEMA_VERSION = "runtime-manifest.v1"

@@ -29,7 +29,7 @@ from libs.core import (
 )
 from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
 from libs.core.llm_provider_timing import TimingLLMProvider
-from libs.core.memory_client import MemoryClient
+from libs.memory.memory_client import MemoryClient
 from services.worker.app.memory_semantics import (
     apply_memory_defaults,
     missing_memory_only_inputs,
