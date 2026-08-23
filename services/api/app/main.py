@@ -15483,6 +15483,10 @@ def _collect_reference_paths(value: Any) -> list[list[str]]:
                     parts = [segment for segment in raw.split(".") if segment]
                 if parts:
                     refs.append(parts)
+            elif isinstance(from_path, (list, tuple)) and from_path:
+                list_parts = [str(segment) for segment in from_path if str(segment).strip()]
+                if list_parts:
+                    refs.append(list_parts)
             for child in node.values():
                 _walk(child)
         elif isinstance(node, list):
