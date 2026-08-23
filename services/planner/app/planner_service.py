@@ -980,6 +980,7 @@ def build_validation_payload(
     projected_inputs = job_projection.project_explicit_inputs_for_tool(
         tool.name,
         request.job_payload,
+        job_context=request.job_context,
         default_goal=request.goal,
     )
     if projected_inputs:
