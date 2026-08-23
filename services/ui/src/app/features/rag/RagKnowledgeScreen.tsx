@@ -2,14 +2,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, useAuth } from "../../lib/auth";
 
 import { useShell, ShellActions } from "../../lib/shell";
 import ScreenHeader from "../../components/ScreenHeader";
+import Button from "../../components/ui/Button";
+import Input from "../../components/ui/Input";
+import Textarea from "../../components/ui/Textarea";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
 const DEFAULT_COLLECTION = "rag_default";
 const DEFAULT_NAMESPACE = "docs";
+const RAG_COLLECTIONS_QUERY_KEY = ["rag", "collections"] as const;
 const CREATE_NEW_VALUE = "__create_new__";
 
 type IndexMode = "markdown" | "text" | "workspace_file" | "workspace_directory";
@@ -64,14 +69,12 @@ function writeLsScope(scope: RagScope) {
 
 type RagScreenCache = {
   scope: RagScope;
-  availableCollections: string[];
   documents: RagDocumentSummary[];
   selectedDocumentId: string | null;
 };
 
 const _cache: RagScreenCache = {
   scope: { collectionName: DEFAULT_COLLECTION, namespace: DEFAULT_NAMESPACE, workspaceId: "", tenantId: "" },
-  availableCollections: [DEFAULT_COLLECTION],
   documents: [],
   selectedDocumentId: null,
 };
@@ -272,7 +275,7 @@ function ScopeComboBox({
     >
       {creating ? (
         <div className="p-3 space-y-2">
-          <input
+          <Input
             autoFocus
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -281,26 +284,29 @@ function ScopeComboBox({
               if (e.key === "Escape") { setCreating(false); setNewName(""); }
             }}
             placeholder={`New ${label.toLowerCase()} name…`}
-            className="w-full rounded-xl border border-white/20 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-sky-400/50 focus:outline-none"
           />
           {createError && (
             <p className="text-[11px] text-rose-400">{createError}</p>
           )}
           <div className="flex gap-2">
-            <button
+            <Button
               type="button"
+              variant="primary"
+              size="sm"
+              className="uppercase tracking-[0.14em]"
               onClick={() => void handleCreate()}
-              className="rounded-xl border border-sky-400/40 bg-sky-500/20 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-300"
             >
               Create
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.14em]"
               onClick={() => { setCreating(false); setNewName(""); }}
-              className="rounded-xl border border-white/15 bg-slate-800 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
@@ -396,6 +402,7 @@ function RagModeButton({
 
 export default function RagKnowledgeScreen() {
   const { user: authUser } = useAuth();
+  const queryClient = useQueryClient();
 
   // ── Scope state ──────────────────────────────────────────────────────────────
   // Layer 1: module cache (same-tab navigation, instant)
@@ -437,12 +444,6 @@ export default function RagKnowledgeScreen() {
   const setWorkspaceId = (v: string) => { const s = { ..._cache.scope, workspaceId: v }; persistScope(s); setWorkspaceIdState(v); };
   const setTenantId = (v: string) => { const s = { ..._cache.scope, tenantId: v }; persistScope(s); setTenantIdState(v); };
 
-  // Available options fetched from the API / derived from documents
-  const [availableCollections, setAvailableCollectionsState] = useState<string[]>(() => _cache.availableCollections);
-  const [collectionsLoading, setCollectionsLoading] = useState(_cache.availableCollections.length <= 1);
-
-  const setAvailableCollections = (cols: string[]) => { _cache.availableCollections = cols; setAvailableCollectionsState(cols); };
-
   const [documents, setDocumentsState] = useState<RagDocumentSummary[]>(() => _cache.documents);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
@@ -469,6 +470,7 @@ export default function RagKnowledgeScreen() {
   const [indexing, setIndexing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [replacing, setReplacing] = useState(false);
+  const [confirmDeleteDocument, setConfirmDeleteDocument] = useState(false);
 
   // Facet options derived from loaded documents
   const availableNamespaces = useMemo(
@@ -484,33 +486,30 @@ export default function RagKnowledgeScreen() {
     [documents]
   );
 
-  // Fetch available collections on mount (skips network call if cache is warm)
-  useEffect(() => {
-    if (_cache.availableCollections.length > 1) {
-      setCollectionsLoading(false);
-      return;
-    }
-    setCollectionsLoading(true);
-    apiFetch(`${apiUrl}/rag/collections`)
-      .then((res) => res.json())
-      .then((body: unknown) => {
-        const cols = (body as { collections?: unknown }).collections;
-        if (Array.isArray(cols)) {
-          const names = cols.filter((c): c is string => typeof c === "string" && Boolean(c));
-          setAvailableCollections(names.length > 0 ? names : [DEFAULT_COLLECTION]);
-        }
-      })
-      .catch(() => {
-        setAvailableCollections([DEFAULT_COLLECTION]);
-      })
-      .finally(() => setCollectionsLoading(false));
-  }, []);
+  const collectionsQueryResult = useQuery({
+    queryKey: RAG_COLLECTIONS_QUERY_KEY,
+    queryFn: async () => {
+      const res = await apiFetch(`${apiUrl}/rag/collections`);
+      const body = (await res.json()) as { collections?: unknown };
+      const cols = body.collections;
+      const names = Array.isArray(cols)
+        ? cols.filter((c): c is string => typeof c === "string" && Boolean(c))
+        : [];
+      return names.length > 0 ? names : [DEFAULT_COLLECTION];
+    },
+  });
+  const availableCollections = collectionsQueryResult.data ?? [DEFAULT_COLLECTION];
+  const collectionsLoading = collectionsQueryResult.isLoading;
 
   useEffect(() => {
     if (authUser?.user_id) {
       setUserId(authUser.user_id);
     }
   }, [authUser?.user_id]);
+
+  useEffect(() => {
+    setConfirmDeleteDocument(false);
+  }, [selectedDocumentId]);
 
   // Hydrate scope: localStorage first (instant), then server (source of truth)
   useEffect(() => {
@@ -627,17 +626,7 @@ export default function RagKnowledgeScreen() {
 
   // Refresh collections list after creating a new one
   const refreshCollections = async () => {
-    try {
-      const res = await apiFetch(`${apiUrl}/rag/collections`);
-      const body = (await res.json()) as { collections?: unknown };
-      const cols = body.collections;
-      if (Array.isArray(cols)) {
-        const names = cols.filter((c): c is string => typeof c === "string" && Boolean(c));
-        if (names.length > 0) setAvailableCollections(names);
-      }
-    } catch {
-      // keep existing list
-    }
+    await queryClient.invalidateQueries({ queryKey: RAG_COLLECTIONS_QUERY_KEY });
   };
 
   const createCollection = async (name: string) => {
@@ -799,8 +788,7 @@ export default function RagKnowledgeScreen() {
 
   const deleteSelectedDocument = async () => {
     if (!selectedDocumentId) return;
-    const confirmed = window.confirm(`Delete indexed document ${selectedDocumentId}?`);
-    if (!confirmed) return;
+    setConfirmDeleteDocument(false);
     setDeleting(true);
     setFormError(null);
     setNotice(null);
@@ -854,22 +842,26 @@ export default function RagKnowledgeScreen() {
   return (
     <>
       <ShellActions>
-        <button
+        <Button
           type="button"
-          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+          variant="secondary"
+          size="sm"
+          className="uppercase tracking-[0.16em]"
           onClick={() => void refreshDocuments()}
           disabled={documentsLoading}
         >
           Refresh
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+          variant="secondary"
+          size="sm"
+          className="uppercase tracking-[0.16em]"
           onClick={() => void submitIndex()}
           disabled={indexing}
         >
           {indexing ? "Indexing..." : "Index Now"}
-        </button>
+        </Button>
       </ShellActions>
       <ScreenHeader
         eyebrow="Knowledge Base"
@@ -915,19 +907,19 @@ export default function RagKnowledgeScreen() {
           <label className={fieldGroupClassName}>
             <span className={fieldLabelClassName}>Search</span>
             <div className="flex gap-2">
-              <input
+              <Input
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                className={fieldInputClassName}
                 placeholder="document, source, metadata..."
               />
-              <button
+              <Button
                 type="button"
-                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+                variant="secondary"
+                className="uppercase tracking-[0.16em]"
                 onClick={() => void refreshDocuments()}
               >
                 Go
-              </button>
+              </Button>
             </div>
           </label>
         </div>
@@ -956,13 +948,9 @@ export default function RagKnowledgeScreen() {
                 selected document.
               </p>
             </div>
-            <button
-              type="button"
-              className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1"
-              onClick={clearForm}
-            >
+            <Button type="button" variant="secondary" onClick={clearForm}>
               Clear Form
-            </button>
+            </Button>
           </div>
 
           <div className="mt-6 grid gap-3">
@@ -1274,23 +1262,44 @@ export default function RagKnowledgeScreen() {
                     <dd className="mt-1 text-text-md">{selectedDocument.chunk_count}</dd>
                   </div>
                 </dl>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  {confirmDeleteDocument ? (
+                    <>
+                      <span className="text-sm text-text-rose-token">Delete this document?</span>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        onClick={() => void deleteSelectedDocument()}
+                        disabled={deleting}
+                      >
+                        {deleting ? "Deleting..." : "Yes, delete"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setConfirmDeleteDocument(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={() => setConfirmDeleteDocument(true)}
+                      disabled={deleting}
+                    >
+                      Delete Document
+                    </Button>
+                  )}
+                  <Button
                     type="button"
-                    className="rounded-full border border-rose-300/20 bg-accent-rose px-4 py-2 text-sm font-semibold text-text-rose-token transition hover:border-rose-300/30 hover:bg-accent-rose disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={() => void deleteSelectedDocument()}
-                    disabled={deleting}
-                  >
-                    {deleting ? "Deleting..." : "Delete Document"}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+                    variant="secondary"
                     onClick={() => void replaceSelectedDocument()}
                     disabled={replacing || (indexMode !== "markdown" && indexMode !== "text")}
                   >
                     {replacing ? "Replacing..." : "Replace With Form"}
-                  </button>
+                  </Button>
                 </div>
               </div>
 
