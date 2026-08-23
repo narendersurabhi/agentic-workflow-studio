@@ -328,16 +328,23 @@ def load_capability_registry(path: Path | None = None) -> CapabilityRegistry:
     global _CAPABILITY_CACHE_KEY, _CAPABILITY_CACHE_VALUE, _CAPABILITY_CACHE_CHECKED_AT
 
     now = _time.monotonic()
+    resolved = (path or resolve_capability_registry_path()).expanduser()
 
-    # Fast path: if the cache is warm and we checked the file recently, skip stat().
-    # The file changes only on deploys; 30 s staleness is acceptable in production.
+    # Fast path: if the cache is warm *for this resolved path* and we checked the
+    # file recently, skip stat(). The file changes only on deploys; 30 s staleness
+    # is acceptable in production. The resolved-path check (cheap: no I/O) keeps
+    # this correct when a caller passes an explicit `path` or changes
+    # CAPABILITY_REGISTRY_PATH between calls (e.g. tests swapping in a fixture
+    # registry) — without it, the fast path would silently keep serving whatever
+    # registry happened to be cached first, ignoring the new path entirely.
     if (
         _CAPABILITY_CACHE_VALUE is not None
+        and _CAPABILITY_CACHE_KEY is not None
+        and _CAPABILITY_CACHE_KEY[0] == str(resolved)
         and now - _CAPABILITY_CACHE_CHECKED_AT < _CAPABILITY_CACHE_TTL
     ):
         return _CAPABILITY_CACHE_VALUE
 
-    resolved = (path or resolve_capability_registry_path()).expanduser()
     try:
         mtime = resolved.stat().st_mtime
     except OSError:
