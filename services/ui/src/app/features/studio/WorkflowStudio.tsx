@@ -15,6 +15,7 @@ import {
   fetchWorkflowTriggers,
   fetchWorkflowRuns,
 } from "./workflowLibraryQueries";
+import { useStudioCanvasStore } from "./studioCanvasStore";
 import ComposerValidationPanel from "../../components/composer/ComposerValidationPanel";
 import {
   WorkflowNodeIcon,
@@ -178,14 +179,6 @@ const defaultControlConfig = (kind: StudioControlKind): StudioControlConfig => {
     return { expression: "", switchCases: [createStudioControlCase()] };
   }
   return { expression: "", parallelMode: "fan_out" };
-};
-
-type DagConnectorDragState = {
-  sourceNodeId: string;
-  x: number;
-  y: number;
-  branchLabel?: string;
-  sourcePortY?: number;
 };
 
 const dagNodeOutputAnchorY = (
@@ -1688,7 +1681,6 @@ export default function WorkflowStudio() {
   const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteGroup, setPaletteGroup] = useState("all");
-  const [selectedDagNodeId, setSelectedDagNodeId] = useState<string | null>(null);
   const [studioNotice, setStudioNotice] = useState<string | null>(null);
   const [lastStartedJobId, setLastStartedJobId] = useState<string | null>(null);
   const [chainPreflightLoading, setChainPreflightLoading] = useState(false);
@@ -1719,14 +1711,25 @@ export default function WorkflowStudio() {
     null
   );
   const [composerNodePositions, setComposerNodePositions] = useState<Record<string, CanvasPoint>>({});
-  const [hoveredDagEdgeKey, setHoveredDagEdgeKey] = useState<string | null>(null);
-  const [dagEdgeDraftSourceNodeId, setDagEdgeDraftSourceNodeId] = useState<string | null>(null);
-  const [dagConnectorDrag, setDagConnectorDrag] = useState<DagConnectorDragState | null>(null);
-  const [dagCanvasDraggingNodeId, setDagCanvasDraggingNodeId] = useState<string | null>(null);
-  const [dagConnectorHoverTargetNodeId, setDagConnectorHoverTargetNodeId] = useState<string | null>(
-    null
+  // Canvas-local interaction state (selection, drag, zoom) lives in a Zustand
+  // store rather than component state — see studioCanvasStore.ts for why.
+  const selectedDagNodeId = useStudioCanvasStore((s) => s.selectedDagNodeId);
+  const setSelectedDagNodeId = useStudioCanvasStore((s) => s.setSelectedDagNodeId);
+  const dagCanvasDraggingNodeId = useStudioCanvasStore((s) => s.dagCanvasDraggingNodeId);
+  const setDagCanvasDraggingNodeId = useStudioCanvasStore((s) => s.setDagCanvasDraggingNodeId);
+  const dagConnectorDrag = useStudioCanvasStore((s) => s.dagConnectorDrag);
+  const setDagConnectorDrag = useStudioCanvasStore((s) => s.setDagConnectorDrag);
+  const dagConnectorHoverTargetNodeId = useStudioCanvasStore((s) => s.dagConnectorHoverTargetNodeId);
+  const setDagConnectorHoverTargetNodeId = useStudioCanvasStore(
+    (s) => s.setDagConnectorHoverTargetNodeId
   );
-  const [dagCanvasZoom, setDagCanvasZoom] = useState(1);
+  const dagEdgeDraftSourceNodeId = useStudioCanvasStore((s) => s.dagEdgeDraftSourceNodeId);
+  const setDagEdgeDraftSourceNodeId = useStudioCanvasStore((s) => s.setDagEdgeDraftSourceNodeId);
+  const hoveredDagEdgeKey = useStudioCanvasStore((s) => s.hoveredDagEdgeKey);
+  const setHoveredDagEdgeKey = useStudioCanvasStore((s) => s.setHoveredDagEdgeKey);
+  const dagCanvasZoom = useStudioCanvasStore((s) => s.dagCanvasZoom);
+  const setDagCanvasZoom = useStudioCanvasStore((s) => s.setDagCanvasZoom);
+  const resetDagCanvasInteractionState = useStudioCanvasStore((s) => s.resetDragState);
   const [studioWorkspaceMode, setStudioWorkspaceMode] =
     useState<StudioWorkspaceMode>("default");
   const [workflowSetupExpanded, setWorkflowSetupExpanded] = useState(false);
@@ -2152,15 +2155,11 @@ export default function WorkflowStudio() {
         }));
       }
       if (dagConnectorDrag) {
-        setDagConnectorDrag((prev) =>
-          prev
-            ? {
-                ...prev,
-                x: pointerX,
-                y: pointerY,
-              }
-            : prev
-        );
+        setDagConnectorDrag({
+          ...dagConnectorDrag,
+          x: pointerX,
+          y: pointerY,
+        });
       }
     };
 
@@ -3490,7 +3489,9 @@ export default function WorkflowStudio() {
       delete next[nodeId];
       return next;
     });
-    setSelectedDagNodeId((prev) => (prev === nodeId ? null : prev));
+    if (selectedDagNodeId === nodeId) {
+      setSelectedDagNodeId(null);
+    }
     setStudioNotice("Removed step from workflow.");
   };
 
@@ -4289,10 +4290,7 @@ export default function WorkflowStudio() {
     setComposerCompileResult(null);
     setActiveComposerIssueFocus(null);
     setHoveredDagEdgeKey(null);
-    setDagEdgeDraftSourceNodeId(null);
-    setDagConnectorDrag(null);
-    setDagCanvasDraggingNodeId(null);
-    setDagConnectorHoverTargetNodeId(null);
+    resetDagCanvasInteractionState();
   };
 
   const startFreshStudioDraft = () => {
@@ -5859,10 +5857,7 @@ export default function WorkflowStudio() {
       if (normalizedKey === "escape") {
         event.preventDefault();
         setActiveStudioPanelMenuId(null);
-        setDagEdgeDraftSourceNodeId(null);
-        setDagConnectorDrag(null);
-        setDagCanvasDraggingNodeId(null);
-        setDagConnectorHoverTargetNodeId(null);
+        resetDagCanvasInteractionState();
         setSelectedDagNodeId(null);
         setStudioNotice("Transient graph interactions cleared.");
         return;
