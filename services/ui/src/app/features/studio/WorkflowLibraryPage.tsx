@@ -1,175 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import { apiFetch, useAuth } from "../../lib/auth";
+import { useAuth } from "../../lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useShell, ShellActions } from "../../lib/shell";
 import StudioWorkflowLibrary from "./StudioWorkflowLibrary";
-import type {
-  WorkflowDefinition,
-  WorkflowRun,
-  WorkflowRunResult,
-  WorkflowTrigger,
-  WorkflowVersion,
-} from "./types";
-
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
-const detailMessage = (body: unknown, fallback: string) => {
-  if (body && typeof body === "object" && typeof (body as { detail?: unknown }).detail === "string") {
-    return (body as { detail: string }).detail;
-  }
-  return fallback;
-};
+import {
+  workflowLibraryKeys,
+  fetchWorkflowDefinitions,
+  fetchWorkflowVersions,
+  fetchWorkflowTriggers,
+  fetchWorkflowRuns,
+  deleteWorkflowDefinitionRequest,
+  deleteWorkflowVersionRequest,
+  createManualWorkflowTriggerRequest,
+  invokeWorkflowTriggerRequest,
+} from "./workflowLibraryQueries";
+import type { WorkflowDefinition, WorkflowTrigger, WorkflowVersion } from "./types";
 
 export default function WorkflowLibraryPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { user: authUser } = useAuth();
   const [workspaceUserId, setWorkspaceUserId] = useState("");
-  const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([]);
-  const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] = useState(true);
-  const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<string | null>(null);
-  const [workflowVersions, setWorkflowVersions] = useState<WorkflowVersion[]>([]);
-  const [workflowVersionsLoading, setWorkflowVersionsLoading] = useState(false);
-  const [workflowVersionsError, setWorkflowVersionsError] = useState<string | null>(null);
-  const [workflowTriggers, setWorkflowTriggers] = useState<WorkflowTrigger[]>([]);
-  const [workflowTriggersLoading, setWorkflowTriggersLoading] = useState(false);
-  const [workflowTriggersError, setWorkflowTriggersError] = useState<string | null>(null);
-  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>([]);
-  const [workflowRunsLoading, setWorkflowRunsLoading] = useState(false);
-  const [workflowRunsError, setWorkflowRunsError] = useState<string | null>(null);
   const [activeWorkflowDefinitionId, setActiveWorkflowDefinitionId] = useState<string | null>(null);
   const [activeWorkflowVersionId, setActiveWorkflowVersionId] = useState<string | null>(null);
-  const [deletingWorkflowDefinitionId, setDeletingWorkflowDefinitionId] = useState<string | null>(
-    null
-  );
-  const [deletingWorkflowVersionId, setDeletingWorkflowVersionId] = useState<string | null>(null);
-  const [workflowActionLoading, setWorkflowActionLoading] = useState<"delete" | "save" | "run" | null>(
-    null
-  );
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  const activeWorkflowDefinition = useMemo(
-    () => workflowDefinitions.find((definition) => definition.id === activeWorkflowDefinitionId) || null,
-    [activeWorkflowDefinitionId, workflowDefinitions]
-  );
-
-  const refreshWorkflowDefinitions = async (nextUserId?: string) => {
-    setWorkflowDefinitionsLoading(true);
-    setWorkflowDefinitionsError(null);
-    try {
-      const params = new URLSearchParams();
-      const normalizedUserId = (nextUserId ?? workspaceUserId).trim();
-      if (normalizedUserId) {
-        params.set("user_id", normalizedUserId);
-      }
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions${params.size > 0 ? `?${params.toString()}` : ""}`
-      );
-      const body = (await response.json()) as WorkflowDefinition[] | { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailMessage(body, `Workflow library request failed (${response.status}).`));
-      }
-      setWorkflowDefinitions(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowDefinitionsError(
-        error instanceof Error ? error.message : "Failed to load saved workflows."
-      );
-      setWorkflowDefinitions([]);
-    } finally {
-      setWorkflowDefinitionsLoading(false);
-    }
-  };
-
-  const refreshWorkflowVersions = async (definitionId: string) => {
-    if (!definitionId.trim()) {
-      setWorkflowVersions([]);
-      setWorkflowVersionsError(null);
-      setWorkflowVersionsLoading(false);
-      return;
-    }
-    setWorkflowVersionsLoading(true);
-    setWorkflowVersionsError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/versions`
-      );
-      const body = (await response.json()) as WorkflowVersion[] | { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(
-          detailMessage(body, `Workflow version history request failed (${response.status}).`)
-        );
-      }
-      setWorkflowVersions(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowVersionsError(
-        error instanceof Error ? error.message : "Failed to load workflow versions."
-      );
-      setWorkflowVersions([]);
-    } finally {
-      setWorkflowVersionsLoading(false);
-    }
-  };
-
-  const refreshWorkflowTriggers = async (definitionId: string) => {
-    if (!definitionId.trim()) {
-      setWorkflowTriggers([]);
-      setWorkflowTriggersError(null);
-      setWorkflowTriggersLoading(false);
-      return;
-    }
-    setWorkflowTriggersLoading(true);
-    setWorkflowTriggersError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/triggers`
-      );
-      const body = (await response.json()) as WorkflowTrigger[] | { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailMessage(body, `Workflow trigger request failed (${response.status}).`));
-      }
-      setWorkflowTriggers(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowTriggersError(
-        error instanceof Error ? error.message : "Failed to load workflow triggers."
-      );
-      setWorkflowTriggers([]);
-    } finally {
-      setWorkflowTriggersLoading(false);
-    }
-  };
-
-  const refreshWorkflowRuns = async (definitionId: string) => {
-    if (!definitionId.trim()) {
-      setWorkflowRuns([]);
-      setWorkflowRunsError(null);
-      setWorkflowRunsLoading(false);
-      return;
-    }
-    setWorkflowRunsLoading(true);
-    setWorkflowRunsError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(definitionId)}/runs?limit=12`
-      );
-      const body = (await response.json()) as WorkflowRun[] | { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(
-          detailMessage(body, `Workflow run history request failed (${response.status}).`)
-        );
-      }
-      setWorkflowRuns(Array.isArray(body) ? body : []);
-    } catch (error) {
-      setWorkflowRunsError(
-        error instanceof Error ? error.message : "Failed to load workflow run history."
-      );
-      setWorkflowRuns([]);
-    } finally {
-      setWorkflowRunsLoading(false);
-    }
-  };
 
   useEffect(() => {
     if (authUser?.user_id) {
@@ -177,37 +37,48 @@ export default function WorkflowLibraryPage() {
     }
   }, [authUser?.user_id]);
 
-  useEffect(() => {
-    void refreshWorkflowDefinitions();
-  }, [workspaceUserId]);
+  const definitionsQuery = useQuery({
+    queryKey: workflowLibraryKeys.definitions(workspaceUserId),
+    queryFn: () => fetchWorkflowDefinitions(workspaceUserId),
+  });
+  const workflowDefinitions = useMemo(() => definitionsQuery.data ?? [], [definitionsQuery.data]);
 
   useEffect(() => {
     if (workflowDefinitions.length === 0) {
       setActiveWorkflowDefinitionId(null);
       return;
     }
-    if (!activeWorkflowDefinitionId || !workflowDefinitions.some((item) => item.id === activeWorkflowDefinitionId)) {
+    if (
+      !activeWorkflowDefinitionId ||
+      !workflowDefinitions.some((item) => item.id === activeWorkflowDefinitionId)
+    ) {
       setActiveWorkflowDefinitionId(workflowDefinitions[0].id);
     }
   }, [activeWorkflowDefinitionId, workflowDefinitions]);
 
-  useEffect(() => {
-    if (!activeWorkflowDefinitionId) {
-      setWorkflowVersions([]);
-      setWorkflowVersionsError(null);
-      setWorkflowVersionsLoading(false);
-      setWorkflowTriggers([]);
-      setWorkflowTriggersError(null);
-      setWorkflowTriggersLoading(false);
-      setWorkflowRuns([]);
-      setWorkflowRunsError(null);
-      setWorkflowRunsLoading(false);
-      return;
-    }
-    void refreshWorkflowVersions(activeWorkflowDefinitionId);
-    void refreshWorkflowTriggers(activeWorkflowDefinitionId);
-    void refreshWorkflowRuns(activeWorkflowDefinitionId);
-  }, [activeWorkflowDefinitionId]);
+  const versionsQuery = useQuery({
+    queryKey: workflowLibraryKeys.versions(activeWorkflowDefinitionId ?? ""),
+    queryFn: () => fetchWorkflowVersions(activeWorkflowDefinitionId as string),
+    enabled: Boolean(activeWorkflowDefinitionId),
+  });
+  const workflowVersions = useMemo(
+    () => (activeWorkflowDefinitionId ? versionsQuery.data ?? [] : []),
+    [activeWorkflowDefinitionId, versionsQuery.data]
+  );
+
+  const triggersQuery = useQuery({
+    queryKey: workflowLibraryKeys.triggers(activeWorkflowDefinitionId ?? ""),
+    queryFn: () => fetchWorkflowTriggers(activeWorkflowDefinitionId as string),
+    enabled: Boolean(activeWorkflowDefinitionId),
+  });
+  const workflowTriggers = activeWorkflowDefinitionId ? triggersQuery.data ?? [] : [];
+
+  const runsQuery = useQuery({
+    queryKey: workflowLibraryKeys.runs(activeWorkflowDefinitionId ?? ""),
+    queryFn: () => fetchWorkflowRuns(activeWorkflowDefinitionId as string),
+    enabled: Boolean(activeWorkflowDefinitionId),
+  });
+  const workflowRuns = activeWorkflowDefinitionId ? runsQuery.data ?? [] : [];
 
   useEffect(() => {
     if (!activeWorkflowVersionId || !workflowVersions.some((version) => version.id === activeWorkflowVersionId)) {
@@ -215,118 +86,94 @@ export default function WorkflowLibraryPage() {
     }
   }, [activeWorkflowVersionId, workflowVersions]);
 
-  const deleteWorkflowDefinition = async (definition: WorkflowDefinition) => {
-    setWorkflowActionLoading("delete");
-    setDeletingWorkflowDefinitionId(definition.id);
-    setActionError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}`,
-        { method: "DELETE" }
+  const activeWorkflowDefinition = useMemo(
+    () => workflowDefinitions.find((definition) => definition.id === activeWorkflowDefinitionId) || null,
+    [activeWorkflowDefinitionId, workflowDefinitions]
+  );
+
+  const invalidateActiveDefinitionQueries = () => {
+    if (!activeWorkflowDefinitionId) return;
+    void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.versions(activeWorkflowDefinitionId) });
+    void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.triggers(activeWorkflowDefinitionId) });
+    void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.runs(activeWorkflowDefinitionId) });
+  };
+
+  const deleteDefinitionMutation = useMutation({
+    mutationFn: (definition: WorkflowDefinition) => deleteWorkflowDefinitionRequest(definition.id),
+    onSuccess: (_data, definition) => {
+      queryClient.setQueryData<WorkflowDefinition[]>(
+        workflowLibraryKeys.definitions(workspaceUserId),
+        (prev: WorkflowDefinition[] | undefined) => (prev ?? []).filter((item) => item.id !== definition.id)
       );
-      const body = response.status === 204 ? null : ((await response.json()) as { detail?: unknown } | null);
-      if (!response.ok) {
-        throw new Error(detailMessage(body, `Delete draft failed (${response.status}).`));
-      }
-      setWorkflowDefinitions((prev) => prev.filter((item) => item.id !== definition.id));
       setNotice(`Deleted "${definition.title}".`);
-    } catch (error) {
+      setActionError(null);
+    },
+    onError: (error) => {
       console.error("[WorkflowLibrary] deleteWorkflowDefinition:", error);
       setActionError(error instanceof Error ? error.message : "Failed to delete saved draft.");
-    } finally {
-      setDeletingWorkflowDefinitionId(null);
-      setWorkflowActionLoading(null);
-    }
-  };
+    },
+  });
 
-  const deleteWorkflowVersion = async (version: WorkflowVersion) => {
-    setWorkflowActionLoading("delete");
-    setDeletingWorkflowVersionId(version.id);
-    setActionError(null);
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/versions/${encodeURIComponent(version.id)}`,
-        { method: "DELETE" }
+  const deleteVersionMutation = useMutation({
+    mutationFn: (version: WorkflowVersion) => deleteWorkflowVersionRequest(version.id),
+    onSuccess: (_data, version) => {
+      queryClient.setQueryData<WorkflowVersion[]>(
+        workflowLibraryKeys.versions(version.definition_id),
+        (prev: WorkflowVersion[] | undefined) => (prev ?? []).filter((v) => v.id !== version.id)
       );
-      const body = response.status === 204 ? null : ((await response.json()) as { detail?: unknown } | null);
-      if (!response.ok) {
-        throw new Error(detailMessage(body, `Delete version failed (${response.status}).`));
-      }
-      setWorkflowVersions((prev) => prev.filter((v) => v.id !== version.id));
       if (activeWorkflowDefinitionId) {
-        void refreshWorkflowRuns(activeWorkflowDefinitionId);
+        void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.runs(activeWorkflowDefinitionId) });
       }
       setNotice(`Deleted version v${version.version_number}.`);
-    } catch (error) {
+      setActionError(null);
+    },
+    onError: (error) => {
       console.error("[WorkflowLibrary] deleteWorkflowVersion:", error);
       setActionError(error instanceof Error ? error.message : "Failed to delete version.");
-    } finally {
-      setDeletingWorkflowVersionId(null);
-      setWorkflowActionLoading(null);
-    }
-  };
+    },
+  });
 
-  const createManualWorkflowTrigger = async () => {
-    if (!activeWorkflowDefinitionId || !activeWorkflowDefinition) {
-      setNotice("Select a workflow definition before creating a trigger.");
-      return;
-    }
-    setWorkflowActionLoading("save");
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/definitions/${encodeURIComponent(activeWorkflowDefinitionId)}/triggers`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: `${activeWorkflowDefinition.title} manual trigger`,
-            trigger_type: "manual",
-            enabled: true,
-            config: { version_mode: "latest_published" },
-            user_id: workspaceUserId.trim() || undefined,
-            metadata: { source: "workflow_library_page" },
-          }),
-        }
-      );
-      const body = (await response.json()) as WorkflowTrigger | { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailMessage(body, `Create trigger failed (${response.status}).`));
+  const createManualTriggerMutation = useMutation({
+    mutationFn: () => {
+      if (!activeWorkflowDefinitionId || !activeWorkflowDefinition) {
+        throw new Error("Select a workflow definition before creating a trigger.");
       }
-      void refreshWorkflowTriggers(activeWorkflowDefinitionId);
-      setNotice(`Created manual trigger ${(body as WorkflowTrigger).title}.`);
-    } catch (error) {
+      return createManualWorkflowTriggerRequest({
+        definitionId: activeWorkflowDefinitionId,
+        title: activeWorkflowDefinition.title,
+        workspaceUserId,
+      });
+    },
+    onSuccess: (trigger) => {
+      invalidateActiveDefinitionQueries();
+      setNotice(`Created manual trigger ${trigger.title}.`);
+    },
+    onError: (error) => {
       setNotice(error instanceof Error ? error.message : "Failed to create workflow trigger.");
-    } finally {
-      setWorkflowActionLoading(null);
-    }
-  };
+    },
+  });
 
-  const invokeWorkflowTrigger = async (trigger: WorkflowTrigger) => {
-    setWorkflowActionLoading("run");
-    try {
-      const response = await apiFetch(
-        `${apiUrl}/workflows/triggers/${encodeURIComponent(trigger.id)}/invoke`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ priority: 0 }),
-        }
-      );
-      const body = (await response.json()) as WorkflowRunResult | { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailMessage(body, `Trigger invoke failed (${response.status}).`));
-      }
-      const result = body as WorkflowRunResult;
+  const invokeTriggerMutation = useMutation({
+    mutationFn: (trigger: WorkflowTrigger) => invokeWorkflowTriggerRequest(trigger.id),
+    onSuccess: (result, trigger) => {
       setActiveWorkflowDefinitionId(result.workflow_definition.id);
       setActiveWorkflowVersionId(result.workflow_version.id);
-      void refreshWorkflowRuns(result.workflow_definition.id);
+      void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.runs(result.workflow_definition.id) });
       setNotice(`Triggered job ${result.job.id} via ${trigger.title}.`);
-    } catch (error) {
+    },
+    onError: (error) => {
       setNotice(error instanceof Error ? error.message : "Failed to invoke workflow trigger.");
-    } finally {
-      setWorkflowActionLoading(null);
-    }
-  };
+    },
+  });
+
+  const workflowActionLoading: "delete" | "save" | "run" | null = deleteDefinitionMutation.isPending
+    || deleteVersionMutation.isPending
+    ? "delete"
+    : createManualTriggerMutation.isPending
+    ? "save"
+    : invokeTriggerMutation.isPending
+    ? "run"
+    : null;
 
   const summaryChips = [
     `drafts ${workflowDefinitions.length}`,
@@ -396,27 +243,49 @@ export default function WorkflowLibraryPage() {
               <div className="mt-5 max-w-[1180px]">
                 <StudioWorkflowLibrary
                   workflowDefinitions={workflowDefinitions}
-                  workflowDefinitionsLoading={workflowDefinitionsLoading}
-                  workflowDefinitionsError={workflowDefinitionsError}
+                  workflowDefinitionsLoading={definitionsQuery.isFetching}
+                  workflowDefinitionsError={
+                    definitionsQuery.error
+                      ? definitionsQuery.error instanceof Error
+                        ? definitionsQuery.error.message
+                        : "Failed to load saved workflows."
+                      : null
+                  }
                   workflowVersions={workflowVersions}
-                  workflowVersionsLoading={workflowVersionsLoading}
-                  workflowVersionsError={workflowVersionsError}
+                  workflowVersionsLoading={activeWorkflowDefinitionId ? versionsQuery.isFetching : false}
+                  workflowVersionsError={
+                    versionsQuery.error
+                      ? versionsQuery.error instanceof Error
+                        ? versionsQuery.error.message
+                        : "Failed to load workflow versions."
+                      : null
+                  }
                   workflowTriggers={workflowTriggers}
-                  workflowTriggersLoading={workflowTriggersLoading}
-                  workflowTriggersError={workflowTriggersError}
+                  workflowTriggersLoading={activeWorkflowDefinitionId ? triggersQuery.isFetching : false}
+                  workflowTriggersError={
+                    triggersQuery.error
+                      ? triggersQuery.error instanceof Error
+                        ? triggersQuery.error.message
+                        : "Failed to load workflow triggers."
+                      : null
+                  }
                   workflowRuns={workflowRuns}
-                  workflowRunsLoading={workflowRunsLoading}
-                  workflowRunsError={workflowRunsError}
+                  workflowRunsLoading={activeWorkflowDefinitionId ? runsQuery.isFetching : false}
+                  workflowRunsError={
+                    runsQuery.error
+                      ? runsQuery.error instanceof Error
+                        ? runsQuery.error.message
+                        : "Failed to load workflow run history."
+                      : null
+                  }
                   activeWorkflowDefinitionId={activeWorkflowDefinitionId}
                   activeWorkflowVersionId={activeWorkflowVersionId}
-                  deletingWorkflowDefinitionId={deletingWorkflowDefinitionId}
+                  deletingWorkflowDefinitionId={
+                    deleteDefinitionMutation.isPending ? deleteDefinitionMutation.variables?.id ?? null : null
+                  }
                   onRefresh={() => {
-                    void refreshWorkflowDefinitions();
-                    if (activeWorkflowDefinitionId) {
-                      void refreshWorkflowVersions(activeWorkflowDefinitionId);
-                      void refreshWorkflowTriggers(activeWorkflowDefinitionId);
-                      void refreshWorkflowRuns(activeWorkflowDefinitionId);
-                    }
+                    void queryClient.invalidateQueries({ queryKey: workflowLibraryKeys.definitions(workspaceUserId) });
+                    invalidateActiveDefinitionQueries();
                   }}
                   onSelectDefinition={(definition) => {
                     setActiveWorkflowDefinitionId(definition.id);
@@ -425,10 +294,12 @@ export default function WorkflowLibraryPage() {
                     router.push(`/studio?definition=${encodeURIComponent(definition.id)}`);
                   }}
                   onDeleteDefinition={(definition) => {
-                    void deleteWorkflowDefinition(definition);
+                    deleteDefinitionMutation.mutate(definition);
                   }}
                   openDefinitionLabel="Open In Studio"
-                  deletingWorkflowVersionId={deletingWorkflowVersionId}
+                  deletingWorkflowVersionId={
+                    deleteVersionMutation.isPending ? deleteVersionMutation.variables?.id ?? null : null
+                  }
                   onSelectVersion={(version) => {
                     setActiveWorkflowVersionId(version.id);
                   }}
@@ -438,14 +309,14 @@ export default function WorkflowLibraryPage() {
                     );
                   }}
                   onDeleteVersion={(version) => {
-                    void deleteWorkflowVersion(version);
+                    deleteVersionMutation.mutate(version);
                   }}
                   openVersionLabel="Open Version"
                   onCreateManualTrigger={() => {
-                    void createManualWorkflowTrigger();
+                    createManualTriggerMutation.mutate();
                   }}
                   onInvokeTrigger={(trigger) => {
-                    void invokeWorkflowTrigger(trigger);
+                    invokeTriggerMutation.mutate(trigger);
                   }}
                 />
               </div>
