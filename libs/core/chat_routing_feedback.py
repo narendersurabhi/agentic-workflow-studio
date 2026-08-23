@@ -32,8 +32,10 @@ def _dimensions_payload(example: Mapping[str, Any], feedback: Mapping[str, Any])
     if isinstance(dimensions, Mapping):
         return dict(dimensions)
     metadata = feedback.get("metadata")
-    if isinstance(metadata, Mapping) and isinstance(metadata.get("dimensions"), Mapping):
-        return dict(metadata.get("dimensions"))
+    if isinstance(metadata, Mapping):
+        metadata_dimensions = metadata.get("dimensions")
+        if isinstance(metadata_dimensions, Mapping):
+            return dict(metadata_dimensions)
     return {}
 
 
@@ -41,8 +43,9 @@ def _snapshot_payload(example: Mapping[str, Any], feedback: Mapping[str, Any]) -
     snapshot = example.get("snapshot")
     if isinstance(snapshot, Mapping):
         return dict(snapshot)
-    if isinstance(feedback.get("snapshot"), Mapping):
-        return dict(feedback.get("snapshot"))
+    feedback_snapshot = feedback.get("snapshot")
+    if isinstance(feedback_snapshot, Mapping):
+        return dict(feedback_snapshot)
     return {}
 
 
@@ -99,7 +102,8 @@ def build_feedback_rows(examples: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 or None,
                 "top_k_candidates": top_k_candidates,
                 "fallback_used": fallback_used,
-                "fallback_reason": _normalize_str(dimensions.get("routing_fallback_reason")) or None,
+                "fallback_reason": _normalize_str(dimensions.get("routing_fallback_reason"))
+                or None,
                 "execution_started": _normalize_str(dimensions.get("routing_execution_started"))
                 == "yes",
                 "execution_succeeded": execution_succeeded,
@@ -118,5 +122,7 @@ def build_feedback_rows(examples: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 "hard_negative_ids": hard_negative_ids,
             }
         )
-    rows.sort(key=lambda item: (str(item.get("session_id") or ""), str(item.get("message_id") or "")))
+    rows.sort(
+        key=lambda item: (str(item.get("session_id") or ""), str(item.get("message_id") or ""))
+    )
     return rows

@@ -3,7 +3,9 @@ from services.worker.app import main
 
 def test_semantic_should_capture_matches_pattern(monkeypatch):
     monkeypatch.setattr(main, "SEMANTIC_MEMORY_AUTO_WRITE_ENABLED", True)
-    monkeypatch.setattr(main, "SEMANTIC_MEMORY_AUTO_WRITE_TOOL_PATTERNS", ["llm.*", "document.spec.*"])
+    monkeypatch.setattr(
+        main, "SEMANTIC_MEMORY_AUTO_WRITE_TOOL_PATTERNS", ["llm.*", "document.spec.*"]
+    )
     assert main._semantic_should_capture("llm.text.generate") is True
     assert main._semantic_should_capture("document.spec.generate") is True
     assert main._semantic_should_capture("memory.read") is False

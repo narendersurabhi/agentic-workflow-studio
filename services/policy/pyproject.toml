@@ -1,10 +1,10 @@
 [project]
 name = "agentic-policy"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
   "redis>=5.0",
-  "pydantic>=2.6",
+  "pydantic>=2.13",
   "prometheus-client>=0.19",
   "pyyaml>=6.0",
   "structlog>=24.1.0",
@@ -13,11 +13,14 @@ dependencies = [
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ruff.format]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 
 [tool.setuptools]

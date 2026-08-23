@@ -84,6 +84,9 @@ class TimingVectorDatabase:
     def get_collection(self, collection: str) -> dict[str, Any] | None:
         return self._inner.get_collection(collection)
 
+    def list_collections(self) -> list[str]:
+        return self._inner.list_collections()
+
     def scroll(
         self,
         *,

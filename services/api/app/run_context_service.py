@@ -81,11 +81,15 @@ def get_run_state(db: Session, run_id: str) -> models.RunStateSnapshot:
         .order_by(RunEventRecord.occurred_at.desc())
         .first()
     )
-    latest_step = sorted(
-        steps,
-        key=lambda step: step.updated_at or step.created_at,
-        reverse=True,
-    )[0] if steps else None
+    latest_step = (
+        sorted(
+            steps,
+            key=lambda step: step.updated_at or step.created_at,
+            reverse=True,
+        )[0]
+        if steps
+        else None
+    )
     latest_error = _latest_error_for_run(db, run_record)
     return models.RunStateSnapshot(
         run_id=run_record.id,
@@ -675,7 +679,10 @@ def acquire_lock(
         existing.acquired_at = now
         existing.expires_at = expires_at
         if request.metadata:
-            existing.metadata_json = {**dict(existing.metadata_json or {}), **dict(request.metadata)}
+            existing.metadata_json = {
+                **dict(existing.metadata_json or {}),
+                **dict(request.metadata),
+            }
         db.commit()
         db.refresh(existing)
         return lock_from_record(existing)
@@ -731,7 +738,9 @@ def release_lock(db: Session, run_id: str, resource: str, agent_id: str) -> bool
     return True
 
 
-def list_locks(db: Session, run_id: str, *, include_expired: bool = False) -> list[models.AgentLock]:
+def list_locks(
+    db: Session, run_id: str, *, include_expired: bool = False
+) -> list[models.AgentLock]:
     run_record = _require_run(db, run_id)
     now = utcnow()
     rows = (
@@ -824,7 +833,8 @@ def index_task_result_collaboration(
             path=path,
             step_id=step_id,
             task_id=task_id,
-            producing_agent_id=_clean_optional(candidate.get("producing_agent_id")) or producing_agent,
+            producing_agent_id=_clean_optional(candidate.get("producing_agent_id"))
+            or producing_agent,
             storage_key=_clean_optional(candidate.get("storage_key")),
             mime_type=_clean_optional(candidate.get("mime_type")),
             size_bytes=_optional_int(candidate.get("size_bytes")),
@@ -872,10 +882,18 @@ def task_result_summary(result: Mapping[str, Any]) -> dict[str, Any]:
     tool_calls = result.get("tool_calls") if isinstance(result, Mapping) else None
     return {
         "status": str(result.get("status") or "") if isinstance(result, Mapping) else "",
-        "output_keys": sorted(str(key) for key in outputs.keys()) if isinstance(outputs, Mapping) else [],
-        "artifact_count": len(artifacts) if isinstance(artifacts, Sequence) and not isinstance(artifacts, (str, bytes)) else 0,
-        "tool_call_count": len(tool_calls) if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes)) else 0,
-        "error": str(result.get("error") or "") if isinstance(result, Mapping) and result.get("error") else "",
+        "output_keys": sorted(str(key) for key in outputs.keys())
+        if isinstance(outputs, Mapping)
+        else [],
+        "artifact_count": len(artifacts)
+        if isinstance(artifacts, Sequence) and not isinstance(artifacts, (str, bytes))
+        else 0,
+        "tool_call_count": len(tool_calls)
+        if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes))
+        else 0,
+        "error": str(result.get("error") or "")
+        if isinstance(result, Mapping) and result.get("error")
+        else "",
     }
 
 
@@ -964,7 +982,9 @@ def upsert_artifact(
     existing.artifact_type = artifact_type or existing.artifact_type
     existing.storage_key = storage_key or existing.storage_key
     existing.mime_type = resolved_mime_type or existing.mime_type
-    existing.size_bytes = size_bytes if size_bytes is not None else stat.get("size_bytes") or existing.size_bytes
+    existing.size_bytes = (
+        size_bytes if size_bytes is not None else stat.get("size_bytes") or existing.size_bytes
+    )
     existing.sha256 = sha256 or stat.get("sha256") or existing.sha256
     existing.metadata_json = {**dict(existing.metadata_json or {}), **dict(metadata or {})}
     return existing
@@ -1014,7 +1034,7 @@ def normalize_artifact_path(value: str) -> str:
     trimmed = str(value or "").strip().replace("\\", "/")
     for prefix in ("/shared/artifacts/", "shared/artifacts/", "artifacts/"):
         if trimmed.startswith(prefix):
-            trimmed = trimmed[len(prefix):]
+            trimmed = trimmed[len(prefix) :]
             break
     if trimmed.startswith("/") or ".." in Path(trimmed).parts:
         return ""
@@ -1054,7 +1074,9 @@ def _blackboard_entry_from_memory(
 ) -> models.BlackboardEntry:
     payload = record.payload if isinstance(record.payload, Mapping) else {}
     metadata = record.metadata_json if isinstance(record.metadata_json, Mapping) else {}
-    inner_payload = payload.get("payload") if isinstance(payload.get("payload"), Mapping) else payload
+    inner_payload = (
+        payload.get("payload") if isinstance(payload.get("payload"), Mapping) else payload
+    )
     kind = str(payload.get("kind") or metadata.get("kind") or "fact")
     confidence = payload.get("confidence", metadata.get("confidence"))
     return models.BlackboardEntry(
@@ -1064,7 +1086,9 @@ def _blackboard_entry_from_memory(
         key=record.key,
         kind=kind,
         payload=dict(inner_payload),
-        source_agent_id=_clean_optional(payload.get("source_agent_id") or metadata.get("source_agent_id")),
+        source_agent_id=_clean_optional(
+            payload.get("source_agent_id") or metadata.get("source_agent_id")
+        ),
         step_id=_clean_optional(payload.get("step_id") or metadata.get("step_id")),
         task_id=_clean_optional(payload.get("task_id") or metadata.get("task_id")),
         visibility=str(payload.get("visibility") or metadata.get("visibility") or "shared"),
@@ -1081,7 +1105,9 @@ def _blackboard_entry_from_memory_entry(
 ) -> models.BlackboardEntry:
     payload = entry.payload if isinstance(entry.payload, Mapping) else {}
     metadata = entry.metadata if isinstance(entry.metadata, Mapping) else {}
-    inner_payload = payload.get("payload") if isinstance(payload.get("payload"), Mapping) else payload
+    inner_payload = (
+        payload.get("payload") if isinstance(payload.get("payload"), Mapping) else payload
+    )
     confidence = payload.get("confidence", metadata.get("confidence"))
     return models.BlackboardEntry(
         id=entry.id,
@@ -1090,7 +1116,9 @@ def _blackboard_entry_from_memory_entry(
         key=entry.key,
         kind=str(payload.get("kind") or metadata.get("kind") or "fact"),
         payload=dict(inner_payload),
-        source_agent_id=_clean_optional(payload.get("source_agent_id") or metadata.get("source_agent_id")),
+        source_agent_id=_clean_optional(
+            payload.get("source_agent_id") or metadata.get("source_agent_id")
+        ),
         step_id=_clean_optional(payload.get("step_id") or metadata.get("step_id")),
         task_id=_clean_optional(payload.get("task_id") or metadata.get("task_id")),
         visibility=str(payload.get("visibility") or metadata.get("visibility") or "shared"),

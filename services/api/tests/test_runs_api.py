@@ -182,7 +182,9 @@ def test_run_debugger_includes_execution_requests() -> None:
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
         assert task is not None
-        payload = main._task_payload_from_record(task, correlation_id=f"corr-{uuid.uuid4()}", context={})
+        payload = main._task_payload_from_record(
+            task, correlation_id=f"corr-{uuid.uuid4()}", context={}
+        )
         assert payload["task_id"] == task.id
 
     response = client.get(f"/runs/{job['run_id']}/debugger")
@@ -288,7 +290,9 @@ def test_task_payload_includes_run_collaboration_context() -> None:
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
         assert task is not None
-        payload = main._task_payload_from_record(task, correlation_id=f"corr-{uuid.uuid4()}", context={})
+        payload = main._task_payload_from_record(
+            task, correlation_id=f"corr-{uuid.uuid4()}", context={}
+        )
 
     context = payload["context"]
     assert context["run_state"]["run_id"] == run_id
@@ -356,15 +360,11 @@ def test_revision_context_includes_run_memory_snapshot() -> None:
 
     snapshot = revision.run_memory_snapshot
     assert snapshot, "run_memory_snapshot should be populated from shared run memory"
-    assert any(
-        fact["key"] == "finding:api_rate_limit" for fact in snapshot.get("facts", [])
-    )
+    assert any(fact["key"] == "finding:api_rate_limit" for fact in snapshot.get("facts", []))
     assert snapshot.get("task_snapshots"), "task snapshots should be present"
     assert snapshot.get("handoffs"), "handoffs should be present"
     assert snapshot["handoffs"][0]["to_agent_id"] == "writer"
-    assert any(
-        artifact["path"] == "findings.md" for artifact in snapshot.get("artifacts", [])
-    )
+    assert any(artifact["path"] == "findings.md" for artifact in snapshot.get("artifacts", []))
 
     # The serialized revision context (what the planner prompt receives) carries it through.
     serialized = revision.model_dump(mode="json", exclude_none=True)
@@ -453,9 +453,7 @@ def test_agent_lock_acquire_conflict_release_and_steal() -> None:
     assert bad_release.status_code == 409
 
     # Holder releases; resource becomes free for another agent.
-    release = client.delete(
-        f"/runs/{run_id}/locks/shared-report", params={"agent_id": "agent-a"}
-    )
+    release = client.delete(f"/runs/{run_id}/locks/shared-report", params={"agent_id": "agent-a"})
     assert release.status_code == 200
     reacquire = client.post(
         f"/runs/{run_id}/locks",
@@ -596,7 +594,10 @@ def test_multi_agent_job_preregisters_team_and_constrains_capabilities() -> None
             "context_json": {},
             "priority": 1,
             "agents": [
-                {"role": "researcher", "capabilities": ["filesystem.workspace.list", "memory.read"]},
+                {
+                    "role": "researcher",
+                    "capabilities": ["filesystem.workspace.list", "memory.read"],
+                },
                 {"role": "writer", "capabilities": ["llm.text.generate"]},
             ],
         },
@@ -644,7 +645,9 @@ def test_multi_agent_task_assignment_and_attribution() -> None:
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.job_id == job["id"]).first()
         assert task is not None
-        payload = main._task_payload_from_record(task, correlation_id=f"corr-{uuid.uuid4()}", context={})
+        payload = main._task_payload_from_record(
+            task, correlation_id=f"corr-{uuid.uuid4()}", context={}
+        )
         assigned = payload["context"].get("assigned_agent")
         assert assigned is not None
         assert assigned["agent_id"] == "researcher"
@@ -689,8 +692,20 @@ def test_agent_run_result_materializes_dynamic_agents_into_registry() -> None:
                 "status": "completed",
                 "result": "done",
                 "agents": [
-                    {"agent_id": "agent-run-d0-aaa", "role": "lead", "depth": 0, "status": "done", "steps_taken": 3},
-                    {"agent_id": "agent-run-d1-bbb", "role": "agent", "depth": 1, "status": "done", "steps_taken": 2},
+                    {
+                        "agent_id": "agent-run-d0-aaa",
+                        "role": "lead",
+                        "depth": 0,
+                        "status": "done",
+                        "steps_taken": 3,
+                    },
+                    {
+                        "agent_id": "agent-run-d1-bbb",
+                        "role": "agent",
+                        "depth": 1,
+                        "status": "done",
+                        "steps_taken": 2,
+                    },
                 ],
                 "tool_calls": [],
             },
@@ -728,12 +743,22 @@ def test_dynamic_agents_materialize_from_nested_agent_run_output() -> None:
                 "run_id": run_id,
                 "status": "completed",
                 "outputs": {
-                    "agent_run": {
+                    "agent": {
                         "result": "done",
                         "steps_taken": 2,
                         "agents": [
-                            {"agent_id": "agent-run-d0-orch", "role": "orchestrator", "depth": 0, "status": "done"},
-                            {"agent_id": "agent-run-d1-sub", "role": "agent", "depth": 1, "status": "done"},
+                            {
+                                "agent_id": "agent-run-d0-orch",
+                                "role": "orchestrator",
+                                "depth": 0,
+                                "status": "done",
+                            },
+                            {
+                                "agent_id": "agent-run-d1-sub",
+                                "role": "agent",
+                                "depth": 1,
+                                "status": "done",
+                            },
                         ],
                     }
                 },
@@ -1248,9 +1273,10 @@ def test_clear_job_deletes_shadow_run_records() -> None:
         assert db.query(RunRecord).filter(RunRecord.id == run_id).first() is None
         assert db.query(RunStepRecord).filter(RunStepRecord.run_id == run_id).first() is None
         assert (
-            db.query(ExecutionRequestRecord)
-            .filter(ExecutionRequestRecord.run_id == run_id)
-            .first()
+            db.query(ExecutionRequestRecord).filter(ExecutionRequestRecord.run_id == run_id).first()
             is None
         )
-        assert db.query(StepCheckpointRecord).filter(StepCheckpointRecord.run_id == run_id).first() is None
+        assert (
+            db.query(StepCheckpointRecord).filter(StepCheckpointRecord.run_id == run_id).first()
+            is None
+        )

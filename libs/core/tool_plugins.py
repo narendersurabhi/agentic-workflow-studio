@@ -82,14 +82,13 @@ def call_register_fn(
     try:
         register_fn(registry, **kwargs)
     except TypeError as exc:
-        raise ToolPluginLoadError(f"Invalid tool plugin signature for {register_fn}: {exc}") from exc
+        raise ToolPluginLoadError(
+            f"Invalid tool plugin signature for {register_fn}: {exc}"
+        ) from exc
 
 
 def _iter_entry_points(group: str) -> list[Any]:
-    eps = importlib_metadata.entry_points()
-    if hasattr(eps, "select"):
-        return list(eps.select(group=group))
-    return list(eps.get(group, []))
+    return list(importlib_metadata.entry_points().select(group=group))
 
 
 def load_module_plugins(

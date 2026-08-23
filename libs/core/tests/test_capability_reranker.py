@@ -3,8 +3,18 @@ from libs.core import capability_reranker
 
 def test_reranker_boosts_successful_query_specific_capability() -> None:
     results = [
-        {"id": "memory.semantic.search", "score": 30.0, "reason": "semantic match", "source": "semantic_search"},
-        {"id": "memory.semantic.write", "score": 28.0, "reason": "semantic match", "source": "semantic_search"},
+        {
+            "id": "memory.semantic.search",
+            "score": 30.0,
+            "reason": "semantic match",
+            "source": "semantic_search",
+        },
+        {
+            "id": "memory.semantic.write",
+            "score": 28.0,
+            "reason": "semantic match",
+            "source": "semantic_search",
+        },
     ]
     feedback_rows = [
         {
@@ -26,4 +36,3 @@ def test_reranker_boosts_successful_query_specific_capability() -> None:
 
     assert reranked[0]["id"] == "memory.semantic.write"
     assert "rerank executed=1" in reranked[0]["reason"]
-

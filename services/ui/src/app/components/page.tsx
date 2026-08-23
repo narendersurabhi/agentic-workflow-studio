@@ -254,7 +254,7 @@ export default function ComponentsGalleryPage() {
           </p>
         </div>
 
-        <div className="relative overflow-hidden px-8 py-8 [background-image:linear-gradient(rgba(59,130,246,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.10)_1px,transparent_1px),radial-gradient(circle_at_14%_20%,rgba(186,230,253,0.20),transparent_16%),radial-gradient(circle_at_82%_18%,rgba(187,247,208,0.18),transparent_10%),linear-gradient(180deg,rgba(2,6,23,0.96),rgba(3,10,24,0.98))] [background-size:24px_24px,24px_24px,100%_100%,100%_100%,100%_100%]">
+        <div className="relative overflow-hidden px-8 py-8 bg-[linear-gradient(rgba(59,130,246,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.10)_1px,transparent_1px),radial-gradient(circle_at_14%_20%,rgba(186,230,253,0.20),transparent_16%),radial-gradient(circle_at_82%_18%,rgba(187,247,208,0.18),transparent_10%),linear-gradient(180deg,rgba(2,6,23,0.96),rgba(3,10,24,0.98))] bg-size-[24px_24px,24px_24px,100%_100%,100%_100%,100%_100%]">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_18%,rgba(191,219,254,0.18),transparent_10%),radial-gradient(circle_at_86%_24%,rgba(167,243,208,0.14),transparent_8%),radial-gradient(circle_at_78%_72%,rgba(56,189,248,0.08),transparent_16%)]" />
 
           <div className="relative mx-auto min-h-[700px] max-w-[1280px]">

@@ -113,10 +113,7 @@ class TaskExecutionRequest(BaseModel):
 
     @property
     def tool_inputs(self) -> dict[str, dict[str, Any]]:
-        return {
-            request.request_id: dict(request.resolved_inputs)
-            for request in self.requests
-        }
+        return {request.request_id: dict(request.resolved_inputs) for request in self.requests}
 
 
 class TaskDispatchPayload(BaseModel):
@@ -193,6 +190,7 @@ def build_task_execution_request(
     context_value = payload.get("context")
     dependency_artifacts_value = payload.get("dependency_artifacts")
     replay_context_value = payload.get("replay_context")
+    retry_policy_value = payload.get("retry_policy")
     return TaskExecutionRequest(
         task_id=_string_value(payload.get("task_id")),
         job_id=_string_value(payload.get("job_id")),
@@ -209,16 +207,14 @@ def build_task_execution_request(
         intent_confidence=_intent_confidence(payload.get("intent_confidence")),
         intent_segment=_intent_segment(payload),
         replay_context=(
-            dict(replay_context_value)
-            if isinstance(replay_context_value, Mapping)
-            else {}
+            dict(replay_context_value) if isinstance(replay_context_value, Mapping) else {}
         ),
         dependency_artifacts=(
             dict(dependency_artifacts_value)
             if isinstance(dependency_artifacts_value, Mapping)
             else {}
         ),
-        retry_policy=dict(payload.get("retry_policy")) if isinstance(payload.get("retry_policy"), Mapping) else {},
+        retry_policy=dict(retry_policy_value) if isinstance(retry_policy_value, Mapping) else {},
         source_payload=payload,
         requests=[
             TaskExecutionStep(
@@ -253,7 +249,9 @@ def build_task_dispatch_payload(
         request_ids=execution_request.tool_requests,
     )
     correlation_id = _string_value(payload.get("correlation_id")) or execution_request.trace_id
-    trace_id = _string_value(payload.get("trace_id")) or correlation_id or execution_request.trace_id
+    trace_id = (
+        _string_value(payload.get("trace_id")) or correlation_id or execution_request.trace_id
+    )
     normalized = dict(payload)
     normalized.update(
         {
@@ -265,9 +263,7 @@ def build_task_dispatch_payload(
             "description": _string_value(payload.get("description")),
             "instruction": execution_request.instruction,
             "acceptance_criteria": _string_list(payload.get("acceptance_criteria")),
-            "expected_output_schema_ref": _string_value(
-                payload.get("expected_output_schema_ref")
-            ),
+            "expected_output_schema_ref": _string_value(payload.get("expected_output_schema_ref")),
             "status": _string_value(payload.get("status")),
             "deps": _string_list(payload.get("deps")),
             "attempts": execution_request.attempts,
@@ -395,16 +391,16 @@ def embed_execution_gate(
         return merged
     normalized_request_ids = _request_ids(request_ids or [])
     embedded = {
-        request_id: dict(execution_gate)
-        for request_id in normalized_request_ids
-        if request_id
+        request_id: dict(execution_gate) for request_id in normalized_request_ids if request_id
     }
     if embedded:
         merged[EXECUTION_GATE_KEY] = embedded
     return merged
 
 
-def strip_execution_metadata_from_tool_inputs(tool_inputs: Mapping[str, Any] | None) -> dict[str, Any]:
+def strip_execution_metadata_from_tool_inputs(
+    tool_inputs: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     if not isinstance(tool_inputs, Mapping):
         return {}
     stripped: dict[str, Any] = {}
@@ -535,7 +531,9 @@ def _binding_index(value: Any) -> dict[str, CapabilityBinding]:
         for request_id, binding_payload in value.items():
             if not isinstance(binding_payload, Mapping):
                 continue
-            binding = _binding_from_mapping(binding_payload, fallback_request_id=_string_value(request_id))
+            binding = _binding_from_mapping(
+                binding_payload, fallback_request_id=_string_value(request_id)
+            )
             if binding is not None:
                 index[binding.request_id] = binding
         return index
@@ -595,7 +593,11 @@ def _execution_gates(
             continue
         gates[key] = dict(gate_payload)
     if normalized_request_ids:
-        return {request_id: gates[request_id] for request_id in normalized_request_ids if request_id in gates}
+        return {
+            request_id: gates[request_id]
+            for request_id in normalized_request_ids
+            if request_id in gates
+        }
     return gates
 
 
@@ -626,9 +628,7 @@ def _binding_from_mapping(
         capability_id=_string_value(value.get("capability_id")) or None,
         tool_name=_string_value(value.get("tool_name")) or None,
         adapter_type=(
-            _string_value(value.get("adapter_type"))
-            or _string_value(value.get("type"))
-            or None
+            _string_value(value.get("adapter_type")) or _string_value(value.get("type")) or None
         ),
         server_id=_string_value(value.get("server_id")) or None,
     )

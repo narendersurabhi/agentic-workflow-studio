@@ -135,6 +135,7 @@ def rerank_route_candidates(
             reason_codes.append(f"routing_rerank_hard_negative={hard_negative_hits}")
         if fallback_penalties:
             reason_codes.append(f"routing_rerank_fallback_penalty={fallback_penalties}")
+        candidate_metadata = candidate.get("metadata")
         adjusted.append(
             {
                 **candidate,
@@ -142,7 +143,7 @@ def rerank_route_candidates(
                 "score": round(score, 3),
                 "reason_codes": reason_codes,
                 "metadata": {
-                    **(dict(candidate.get("metadata")) if isinstance(candidate.get("metadata"), dict) else {}),
+                    **(dict(candidate_metadata) if isinstance(candidate_metadata, dict) else {}),
                     "reranked": True,
                 },
             }

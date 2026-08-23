@@ -99,13 +99,17 @@ def _boundary_fields_from_message(
     snapshot: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     message_metadata = (
-        dict(message.metadata_json or {}) if message is not None and isinstance(message.metadata_json, Mapping) else {}
+        dict(message.metadata_json or {})
+        if message is not None and isinstance(message.metadata_json, Mapping)
+        else {}
     )
     boundary_payload = _boundary_decision_payload(message_metadata.get("boundary_decision"))
     if not boundary_payload and isinstance(snapshot, Mapping):
         snapshot_metadata = snapshot.get("metadata")
         if isinstance(snapshot_metadata, Mapping):
-            boundary_payload = _boundary_decision_payload(snapshot_metadata.get("boundary_decision"))
+            boundary_payload = _boundary_decision_payload(
+                snapshot_metadata.get("boundary_decision")
+            )
     return _boundary_decision_fields(boundary_payload)
 
 
@@ -206,7 +210,9 @@ def _routing_fields_from_message(
     job_status: str | None,
 ) -> dict[str, Any]:
     message_metadata = (
-        dict(message.metadata_json or {}) if message is not None and isinstance(message.metadata_json, Mapping) else {}
+        dict(message.metadata_json or {})
+        if message is not None and isinstance(message.metadata_json, Mapping)
+        else {}
     )
     routing_payload = _routing_decision_payload(message_metadata.get("routing_decision"))
     if not routing_payload and isinstance(snapshot, Mapping):
@@ -241,7 +247,9 @@ def _intent_fields_from_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str
     if not isinstance(profile, Mapping):
         envelope = payload.get("normalized_intent_envelope")
         if isinstance(envelope, Mapping):
-            profile = envelope.get("profile") if isinstance(envelope.get("profile"), Mapping) else {}
+            profile = (
+                envelope.get("profile") if isinstance(envelope.get("profile"), Mapping) else {}
+            )
         else:
             profile = {}
     envelope = payload.get("normalized_intent_envelope")
@@ -251,7 +259,9 @@ def _intent_fields_from_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str
         if isinstance(envelope_map.get("clarification"), Mapping)
         else {}
     )
-    trace = dict(envelope_map.get("trace")) if isinstance(envelope_map.get("trace"), Mapping) else {}
+    trace = (
+        dict(envelope_map.get("trace")) if isinstance(envelope_map.get("trace"), Mapping) else {}
+    )
     candidate_capabilities = (
         dict(envelope_map.get("candidate_capabilities"))
         if isinstance(envelope_map.get("candidate_capabilities"), Mapping)
@@ -489,20 +499,26 @@ def build_chat_message_snapshot(db: Session, record: ChatMessageRecord) -> dict[
         "session_id": record.session_id,
         "role": record.role,
         "content": record.content,
-        "user_message_id": preceding_user_message.id if preceding_user_message is not None else None,
+        "user_message_id": preceding_user_message.id
+        if preceding_user_message is not None
+        else None,
         "user_message_content": (
             preceding_user_message.content if preceding_user_message is not None else None
         ),
         "metadata": dict(record.metadata_json or {}),
         "action": dict(record.action_json or {}) if isinstance(record.action_json, Mapping) else {},
         "job_id": record.job_id,
-        "created_at": record.created_at.isoformat() if isinstance(record.created_at, datetime) else None,
+        "created_at": record.created_at.isoformat()
+        if isinstance(record.created_at, datetime)
+        else None,
     }
 
 
 def build_intent_snapshot(job: JobRecord) -> dict[str, Any]:
     metadata = dict(job.metadata_json or {})
-    profile, graph, envelope = _normalized_intent_snapshot(metadata, goal=str(job.goal or "").strip())
+    profile, graph, envelope = _normalized_intent_snapshot(
+        metadata, goal=str(job.goal or "").strip()
+    )
     return {
         "job_id": job.id,
         "goal": job.goal,
@@ -544,7 +560,9 @@ def build_plan_snapshot(db: Session, plan: PlanRecord) -> dict[str, Any]:
             }
             for task in tasks
         ],
-        "created_at": plan.created_at.isoformat() if isinstance(plan.created_at, datetime) else None,
+        "created_at": plan.created_at.isoformat()
+        if isinstance(plan.created_at, datetime)
+        else None,
     }
 
 
@@ -684,7 +702,9 @@ def derive_feedback_dimensions(
         else None
     )
     session = (
-        db.query(ChatSessionRecord).filter(ChatSessionRecord.id == resolution.get("session_id")).first()
+        db.query(ChatSessionRecord)
+        .filter(ChatSessionRecord.id == resolution.get("session_id"))
+        .first()
         if _non_empty_string(resolution.get("session_id"))
         else None
     )
@@ -699,10 +719,9 @@ def derive_feedback_dimensions(
     workflow_source = _non_empty_string(job_metadata.get("workflow_source"))
     llm_provider = _non_empty_string(job_metadata.get("llm_provider"))
     llm_model = _non_empty_string(job_metadata.get("llm_model"))
-    planner_version = (
-        _non_empty_string(plan.planner_version if plan is not None else None)
-        or _non_empty_string(snapshot.get("planner_version"))
-    )
+    planner_version = _non_empty_string(
+        plan.planner_version if plan is not None else None
+    ) or _non_empty_string(snapshot.get("planner_version"))
     job_status = (
         _non_empty_string(job.status if job is not None else None)
         or _non_empty_string(snapshot.get("job_status"))
@@ -761,9 +780,9 @@ def _feedback_dimensions(item: models.Feedback) -> dict[str, Any]:
     if not _non_empty_string(normalized.get("planner_version")):
         normalized["planner_version"] = _non_empty_string(snapshot.get("planner_version"))
     if not _non_empty_string(normalized.get("job_status_at_feedback")):
-        normalized["job_status_at_feedback"] = (
-            _non_empty_string(snapshot.get("job_status")) or _non_empty_string(snapshot.get("status"))
-        )
+        normalized["job_status_at_feedback"] = _non_empty_string(
+            snapshot.get("job_status")
+        ) or _non_empty_string(snapshot.get("status"))
     if not _non_empty_string(normalized.get("assistant_action_type")):
         action = snapshot.get("action")
         if isinstance(action, Mapping):
@@ -843,7 +862,8 @@ def _filter_feedback_items(
         filtered = [
             item
             for item in filtered
-            if _non_empty_string(_feedback_dimensions(item).get("llm_model")) == normalized_llm_model
+            if _non_empty_string(_feedback_dimensions(item).get("llm_model"))
+            == normalized_llm_model
         ]
     if normalized_planner_version is not None:
         filtered = [
@@ -929,8 +949,7 @@ def collect_job_feedback_correlates(
         return models.FeedbackCorrelationSummary()
 
     jobs = {
-        record.id: record
-        for record in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()
+        record.id: record for record in db.query(JobRecord).filter(JobRecord.id.in_(job_ids)).all()
     }
     tasks_by_job: dict[str, list[TaskRecord]] = {job_id: [] for job_id in job_ids}
     for task in db.query(TaskRecord).filter(TaskRecord.job_id.in_(job_ids)).all():
@@ -950,9 +969,7 @@ def collect_job_feedback_correlates(
     clarification_counts_by_session: dict[str, int] = {session_id: 0 for session_id in session_ids}
     if session_ids:
         messages = (
-            db.query(ChatMessageRecord)
-            .filter(ChatMessageRecord.session_id.in_(session_ids))
-            .all()
+            db.query(ChatMessageRecord).filter(ChatMessageRecord.session_id.in_(session_ids)).all()
         )
         for message in messages:
             if message.role != "assistant" or not isinstance(message.action_json, Mapping):
@@ -992,7 +1009,9 @@ def collect_job_feedback_correlates(
         if _job_error_from_metadata(metadata):
             plan_failure_count += 1
         task_rows = tasks_by_job.get(job_id, [])
-        failed_task_count += sum(1 for task in task_rows if task.status == models.TaskStatus.failed.value)
+        failed_task_count += sum(
+            1 for task in task_rows if task.status == models.TaskStatus.failed.value
+        )
         retry_count += sum(max(0, int(task.rework_count or 0)) for task in task_rows)
         step_attempts = attempts_by_job.get(job_id, [])
         attempts_by_step: dict[str, int] = {}
@@ -1072,7 +1091,9 @@ def summarize_feedback_rows(
         boundary_top_families=dimension_breakdown(items, "boundary_top_family"),
         clarification_active_families=dimension_breakdown(items, "clarification_active_family"),
         clarification_slot_loss_states=dimension_breakdown(items, "clarification_slot_loss_state"),
-        clarification_family_alignments=dimension_breakdown(items, "clarification_family_alignment"),
+        clarification_family_alignments=dimension_breakdown(
+            items, "clarification_family_alignment"
+        ),
         clarification_mapping_resolved_active_field_states=dimension_breakdown(
             items,
             "clarification_mapping_resolved_active_field",
@@ -1093,7 +1114,9 @@ def summarize_feedback_rows(
         routing_fallback_states=dimension_breakdown(items, "routing_fallback_used"),
         routing_fallback_reasons=dimension_breakdown(items, "routing_fallback_reason"),
         routing_execution_started_states=dimension_breakdown(items, "routing_execution_started"),
-        routing_execution_succeeded_states=dimension_breakdown(items, "routing_execution_succeeded"),
+        routing_execution_succeeded_states=dimension_breakdown(
+            items, "routing_execution_succeeded"
+        ),
         metrics={
             "chat_helpfulness_rate": _positive_rate(
                 items,
@@ -1211,7 +1234,11 @@ def submit_feedback(
     record.comment = _non_empty_string(request.comment)
     record.snapshot_json = dict(resolution.get("snapshot") or {})
     metadata = _normalize_metadata(request.metadata)
-    dimensions = dict(metadata.get("dimensions") or {}) if isinstance(metadata.get("dimensions"), Mapping) else {}
+    dimensions = (
+        dict(metadata.get("dimensions") or {})
+        if isinstance(metadata.get("dimensions"), Mapping)
+        else {}
+    )
     dimensions.update(
         derive_feedback_dimensions(
             db,
@@ -1723,13 +1750,9 @@ def _intent_gold_case_stub(
         "expected_profile_intent": "",
         "expected_missing_inputs": list(observed_case.get("missing_inputs") or []),
         "expected_requires_clarification": bool(observed_case.get("requires_clarification")),
-        "expected_clarification_mode": _non_empty_string(
-            observed_case.get("clarification_mode")
-        )
+        "expected_clarification_mode": _non_empty_string(observed_case.get("clarification_mode"))
         or "",
-        "expected_disagreement_reason": _non_empty_string(
-            observed_case.get("disagreement_reason")
-        )
+        "expected_disagreement_reason": _non_empty_string(observed_case.get("disagreement_reason"))
         or "",
         "_review_label": item.review_label,
         "_tuning_focus": tuning_focus,
@@ -1773,10 +1796,15 @@ def _collect_intent_review_items(
             continue
         if (
             normalized_intent_source is not None
-            and _non_empty_string(dimensions.get("intent_assessment_source")) != normalized_intent_source
+            and _non_empty_string(dimensions.get("intent_assessment_source"))
+            != normalized_intent_source
         ):
             continue
-        excerpt = _non_empty_string(feedback.snapshot.get("goal")) if isinstance(feedback.snapshot, Mapping) else None
+        excerpt = (
+            _non_empty_string(feedback.snapshot.get("goal"))
+            if isinstance(feedback.snapshot, Mapping)
+            else None
+        )
         items.append(
             models.IntentReviewQueueItem(
                 feedback=feedback,
@@ -1824,10 +1852,15 @@ def chat_boundary_review_queue(
             continue
         if (
             normalized_boundary_decision is not None
-            and _non_empty_string(dimensions.get("boundary_decision")) != normalized_boundary_decision
+            and _non_empty_string(dimensions.get("boundary_decision"))
+            != normalized_boundary_decision
         ):
             continue
-        excerpt = _non_empty_string(feedback.snapshot.get("content")) if isinstance(feedback.snapshot, Mapping) else None
+        excerpt = (
+            _non_empty_string(feedback.snapshot.get("content"))
+            if isinstance(feedback.snapshot, Mapping)
+            else None
+        )
         items.append(
             models.ChatBoundaryReviewQueueItem(
                 feedback=feedback,
@@ -1954,7 +1987,8 @@ def chat_routing_review_queue(
             continue
         if (
             normalized_fallback_used is not None
-            and _non_empty_string(dimensions.get("routing_fallback_used")) != normalized_fallback_used
+            and _non_empty_string(dimensions.get("routing_fallback_used"))
+            != normalized_fallback_used
         ):
             continue
         excerpt = (
@@ -2067,7 +2101,9 @@ def intent_tuning_report(
         ),
         negative_reasons=[
             models.FeedbackReasonBucket(reason_code=reason_code, count=count)
-            for reason_code, count in sorted(reason_counts.items(), key=lambda entry: (-entry[1], entry[0]))
+            for reason_code, count in sorted(
+                reason_counts.items(), key=lambda entry: (-entry[1], entry[0])
+            )
         ],
     )
 

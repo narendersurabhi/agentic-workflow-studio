@@ -47,9 +47,9 @@ images:
   - name: ghcr.io/your-org/awe-rag-retriever-mcp
     newName: ghcr.io/your-org/awe-rag-retriever-mcp
     newTag: latest
-  - name: ghcr.io/your-org/awe-ui
-    newName: ghcr.io/your-org/awe-ui
-    newTag: latest
+  - name: ghcr.io/narendersurabhi/awe-ui
+    newName: ghcr.io/narendersurabhi/awe-ui
+    newTag: v0.1.0
   - name: ghcr.io/your-org/awe-policy
     newName: ghcr.io/your-org/awe-policy
     newTag: latest

@@ -118,7 +118,11 @@ def test_build_workflow_runtime_context_envelope_merges_context_and_inputs() -> 
     assert runtime_view["channel"] == "chat"
     assert runtime_view["workflow_context_json"]["priority"] == "high"
     assert runtime_inputs == {"repo": "repo-b", "topic": "Input topic"}
-    assert envelope.trace.sources_used[:3] == ["version_context", "trigger_context", "request_context"]
+    assert envelope.trace.sources_used[:3] == [
+        "version_context",
+        "trigger_context",
+        "request_context",
+    ]
 
 
 def test_build_preflight_context_envelope_prefers_provided_job_context() -> None:

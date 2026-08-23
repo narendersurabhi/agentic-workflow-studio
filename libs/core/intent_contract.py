@@ -271,7 +271,9 @@ def _looks_like_workspace_delete_request(text: str) -> bool:
     return (
         "workspace" in lowered
         and _contains_any(lowered, ("delete", "remove", "destroy", "drop", "wipe", "purge"))
-        and _contains_any(lowered, ("manifest", "file", "files", "directory", "folder", "workspace"))
+        and _contains_any(
+            lowered, ("manifest", "file", "files", "directory", "folder", "workspace")
+        )
     )
 
 
@@ -404,7 +406,9 @@ def select_active_execution_target(
             raw_segment,
             candidate_capabilities=candidate_map.get(segment_id),
         )
-        capability_match = int(bool(preferred_capability and preferred_capability in capability_ids))
+        capability_match = int(
+            bool(preferred_capability and preferred_capability in capability_ids)
+        )
         segment_match = int(bool(preferred_segment and segment_id == preferred_segment))
         overlap = len(normalized_pending_fields.intersection(unresolved_required_fields))
         has_relevant_unresolved = int(bool(unresolved_required_fields))
@@ -508,13 +512,12 @@ def detect_intent_disagreement(
     except (TypeError, ValueError):
         graph_confidence = 0.0
     trusted_graph = bool(
-        profile_low_confidence
-        or graph_source not in {"", "heuristic"}
-        or graph_confidence >= 0.75
+        profile_low_confidence or graph_source not in {"", "heuristic"} or graph_confidence >= 0.75
     )
     graph_intents: list[str] = []
     graph_capabilities: list[str] = []
-    segments = graph_map.get("segments") if isinstance(graph_map.get("segments"), list) else []
+    raw_segments = graph_map.get("segments")
+    segments = raw_segments if isinstance(raw_segments, list) else []
     if trusted_graph:
         for raw_segment in segments:
             if not isinstance(raw_segment, Mapping):
@@ -547,7 +550,12 @@ def detect_intent_disagreement(
     ):
         reason_code = "capability_intent_conflict"
         evidence_intent = capability_intents[0]
-    elif heuristic_intent and profile_intent and heuristic_intent != profile_intent and profile_low_confidence:
+    elif (
+        heuristic_intent
+        and profile_intent
+        and heuristic_intent != profile_intent
+        and profile_low_confidence
+    ):
         reason_code = "heuristic_intent_conflict"
         evidence_intent = heuristic_intent
     elif profile_intent == "io" and any(
@@ -673,7 +681,9 @@ def _infer_segment_artifact_type(intent: str, objective: str, output_format: str
     return "content"
 
 
-def _infer_segment_risk_level(intent: str, objective: str, suggested_capabilities: Iterable[str]) -> str:
+def _infer_segment_risk_level(
+    intent: str, objective: str, suggested_capabilities: Iterable[str]
+) -> str:
     lowered = objective.lower()
     capability_blob = " ".join(str(item).lower() for item in suggested_capabilities)
     search_blob = f"{lowered} {capability_blob}"
@@ -716,10 +726,7 @@ def _normalize_must_have_inputs(
     else:
         candidates = tuple(
             item
-            for item in (
-                _extract_required_input_key(raw)
-                for raw in fallback_inputs
-            )
+            for item in (_extract_required_input_key(raw) for raw in fallback_inputs)
             if item and "_or_" not in item and len(item) <= 48
         )
     for candidate in candidates:
@@ -838,7 +845,9 @@ def required_input_question(required_input: str, goal: str) -> str:
     if key == "target_system":
         return "Which target system should this use (for example GitHub, Jira, Slack, filesystem)?"
     if key == "safety_constraints":
-        return "What safety constraints must be enforced (for example read-only, no deletes, dry-run)?"
+        return (
+            "What safety constraints must be enforced (for example read-only, no deletes, dry-run)?"
+        )
     if key == "intent_action":
         return "What should the system do first (generate, transform, validate, render, or io)?"
     return f"Provide clarification for input '{key}' for goal: '{goal[:120]}'."
@@ -858,7 +867,9 @@ def _goal_implies_concrete_instruction(goal: str) -> bool:
     if not raw:
         return False
     primary = re.split(r"\n+\s*user clarification:\s*", raw, maxsplit=1, flags=re.IGNORECASE)[0]
-    primary = re.sub(r"\b[\w./-]+\.(?:pdf|docx|md|txt|html|json|csv|xlsx)\b", " ", primary, flags=re.IGNORECASE)
+    primary = re.sub(
+        r"\b[\w./-]+\.(?:pdf|docx|md|txt|html|json|csv|xlsx)\b", " ", primary, flags=re.IGNORECASE
+    )
     primary = re.sub(r"(?:^|[\s'\"`])(?:/|\.?/)[^\s]+", " ", primary)
     tokens = re.findall(r"[a-z0-9]+", primary.lower())
     informative = [
@@ -901,7 +912,8 @@ def derive_segment_missing_inputs(
     if not isinstance(segment, Mapping):
         return []
     slot_values = slot_values if isinstance(slot_values, Mapping) else {}
-    segment_slots = dict(segment.get("slots")) if isinstance(segment.get("slots"), Mapping) else {}
+    raw_segment_slots = segment.get("slots")
+    segment_slots = dict(raw_segment_slots) if isinstance(raw_segment_slots, Mapping) else {}
     objective = str(segment.get("objective") or "").strip()
     candidate_capabilities = _coerce_string_tuple(segment.get("suggested_capabilities"))
     candidate_formats = _segment_candidate_format_hints(candidate_capabilities)
@@ -929,8 +941,12 @@ def derive_segment_missing_inputs(
         return False
 
     path_present = (
-        _mapping_has_value(segment_slots, "path", "output_path", "filename", "file_name", "output_filename")
-        or _mapping_has_value(slot_values, "path", "output_path", "filename", "file_name", "output_filename")
+        _mapping_has_value(
+            segment_slots, "path", "output_path", "filename", "file_name", "output_filename"
+        )
+        or _mapping_has_value(
+            slot_values, "path", "output_path", "filename", "file_name", "output_filename"
+        )
         or _goal_mentions_explicit_path(goal, objective)
     )
     output_format_present = (
@@ -1008,11 +1024,7 @@ def derive_segment_missing_inputs(
         and "output_format" not in missing_inputs
     ):
         missing_inputs.append("output_format")
-    if (
-        low_confidence
-        and not intent_action_present
-        and "intent_action" not in missing_inputs
-    ):
+    if low_confidence and not intent_action_present and "intent_action" not in missing_inputs:
         missing_inputs.append("intent_action")
     return list(dict.fromkeys(missing_inputs))
 
@@ -1028,12 +1040,10 @@ def derive_envelope_clarification(
 ) -> dict[str, Any]:
     profile_map = profile if isinstance(profile, Mapping) else {}
     graph_map = graph if isinstance(graph, Mapping) else {}
-    slot_values = (
-        dict(profile_map.get("slot_values"))
-        if isinstance(profile_map.get("slot_values"), Mapping)
-        else {}
-    )
-    segments = graph_map.get("segments") if isinstance(graph_map.get("segments"), list) else []
+    raw_slot_values = profile_map.get("slot_values")
+    slot_values = dict(raw_slot_values) if isinstance(raw_slot_values, Mapping) else {}
+    raw_segments = graph_map.get("segments")
+    segments = raw_segments if isinstance(raw_segments, list) else []
     low_confidence = bool(profile_map.get("low_confidence"))
     profile_intent = normalize_task_intent(profile_map.get("intent")) or ""
     prioritized_segment_ids: set[str] = set()
@@ -1102,7 +1112,9 @@ def derive_envelope_clarification(
         ]
         questions = [disagreement_question] if disagreement_question else []
         questions.extend(remaining_questions)
-        clarification_mode = str(disagreement.get("clarification_mode") or "").strip() or clarification_mode
+        clarification_mode = (
+            str(disagreement.get("clarification_mode") or "").strip() or clarification_mode
+        )
     return {
         "needs_clarification": bool(missing_inputs),
         "requires_blocking_clarification": bool(missing_inputs),
@@ -1113,6 +1125,7 @@ def derive_envelope_clarification(
         "clarification_mode": clarification_mode,
         "disagreement": disagreement,
     }
+
 
 def _tool_output_format_hint(tool_name: str) -> str | None:
     lowered = tool_name.lower()
@@ -1226,7 +1239,9 @@ def _payload_has_required_input(
             return True
     if key == "length":
         for candidate in ("length", "target_pages", "page_count", "max_words", "word_count"):
-            if candidate in payload_map and _value_present(payload_map.get(candidate), key=candidate):
+            if candidate in payload_map and _value_present(
+                payload_map.get(candidate), key=candidate
+            ):
                 return True
             value = _job_context_value(payload_map, candidate) if allow_job_context else None
             if _value_present(value, key=candidate):
@@ -1332,9 +1347,7 @@ def _capability_intent_hint(capability_id: str) -> str | None:
 
 def _intent_disagreement_question(intents: Iterable[str]) -> str:
     normalized = [
-        intent
-        for intent in (normalize_task_intent(value) for value in intents)
-        if intent
+        intent for intent in (normalize_task_intent(value) for value in intents) if intent
     ]
     ordered: list[str] = []
     for intent in normalized:
@@ -1389,10 +1402,7 @@ def validate_intent_segment_contract(
         return None
     segment_intent = normalize_task_intent(segment.get("intent"))
     if segment_intent and not _segment_task_intent_compatible(segment_intent, task_intent):
-        return (
-            f"segment_intent_mismatch:{tool_name}:"
-            f"segment={segment_intent}:task={task_intent}"
-        )
+        return f"segment_intent_mismatch:{tool_name}:segment={segment_intent}:task={task_intent}"
     required_inputs = _coerce_string_tuple(segment.get("required_inputs"))
     suggested_capabilities = _coerce_string_tuple(segment.get("suggested_capabilities"))
     slots = normalize_intent_segment_slots(
@@ -1430,12 +1440,9 @@ def validate_intent_segment_contract(
         return f"must_have_inputs_missing:{','.join(sorted(set(missing_inputs)))}"
 
     output_format = slots.get("output_format")
-    ignore_final_artifact_format = (
-        slots.get("artifact_type") == "document_spec"
-        and (
-            _is_document_spec_generation_identifier(tool_name)
-            or _is_document_spec_generation_identifier(capability_id)
-        )
+    ignore_final_artifact_format = slots.get("artifact_type") == "document_spec" and (
+        _is_document_spec_generation_identifier(tool_name)
+        or _is_document_spec_generation_identifier(capability_id)
     )
     if isinstance(output_format, str) and output_format:
         resolved_format = _normalize_output_format(output_format)
@@ -1463,14 +1470,15 @@ def validate_intent_segment_contract(
             hinted = render_hint
             if hinted and hinted != resolved_format:
                 return (
-                    f"output_format_mismatch:{tool_name}:"
-                    f"expected={resolved_format}:hinted={hinted}"
+                    f"output_format_mismatch:{tool_name}:expected={resolved_format}:hinted={hinted}"
                 )
 
     slot_rank = _risk_rank(slots.get("risk_level"))
     capability_rank = _risk_rank(capability_risk_tier)
     if slot_rank > 0 and capability_rank > slot_rank:
-        expected = _normalize_risk_level(slots.get("risk_level")) or str(slots.get("risk_level") or "")
+        expected = _normalize_risk_level(slots.get("risk_level")) or str(
+            slots.get("risk_level") or ""
+        )
         actual = _normalize_risk_level(capability_risk_tier) or str(capability_risk_tier or "")
         return f"risk_level_mismatch:{tool_name}:expected<={expected}:actual={actual}"
     return None
@@ -1667,11 +1675,17 @@ def _suggested_capabilities_for_clause(
     if intent == "io":
         if "semantic memory" in context_lowered:
             suggestions = _prepend_unique(suggestions, "memory.semantic.search", "memory.read")
-        elif any(token in context_lowered for token in ("memory", "notes", "preferences", "context")):
+        elif any(
+            token in context_lowered for token in ("memory", "notes", "preferences", "context")
+        ):
             suggestions = _prepend_unique(suggestions, "memory.read")
-        if "workspace" in context_lowered and any(token in lowered for token in ("search", "find", "grep")):
+        if "workspace" in context_lowered and any(
+            token in lowered for token in ("search", "find", "grep")
+        ):
             suggestions = _prepend_unique(suggestions, "filesystem.workspace.search_text")
-        if "artifact" in context_lowered and any(token in lowered for token in ("search", "find", "error")):
+        if "artifact" in context_lowered and any(
+            token in lowered for token in ("search", "find", "error")
+        ):
             suggestions = _prepend_unique(suggestions, "filesystem.artifacts.search_text")
         if "branch" in lowered and "github" in context_lowered:
             suggestions = _prepend_unique(suggestions, "github.branch.list", "github.repo.list")
@@ -1693,12 +1707,19 @@ def _suggested_capabilities_for_clause(
             suggestions = _prepend_unique(suggestions, "filesystem.workspace.delete")
         if "openapi" in context_lowered:
             suggestions = _prepend_unique(suggestions, "openapi.spec.generate_iterative")
-        if any(token in lowered for token in ("code changes", "codegen", "code change", "source code")):
+        if any(
+            token in lowered for token in ("code changes", "codegen", "code change", "source code")
+        ):
             suggestions = _prepend_unique(suggestions, "codegen.generate")
         if "markdown" in lowered:
             suggestions = _prepend_unique(suggestions, "document.spec.generate_from_markdown")
-        if any(token in lowered for token in ("runbook", "document", "report", "brief", "release notes")):
-            suggestions = _prepend_unique(suggestions, "document.spec.generate", "llm.text.generate")
+        if any(
+            token in lowered
+            for token in ("runbook", "document", "report", "brief", "release notes")
+        ):
+            suggestions = _prepend_unique(
+                suggestions, "document.spec.generate", "llm.text.generate"
+            )
     if intent == "transform":
         if "openapi" in context_lowered:
             suggestions = _prepend_unique(

@@ -47,8 +47,12 @@ class ApiDispatchRuntime:
 class ApiDispatchCallbacks:
     stream_for_event: Callable[[str], str]
     resolve_task_deps: Callable[[list[TaskRecord]], list[models.Task]]
-    build_task_context: Callable[[str, Mapping[str, Any], Mapping[str, str], dict[str, Any]], dict[str, Any]]
-    project_execution_context: Callable[[str, Mapping[str, Any], Mapping[str, Any] | None], dict[str, Any]]
+    build_task_context: Callable[
+        [str, Mapping[str, Any], Mapping[str, str], dict[str, Any]], dict[str, Any]
+    ]
+    project_execution_context: Callable[
+        [str, Mapping[str, Any], Mapping[str, Any] | None], dict[str, Any]
+    ]
     coerce_task_intent_profiles: Callable[[Mapping[str, Any]], dict[str, dict[str, Any]]]
     normalize_task_intent_profile_segment: Callable[[Any], Mapping[str, Any] | None]
     refresh_job_status: Callable[[str], None]
@@ -250,9 +254,7 @@ def task_payload_from_record(
     )
     compiled = planner_contracts.compile_task_request_payloads(
         tool_requests=source_request_ids,
-        tool_inputs=execution_contracts.strip_execution_metadata_from_tool_inputs(
-            raw_tool_inputs
-        ),
+        tool_inputs=execution_contracts.strip_execution_metadata_from_tool_inputs(raw_tool_inputs),
         capability_bindings=normalized_bindings,
         capabilities=enabled_capabilities,
     )
@@ -409,9 +411,7 @@ def enqueue_ready_tasks(
             job_context,
             job_metadata,
         )
-        task_intent_profiles = callbacks.coerce_task_intent_profiles(
-            job_metadata
-        )
+        task_intent_profiles = callbacks.coerce_task_intent_profiles(job_metadata)
         tasks = callbacks.resolve_task_deps(task_records)
         task_map = {task.id: task for task in tasks}
         id_to_name = {record.id: record.name for record in task_records}
@@ -477,7 +477,9 @@ def enqueue_ready_tasks(
                     config=runtime.config,
                     callbacks=callbacks,
                 )
-                if runtime.config.tool_input_validation_enabled and payload.get("tool_inputs_validation"):
+                if runtime.config.tool_input_validation_enabled and payload.get(
+                    "tool_inputs_validation"
+                ):
                     record.status = models.TaskStatus.failed.value
                     record.updated_at = now
                     failed_payload = dict(payload)
@@ -489,6 +491,8 @@ def enqueue_ready_tasks(
     for event_type, event_payload in events_to_emit:
         callbacks.emit_event(event_type, event_payload)
     callbacks.refresh_job_status(job_id)
+
+
 def _limit_exceeded(count: int, limit: int | None) -> bool:
     if not limit or limit <= 0:
         return False

@@ -65,7 +65,9 @@ def _default_capability_response(content: str) -> str:
         lines = [header]
         for capability_id, spec in scoped_capabilities:
             description = str(spec.description or "").strip()
-            lines.append(f"- {capability_id}: {description}" if description else f"- {capability_id}")
+            lines.append(
+                f"- {capability_id}: {description}" if description else f"- {capability_id}"
+            )
         return "\n".join(lines)
     if scope_query:
         return f"No capabilities related to '{scope_query}' are currently available for this assistant."
@@ -77,7 +79,9 @@ class _DefaultChatResponseProvider:
         payload = _llm_json_payload(request)
         content = str(payload.get("current_user_message") or "").strip()
         context_json = dict(payload.get("context_json") or {})
-        active_job_id = str(context_json.get("active_job_id") or context_json.get("job_id") or "").strip()
+        active_job_id = str(
+            context_json.get("active_job_id") or context_json.get("job_id") or ""
+        ).strip()
         if active_job_id:
             return type("_Response", (), {"content": f"Job {active_job_id} is already active."})()
         capability_response = _default_capability_response(content)
@@ -113,10 +117,9 @@ class _DefaultChatResponseProvider:
                 "assistant_response": "",
                 "confidence": 0.9,
             }
-        if (
-            evidence.get("conversation_mode_hint") == "execution_oriented"
-            or evidence.get("execution_signal_strength") in {"strong", "moderate"}
-        ):
+        if evidence.get("conversation_mode_hint") == "execution_oriented" or evidence.get(
+            "execution_signal_strength"
+        ) in {"strong", "moderate"}:
             return {
                 "decision": "execution_request",
                 "assistant_response": "",
@@ -165,17 +168,30 @@ class _DefaultChatRouterProvider:
                 "intent": "generate",
                 "risk_level": "bounded_write",
                 "confidence": 0.95,
-                "output_format": "pdf" if "pdf" in lowered else "docx" if "docx" in lowered else None,
+                "output_format": "pdf"
+                if "pdf" in lowered
+                else "docx"
+                if "docx" in lowered
+                else None,
             }
-        if any(token in lowered for token in ("generate", "render", "create", "deployment report", "document")):
-            if any(token in lowered for token in ("pdf", "docx", "markdown", "json")) or context_json.get("path"):
+        if any(
+            token in lowered
+            for token in ("generate", "render", "create", "deployment report", "document")
+        ):
+            if any(
+                token in lowered for token in ("pdf", "docx", "markdown", "json")
+            ) or context_json.get("path"):
                 return {
                     "route": "submit_job",
                     "assistant_response": "",
                     "intent": "generate",
                     "risk_level": "bounded_write",
                     "confidence": 0.95,
-                    "output_format": "pdf" if "pdf" in lowered else "docx" if "docx" in lowered else None,
+                    "output_format": "pdf"
+                    if "pdf" in lowered
+                    else "docx"
+                    if "docx" in lowered
+                    else None,
                 }
             return {
                 "route": "ask_clarification",
@@ -199,7 +215,9 @@ main._chat_router_provider = _DefaultChatRouterProvider()
 main._chat_response_provider = _DefaultChatResponseProvider()
 
 
-def _metric_value(metrics_text: str, metric_name: str, labels: dict[str, str] | None = None) -> float:
+def _metric_value(
+    metrics_text: str, metric_name: str, labels: dict[str, str] | None = None
+) -> float:
     for line in metrics_text.splitlines():
         if not line or line.startswith("#"):
             continue
@@ -497,12 +515,18 @@ def test_chat_turn_uses_vector_capability_search_for_fuzzy_scope_queries(monkeyp
     session = client.post("/chat/sessions", json={}).json()
     response = client.post(
         f"/chat/sessions/{session['id']}/messages",
-        json={"content": "What can you do related to repo changes?", "context_json": {}, "priority": 0},
+        json={
+            "content": "What can you do related to repo changes?",
+            "context_json": {},
+            "priority": 0,
+        },
     )
 
     assert response.status_code == 200
     body = response.json()
-    assert "Available capabilities related to 'repo changes'" in body["assistant_message"]["content"]
+    assert (
+        "Available capabilities related to 'repo changes'" in body["assistant_message"]["content"]
+    )
     assert "github.file.create_or_update" in body["assistant_message"]["content"]
     assert "filesystem.workspace.list" not in body["assistant_message"]["content"]
 
@@ -617,7 +641,11 @@ def test_chat_turn_uses_vector_intent_detection_for_fuzzy_capability_question(mo
     session = client.post("/chat/sessions", json={}).json()
     response = client.post(
         f"/chat/sessions/{session['id']}/messages",
-        json={"content": "What kinds of work can you handle here?", "context_json": {}, "priority": 0},
+        json={
+            "content": "What kinds of work can you handle here?",
+            "context_json": {},
+            "priority": 0,
+        },
     )
 
     assert response.status_code == 200
@@ -997,9 +1025,7 @@ def test_chat_turn_asks_for_missing_workflow_input_and_uses_followup_reply() -> 
                         "id": "n1",
                         "taskName": "ListWorkspace",
                         "capabilityId": "filesystem.workspace.list",
-                        "bindings": {
-                            "path": {"kind": "workflow_input", "inputKey": "path"}
-                        },
+                        "bindings": {"path": {"kind": "workflow_input", "inputKey": "path"}},
                     }
                 ],
                 "edges": [],
@@ -1041,7 +1067,9 @@ def test_chat_turn_asks_for_missing_workflow_input_and_uses_followup_reply() -> 
     assert run_body["assistant_message"]["action"]["type"] == "run_workflow"
     assert run_body["workflow_run"]["version_id"] == version["id"]
     assert run_body["job"]["context_json"]["workflow"]["inputs"]["path"] == "reports"
-    assert run_body["session"]["metadata"]["active_workflow_run_id"] == run_body["workflow_run"]["id"]
+    assert (
+        run_body["session"]["metadata"]["active_workflow_run_id"] == run_body["workflow_run"]["id"]
+    )
     assert "pending_workflow_input" not in run_body["session"]["metadata"]
 
 
@@ -1435,7 +1463,9 @@ def test_chat_turn_blocks_submit_when_post_normalization_still_requires_blocking
                 "low_confidence": True,
                 "needs_clarification": True,
                 "requires_blocking_clarification": True,
-                "questions": ["What should the system do first (generate, transform, validate, render, or io)?"],
+                "questions": [
+                    "What should the system do first (generate, transform, validate, render, or io)?"
+                ],
                 "blocking_slots": ["intent_action"],
                 "missing_slots": ["intent_action"],
                 "slot_values": {"intent_action": "render", "risk_level": "bounded_write"},
@@ -1512,7 +1542,9 @@ def test_chat_turn_persists_typed_pending_clarification_state_with_active_target
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "response_first")
     monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
     monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
-    monkeypatch.setattr(chat_service.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(
+        chat_service.capability_registry, "load_capability_registry", lambda: registry
+    )
 
     session = client.post("/chat/sessions", json={}).json()
     response = client.post(
@@ -1879,9 +1911,10 @@ def test_answer_or_handoff_maps_pending_answer_before_routing(
     assert second.status_code == 200
     body = second.json()
     assert body["assistant_message"]["action"]["type"] == "ask_clarification"
-    assert body["session"]["metadata"]["pending_clarification"]["known_slot_values"][
-        "audience"
-    ] == "Agentic AI Architects"
+    assert (
+        body["session"]["metadata"]["pending_clarification"]["known_slot_values"]["audience"]
+        == "Agentic AI Architects"
+    )
     assert route_calls["count"] == 1
 
 
@@ -2376,7 +2409,9 @@ def test_pending_clarification_state_filters_polluted_fields_and_derives_output_
             ),
         }
     )
-    monkeypatch.setattr(chat_service.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(
+        chat_service.capability_registry, "load_capability_registry", lambda: registry
+    )
 
     existing_state = main.chat_contracts.ClarificationState(
         original_goal="create a document",
@@ -2447,7 +2482,9 @@ def test_pending_clarification_state_filters_polluted_fields_and_derives_output_
 def test_pending_clarification_state_drops_known_intent_action_question() -> None:
     pending_state = chat_service._pending_clarification_state(
         resolved_goal="create a git repo named firstrepo-from-my-agent",
-        questions=["What should the system do first (generate, transform, validate, render, or io)?"],
+        questions=[
+            "What should the system do first (generate, transform, validate, render, or io)?"
+        ],
         assessment={
             "missing_slots": ["goal", "workspace_path"],
             "blocking_slots": ["goal", "workspace_path"],
@@ -2528,7 +2565,9 @@ def test_candidate_goal_uses_registry_thread_hints(monkeypatch) -> None:
             )
         }
     )
-    monkeypatch.setattr(chat_service.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(
+        chat_service.capability_registry, "load_capability_registry", lambda: registry
+    )
     messages = [
         main.chat_contracts.ChatMessage(
             id="m1",
@@ -2553,15 +2592,18 @@ def test_chat_route_treats_prompt_as_satisfied_by_candidate_goal() -> None:
         missing_slots=["prompt", "goal", "workspace_path"],
         blocking_slots=["prompt", "goal", "workspace_path"],
         slot_values=slot_values,
-        candidate_goal=(
-            "Create a small HTML countdown website in workspace/narender folder."
-        ),
+        candidate_goal=("Create a small HTML countdown website in workspace/narender folder."),
     )
 
     assert missing == []
     assert blocking == []
-    assert slot_values["prompt"] == "Create a small HTML countdown website in workspace/narender folder."
-    assert slot_values["goal"] == "Create a small HTML countdown website in workspace/narender folder."
+    assert (
+        slot_values["prompt"]
+        == "Create a small HTML countdown website in workspace/narender folder."
+    )
+    assert (
+        slot_values["goal"] == "Create a small HTML countdown website in workspace/narender folder."
+    )
     assert slot_values["workspace_path"] == "workspace/narender"
 
 
@@ -2632,9 +2674,10 @@ def test_resolved_pending_clarification_is_not_active() -> None:
         context_json={},
     )
 
-    assert chat_service.pending_clarification_is_active(
-        {"pending_clarification": pending_state}
-    ) is False
+    assert (
+        chat_service.pending_clarification_is_active({"pending_clarification": pending_state})
+        is False
+    )
 
 
 def test_persist_pending_clarification_clears_inactive_state() -> None:
@@ -3082,6 +3125,7 @@ def test_chat_submit_normalization_reconciles_stale_missing_slots_from_context(
         )
 
     monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
+
     class _Normalizer:
         def generate_request_json_object(self, request):
             return {
@@ -3275,7 +3319,9 @@ def test_chat_turn_scopes_follow_up_clarification_to_active_segment(
 
     monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
     monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
-    monkeypatch.setattr(chat_service.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(
+        chat_service.capability_registry, "load_capability_registry", lambda: registry
+    )
     monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", False)
 
     session = client.post("/chat/sessions", json={}).json()
@@ -3415,7 +3461,9 @@ def test_chat_turn_document_content_answer_stays_on_document_flow(
 
     monkeypatch.setattr(main, "_normalize_goal_intent", _normalize_goal_intent)
     monkeypatch.setattr(main.capability_registry, "load_capability_registry", lambda: registry)
-    monkeypatch.setattr(chat_service.capability_registry, "load_capability_registry", lambda: registry)
+    monkeypatch.setattr(
+        chat_service.capability_registry, "load_capability_registry", lambda: registry
+    )
     monkeypatch.setattr(main, "CHAT_CLARIFICATION_NORMALIZER_ENABLED", False)
 
     session = client.post("/chat/sessions", json={}).json()
@@ -3429,14 +3477,16 @@ def test_chat_turn_document_content_answer_stays_on_document_flow(
     assert first.status_code == 200
     first_body = first.json()
     assert first_body["assistant_message"]["action"]["type"] == "ask_clarification"
-    assert first_body["assistant_message"]["content"] == "What specific content should be in the document?"
+    assert (
+        first_body["assistant_message"]["content"]
+        == "What specific content should be in the document?"
+    )
     first_pending = first_body["session"]["metadata"]["pending_clarification"]
     assert first_pending["current_question_field"] == "instruction"
     assert first_pending["active_capability_id"] == "document.spec.generate"
-    assert (
-        first_body["session"]["metadata"]["normalized_intent_envelope"]["candidate_capabilities"]["s1"]
-        == ["document.spec.generate"]
-    )
+    assert first_body["session"]["metadata"]["normalized_intent_envelope"][
+        "candidate_capabilities"
+    ]["s1"] == ["document.spec.generate"]
 
     monkeypatch.setattr(main, "CHAT_ROUTING_MODE", "always_router")
     monkeypatch.setattr(main, "_chat_router_provider", _Router())
@@ -3616,9 +3666,7 @@ def test_chat_turn_preserves_original_goal_and_filename_across_clarification_tur
                 if "practical" in goal.lower():
                     slots["tone"] = "practical"
                     confidence["tone"] = 0.98
-                unresolved = [
-                    field for field in payload["missing_fields"] if field not in slots
-                ]
+                unresolved = [field for field in payload["missing_fields"] if field not in slots]
                 return {
                     "normalized_slots": slots,
                     "field_confidence": confidence,
@@ -3697,7 +3745,9 @@ def test_chat_turn_preserves_original_goal_and_filename_across_clarification_tur
     third_body = third.json()
     assert third_body["job"] is not None
     assert third_body["assistant_message"]["action"]["type"] == "submit_job"
-    assert third_body["job"]["context_json"]["topic"] == "How AI workflows are deployed to Kubernetes"
+    assert (
+        third_body["job"]["context_json"]["topic"] == "How AI workflows are deployed to Kubernetes"
+    )
     assert third_body["job"]["context_json"]["audience"] == "SSE"
     assert third_body["job"]["context_json"]["tone"] == "practical"
     assert third_body["job"]["context_json"]["path"] == "Kubernetes AI Deployments.docx"
@@ -3818,9 +3868,7 @@ def test_chat_submit_normalization_uses_prior_chat_turns_to_fill_document_slots(
                     slots["audience"] = "Senior AI engineers"
                 if "practical" in combined:
                     slots["tone"] = "practical"
-                unresolved = [
-                    field for field in payload["missing_fields"] if field not in slots
-                ]
+                unresolved = [field for field in payload["missing_fields"] if field not in slots]
                 return {
                     "normalized_slots": slots,
                     "field_confidence": {field: 0.99 for field in slots},
@@ -3848,7 +3896,11 @@ def test_chat_submit_normalization_uses_prior_chat_turns_to_fill_document_slots(
     session = client.post("/chat/sessions", json={}).json()
     first = client.post(
         f"/chat/sessions/{session['id']}/messages",
-        json={"content": "Create a Kubernetes deployment report", "context_json": {}, "priority": 0},
+        json={
+            "content": "Create a Kubernetes deployment report",
+            "context_json": {},
+            "priority": 0,
+        },
     )
     assert first.status_code == 200
     assert first.json()["assistant_message"]["action"]["type"] == "ask_clarification"
@@ -4298,11 +4350,15 @@ def test_chat_turn_uses_separate_response_provider_for_conversational_reply(monk
 def test_chat_turn_response_first_skips_router_for_conversational_turn(monkeypatch) -> None:
     class _Router:
         def generate_request_json_object(self, request):
-            raise AssertionError("router should not run for conversational turns in response_first mode")
+            raise AssertionError(
+                "router should not run for conversational turns in response_first mode"
+            )
 
     class _PendingCorrectionProvider:
         def generate_request_json_object(self, request):
-            raise AssertionError("pending correction classifier should not run for normal conversational turns")
+            raise AssertionError(
+                "pending correction classifier should not run for normal conversational turns"
+            )
 
     class _Responder:
         def generate_request(self, request):
@@ -4342,7 +4398,9 @@ def test_chat_turn_response_first_treats_discussion_request_as_conversational(mo
 
     class _PendingCorrectionProvider:
         def generate_request_json_object(self, request):
-            raise AssertionError("pending correction classifier should not run for normal discussion turns")
+            raise AssertionError(
+                "pending correction classifier should not run for normal discussion turns"
+            )
 
     class _Responder:
         def generate_request(self, request):
@@ -4356,7 +4414,9 @@ def test_chat_turn_response_first_treats_discussion_request_as_conversational(mo
         main,
         "_normalize_goal_intent",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("intent normalization should not run for discussion-style conversational turns")
+            AssertionError(
+                "intent normalization should not run for discussion-style conversational turns"
+            )
         ),
     )
     monkeypatch.setattr(main, "_chat_router_provider", _Router())
@@ -4366,7 +4426,11 @@ def test_chat_turn_response_first_treats_discussion_request_as_conversational(mo
 
     response = client.post(
         f"/chat/sessions/{session['id']}/messages",
-        json={"content": "I want to discuss about Kubernetes with you.", "context_json": {}, "priority": 0},
+        json={
+            "content": "I want to discuss about Kubernetes with you.",
+            "context_json": {},
+            "priority": 0,
+        },
     )
 
     assert response.status_code == 200
@@ -4396,7 +4460,9 @@ def test_chat_turn_response_first_answer_or_handoff_answers_without_router(monke
         main,
         "_normalize_goal_intent",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("intent normalization should not run for answer-or-handoff direct responses")
+            AssertionError(
+                "intent normalization should not run for answer-or-handoff direct responses"
+            )
         ),
     )
     monkeypatch.setattr(main, "_chat_router_provider", _Router())
@@ -4986,7 +5052,9 @@ def test_build_chat_route_request_applies_live_calibration_override(monkeypatch)
     calibration = route_request.routing_evidence.historical_success_features["calibration"]
     assert calibration["mode"] == "live"
     assert calibration["live_override_used"] is True
-    assert route_request.routing_evidence.retrieved_candidates[0].candidate_id == "workflow:preferred"
+    assert (
+        route_request.routing_evidence.retrieved_candidates[0].candidate_id == "workflow:preferred"
+    )
 
 
 def test_chat_turn_can_run_retrieved_workflow_candidate_without_explicit_reference(
@@ -5214,15 +5282,24 @@ def test_chat_turn_persists_routing_decision_metadata(monkeypatch) -> None:
         "generic:submit_job"
     ]
     assert body["assistant_message"]["metadata"]["routing_decision"]["calibration_mode"] == "shadow"
-    assert body["assistant_message"]["metadata"]["routing_decision"]["calibration_live_requested"] is False
-    assert body["assistant_message"]["metadata"]["routing_decision"]["calibration_live_override_used"] is False
+    assert (
+        body["assistant_message"]["metadata"]["routing_decision"]["calibration_live_requested"]
+        is False
+    )
+    assert (
+        body["assistant_message"]["metadata"]["routing_decision"]["calibration_live_override_used"]
+        is False
+    )
     assert (
         body["assistant_message"]["metadata"]["routing_decision"]["shadow_selected_candidate_id"]
         == "workflow:preferred"
     )
-    assert body["assistant_message"]["metadata"]["routing_decision"][
-        "selected_candidate_calibrated_confidence"
-    ] < body["assistant_message"]["metadata"]["routing_decision"]["shadow_selected_confidence"]
+    assert (
+        body["assistant_message"]["metadata"]["routing_decision"][
+            "selected_candidate_calibrated_confidence"
+        ]
+        < body["assistant_message"]["metadata"]["routing_decision"]["shadow_selected_confidence"]
+    )
 
 
 def test_chat_boundary_uses_semantic_capability_evidence_and_persists_decision(
@@ -5443,8 +5520,7 @@ def test_chat_boundary_capability_evidence_scopes_to_active_family(
     assert top_families
     assert top_families[0].family == "documents"
     assert all(
-        capability_id.startswith("document.")
-        for capability_id in top_families[0].capability_ids
+        capability_id.startswith("document.") for capability_id in top_families[0].capability_ids
     )
 
 
@@ -5528,7 +5604,10 @@ def test_chat_boundary_overrides_chat_reply_when_execution_signal_is_strong(
     assert response.status_code == 200
     body = response.json()
     assert body["assistant_message"]["action"]["type"] in {"submit_job", "ask_clarification"}
-    assert body["assistant_message"]["metadata"]["boundary_decision"]["decision"] == "execution_request"
+    assert (
+        body["assistant_message"]["metadata"]["boundary_decision"]["decision"]
+        == "execution_request"
+    )
     assert (
         body["assistant_message"]["metadata"]["boundary_decision"]["reason_code"]
         == "execution_signal_override"
@@ -5666,7 +5745,10 @@ def test_chat_boundary_clears_stale_pending_clarification_for_execution_oriented
     body = response.json()
     assert body["job"] is None
     assert body["assistant_message"]["action"]["type"] == "ask_clarification"
-    assert body["assistant_message"]["metadata"]["boundary_decision"]["decision"] == "execution_request"
+    assert (
+        body["assistant_message"]["metadata"]["boundary_decision"]["decision"]
+        == "execution_request"
+    )
     assert (
         body["assistant_message"]["metadata"]["boundary_decision"]["reason_code"]
         == "execution_signal_override"
@@ -5726,7 +5808,10 @@ def test_chat_boundary_coerces_non_pending_meta_clarification_back_to_execution(
     body = response.json()
     assert body["job"] is None
     assert body["assistant_message"]["action"]["type"] == "ask_clarification"
-    assert body["assistant_message"]["metadata"]["boundary_decision"]["decision"] == "execution_request"
+    assert (
+        body["assistant_message"]["metadata"]["boundary_decision"]["decision"]
+        == "execution_request"
+    )
     assert (
         body["assistant_message"]["metadata"]["boundary_decision"]["reason_code"]
         == "non_pending_meta_clarification_execution_override"
@@ -5789,7 +5874,9 @@ def test_chat_boundary_missing_document_output_format_cannot_fall_back_to_respon
     body = response.json()
     assert body["job"] is None
     assert body["assistant_message"]["action"]["type"] == "ask_clarification"
-    assert body["assistant_message"]["metadata"]["boundary_decision"]["decision"] == "continue_pending"
+    assert (
+        body["assistant_message"]["metadata"]["boundary_decision"]["decision"] == "continue_pending"
+    )
     assert (
         body["assistant_message"]["metadata"]["boundary_decision"]["reason_code"]
         == "missing_required_input_output_format_for_document_generation"
@@ -5797,9 +5884,10 @@ def test_chat_boundary_missing_document_output_format_cannot_fall_back_to_respon
     assert body["assistant_message"]["action"]["goal_intent_profile"]["missing_slots"] == [
         "output_format"
     ]
-    assert "output_format" not in body["assistant_message"]["action"]["goal_intent_profile"][
-        "slot_values"
-    ]
+    assert (
+        "output_format"
+        not in body["assistant_message"]["action"]["goal_intent_profile"]["slot_values"]
+    )
     assert body["session"]["metadata"]["pending_clarification"]["original_goal"] == (
         "create a document on Deployment of ML workflows on Kubernetes."
     )
@@ -5851,7 +5939,9 @@ def test_chat_route_goal_intent_profile_preserves_intent_disagreement_question(m
         low_confidence=True,
         needs_clarification=True,
         requires_blocking_clarification=True,
-        questions=["Should I generate new content, or should I fetch, inspect, or list data for this request?"],
+        questions=[
+            "Should I generate new content, or should I fetch, inspect, or list data for this request?"
+        ],
         blocking_slots=["intent_action"],
         missing_slots=["intent_action"],
         slot_values={"intent_action": "io"},
@@ -5941,7 +6031,9 @@ def test_chat_turn_exits_pending_clarification_when_user_requests_chat_only_resp
 
     class _Router:
         def generate_request_json_object(self, request):
-            raise AssertionError("router should not run when user exits pending clarification to stay in chat")
+            raise AssertionError(
+                "router should not run when user exits pending clarification to stay in chat"
+            )
 
     class _Responder:
         def generate_request_json_object(self, request):
@@ -5995,7 +6087,9 @@ def test_chat_turn_exits_pending_clarification_for_semantic_chat_only_correction
 
     class _Router:
         def generate_request_json_object(self, request):
-            raise AssertionError("router should not run when user semantically redirects back to chat")
+            raise AssertionError(
+                "router should not run when user semantically redirects back to chat"
+            )
 
     class _Responder:
         def generate_request_json_object(self, request):
@@ -6014,7 +6108,9 @@ def test_chat_turn_exits_pending_clarification_for_semantic_chat_only_correction
         main,
         "_normalize_goal_intent",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("intent normalization should not run when semantic correction redirects to chat")
+            AssertionError(
+                "intent normalization should not run when semantic correction redirects to chat"
+            )
         ),
     )
 
@@ -6267,7 +6363,9 @@ def test_build_chat_boundary_provider_prefers_dedicated_model(monkeypatch) -> No
         return object()
 
     monkeypatch.setattr(main, "LLM_PROVIDER_NAME", "bedrock")
-    monkeypatch.setattr(main, "_CHAT_BOUNDARY_MODEL_NAME", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    monkeypatch.setattr(
+        main, "_CHAT_BOUNDARY_MODEL_NAME", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
     monkeypatch.setattr(main, "CHAT_BOUNDARY_MAX_OUTPUT_TOKENS", 384)
     monkeypatch.setattr(main, "resolve_provider", _resolve_provider)
 
@@ -6433,7 +6531,9 @@ def test_chat_turn_tool_call_does_not_use_chat_response_provider(monkeypatch) ->
         def generate_request(self, request):
             raise AssertionError("chat response provider should not run for tool_call")
 
-    def _run_chat_direct_capability(*, db, chat_session_id, goal, capability_id, arguments, context_json, priority):
+    def _run_chat_direct_capability(
+        *, db, chat_session_id, goal, capability_id, arguments, context_json, priority
+    ):
         del db, chat_session_id, goal, arguments, context_json, priority
         return chat_service.ChatDirectRunResult(
             job=models.Job(
@@ -6545,9 +6645,9 @@ def test_chat_turn_executes_direct_capability_as_synchronous_one_step_run(monkey
     task_results = client.get(f"/jobs/{job_id}/task_results")
     assert task_results.status_code == 200
     task_result_payload = next(iter(task_results.json().values()))
-    assert task_result_payload["outputs"]["filesystem.workspace.list"]["entries"][0]["path"].endswith(
-        "README.md"
-    )
+    assert task_result_payload["outputs"]["filesystem.workspace.list"]["entries"][0][
+        "path"
+    ].endswith("README.md")
 
     attempts_response = client.get(f"/jobs/{job_id}/debugger/attempts")
     assert attempts_response.status_code == 200
@@ -6630,7 +6730,9 @@ def test_chat_route_context_includes_profile_without_persisting_it(monkeypatch) 
 
     def _route_turn(*, content, candidate_goal, session_metadata, merged_context, messages):
         del content, candidate_goal, session_metadata, messages
-        assert merged_context["user_profile"]["preferences"]["preferred_output_format"] == "markdown"
+        assert (
+            merged_context["user_profile"]["preferences"]["preferred_output_format"] == "markdown"
+        )
         return {
             "type": "respond",
             "assistant_content": "Profile-aware route.",

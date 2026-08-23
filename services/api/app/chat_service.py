@@ -7,16 +7,74 @@ from enum import Enum
 import logging
 import os
 import re
+import threading
+import time
 from typing import Any, Callable, Sequence
 
 from sqlalchemy.orm import Session
 
-from libs.core import capability_registry, chat_contracts, intent_contract, llm_provider, models, workflow_contracts
+from libs.core import (
+    capability_registry,
+    chat_contracts,
+    intent_contract,
+    llm_provider,
+    models,
+    workflow_contracts,
+)
 
 from . import chat_clarification_normalizer, context_service, memory_profile_service
 from .models import ChatMessageRecord, ChatSessionRecord
 
 logger = logging.getLogger("api.chat_service")
+
+# ---------------------------------------------------------------------------
+# In-process caches — eliminate DB round-trips for data that barely changes
+# between consecutive turns of the same session.
+#
+# Session record cache: keyed by session_id; stores the post-persist state
+# (metadata_json + updated_at + title) so the next turn skips the initial
+# SELECT on chat_sessions.
+#
+# User profile cache: keyed by user_id; stores the profile payload with a
+# monotonic timestamp for TTL expiry.  The profile is re-read from the DB
+# only on the first turn or after the TTL expires.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _CachedSession:
+    metadata_json: dict[str, Any]
+    updated_at: datetime
+    title: str
+    created_at: datetime
+
+
+_SESSION_CACHE: dict[str, _CachedSession] = {}
+_SESSION_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_session(session_id: str) -> _CachedSession | None:
+    with _SESSION_CACHE_LOCK:
+        return _SESSION_CACHE.get(session_id)
+
+
+def _put_cached_session(
+    session_id: str, metadata_json: dict, updated_at: datetime, title: str, created_at: datetime
+) -> None:
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE[session_id] = _CachedSession(
+            metadata_json=dict(metadata_json),
+            updated_at=updated_at,
+            title=title,
+            created_at=created_at,
+        )
+
+
+def _invalidate_cached_session(session_id: str) -> None:
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE.pop(session_id, None)
+
+
 _INTERNAL_CHAT_USER_ID_KEY = "_chat_user_id"
 _CHAT_STATE_VERSION_KEY = "_chat_state_version"
 _CHAT_STATE_CONFLICT_COUNT_KEY = "_chat_state_conflict_count"
@@ -70,6 +128,8 @@ class ChatServiceRuntime:
     normalize_submit_context: Callable[..., "ChatSubmitNormalizationResult | None"] | None = None
     is_chat_only_correction: Callable[[str], bool] | None = None
     defer_pending_clarification_mapping: bool = False
+    progress_callback: Callable[[str, dict], None] | None = None
+    rag_synthesize_callback: Callable[[str, list], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -134,20 +194,24 @@ class ClarificationLifecycle:
 # ChatRuntime and AgentRuntime are narrower views used internally by the
 # pipeline stages so each executor only depends on what it actually needs.
 
+
 @dataclass(frozen=True)
 class ChatRuntime:
     """Owns a single synchronous turn: classify, respond, optionally spawn work."""
+
     route_turn: Callable[..., dict[str, Any]]
     utcnow: Callable[[], datetime]
     make_id: Callable[[], str]
     normalize_submit_context: Callable[..., "ChatSubmitNormalizationResult | None"] | None = None
     is_chat_only_correction: Callable[[str], bool] | None = None
     defer_pending_clarification_mapping: bool = False
+    progress_callback: Callable[[str, dict], None] | None = None
 
 
 @dataclass(frozen=True)
 class AgentRuntime:
     """Owns job-scoped operations that outlive a single chat turn."""
+
     create_job: Callable[[models.JobCreate, Session], models.Job]
     run_workflow: Callable[..., models.WorkflowRunResult]
     inspect_workflow: Callable[..., "ChatWorkflowInspection"]
@@ -163,6 +227,7 @@ def _decompose_runtime(runtime: ChatServiceRuntime) -> tuple[ChatRuntime, AgentR
         normalize_submit_context=runtime.normalize_submit_context,
         is_chat_only_correction=runtime.is_chat_only_correction,
         defer_pending_clarification_mapping=runtime.defer_pending_clarification_mapping,
+        progress_callback=runtime.progress_callback,
     )
     agent = AgentRuntime(
         create_job=runtime.create_job,
@@ -176,6 +241,7 @@ def _decompose_runtime(runtime: ChatServiceRuntime) -> tuple[ChatRuntime, AgentR
 # ─── Typed turn plans ─────────────────────────────────────────────────────────
 # The LLM router currently returns dict[str, Any]. These dataclasses give each
 # route type an explicit contract so executors don't silently miss fields.
+
 
 @dataclass(frozen=True)
 class AskClarificationPlan:
@@ -217,6 +283,17 @@ class ToolCallPlan:
 
 
 @dataclass(frozen=True)
+class ToolChainPlan:
+    """Sequential chain of tool calls — each step's output feeds the next step's input."""
+
+    steps: list[ToolCallPlan]
+    resolved_goal: str
+    merged_context: dict[str, Any]
+    assessment: dict[str, Any]
+    assistant_content: str = ""
+
+
+@dataclass(frozen=True)
 class RespondPlan:
     resolved_goal: str
     merged_context: dict[str, Any]
@@ -232,15 +309,18 @@ TurnPlan = (
     | SubmitJobPlan
     | RunWorkflowPlan
     | ToolCallPlan
+    | ToolChainPlan
     | RespondPlan
 )
 
 
 # ─── Turn context and result ───────────────────────────────────────────────────
 
+
 @dataclass
 class TurnContext:
     """All state assembled before routing; passed unchanged through executors."""
+
     db: Session
     record: ChatSessionRecord
     request: chat_contracts.ChatTurnRequest
@@ -265,10 +345,19 @@ class TurnContext:
     pre_route_normalization: ChatSubmitNormalizationResult | None = None
     clarification_mapping: dict[str, Any] | None = None
 
+    def emit_progress(self, kind: str, payload: dict) -> None:
+        cb = self.chat.progress_callback
+        if cb is not None:
+            try:
+                cb(kind, payload)
+            except Exception:  # noqa: BLE001
+                pass
+
 
 @dataclass
 class TurnResult:
     """What an executor produces; consumed by _persist_turn and _build_turn_response."""
+
     assistant_content: str
     assistant_action: chat_contracts.AssistantAction
     created_job: models.Job | None = None
@@ -281,6 +370,7 @@ class TurnResult:
 # ─── Clarification state machine ──────────────────────────────────────────────
 # Replaces the _clarification_lifecycle blob computation for new code paths.
 # Existing ClarificationLifecycle functions are kept for callers not yet migrated.
+
 
 class ClarificationPhase(str, Enum):
     idle = "idle"
@@ -477,8 +567,7 @@ def _clarification_lifecycle(
     known_slot_values = _known_clarification_slot_values(state)
     profile = dict(state.goal_intent_profile or {})
     profile_requires_clarification = bool(
-        profile.get("needs_clarification")
-        or profile.get("requires_blocking_clarification")
+        profile.get("needs_clarification") or profile.get("requires_blocking_clarification")
     )
 
     profile_fields = _unresolved_clarification_fields(
@@ -538,16 +627,18 @@ def _clarification_lifecycle(
     if resolved_question_field and resolved_question_field not in known_slot_values:
         current_question_field = resolved_question_field
         if current_question_field not in pending_fields:
-            pending_fields = tuple(_ordered_clarification_fields([current_question_field], pending_fields))
+            pending_fields = tuple(
+                _ordered_clarification_fields([current_question_field], pending_fields)
+            )
         if current_question_field not in required_fields:
-            required_fields = tuple(_ordered_clarification_fields([current_question_field], required_fields))
+            required_fields = tuple(
+                _ordered_clarification_fields([current_question_field], required_fields)
+            )
     elif not current_question_field and pending_fields:
         current_question_field = pending_fields[0]
 
     active = bool(
-        pending_fields
-        or required_fields
-        or (profile_requires_clarification and questions)
+        pending_fields or required_fields or (profile_requires_clarification and questions)
     )
     return ClarificationLifecycle(
         state=state,
@@ -777,7 +868,8 @@ def _clarification_collectible_fields(
     capability_ids: Sequence[str] | None,
 ) -> set[str]:
     normalized_capability_ids = [
-        capability_registry.canonicalize_capability_id(capability_id) or str(capability_id or "").strip()
+        capability_registry.canonicalize_capability_id(capability_id)
+        or str(capability_id or "").strip()
         for capability_id in (capability_ids or [])
         if str(capability_id or "").strip()
     ]
@@ -844,54 +936,66 @@ def _clarification_field_from_question(
             candidate_set.add(normalized_field)
             candidates.append(normalized_field)
 
-    for field in candidates:
+    for candidate_field in candidates:
         canonical_question = chat_clarification_normalizer.clarification_question_for_field(
-            field,
+            candidate_field,
             goal=goal,
         )
         if normalized_question == canonical_question:
-            return field
+            return candidate_field
 
     if "target audience" in question_lower and "audience" in candidate_set:
         return "audience"
     if "tone" in question_lower and "tone" in candidate_set:
         return "tone"
-    if any(
-        token in question_lower
-        for token in (
-            "output format",
-            "what format",
-            "target format",
-            "pdf",
-            "docx",
-            "markdown",
+    if (
+        any(
+            token in question_lower
+            for token in (
+                "output format",
+                "what format",
+                "target format",
+                "pdf",
+                "docx",
+                "markdown",
+            )
         )
-    ) and "output_format" in candidate_set:
+        and "output_format" in candidate_set
+    ):
         return "output_format"
-    if any(
-        token in question_lower
-        for token in (
-            "output path",
-            "filename",
-            "file name",
-            "name of the document",
-            "exact filename",
-            "save the document",
-            "where should i save",
+    if (
+        any(
+            token in question_lower
+            for token in (
+                "output path",
+                "filename",
+                "file name",
+                "name of the document",
+                "exact filename",
+                "save the document",
+                "where should i save",
+            )
         )
-    ) and "path" in candidate_set:
+        and "path" in candidate_set
+    ):
         return "path"
-    if any(token in question_lower for token in ("main topic", "topic", "title", "subject")) and "topic" in candidate_set:
+    if (
+        any(token in question_lower for token in ("main topic", "topic", "title", "subject"))
+        and "topic" in candidate_set
+    ):
         return "topic"
-    if any(
-        token in question_lower
-        for token in (
-            "system do first",
-            "generate, transform, validate, render, or io",
-            "generate, transform, validate, render",
-            "intent action",
+    if (
+        any(
+            token in question_lower
+            for token in (
+                "system do first",
+                "generate, transform, validate, render, or io",
+                "generate, transform, validate, render",
+                "intent action",
+            )
         )
-    ) and "intent_action" in candidate_set:
+        and "intent_action" in candidate_set
+    ):
         return "intent_action"
     if any(
         token in question_lower
@@ -973,7 +1077,9 @@ def _merge_clarification_state_for_persistence(
         or str(latest_state.execution_frame.original_goal or "").strip()
     )
     execution_frame.mode = desired_state.execution_frame.mode
-    execution_frame.active_family = desired_state.execution_frame.active_family or execution_frame.active_family
+    execution_frame.active_family = (
+        desired_state.execution_frame.active_family or execution_frame.active_family
+    )
     execution_frame.active_segment_id = (
         desired_state.execution_frame.active_segment_id or execution_frame.active_segment_id
     )
@@ -981,21 +1087,28 @@ def _merge_clarification_state_for_persistence(
         desired_state.execution_frame.active_capability_id or execution_frame.active_capability_id
     )
     execution_frame.workflow_target = workflow_target
-    execution_frame.state_version = max(
-        int(latest_state.execution_frame.state_version or 0),
-        int(desired_state.execution_frame.state_version or 0),
-    ) + 1
+    execution_frame.state_version = (
+        max(
+            int(latest_state.execution_frame.state_version or 0),
+            int(desired_state.execution_frame.state_version or 0),
+        )
+        + 1
+    )
 
     merged = desired_state.model_copy(deep=True)
     merged.schema_version = desired_state.schema_version or latest_state.schema_version
-    merged.state_version = max(
-        int(latest_state.state_version or 0),
-        int(desired_state.state_version or 0),
-    ) + 1
+    merged.state_version = (
+        max(
+            int(latest_state.state_version or 0),
+            int(desired_state.state_version or 0),
+        )
+        + 1
+    )
     merged.execution_frame = execution_frame
-    merged.original_goal = str(desired_state.original_goal or "").strip() or str(
-        latest_state.original_goal or ""
-    ).strip()
+    merged.original_goal = (
+        str(desired_state.original_goal or "").strip()
+        or str(latest_state.original_goal or "").strip()
+    )
     merged.active_family = desired_state.active_family or latest_state.active_family
     merged.active_segment_id = desired_state.active_segment_id or latest_state.active_segment_id
     merged.active_capability_id = (
@@ -1020,9 +1133,7 @@ def _merge_clarification_state_for_persistence(
     merged.resolved_slots = resolved_slots
     merged.slot_provenance = slot_provenance
     merged.pending_fields = [
-        field
-        for field in merged.pending_fields
-        if field and field not in known_slot_values
+        field for field in merged.pending_fields if field and field not in known_slot_values
     ]
     merged.answered_fields = sorted(
         {
@@ -1144,11 +1255,13 @@ def _merge_session_metadata_for_persistence(
 
     merged[_CHAT_STATE_VERSION_KEY] = max(latest_state_version, loaded_state_version) + 1
     if conflict_detected:
+        merged[_CHAT_STATE_CONFLICT_COUNT_KEY] = (
+            int(latest.get(_CHAT_STATE_CONFLICT_COUNT_KEY) or 0) + 1
+        )
+    elif _CHAT_STATE_CONFLICT_COUNT_KEY in latest:
         merged[_CHAT_STATE_CONFLICT_COUNT_KEY] = int(
             latest.get(_CHAT_STATE_CONFLICT_COUNT_KEY) or 0
-        ) + 1
-    elif _CHAT_STATE_CONFLICT_COUNT_KEY in latest:
-        merged[_CHAT_STATE_CONFLICT_COUNT_KEY] = int(latest.get(_CHAT_STATE_CONFLICT_COUNT_KEY) or 0)
+        )
     return merged, conflict_detected
 
 
@@ -1279,7 +1392,9 @@ def _active_execution_target(
 ]:
     active_family = existing_state.active_family if existing_state is not None else None
     active_segment_id = existing_state.active_segment_id if existing_state is not None else None
-    active_capability_id = existing_state.active_capability_id if existing_state is not None else None
+    active_capability_id = (
+        existing_state.active_capability_id if existing_state is not None else None
+    )
     workflow_target = (
         dict(existing_state.execution_frame.workflow_target)
         if existing_state is not None
@@ -1303,11 +1418,18 @@ def _active_execution_target(
             active_capability_id = active_target.capability_id or active_capability_id
     if not active_capability_id and candidate_capabilities:
         active_capability_id = next(
-            (str(capability_id).strip() for capability_id in candidate_capabilities if str(capability_id).strip()),
+            (
+                str(capability_id).strip()
+                for capability_id in candidate_capabilities
+                if str(capability_id).strip()
+            ),
             None,
         )
     if active_capability_id:
-        active_capability_id = capability_registry.canonicalize_capability_id(active_capability_id) or active_capability_id
+        active_capability_id = (
+            capability_registry.canonicalize_capability_id(active_capability_id)
+            or active_capability_id
+        )
         active_family = _execution_family_for_capability(active_capability_id) or active_family
     latest_workflow_target = _workflow_target_state(context_json)
     if latest_workflow_target:
@@ -1377,7 +1499,9 @@ def _pending_clarification_state(
                 )
     assessment_unresolved_fields: set[str] = set()
     if isinstance(assessment, Mapping):
-        for raw_field in (assessment.get("missing_slots") or []) + (assessment.get("blocking_slots") or []):
+        for raw_field in (assessment.get("missing_slots") or []) + (
+            assessment.get("blocking_slots") or []
+        ):
             field = _normalize_clarification_field_key(raw_field)
             if field:
                 assessment_unresolved_fields.add(field)
@@ -1388,7 +1512,8 @@ def _pending_clarification_state(
             or (
                 isinstance(assessment.get("confidence"), (int, float))
                 and isinstance(assessment.get("threshold"), (int, float))
-                and float(assessment.get("confidence") or 0) < float(assessment.get("threshold") or 0)
+                and float(assessment.get("confidence") or 0)
+                < float(assessment.get("threshold") or 0)
             )
         )
     )
@@ -1416,7 +1541,9 @@ def _pending_clarification_state(
     pending_fields: list[str] = []
     required_fields: list[str] = []
     if isinstance(assessment, Mapping):
-        for raw_field in (assessment.get("missing_slots") or []) + (assessment.get("blocking_slots") or []):
+        for raw_field in (assessment.get("missing_slots") or []) + (
+            assessment.get("blocking_slots") or []
+        ):
             if isinstance(raw_field, str):
                 field = _normalize_clarification_field_key(raw_field)
                 if field and field not in required_fields:
@@ -1434,11 +1561,10 @@ def _pending_clarification_state(
         )
     )
     reset_existing_pending_fields = (
-        isinstance(assessment, Mapping)
-        and assessment_source == "chat_boundary_meta_clarification"
+        isinstance(assessment, Mapping) and assessment_source == "chat_boundary_meta_clarification"
     )
     if not reset_existing_pending_fields:
-        for raw_field in (existing_state.pending_fields if existing_state is not None else []):
+        for raw_field in existing_state.pending_fields if existing_state is not None else []:
             if isinstance(raw_field, str):
                 field = _normalize_clarification_field_key(raw_field)
                 if field and field not in pending_fields and field not in known_slot_values:
@@ -1450,7 +1576,7 @@ def _pending_clarification_state(
                 if field and field not in required_fields:
                     required_fields.append(field)
     question_history: list[str] = []
-    for raw_question in (existing_state.question_history if existing_state is not None else []):
+    for raw_question in existing_state.question_history if existing_state is not None else []:
         if isinstance(raw_question, str):
             question = raw_question.strip()
             if question and question not in question_history:
@@ -1460,7 +1586,7 @@ def _pending_clarification_state(
         if normalized and normalized not in question_history:
             question_history.append(normalized)
     answer_history: list[str] = []
-    for raw_answer in (existing_state.answer_history if existing_state is not None else []):
+    for raw_answer in existing_state.answer_history if existing_state is not None else []:
         if isinstance(raw_answer, str):
             answer = raw_answer.strip()
             if answer and answer not in answer_history:
@@ -1470,7 +1596,9 @@ def _pending_clarification_state(
         if latest_answer and latest_answer not in answer_history:
             answer_history.append(latest_answer)
     candidate_capabilities: list[str] = []
-    raw_candidates = context_json.get("capability_candidates") if isinstance(context_json, Mapping) else None
+    raw_candidates = (
+        context_json.get("capability_candidates") if isinstance(context_json, Mapping) else None
+    )
     if isinstance(raw_candidates, list):
         for raw_value in raw_candidates:
             if isinstance(raw_value, str):
@@ -1478,7 +1606,9 @@ def _pending_clarification_state(
                 if value and value not in candidate_capabilities:
                     candidate_capabilities.append(value)
     if not candidate_capabilities:
-        for raw_value in (existing_state.candidate_capabilities if existing_state is not None else []):
+        for raw_value in (
+            existing_state.candidate_capabilities if existing_state is not None else []
+        ):
             if isinstance(raw_value, str):
                 value = raw_value.strip()
                 if value and value not in candidate_capabilities:
@@ -1578,9 +1708,7 @@ def _pending_clarification_state(
     execution_frame.active_capability_id = active_capability_id
     execution_frame.workflow_target = workflow_target
     execution_frame.state_version = (
-        existing_state.execution_frame.state_version + 1
-        if existing_state is not None
-        else 1
+        existing_state.execution_frame.state_version + 1 if existing_state is not None else 1
     )
     if not str(execution_frame.frame_id or "").strip():
         execution_frame.frame_id = (
@@ -1621,7 +1749,8 @@ def _pending_clarification_state(
         questions=active_questions,
         pending_questions=question_queue,
         current_question=current_question,
-        current_question_field=current_question_field or (pending_fields[0] if pending_fields else None),
+        current_question_field=current_question_field
+        or (pending_fields[0] if pending_fields else None),
         pending_fields=pending_fields,
         required_fields=required_fields,
         known_slot_values=known_slot_values,
@@ -1631,7 +1760,9 @@ def _pending_clarification_state(
         question_history=question_history,
         answer_history=answer_history,
         candidate_capabilities=candidate_capabilities,
-        auto_path_allowed=bool(existing_state.auto_path_allowed) if existing_state is not None else False,
+        auto_path_allowed=bool(existing_state.auto_path_allowed)
+        if existing_state is not None
+        else False,
     )
     return state.model_dump(mode="json", exclude_none=True)
 
@@ -1831,8 +1962,7 @@ def _local_pending_clarification_normalization(
     assessment["questions"] = remaining_questions
     if remaining_fields:
         assessment["clarification_mode"] = (
-            str(assessment.get("clarification_mode") or "").strip()
-            or "targeted_slot_filling"
+            str(assessment.get("clarification_mode") or "").strip() or "targeted_slot_filling"
         )
     else:
         assessment["clarification_mode"] = None
@@ -2112,7 +2242,19 @@ def looks_like_chat_only_correction(content: str) -> bool:
     if not tokens:
         return False
 
-    negation_tokens = {"no", "not", "dont", "don't", "do", "without", "skip", "cancel", "stop", "instead", "rather"}
+    negation_tokens = {
+        "no",
+        "not",
+        "dont",
+        "don't",
+        "do",
+        "without",
+        "skip",
+        "cancel",
+        "stop",
+        "instead",
+        "rather",
+    }
     execution_tokens = {
         "document",
         "doc",
@@ -2256,9 +2398,29 @@ def _build_turn_context(
     user_id: str | None,
 ) -> TurnContext:
     """Validate session access, assemble all pre-routing state, and return TurnContext."""
-    record = db.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
-    if record is None:
-        raise KeyError(session_id)
+    _tc0 = time.perf_counter()
+    _cached = _get_cached_session(session_id)
+    if _cached is not None:
+        # Warm path: skip the SELECT on chat_sessions entirely.  We have all
+        # fields we need from last turn's post-persist snapshot.  A lightweight
+        # namespace works wherever the code uses record.field; _persist_chat_session_state
+        # does its own fresh SELECT internally so the ORM identity map is not needed here.
+        import types as _types
+
+        record: Any = _types.SimpleNamespace(
+            id=session_id,
+            title=_cached.title,
+            metadata_json=dict(_cached.metadata_json),
+            updated_at=_cached.updated_at,
+            created_at=_cached.created_at,
+        )
+        _cache_hit = True
+    else:
+        record = db.query(ChatSessionRecord).filter(ChatSessionRecord.id == session_id).first()
+        if record is None:
+            raise KeyError(session_id)
+        _cache_hit = False
+    _tc1 = time.perf_counter()
     if not _chat_session_access_allowed(record, user_id):
         raise KeyError(session_id)
 
@@ -2294,18 +2456,30 @@ def _build_turn_context(
         clear_pending_clarification_state(session_metadata, include_workflow_input=True)
 
     # Build context
-    session_context = _sanitize_chat_context(_coerce_context_json(session_metadata.get("context_json")))
-    turn_context_json = _sanitize_chat_context(
-        _prepare_turn_context(request.context_json, session_metadata=session_metadata, content=content)
+    session_context = _sanitize_chat_context(
+        _coerce_context_json(session_metadata.get("context_json"))
     )
+    turn_context_json = _sanitize_chat_context(
+        _prepare_turn_context(
+            request.context_json, session_metadata=session_metadata, content=content
+        )
+    )
+    _tc2 = time.perf_counter()
     messages = _message_records_for_session(db, record.id)
+    _tc3 = time.perf_counter()
     chat_messages = [_message_from_record(m) for m in messages]
+    _tc3a = time.perf_counter()
     candidate_goal = (
         content.strip()
         if restarted_pending_clarification
-        else _candidate_goal(content, session_metadata, messages=chat_messages,
-                             is_chat_only_correction=chat.is_chat_only_correction)
+        else _candidate_goal(
+            content,
+            session_metadata,
+            messages=chat_messages,
+            is_chat_only_correction=chat.is_chat_only_correction,
+        )
     )
+    _tc4 = time.perf_counter()
     context_envelope = context_service.build_chat_context_envelope(
         db=db,
         goal=candidate_goal,
@@ -2314,7 +2488,23 @@ def _build_turn_context(
         turn_context=turn_context_json,
         user_id=bound_user_id,
     )
+    _tc5 = time.perf_counter()
     merged_context = context_service.chat_submit_context_view(context_envelope)
+    logger.info(
+        "chat_build_context_timing",
+        extra={
+            "cache_hit": _cache_hit,
+            "session_ms": round((_tc1 - _tc0) * 1000, 1),
+            "gap1_ms": round((_tc2 - _tc1) * 1000, 1),
+            "messages_ms": round((_tc3 - _tc2) * 1000, 1),
+            "convert_ms": round((_tc3a - _tc3) * 1000, 1),
+            "goal_ms": round((_tc4 - _tc3a) * 1000, 1),
+            "gap2_ms": round((_tc4 - _tc3) * 1000, 1),
+            "envelope_ms": round((_tc5 - _tc4) * 1000, 1),
+            "total_build_ms": round((_tc5 - _tc0) * 1000, 1),
+            "session_id": session_id,
+        },
+    )
 
     # Apply pending clarification slot mapping (may update goal / context)
     pending_state_before_mapping = _parse_pending_clarification_state(session_metadata)
@@ -2414,9 +2604,13 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
     if normalized_intent_envelope:
         ctx.session_metadata["normalized_intent_envelope"] = normalized_intent_envelope
 
-    assessment = workflow_contracts.dump_goal_intent_profile(turn_dict.get("goal_intent_profile")) or {}
+    assessment = (
+        workflow_contracts.dump_goal_intent_profile(turn_dict.get("goal_intent_profile")) or {}
+    )
     route_type = str(turn_dict.get("type") or "").strip().lower() or "respond"
-    resolved_goal = str(turn_dict.get("resolved_goal") or ctx.candidate_goal or "").strip() or ctx.content
+    resolved_goal = (
+        str(turn_dict.get("resolved_goal") or ctx.candidate_goal or "").strip() or ctx.content
+    )
     assistant_content = str(turn_dict.get("assistant_content") or "").strip()
 
     # Apply any context updates the router returned
@@ -2429,7 +2623,9 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
     context_envelope = ctx.context_envelope
     if context_json_updates:
         context_envelope = context_service.update_chat_context_envelope(
-            context_envelope, goal=resolved_goal, context_json=context_json_updates,
+            context_envelope,
+            goal=resolved_goal,
+            context_json=context_json_updates,
         )
         merged_context = context_service.chat_submit_context_view(context_envelope)
         ctx.context_envelope = context_envelope
@@ -2492,10 +2688,23 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
 
     if route_type == "tool_call":
         raw_args = turn_dict.get("arguments")
+        capability_id = str(turn_dict.get("capability_id") or "").strip()
+        arguments = dict(raw_args) if isinstance(raw_args, Mapping) else {}
+        chain = _resolve_tool_chain(
+            capability_id=capability_id,
+            arguments=arguments,
+            resolved_goal=resolved_goal,
+            merged_context=merged_context,
+            assessment=assessment,
+            assistant_content=assistant_content,
+            content=ctx.content,
+        )
+        if chain is not None:
+            return chain
         return ToolCallPlan(
             resolved_goal=resolved_goal,
-            capability_id=str(turn_dict.get("capability_id") or "").strip(),
-            arguments=dict(raw_args) if isinstance(raw_args, Mapping) else {},
+            capability_id=capability_id,
+            arguments=arguments,
             merged_context=merged_context,
             assessment=assessment,
             assistant_content=assistant_content,
@@ -2512,14 +2721,125 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
     )
 
 
+def _resolve_tool_chain(
+    *,
+    capability_id: str,
+    arguments: dict[str, Any],
+    resolved_goal: str,
+    merged_context: dict[str, Any],
+    assessment: dict[str, Any],
+    assistant_content: str,
+    content: str,
+) -> ToolChainPlan | None:
+    """Return a ToolChainPlan when the capability declares a downstream render step.
+
+    Reads `chains_to: {<format>: <capability_id>}` from the capability's
+    planner_hints and wires the step-1 output automatically into step-2 arguments.
+    Returns None when no chain applies so the caller falls through to ToolCallPlan.
+    """
+    spec = capability_registry.load_capability_registry().capabilities.get(capability_id)
+    if spec is None:
+        return None
+    hints = spec.planner_hints if isinstance(spec.planner_hints, Mapping) else {}
+    chains_to = hints.get("chains_to")
+    if not isinstance(chains_to, Mapping) or not chains_to:
+        return None
+
+    output_format = str(arguments.get("output_format") or "").strip().lower()
+    if not output_format:
+        lowered = content.lower()
+        for token, fmt in (hints.get("chat_output_format_tokens") or {}).items():
+            if token in lowered:
+                output_format = str(fmt).lower()
+                break
+
+    downstream_id = str(chains_to.get(output_format) or "").strip()
+    if not downstream_id:
+        return None
+    downstream_spec = capability_registry.load_capability_registry().capabilities.get(downstream_id)
+    if downstream_spec is None or not downstream_spec.enabled:
+        return None
+
+    step1 = ToolCallPlan(
+        resolved_goal=resolved_goal,
+        capability_id=capability_id,
+        arguments=arguments,
+        merged_context=merged_context,
+        assessment=assessment,
+        assistant_content="",
+    )
+    step2_args = {k: v for k, v in arguments.items() if k not in {"output_format"}}
+    if "path" not in step2_args:
+        topic = str(arguments.get("topic") or resolved_goal or "document").strip()
+        safe = re.sub(r"[^\w\s-]", "", topic)[:60].strip()
+        step2_args["path"] = f"{safe}.{output_format}"
+    step2 = ToolCallPlan(
+        resolved_goal=resolved_goal,
+        capability_id=downstream_id,
+        arguments=step2_args,
+        merged_context=merged_context,
+        assessment=assessment,
+        assistant_content=assistant_content,
+    )
+    return ToolChainPlan(
+        steps=[step1, step2],
+        resolved_goal=resolved_goal,
+        merged_context=merged_context,
+        assessment=assessment,
+        assistant_content=assistant_content,
+    )
+
+
 def _execute_turn(plan: TurnPlan, ctx: TurnContext) -> TurnResult:
     """Dispatch to the executor for the given plan type."""
+    # ── capability-pick trace ─────────────────────────────────────────────────
+    if isinstance(plan, ToolCallPlan):
+        logger.info(
+            "chat_capability_picked",
+            extra={
+                "plan_type": "tool_call",
+                "capability_id": plan.capability_id,
+                "resolved_goal": (plan.resolved_goal or "")[:120],
+                "session_id": ctx.record.id,
+            },
+        )
+    elif isinstance(plan, ToolChainPlan):
+        logger.info(
+            "chat_capability_picked",
+            extra={
+                "plan_type": "tool_chain",
+                "capability_ids": [s.capability_id for s in plan.steps],
+                "resolved_goal": (plan.resolved_goal or "")[:120],
+                "session_id": ctx.record.id,
+            },
+        )
+    else:
+        plan_type = (
+            "ask_clarification"
+            if isinstance(plan, AskClarificationPlan)
+            else "submit_job"
+            if isinstance(plan, SubmitJobPlan)
+            else "run_workflow"
+            if isinstance(plan, RunWorkflowPlan)
+            else "respond"
+        )
+        logger.info(
+            "chat_capability_picked",
+            extra={
+                "plan_type": plan_type,
+                "capability_id": None,
+                "session_id": ctx.record.id,
+            },
+        )
+    # ─────────────────────────────────────────────────────────────────────────
     if isinstance(plan, AskClarificationPlan):
         return _execute_ask_clarification(plan, ctx)
     if isinstance(plan, SubmitJobPlan):
         return _execute_submit_job(plan, ctx)
     if isinstance(plan, RunWorkflowPlan):
         return _execute_run_workflow(plan, ctx)
+    if isinstance(plan, ToolChainPlan):
+        return _execute_tool_chain(plan, ctx)
     if isinstance(plan, ToolCallPlan):
         return _execute_tool_call(plan, ctx)
     return _execute_respond(plan, ctx)  # type: ignore[arg-type]
@@ -2565,7 +2885,9 @@ def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
         except llm_provider.LLMUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("chat_submit_normalization_failed", extra={"session_id": ctx.record.id})
+            logger.exception(
+                "chat_submit_normalization_failed", extra={"session_id": ctx.record.id}
+            )
             if llm_provider.is_llm_unavailable_error(exc):
                 raise llm_provider.LLMUnavailableError(str(exc)) from exc
             raise llm_provider.LLMUnavailableError("chat_submit_normalization_failed") from exc
@@ -2577,24 +2899,32 @@ def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
     if normalization is not None:
         if isinstance(normalization.context_json, Mapping) and normalization.context_json:
             ctx.context_envelope = context_service.update_chat_context_envelope(
-                ctx.context_envelope, goal=resolved_goal, context_json=normalization.context_json,
+                ctx.context_envelope,
+                goal=resolved_goal,
+                context_json=normalization.context_json,
             )
             merged_context = context_service.chat_submit_context_view(ctx.context_envelope)
         if isinstance(normalization.goal, str) and normalization.goal.strip():
             resolved_goal = normalization.goal.strip()
             ctx.context_envelope = context_service.update_chat_context_envelope(
-                ctx.context_envelope, goal=resolved_goal,
+                ctx.context_envelope,
+                goal=resolved_goal,
             )
-        if isinstance(normalization.goal_intent_profile, Mapping) and normalization.goal_intent_profile:
+        if (
+            isinstance(normalization.goal_intent_profile, Mapping)
+            and normalization.goal_intent_profile
+        ):
             assessment = dict(normalization.goal_intent_profile)
 
         clarification_question_queue = [
-            str(q).strip() for q in normalization.clarification_questions
+            str(q).strip()
+            for q in normalization.clarification_questions
             if isinstance(q, str) and q.strip()
         ]
         if normalization.requires_blocking_clarification and not clarification_question_queue:
             clarification_question_queue = _submit_normalization_failure_questions(
-                session_metadata=ctx.session_metadata, assessment=assessment,
+                session_metadata=ctx.session_metadata,
+                assessment=assessment,
             )
         if normalization.requires_blocking_clarification and not clarification_question_queue:
             raise llm_provider.LLMUnavailableError("chat_submit_clarification_empty")
@@ -2609,7 +2939,9 @@ def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
                     assessment=assessment,
                     session_metadata=ctx.session_metadata,
                     context_json=merged_context,
-                    normalized_intent_envelope=ctx.session_metadata.get("normalized_intent_envelope"),
+                    normalized_intent_envelope=ctx.session_metadata.get(
+                        "normalized_intent_envelope"
+                    ),
                     latest_user_answer=ctx.content,
                 ),
                 draft_goal=resolved_goal,
@@ -2714,7 +3046,9 @@ def _execute_run_workflow(plan: RunWorkflowPlan, ctx: TurnContext) -> TurnResult
                     assessment=workflow_assessment,
                     session_metadata=ctx.session_metadata,
                     context_json=plan.merged_context,
-                    normalized_intent_envelope=ctx.session_metadata.get("normalized_intent_envelope"),
+                    normalized_intent_envelope=ctx.session_metadata.get(
+                        "normalized_intent_envelope"
+                    ),
                     latest_user_answer=ctx.content,
                 ),
                 draft_goal=plan.resolved_goal,
@@ -2791,8 +3125,133 @@ def _execute_run_workflow(plan: RunWorkflowPlan, ctx: TurnContext) -> TurnResult
         )
 
 
+def _execute_tool_chain(plan: ToolChainPlan, ctx: TurnContext) -> TurnResult:
+    """Execute steps sequentially, wiring each step's output into the next step's arguments."""
+    accumulated: dict[str, Any] = {}
+    last_result: ChatDirectRunResult | None = None
+    total = len(plan.steps)
+
+    for i, step in enumerate(plan.steps):
+        merged_args = _enrich_memory_arguments(
+            step.capability_id,
+            {**accumulated, **step.arguments},
+            step.merged_context,
+        )
+        label = step.capability_id.replace(".", " ").replace("_", " ").title()
+        ctx.emit_progress(
+            "tool_start",
+            {
+                "capability": step.capability_id,
+                "label": f"Running {label}",
+                "step": i + 1,
+                "total_steps": total,
+            },
+        )
+        try:
+            direct_result = ctx.agent.run_direct_capability(
+                db=ctx.db,
+                chat_session_id=ctx.record.id,
+                goal=plan.resolved_goal,
+                capability_id=step.capability_id,
+                arguments=merged_args,
+                context_json=step.merged_context,
+                priority=ctx.request.priority,
+            )
+        except Exception as exc:  # noqa: BLE001
+            ctx.emit_progress(
+                "tool_done",
+                {
+                    "capability": step.capability_id,
+                    "label": f"{label} failed",
+                    "error": str(exc)[:200],
+                },
+            )
+            return TurnResult(
+                assistant_content=f"Step {i + 1} ({step.capability_id}) failed: {exc}",
+                assistant_action=chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.respond,
+                    goal=plan.resolved_goal,
+                    goal_intent_profile=dict(plan.assessment),
+                    context_json=plan.merged_context,
+                ),
+            )
+        if direct_result.error:
+            ctx.emit_progress(
+                "tool_done", {"capability": step.capability_id, "label": f"{label} failed"}
+            )
+            return TurnResult(
+                assistant_content=f"Step {i + 1} ({step.capability_id}) failed: {direct_result.error}",
+                assistant_action=chat_contracts.AssistantAction(
+                    type=chat_contracts.AssistantActionType.respond,
+                    goal=plan.resolved_goal,
+                    goal_intent_profile=dict(plan.assessment),
+                    context_json=plan.merged_context,
+                ),
+                created_job=direct_result.job,
+            )
+        if isinstance(direct_result.output, Mapping):
+            accumulated.update(direct_result.output)
+        ctx.emit_progress(
+            "tool_done",
+            {
+                "capability": direct_result.capability_id or step.capability_id,
+                "label": f"{label} complete",
+                "step": i + 1,
+                **(
+                    {"result": dict(direct_result.output)}
+                    if isinstance(direct_result.output, Mapping)
+                    else {}
+                ),
+            },
+        )
+        last_result = direct_result
+
+    clear_pending_clarification_state(
+        ctx.session_metadata,
+        cleared_keys=ctx.cleared_session_keys,
+        include_workflow_input=True,
+    )
+    content = str(last_result.assistant_response if last_result else plan.assistant_content).strip()
+    return TurnResult(
+        assistant_content=content or plan.assistant_content,
+        assistant_action=chat_contracts.AssistantAction(
+            type=chat_contracts.AssistantActionType.tool_call,
+            goal=plan.resolved_goal,
+            job_id=last_result.job.id if last_result else None,
+            capability_id=last_result.capability_id if last_result else None,
+            goal_intent_profile=dict(plan.assessment),
+            context_json=plan.merged_context,
+        ),
+        created_job=last_result.job if last_result else None,
+        direct_output=dict(accumulated) if accumulated else None,
+    )
+
+
+def _capability_wants_grounded_synthesis(capability_id: str) -> bool:
+    """Return True if the capability declared rag_grounded_synthesis in its planner_hints."""
+    try:
+        registry = capability_registry.load_capability_registry()
+        spec = registry.get(capability_id)
+        if spec is not None:
+            return bool((spec.planner_hints or {}).get("rag_grounded_synthesis"))
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
     arguments = _enrich_memory_arguments(plan.capability_id, plan.arguments, plan.merged_context)
+    label = plan.capability_id.replace(".", " ").replace("_", " ").title()
+    _t_tool_start = time.perf_counter()
+    logger.info(
+        "chat_tool_call_start",
+        extra={
+            "capability_id": plan.capability_id,
+            "argument_keys": sorted(arguments.keys()),
+            "session_id": ctx.record.id,
+        },
+    )
+    ctx.emit_progress("tool_start", {"capability": plan.capability_id, "label": f"Running {label}"})
     try:
         direct_result = ctx.agent.run_direct_capability(
             db=ctx.db,
@@ -2803,11 +3262,18 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
             context_json=plan.merged_context,
             priority=ctx.request.priority,
         )
+        _tool_exec_ms = round((time.perf_counter() - _t_tool_start) * 1000, 1)
         created_job = direct_result.job
         if direct_result.error:
-            content = (
-                f"I could not complete that directly in chat. One-step run failed: {direct_result.error}"
+            logger.warning(
+                "chat_tool_call_error",
+                extra={
+                    "capability_id": plan.capability_id,
+                    "exec_ms": _tool_exec_ms,
+                    "error": direct_result.error,
+                },
             )
+            content = f"I could not complete that directly in chat. One-step run failed: {direct_result.error}"
             return TurnResult(
                 assistant_content=content,
                 assistant_action=chat_contracts.AssistantAction(
@@ -2822,7 +3288,97 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
         direct_output = (
             dict(direct_result.output) if isinstance(direct_result.output, Mapping) else None
         )
+        _match_count = len(direct_output.get("matches") or []) if direct_output else 0
+        logger.info(
+            "chat_tool_call_done",
+            extra={
+                "capability_id": direct_result.capability_id or plan.capability_id,
+                "tool_name": direct_result.tool_name,
+                "exec_ms": _tool_exec_ms,
+                "output_keys": sorted(direct_output.keys()) if direct_output else [],
+                "match_count": _match_count,
+            },
+        )
+        ctx.emit_progress(
+            "tool_done",
+            {
+                "capability": direct_result.capability_id or plan.capability_id,
+                "label": f"{label} complete",
+                **({"result": direct_output} if direct_output else {}),
+            },
+        )
         content = str(direct_result.assistant_response or plan.assistant_content).strip()
+        matches = (direct_output or {}).get("matches") if direct_output else None
+        wants_synthesis = _capability_wants_grounded_synthesis(plan.capability_id)
+        if (
+            matches
+            and isinstance(matches, list)
+            and ctx.chat.rag_synthesize_callback is not None
+            and wants_synthesis
+        ):
+            _t_synth = time.perf_counter()
+            logger.info(
+                "chat_tool_rag_synthesis_start",
+                extra={
+                    "capability_id": plan.capability_id,
+                    "match_count": len(matches),
+                },
+            )
+            try:
+                synthesized = ctx.chat.rag_synthesize_callback(ctx.content, matches)
+                if synthesized:
+                    content = synthesized
+                logger.info(
+                    "chat_tool_rag_synthesis_done",
+                    extra={
+                        "capability_id": plan.capability_id,
+                        "synth_ms": round((time.perf_counter() - _t_synth) * 1000, 1),
+                        "content_len": len(content),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "chat_tool_rag_synthesis_failed",
+                    extra={
+                        "capability_id": plan.capability_id,
+                        "synth_ms": round((time.perf_counter() - _t_synth) * 1000, 1),
+                    },
+                    exc_info=True,
+                )
+        else:
+            _skip_reason = (
+                "no_matches"
+                if not matches
+                else "synthesis_not_declared"
+                if not wants_synthesis
+                else "no_synthesize_callback"
+                if ctx.chat.rag_synthesize_callback is None
+                else "unknown"
+            )
+            logger.info(
+                "chat_tool_rag_synthesis_skipped",
+                extra={
+                    "capability_id": plan.capability_id,
+                    "reason": _skip_reason,
+                    "match_count": len(matches) if isinstance(matches, list) else 0,
+                    "wants_synthesis": wants_synthesis,
+                    "has_callback": ctx.chat.rag_synthesize_callback is not None,
+                },
+            )
+        logger.info(
+            "chat_tool_call_total",
+            extra={
+                "capability_id": plan.capability_id,
+                "total_ms": round((time.perf_counter() - _t_tool_start) * 1000, 1),
+                "rag_grounded": bool(matches)
+                and wants_synthesis
+                and ctx.chat.rag_synthesize_callback is not None,
+                "match_count": len(matches) if isinstance(matches, list) else 0,
+                "wants_synthesis": wants_synthesis,
+                "has_callback": ctx.chat.rag_synthesize_callback is not None,
+                "content_len": len(content),
+            },
+        )
         clear_pending_clarification_state(
             ctx.session_metadata,
             cleared_keys=ctx.cleared_session_keys,
@@ -2843,6 +3399,15 @@ def _execute_tool_call(plan: ToolCallPlan, ctx: TurnContext) -> TurnResult:
             direct_output=direct_output,
         )
     except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "chat_tool_call_exception",
+            extra={
+                "capability_id": plan.capability_id,
+                "total_ms": round((time.perf_counter() - _t_tool_start) * 1000, 1),
+                "exc": str(exc),
+            },
+            exc_info=True,
+        )
         content = f"I could not complete that directly in chat. One-step run failed: {exc}"
         return TurnResult(
             assistant_content=content,
@@ -2889,7 +3454,8 @@ def _persist_turn(
                 ctx.cleared_session_keys.add(key)
 
     context_envelope = context_service.update_chat_context_envelope(
-        ctx.context_envelope, goal=_resolved_goal_from_result(result),
+        ctx.context_envelope,
+        goal=_resolved_goal_from_result(result),
         context_json=ctx.merged_context,
     )
     ctx.merged_context = context_service.chat_submit_context_view(context_envelope)
@@ -3032,11 +3598,15 @@ def handle_turn(
         role=chat_contracts.ChatRole.user.value,
         content=ctx.content,
         metadata_json=(
-            {"context_json": _sanitize_chat_context(
-                _prepare_turn_context(request.context_json,
-                                     session_metadata=ctx.session_metadata,
-                                     content=ctx.content)
-            )}
+            {
+                "context_json": _sanitize_chat_context(
+                    _prepare_turn_context(
+                        request.context_json,
+                        session_metadata=ctx.session_metadata,
+                        content=ctx.content,
+                    )
+                )
+            }
         ),
         action_json=None,
         job_id=None,
@@ -3047,7 +3617,9 @@ def handle_turn(
         plan: TurnPlan = _classify_turn(ctx)
         result: TurnResult = _execute_turn(plan, ctx)
     except llm_provider.LLMUnavailableError as exc:
-        logger.warning("chat_llm_unavailable", extra={"session_id": ctx.record.id, "reason": str(exc)[:120]})
+        logger.warning(
+            "chat_llm_unavailable", extra={"session_id": ctx.record.id, "reason": str(exc)[:120]}
+        )
         raise ValueError("chat_llm_unavailable") from exc
 
     if not result.assistant_content:
@@ -3074,14 +3646,27 @@ def handle_turn(
 
     _persist_turn(db, ctx, result, user_message, assistant_message)
 
+    # Update the session cache with the post-persist record state so the NEXT
+    # turn can skip the SELECT on chat_sessions entirely.
+    _put_cached_session(
+        session_id=ctx.record.id,
+        metadata_json=dict(ctx.record.metadata_json or {}),
+        updated_at=ctx.record.updated_at,
+        title=ctx.record.title,
+        created_at=ctx.record.created_at,
+    )
+
     if ctx.bound_user_id:
         try:
             memory_profile_service.apply_user_profile_updates_from_text(
-                db, user_id=ctx.bound_user_id, content=ctx.content,
+                db,
+                user_id=ctx.bound_user_id,
+                content=ctx.content,
             )
         except Exception:  # noqa: BLE001
-            logger.exception("chat_profile_memory_persist_failed",
-                             extra={"session_id": ctx.record.id})
+            logger.exception(
+                "chat_profile_memory_persist_failed", extra={"session_id": ctx.record.id}
+            )
 
     return chat_contracts.ChatTurnResponse(
         session=_session_from_record(ctx.record, [*ctx.messages, user_message, assistant_message]),
@@ -3103,7 +3688,9 @@ def _candidate_goal(
     pending_state = _parse_pending_clarification_state(session_metadata)
     if not _clarification_state_has_pending_work(pending_state):
         pending_state = None
-    original_goal = str(pending_state.original_goal or "").strip() if pending_state is not None else ""
+    original_goal = (
+        str(pending_state.original_goal or "").strip() if pending_state is not None else ""
+    )
     if original_goal:
         return f"{original_goal}\n\nUser clarification: {content.strip()}"
     if isinstance(draft_goal, str) and draft_goal.strip() and pending_state is not None:
@@ -3111,7 +3698,9 @@ def _candidate_goal(
     threaded_goal = _execution_thread_candidate_goal(
         content,
         messages=messages,
-        is_chat_only_correction=is_chat_only_correction,
+        # Only check for chat-only corrections when there is an active pending
+        # clarification state — otherwise the LLM call is wasted on every turn.
+        is_chat_only_correction=is_chat_only_correction if pending_state is not None else None,
     )
     if threaded_goal:
         return threaded_goal
@@ -3171,6 +3760,16 @@ _CHAT_THREAD_HINTS_CACHE_KEY: int | None = None
 
 def _chat_thread_hints() -> ChatThreadHints:
     global _CHAT_THREAD_HINTS_CACHE, _CHAT_THREAD_HINTS_CACHE_KEY
+    # Check our own cache first — avoids calling load_capability_registry (which
+    # runs stat() on the YAML file) on every hot turn.
+    if _CHAT_THREAD_HINTS_CACHE is not None:
+        try:
+            registry = capability_registry.load_capability_registry()
+        except Exception:  # noqa: BLE001
+            return _CHAT_THREAD_HINTS_CACHE
+        if _CHAT_THREAD_HINTS_CACHE_KEY == id(registry):
+            return _CHAT_THREAD_HINTS_CACHE
+
     action_tokens = set(_BOOTSTRAP_EXECUTION_ACTION_TOKENS)
     artifact_tokens = set(_BOOTSTRAP_EXECUTION_ARTIFACT_TOKENS)
     continuation_tokens = set(_BOOTSTRAP_CONTINUATION_TOKENS)
@@ -3184,8 +3783,6 @@ def _chat_thread_hints() -> ChatThreadHints:
         )
 
     cache_key = id(registry)
-    if _CHAT_THREAD_HINTS_CACHE is not None and _CHAT_THREAD_HINTS_CACHE_KEY == cache_key:
-        return _CHAT_THREAD_HINTS_CACHE
 
     for spec in registry.enabled_capabilities().values():
         artifact_tokens.update(_tokens_from_text(spec.capability_id))
@@ -3200,7 +3797,9 @@ def _chat_thread_hints() -> ChatThreadHints:
             continue
         action_tokens.update(_tokens_from_sequence(raw_thread_hints.get("action_tokens")))
         artifact_tokens.update(_tokens_from_sequence(raw_thread_hints.get("artifact_tokens")))
-        continuation_tokens.update(_tokens_from_sequence(raw_thread_hints.get("continuation_tokens")))
+        continuation_tokens.update(
+            _tokens_from_sequence(raw_thread_hints.get("continuation_tokens"))
+        )
 
     result = ChatThreadHints(
         action_tokens=frozenset(action_tokens),
@@ -3210,6 +3809,11 @@ def _chat_thread_hints() -> ChatThreadHints:
     _CHAT_THREAD_HINTS_CACHE = result
     _CHAT_THREAD_HINTS_CACHE_KEY = cache_key
     return result
+
+
+def get_chat_thread_hints() -> ChatThreadHints:
+    """Public accessor for use by the routing layer."""
+    return _chat_thread_hints()
 
 
 def _tokens_from_sequence(value: Any) -> set[str]:
@@ -3223,11 +3827,7 @@ def _tokens_from_sequence(value: Any) -> set[str]:
 
 
 def _tokens_from_text(value: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
-        if token
-    }
+    return {token for token in re.findall(r"[a-z0-9]+", str(value or "").lower()) if token}
 
 
 def _message_records_for_session(db: Session, session_id: str) -> list[ChatMessageRecord]:
@@ -3423,7 +4023,9 @@ def _message_from_record(record: ChatMessageRecord) -> chat_contracts.ChatMessag
     if isinstance(record.action_json, dict):
         action_payload = dict(record.action_json)
         if isinstance(action_payload.get("context_json"), Mapping):
-            action_payload["context_json"] = _sanitize_chat_context(action_payload.get("context_json"))
+            action_payload["context_json"] = _sanitize_chat_context(
+                action_payload.get("context_json")
+            )
         action = chat_contracts.AssistantAction.model_validate(action_payload)
     return chat_contracts.ChatMessage(
         id=record.id,
@@ -3515,13 +4117,17 @@ def _workflow_input_question(definition: Mapping[str, Any]) -> str:
     message = str(definition.get("message") or "").strip()
 
     if value_type in {"object", "array"}:
-        question = f"I need `{label}` before I can run this workflow. Reply with valid JSON for `{key}`."
+        question = (
+            f"I need `{label}` before I can run this workflow. Reply with valid JSON for `{key}`."
+        )
     elif value_type == "boolean":
         question = f"I need `{label}` before I can run this workflow. What value should I use for `{key}`? Reply with `true` or `false`."
     elif value_type in {"number", "integer"}:
         question = f"I need `{label}` before I can run this workflow. What numeric value should I use for `{key}`?"
     else:
-        question = f"I need `{label}` before I can run this workflow. What value should I use for `{key}`?"
+        question = (
+            f"I need `{label}` before I can run this workflow. What value should I use for `{key}`?"
+        )
 
     if description:
         question = f"{question} {description}"

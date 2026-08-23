@@ -30,8 +30,8 @@ _WORKFLOW_CONTEXT_KEYS = (
 _TOKEN_BUDGETS: dict[str, int] = {
     "interaction_summaries": 4_000,
     "capability_candidates": 2_000,
-    "user_profile":          1_500,
-    "context_json":          8_000,
+    "user_profile": 1_500,
+    "context_json": 8_000,
 }
 
 # Capability candidate item caps are kept as a backstop in case token estimates
@@ -43,16 +43,18 @@ _CAPABILITY_CANDIDATE_STAGE_LIMITS: dict[str, int] = {
 
 # Keys that the system writes into context internally.  User-supplied context_json
 # must not contain these or it would shadow derived fields.
-_SYSTEM_RESERVED_KEYS: frozenset[str] = frozenset({
-    "capability_candidates",
-    "missing_inputs",
-    "user_profile",
-    "interaction_summaries",
-    "clarification_resolved_slots",
-    "intent_slot_values",
-    "intent_slot_provenance",
-    "workflow_scope",
-})
+_SYSTEM_RESERVED_KEYS: frozenset[str] = frozenset(
+    {
+        "capability_candidates",
+        "missing_inputs",
+        "user_profile",
+        "interaction_summaries",
+        "clarification_resolved_slots",
+        "intent_slot_values",
+        "intent_slot_provenance",
+        "workflow_scope",
+    }
+)
 
 _INTENT_SLOT_ALIASES: dict[str, tuple[str, ...]] = {
     "instruction": ("instruction", "goal_details", "goal"),
@@ -114,6 +116,7 @@ _COMMON_STOPWORDS: set[str] = {
 # Token helpers
 # ---------------------------------------------------------------------------
 
+
 def _estimate_tokens(value: Any) -> int:
     """Rough token estimate: 1 token ≈ 4 characters of JSON."""
     try:
@@ -139,6 +142,7 @@ def _trim_to_token_budget(items: list[Any], budget: int) -> list[Any]:
 # Ingestion guard
 # ---------------------------------------------------------------------------
 
+
 def sanitize_user_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
     """Strip keys that would shadow internal system fields.
 
@@ -151,6 +155,7 @@ def sanitize_user_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
     shadowed = _SYSTEM_RESERVED_KEYS & context.keys()
     if shadowed:
         import logging
+
         logging.getLogger(__name__).warning(
             "user_context_shadowed_system_keys: %s", sorted(shadowed)
         )
@@ -200,7 +205,9 @@ def build_context_envelope(
     session_metadata: Mapping[str, Any] | None = None,
     context_sources: Mapping[str, Mapping[str, Any]] | None = None,
     user_id: str | None = None,
-    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope
+    | Mapping[str, Any]
+    | None = None,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> workflow_contracts.ContextEnvelope:
     merged_context, sources_used, normalized_user_id = normalize_context_sources(
@@ -281,7 +288,9 @@ def build_chat_context_envelope(
     session_context: Mapping[str, Any] | None,
     turn_context: Mapping[str, Any] | None,
     user_id: str | None,
-    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope
+    | Mapping[str, Any]
+    | None = None,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> workflow_contracts.ContextEnvelope:
     return build_context_envelope(
@@ -307,7 +316,9 @@ def build_workflow_runtime_context_envelope(
     request_context: Mapping[str, Any] | None,
     trigger_inputs: Mapping[str, Any] | None,
     explicit_inputs: Mapping[str, Any] | None,
-    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope
+    | Mapping[str, Any]
+    | None = None,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[workflow_contracts.ContextEnvelope, dict[str, Any]]:
     envelope = build_context_envelope(
@@ -336,7 +347,9 @@ def build_preflight_context_envelope(
     goal: str,
     provided_job_context: Mapping[str, Any] | None,
     persisted_job_context: Mapping[str, Any] | None,
-    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope
+    | Mapping[str, Any]
+    | None = None,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> workflow_contracts.ContextEnvelope:
     context_sources = (
@@ -370,9 +383,7 @@ def chat_context_view(
     base_context = budget_context_for_stage(parsed, stage="chat")
     context = _merge_clarification_slot_ledger(base_context, parsed.session_scope)
     if parsed.profile:
-        budgeted_profile = _trim_to_token_budget(
-            [parsed.profile], _TOKEN_BUDGETS["user_profile"]
-        )
+        budgeted_profile = _trim_to_token_budget([parsed.profile], _TOKEN_BUDGETS["user_profile"])
         if budgeted_profile:
             context["user_profile"] = dict(budgeted_profile[0])
     if parsed.capability_candidates:
@@ -444,6 +455,7 @@ def preflight_context_view(
 # Deprecated aliases — callers should migrate to chat_context_view
 # ---------------------------------------------------------------------------
 
+
 def chat_route_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -508,7 +520,9 @@ def drop_noisy_context_items(
 def derive_missing_inputs(
     *,
     context: Mapping[str, Any] | None,
-    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope
+    | Mapping[str, Any]
+    | None,
 ) -> list[str]:
     parsed = workflow_contracts.parse_normalized_intent_envelope(normalized_intent_envelope)
     missing_inputs = _missing_inputs_from_envelope(parsed)
@@ -557,7 +571,9 @@ def update_chat_context_envelope(
     *,
     goal: str | None = None,
     context_json: Mapping[str, Any] | None = None,
-    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope | Mapping[str, Any] | None = None,
+    normalized_intent_envelope: workflow_contracts.NormalizedIntentEnvelope
+    | Mapping[str, Any]
+    | None = None,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> workflow_contracts.ContextEnvelope:
     parsed = workflow_contracts.parse_context_envelope(envelope)
@@ -612,6 +628,7 @@ def update_chat_context_envelope(
 # ---------------------------------------------------------------------------
 # Prompt block assembly for caching-aware LLM calls
 # ---------------------------------------------------------------------------
+
 
 def envelope_to_prompt_blocks(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
@@ -790,7 +807,9 @@ def _rank_capability_candidates(
     missing_inputs: list[str],
 ) -> list[str]:
     goal_tokens = _goal_tokens(goal)
-    missing = {str(value or "").strip().lower() for value in missing_inputs if str(value or "").strip()}
+    missing = {
+        str(value or "").strip().lower() for value in missing_inputs if str(value or "").strip()
+    }
     scored: list[tuple[int, int, str]] = []
     for index, capability_id in enumerate(capability_candidates):
         normalized = capability_registry.canonicalize_capability_id(capability_id)
@@ -800,9 +819,13 @@ def _rank_capability_candidates(
         parts = [part for part in normalized.lower().split(".") if part]
         if any(token in parts for token in goal_tokens):
             score += 2
-        if "path" in missing and any(token in parts for token in ("render", "filename", "filesystem")):
+        if "path" in missing and any(
+            token in parts for token in ("render", "filename", "filesystem")
+        ):
             score += 1
-        if "query" in missing and any(token in parts for token in ("search", "list", "github", "filesystem")):
+        if "query" in missing and any(
+            token in parts for token in ("search", "list", "github", "filesystem")
+        ):
             score += 1
         scored.append((score, -index, normalized))
     scored.sort(reverse=True)
@@ -834,7 +857,9 @@ def _context_has_required_input(context: Mapping[str, Any], key: str) -> bool:
         workflow = context.get("workflow")
         if isinstance(workflow, Mapping):
             workflow_inputs = workflow.get("inputs")
-            if isinstance(workflow_inputs, Mapping) and _mapping_has_non_empty_value(workflow_inputs, candidate):
+            if isinstance(workflow_inputs, Mapping) and _mapping_has_non_empty_value(
+                workflow_inputs, candidate
+            ):
                 return True
     return False
 
@@ -854,16 +879,14 @@ def _intent_slot_values(
         envelope.session_scope,
         context,
     )
-    clarification_slot_values = (
-        {
-            **(
-                dict(normalized_intent.clarification.slot_values)
-                if normalized_intent is not None
-                else {}
-            ),
-            **clarification_slot_values,
-        }
-    )
+    clarification_slot_values = {
+        **(
+            dict(normalized_intent.clarification.slot_values)
+            if normalized_intent is not None
+            else {}
+        ),
+        **clarification_slot_values,
+    }
     inferred_slot_values = (
         dict(normalized_intent.profile.slot_values) if normalized_intent is not None else {}
     )
@@ -889,9 +912,7 @@ def _intent_slot_values(
                 provenance[canonical_key] = canonical_provenance.strip()
             else:
                 provenance[canonical_key] = (
-                    "clarification_normalized"
-                    if canonical_key in normalized_fields
-                    else "inferred"
+                    "clarification_normalized" if canonical_key in normalized_fields else "inferred"
                 )
             continue
         inferred_value = _first_non_empty_value(inferred_slot_values, None, aliases)
@@ -1060,7 +1081,9 @@ def _interaction_summary_is_noisy(item: Mapping[str, Any]) -> bool:
     if normalized in _CONTEXT_NOISE_TOKENS:
         return True
     tokens = [token for token in normalized.split() if token]
-    if tokens and all(token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"} for token in tokens):
+    if tokens and all(
+        token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"} for token in tokens
+    ):
         return True
     if len(tokens) <= 2 and normalized in _CONTEXT_NOISE_TOKENS:
         return True

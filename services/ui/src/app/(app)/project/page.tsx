@@ -1,14 +1,15 @@
-import Link from "next/link";
+"use client";
 
-import AppShell from "../components/AppShell";
+import Link from "next/link";
+import { useShell } from "../../lib/shell";
+import { ShellActions } from "../../lib/shell";
 
 const projectCards = [
   {
     href: "/workflows",
     eyebrow: "Saved Workflows",
     title: "Saved Workflows",
-    description:
-      "Manage reusable workflows, versions, triggers, and published automations.",
+    description: "Manage reusable workflows, versions, triggers, and published automations.",
     cta: "Open Workflows",
     marker: "W",
   },
@@ -16,37 +17,33 @@ const projectCards = [
     href: "/studio",
     eyebrow: "Workflow Studio",
     title: "Workflow Studio",
-    description:
-      "Design reusable workflow steps, decisions, tools, and AI actions.",
+    description: "Design reusable workflow steps, decisions, tools, and AI actions.",
     cta: "Open Studio",
     marker: "S",
   },
 ];
 
 export default function ProjectPage() {
+  useShell({ title: "Project", breadcrumbs: [{ label: "Project" }] });
+
   return (
-    <AppShell
-      activeScreen="project"
-      title="Project Workspace"
-      breadcrumbs={[{ label: "Project" }]}
-      actions={
-        <>
-          <Link
-            href="/workflows"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-          >
-            Saved Workflows
-          </Link>
-          <Link
-            href="/studio"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
-          >
-            Open Studio
-          </Link>
-        </>
-      }
-    >
-      <section className="relative">
+    <>
+      <ShellActions>
+        <Link
+          href="/workflows"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+        >
+          Saved Workflows
+        </Link>
+        <Link
+          href="/studio"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
+        >
+          Open Studio
+        </Link>
+      </ShellActions>
+
+      <section className="px-4 py-4">
         <div className="mb-4">
           <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
             Project
@@ -79,9 +76,7 @@ export default function ProjectPage() {
                   {card.marker}
                 </div>
               </div>
-              <p className="mt-2 text-xs leading-5 text-text-md">
-                {card.description}
-              </p>
+              <p className="mt-2 text-xs leading-5 text-text-md">{card.description}</p>
               <div className="mt-3 flex items-center justify-end">
                 <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-hi transition group-hover:border-sky-300/30">
                   {card.cta} →
@@ -91,6 +86,6 @@ export default function ProjectPage() {
           ))}
         </div>
       </section>
-    </AppShell>
+    </>
   );
 }

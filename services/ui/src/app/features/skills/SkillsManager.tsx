@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../../lib/auth";
-import AppShell from "../../components/AppShell";
+import { useShell } from "../../lib/shell";
 import SkillEditor from "./SkillEditor";
 import type { Skill, SkillStep } from "./types";
 
@@ -85,37 +85,36 @@ export default function SkillsManager() {
   const builtIns = skills.filter((s) => s.built_in);
   const mySkills = skills.filter((s) => !s.built_in);
 
+  const isEditing = editing !== null;
+  useShell({
+    title: isEditing
+      ? (editing === "new" ? "New Skill" : `Edit: ${(editing as Skill).name}`)
+      : "Skills",
+    breadcrumbs: isEditing
+      ? [{ label: "Skills", href: "/skills" }, { label: editing === "new" ? "New" : "Edit" }]
+      : [{ label: "Skills" }],
+  });
+
   if (editing !== null) {
     return (
-      <AppShell
-        activeScreen="skills"
-        title={editing === "new" ? "New Skill" : `Edit: ${(editing as Skill).name}`}
-        breadcrumbs={[{ label: "Skills", href: "/skills" }, { label: editing === "new" ? "New" : "Edit" }]}
-      >
-        <div className="mx-auto max-w-2xl px-6 py-8">
-          {saving ? (
-            <div className="mb-4 rounded-lg bg-surface-1 px-4 py-2 text-sm text-text-md">Saving…</div>
-          ) : null}
-          {error ? (
-            <div className="mb-4 rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-600">{error}</div>
-          ) : null}
-          <SkillEditor
-            skill={editing === "new" ? null : editing as Skill}
-            onSave={handleSave}
-            onCancel={() => { setEditing(null); setError(null); }}
-          />
-        </div>
-      </AppShell>
+      <div className="mx-auto max-w-2xl px-6 py-8">
+        {saving ? (
+          <div className="mb-4 rounded-lg bg-surface-1 px-4 py-2 text-sm text-text-md">Saving…</div>
+        ) : null}
+        {error ? (
+          <div className="mb-4 rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-600">{error}</div>
+        ) : null}
+        <SkillEditor
+          skill={editing === "new" ? null : editing as Skill}
+          onSave={handleSave}
+          onCancel={() => { setEditing(null); setError(null); }}
+        />
+      </div>
     );
   }
 
   return (
-    <AppShell
-      activeScreen="skills"
-      title="Skills"
-      breadcrumbs={[{ label: "Skills" }]}
-    >
-      <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-3xl px-6 py-8">
         {error ? (
           <div className="mb-4 rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-600">{error}</div>
         ) : null}
@@ -175,7 +174,6 @@ export default function SkillsManager() {
           </div>
         )}
       </div>
-    </AppShell>
   );
 }
 

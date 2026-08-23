@@ -31,7 +31,7 @@ export default function RootLayout({
       <body className={`${displayFont.variable} ${bodyFont.variable} min-h-screen font-body`}>
         <AppThemeProvider>
           <AuthProvider>
-            <div className="w-full px-6 py-8">{children}</div>
+            {children}
           </AuthProvider>
         </AppThemeProvider>
       </body>

@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiFetch, useAuth } from "../../lib/auth";
 
-import AppShell from "../../components/AppShell";
+import { useShell, ShellActions } from "../../lib/shell";
 import ScreenHeader from "../../components/ScreenHeader";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
 const DEFAULT_COLLECTION = "rag_default";
 const DEFAULT_NAMESPACE = "docs";
+const CREATE_NEW_VALUE = "__create_new__";
 
 type IndexMode = "markdown" | "text" | "workspace_file" | "workspace_directory";
 
@@ -27,6 +29,51 @@ type RagDocumentSummary = {
   repo?: string | null;
   indexed_at?: string | null;
   metadata: Record<string, unknown>;
+};
+
+// ─── Scope persistence ────────────────────────────────────────────────────────
+// Three-layer strategy:
+//   1. localStorage  — instant paint on every mount (no flicker)
+//   2. Server prefs  — source of truth; overwrites localStorage on load
+//   3. Module cache  — keeps documents / collections alive across same-tab navigation
+
+const SCOPE_LS_KEY = "ape.rag.scope.v1";
+
+type RagScope = { collectionName: string; namespace: string; workspaceId: string; tenantId: string };
+
+function readLsScope(): RagScope {
+  try {
+    if (typeof window === "undefined") throw new Error();
+    const raw = window.localStorage.getItem(SCOPE_LS_KEY);
+    if (!raw) throw new Error();
+    const parsed = JSON.parse(raw) as Partial<RagScope>;
+    return {
+      collectionName: parsed.collectionName || DEFAULT_COLLECTION,
+      namespace:      parsed.namespace      ?? DEFAULT_NAMESPACE,
+      workspaceId:    parsed.workspaceId    ?? "",
+      tenantId:       parsed.tenantId       ?? "",
+    };
+  } catch {
+    return { collectionName: DEFAULT_COLLECTION, namespace: DEFAULT_NAMESPACE, workspaceId: "", tenantId: "" };
+  }
+}
+
+function writeLsScope(scope: RagScope) {
+  try { window.localStorage.setItem(SCOPE_LS_KEY, JSON.stringify(scope)); } catch { /* quota */ }
+}
+
+type RagScreenCache = {
+  scope: RagScope;
+  availableCollections: string[];
+  documents: RagDocumentSummary[];
+  selectedDocumentId: string | null;
+};
+
+const _cache: RagScreenCache = {
+  scope: { collectionName: DEFAULT_COLLECTION, namespace: DEFAULT_NAMESPACE, workspaceId: "", tenantId: "" },
+  availableCollections: [DEFAULT_COLLECTION],
+  documents: [],
+  selectedDocumentId: null,
 };
 
 type RagDocumentListResponse = {
@@ -94,18 +141,229 @@ const fieldInputClassName =
 const prettyJson = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
 
 const formatTimestamp = (value?: string | null) => {
-  if (!value) {
-    return "—";
-  }
+  if (!value) return "—";
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
+  if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
 };
 
 const asErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
+
+// ─── ScopeComboBox ───────────────────────────────────────────────────────────
+// Dropdown that shows known options + "Create new…" and allows free-text entry.
+
+function ScopeComboBox({
+  label,
+  value,
+  options,
+  placeholder,
+  allowEmpty,
+  onCreate,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  placeholder?: string;
+  allowEmpty?: boolean;
+  onCreate?: (name: string) => Promise<void>;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        triggerRef.current && !triggerRef.current.contains(target) &&
+        panelRef.current && !panelRef.current.contains(target)
+      ) {
+        setOpen(false);
+        setCreating(false);
+        setNewName("");
+        setCreateError(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Reposition on scroll/resize while open
+  useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const update = () => {
+      if (triggerRef.current) setDropdownRect(triggerRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
+  const handleToggle = () => {
+    if (!open && triggerRef.current) {
+      setDropdownRect(triggerRef.current.getBoundingClientRect());
+    }
+    setOpen((prev) => !prev);
+    setCreating(false);
+  };
+
+  const handleSelect = (option: string) => {
+    if (option === CREATE_NEW_VALUE) {
+      setCreating(true);
+      setNewName("");
+      setCreateError(null);
+      return;
+    }
+    onChange(option);
+    setOpen(false);
+  };
+
+  const handleCreate = async () => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    if (onCreate) {
+      setCreateError(null);
+      try {
+        await onCreate(trimmed);
+      } catch (err) {
+        setCreateError(err instanceof Error ? err.message : "Failed to create.");
+        return;
+      }
+    }
+    onChange(trimmed);
+    setCreating(false);
+    setNewName("");
+    setOpen(false);
+  };
+
+  const displayOptions = allowEmpty ? ["", ...options] : options;
+  const allOptions = [...displayOptions.filter((o) => o !== value), value].filter(
+    (o, i, arr) => arr.indexOf(o) === i
+  );
+
+  const dropdownStyle: React.CSSProperties = dropdownRect
+    ? {
+        position: "fixed",
+        top: dropdownRect.bottom + 4,
+        left: dropdownRect.left,
+        width: dropdownRect.width,
+        zIndex: 9999,
+      }
+    : { display: "none" };
+
+  const panel = open && dropdownRect ? (
+    <div
+      ref={panelRef}
+      style={dropdownStyle}
+      className="overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
+    >
+      {creating ? (
+        <div className="p-3 space-y-2">
+          <input
+            autoFocus
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleCreate();
+              if (e.key === "Escape") { setCreating(false); setNewName(""); }
+            }}
+            placeholder={`New ${label.toLowerCase()} name…`}
+            className="w-full rounded-xl border border-white/20 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-sky-400/50 focus:outline-none"
+          />
+          {createError && (
+            <p className="text-[11px] text-rose-400">{createError}</p>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void handleCreate()}
+              className="rounded-xl border border-sky-400/40 bg-sky-500/20 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-300"
+            >
+              Create
+            </button>
+            <button
+              type="button"
+              onClick={() => { setCreating(false); setNewName(""); }}
+              className="rounded-xl border border-white/15 bg-slate-800 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <ul className="max-h-52 overflow-y-auto py-1">
+          {allOptions.map((option) => (
+            <li key={option || "__empty__"}>
+              <button
+                type="button"
+                onClick={() => handleSelect(option)}
+                className={`w-full px-4 py-2.5 text-left text-sm transition hover:bg-slate-800 ${
+                  option === value
+                    ? "font-semibold text-slate-100"
+                    : option
+                    ? "text-slate-300"
+                    : "italic text-slate-500"
+                }`}
+              >
+                {option || "none (clear)"}
+              </button>
+            </li>
+          ))}
+          <li className="border-t border-white/10">
+            <button
+              type="button"
+              onClick={() => handleSelect(CREATE_NEW_VALUE)}
+              className="w-full px-4 py-2.5 text-left text-sm text-sky-400 transition hover:bg-slate-800"
+            >
+              + Create new…
+            </button>
+          </li>
+        </ul>
+      )}
+    </div>
+  ) : null;
+
+  return (
+    <div className={fieldGroupClassName}>
+      <span className={fieldLabelClassName}>{label}</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={handleToggle}
+        className={`${fieldInputClassName} flex items-center justify-between gap-2 text-left`}
+      >
+        <span className={value ? "text-text-hi" : "text-text-lo"}>
+          {value || placeholder || "—"}
+        </span>
+        <svg
+          className={`h-4 w-4 shrink-0 text-text-md transition-transform ${open ? "rotate-180" : ""}`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+      {typeof window !== "undefined" && createPortal(panel, document.body)}
+    </div>
+  );
+}
 
 function RagModeButton({
   active,
@@ -138,17 +396,60 @@ function RagModeButton({
 
 export default function RagKnowledgeScreen() {
   const { user: authUser } = useAuth();
-  const [collectionName, setCollectionName] = useState(DEFAULT_COLLECTION);
-  const [namespace, setNamespace] = useState(DEFAULT_NAMESPACE);
+
+  // ── Scope state ──────────────────────────────────────────────────────────────
+  // Layer 1: module cache (same-tab navigation, instant)
+  // Layer 2: localStorage (survives full reload, painted before server responds)
+  // Layer 3: server preferences (source of truth, applied after fetch)
+  const [collectionName, setCollectionNameState] = useState(() => _cache.scope.collectionName);
+  const [namespace, setNamespaceState] = useState(() => _cache.scope.namespace);
   const [userId, setUserId] = useState("");
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [tenantId, setTenantId] = useState("");
+  const [workspaceId, setWorkspaceIdState] = useState(() => _cache.scope.workspaceId);
+  const [tenantId, setTenantIdState] = useState(() => _cache.scope.tenantId);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const [documents, setDocuments] = useState<RagDocumentSummary[]>([]);
+  const scopeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyScope = (scope: RagScope) => {
+    _cache.scope = scope;
+    writeLsScope(scope);
+    setCollectionNameState(scope.collectionName);
+    setNamespaceState(scope.namespace);
+    setWorkspaceIdState(scope.workspaceId);
+    setTenantIdState(scope.tenantId);
+  };
+
+  const persistScope = (scope: RagScope) => {
+    _cache.scope = scope;
+    writeLsScope(scope);
+    if (scopeSaveTimerRef.current) clearTimeout(scopeSaveTimerRef.current);
+    scopeSaveTimerRef.current = setTimeout(() => {
+      apiFetch(`${apiUrl}/auth/me/preferences`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rag_scope: scope }),
+      }).catch(() => {/* ignore — scope loss on network error is acceptable */});
+    }, 400);
+  };
+
+  const setCollectionName = (v: string) => { const s = { ..._cache.scope, collectionName: v }; persistScope(s); setCollectionNameState(v); };
+  const setNamespace = (v: string) => { const s = { ..._cache.scope, namespace: v }; persistScope(s); setNamespaceState(v); };
+  const setWorkspaceId = (v: string) => { const s = { ..._cache.scope, workspaceId: v }; persistScope(s); setWorkspaceIdState(v); };
+  const setTenantId = (v: string) => { const s = { ..._cache.scope, tenantId: v }; persistScope(s); setTenantIdState(v); };
+
+  // Available options fetched from the API / derived from documents
+  const [availableCollections, setAvailableCollectionsState] = useState<string[]>(() => _cache.availableCollections);
+  const [collectionsLoading, setCollectionsLoading] = useState(_cache.availableCollections.length <= 1);
+
+  const setAvailableCollections = (cols: string[]) => { _cache.availableCollections = cols; setAvailableCollectionsState(cols); };
+
+  const [documents, setDocumentsState] = useState<RagDocumentSummary[]>(() => _cache.documents);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [selectedDocumentId, setSelectedDocumentIdState] = useState<string | null>(() => _cache.selectedDocumentId);
+
+  const setDocuments = (docs: RagDocumentSummary[]) => { _cache.documents = docs; setDocumentsState(docs); };
+  const setSelectedDocumentId = (id: string | null) => { _cache.selectedDocumentId = id; setSelectedDocumentIdState(id); };
 
   const [chunkResponse, setChunkResponse] = useState<RagDocumentChunksResponse | null>(null);
   const [chunksLoading, setChunksLoading] = useState(false);
@@ -169,11 +470,77 @@ export default function RagKnowledgeScreen() {
   const [deleting, setDeleting] = useState(false);
   const [replacing, setReplacing] = useState(false);
 
+  // Facet options derived from loaded documents
+  const availableNamespaces = useMemo(
+    () => [...new Set(documents.map((d) => d.namespace).filter((v): v is string => Boolean(v)))],
+    [documents]
+  );
+  const availableWorkspaceIds = useMemo(
+    () => [...new Set(documents.map((d) => d.workspace_id).filter((v): v is string => Boolean(v)))],
+    [documents]
+  );
+  const availableTenantIds = useMemo(
+    () => [...new Set(documents.map((d) => d.tenant_id).filter((v): v is string => Boolean(v)))],
+    [documents]
+  );
+
+  // Fetch available collections on mount (skips network call if cache is warm)
+  useEffect(() => {
+    if (_cache.availableCollections.length > 1) {
+      setCollectionsLoading(false);
+      return;
+    }
+    setCollectionsLoading(true);
+    apiFetch(`${apiUrl}/rag/collections`)
+      .then((res) => res.json())
+      .then((body: unknown) => {
+        const cols = (body as { collections?: unknown }).collections;
+        if (Array.isArray(cols)) {
+          const names = cols.filter((c): c is string => typeof c === "string" && Boolean(c));
+          setAvailableCollections(names.length > 0 ? names : [DEFAULT_COLLECTION]);
+        }
+      })
+      .catch(() => {
+        setAvailableCollections([DEFAULT_COLLECTION]);
+      })
+      .finally(() => setCollectionsLoading(false));
+  }, []);
+
   useEffect(() => {
     if (authUser?.user_id) {
       setUserId(authUser.user_id);
     }
   }, [authUser?.user_id]);
+
+  // Hydrate scope: localStorage first (instant), then server (source of truth)
+  useEffect(() => {
+    // Skip if the in-memory cache is already warmer than defaults (same-tab navigation)
+    const inMemoryHot =
+      _cache.scope.collectionName !== DEFAULT_COLLECTION ||
+      _cache.scope.namespace !== DEFAULT_NAMESPACE ||
+      _cache.scope.workspaceId !== "" ||
+      _cache.scope.tenantId !== "";
+    if (!inMemoryHot) {
+      const lsScope = readLsScope();
+      applyScope(lsScope);
+    }
+    // Fetch server preferences and overwrite with the authoritative value
+    apiFetch(`${apiUrl}/auth/me/preferences`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((prefs: Record<string, unknown> | null) => {
+        if (!prefs) return;
+        const raw = prefs.rag_scope as Partial<RagScope> | undefined;
+        if (!raw || typeof raw !== "object") return;
+        const scope: RagScope = {
+          collectionName: (typeof raw.collectionName === "string" && raw.collectionName) ? raw.collectionName : DEFAULT_COLLECTION,
+          namespace:      typeof raw.namespace === "string"   ? raw.namespace   : DEFAULT_NAMESPACE,
+          workspaceId:    typeof raw.workspaceId === "string" ? raw.workspaceId : "",
+          tenantId:       typeof raw.tenantId === "string"    ? raw.tenantId    : "",
+        };
+        applyScope(scope);
+      })
+      .catch(() => { /* unauthenticated or network error — keep current */ });
+  }, []);
 
   const selectedDocument = useMemo(() => {
     if (chunkResponse?.document && chunkResponse.document.document_id === selectedDocumentId) {
@@ -196,24 +563,12 @@ export default function RagKnowledgeScreen() {
 
   const buildScopeParams = () => {
     const params = new URLSearchParams();
-    if (collectionName.trim()) {
-      params.set("collection_name", collectionName.trim());
-    }
-    if (namespace.trim()) {
-      params.set("namespace", namespace.trim());
-    }
-    if (userId.trim()) {
-      params.set("user_id", userId.trim());
-    }
-    if (workspaceId.trim()) {
-      params.set("workspace_id", workspaceId.trim());
-    }
-    if (tenantId.trim()) {
-      params.set("tenant_id", tenantId.trim());
-    }
-    if (searchQuery.trim()) {
-      params.set("query", searchQuery.trim());
-    }
+    if (collectionName.trim()) params.set("collection_name", collectionName.trim());
+    if (namespace.trim()) params.set("namespace", namespace.trim());
+    if (userId.trim()) params.set("user_id", userId.trim());
+    if (workspaceId.trim()) params.set("workspace_id", workspaceId.trim());
+    if (tenantId.trim()) params.set("tenant_id", tenantId.trim());
+    if (searchQuery.trim()) params.set("query", searchQuery.trim());
     return params;
   };
 
@@ -270,8 +625,38 @@ export default function RagKnowledgeScreen() {
     }
   };
 
+  // Refresh collections list after creating a new one
+  const refreshCollections = async () => {
+    try {
+      const res = await apiFetch(`${apiUrl}/rag/collections`);
+      const body = (await res.json()) as { collections?: unknown };
+      const cols = body.collections;
+      if (Array.isArray(cols)) {
+        const names = cols.filter((c): c is string => typeof c === "string" && Boolean(c));
+        if (names.length > 0) setAvailableCollections(names);
+      }
+    } catch {
+      // keep existing list
+    }
+  };
+
+  const createCollection = async (name: string) => {
+    const res = await apiFetch(`${apiUrl}/rag/collections/ensure`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ collection_name: name }),
+    });
+    if (!res.ok) {
+      const body = (await res.json()) as { detail?: string };
+      throw new Error(body.detail ?? `Failed to create collection (${res.status})`);
+    }
+    await refreshCollections();
+  };
+
   useEffect(() => {
     if (!userId.trim()) return;
+    // Suppress background refresh when we just navigated back and have cached docs —
+    // but always refresh when scope changes (userId changing from "" → real ID counts).
     void refreshDocuments();
   }, [collectionName, namespace, tenantId, userId, workspaceId]);
 
@@ -296,35 +681,23 @@ export default function RagKnowledgeScreen() {
     };
     const effectiveDocumentId = documentIdOverride || documentIdInput.trim();
     const effectiveSourceUri = sourceUriInput.trim() || documentIdOverride || documentIdInput.trim();
-    if (effectiveDocumentId) {
-      payload.document_id = effectiveDocumentId;
-    }
-    if (effectiveSourceUri) {
-      payload.source_uri = effectiveSourceUri;
-    }
+    if (effectiveDocumentId) payload.document_id = effectiveDocumentId;
+    if (effectiveSourceUri) payload.source_uri = effectiveSourceUri;
     if (indexMode === "markdown") {
       const value = markdownText.trim();
-      if (!value) {
-        throw new Error("Markdown content is required.");
-      }
+      if (!value) throw new Error("Markdown content is required.");
       payload.markdown_text = value;
     } else if (indexMode === "text") {
       const value = plainText.trim();
-      if (!value) {
-        throw new Error("Text content is required.");
-      }
+      if (!value) throw new Error("Text content is required.");
       payload.text = value;
     } else if (indexMode === "workspace_file") {
       const value = workspacePath.trim();
-      if (!value) {
-        throw new Error("Workspace path is required.");
-      }
+      if (!value) throw new Error("Workspace path is required.");
       payload.path = value;
     } else {
       const value = directoryPath.trim();
-      if (!value) {
-        throw new Error("Directory path is required.");
-      }
+      if (!value) throw new Error("Directory path is required.");
       payload.directory_path = value;
       payload.recursive = recursiveDirectory;
     }
@@ -425,13 +798,9 @@ export default function RagKnowledgeScreen() {
   };
 
   const deleteSelectedDocument = async () => {
-    if (!selectedDocumentId) {
-      return;
-    }
+    if (!selectedDocumentId) return;
     const confirmed = window.confirm(`Delete indexed document ${selectedDocumentId}?`);
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
     setDeleting(true);
     setFormError(null);
     setNotice(null);
@@ -450,9 +819,7 @@ export default function RagKnowledgeScreen() {
         );
       }
       const result = body as RagDeleteResponse;
-      setNotice(
-        `Deleted ${result.document_id} (${result.deleted_chunk_count} chunks removed).`
-      );
+      setNotice(`Deleted ${result.document_id} (${result.deleted_chunk_count} chunks removed).`);
       setSelectedDocumentId(null);
       setChunkResponse(null);
       await refreshDocuments();
@@ -476,517 +843,500 @@ export default function RagKnowledgeScreen() {
     setNotice(null);
   };
 
+  useShell({
+    title: "Knowledge Base",
+    breadcrumbs: [
+      { label: "Project", href: "/project" },
+      { label: "Knowledge Base" },
+    ],
+  });
+
   return (
-    <AppShell
-      activeScreen="rag"
-      title="Knowledge Base"
-      breadcrumbs={[
-        { label: "Project", href: "/project" },
-        { label: "Knowledge Base" },
-      ]}
-      actions={
-        <>
-          <button
-            type="button"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void refreshDocuments()}
-            disabled={documentsLoading}
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void submitIndex()}
-            disabled={indexing}
-          >
-            {indexing ? "Indexing..." : "Index Now"}
-          </button>
-        </>
-      }
-    >
-        <ScreenHeader
-          eyebrow="Knowledge Base"
-          title="Knowledge Base"
-          description="Connect documents and workspace content so AI workflows can retrieve the right context."
-          activeScreen="rag"
-          theme="studio"
-          compact
+    <>
+      <ShellActions>
+        <button
+          type="button"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void refreshDocuments()}
+          disabled={documentsLoading}
         >
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            <label className={fieldGroupClassName}>
-              <span className={fieldLabelClassName}>Collection</span>
+          Refresh
+        </button>
+        <button
+          type="button"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void submitIndex()}
+          disabled={indexing}
+        >
+          {indexing ? "Indexing..." : "Index Now"}
+        </button>
+      </ShellActions>
+      <ScreenHeader
+        eyebrow="Knowledge Base"
+        title="Knowledge Base"
+        description="Connect documents and workspace content so AI workflows can retrieve the right context."
+        activeScreen="rag"
+        theme="studio"
+        compact
+      >
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <ScopeComboBox
+            label="Collection"
+            value={collectionName}
+            options={collectionsLoading ? [DEFAULT_COLLECTION] : availableCollections}
+            placeholder="rag_default"
+            onCreate={createCollection}
+            onChange={(v) => setCollectionName(v || DEFAULT_COLLECTION)}
+          />
+          <ScopeComboBox
+            label="Namespace"
+            value={namespace}
+            options={availableNamespaces}
+            placeholder="docs"
+            allowEmpty
+            onChange={setNamespace}
+          />
+          <ScopeComboBox
+            label="Workspace ID"
+            value={workspaceId}
+            options={availableWorkspaceIds}
+            placeholder="optional"
+            allowEmpty
+            onChange={setWorkspaceId}
+          />
+          <ScopeComboBox
+            label="Tenant ID"
+            value={tenantId}
+            options={availableTenantIds}
+            placeholder="optional"
+            allowEmpty
+            onChange={setTenantId}
+          />
+          <label className={fieldGroupClassName}>
+            <span className={fieldLabelClassName}>Search</span>
+            <div className="flex gap-2">
               <input
-                value={collectionName}
-                onChange={(event) => setCollectionName(event.target.value)}
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
                 className={fieldInputClassName}
-                placeholder="rag_default"
+                placeholder="document, source, metadata..."
               />
-            </label>
-            <label className={fieldGroupClassName}>
-              <span className={fieldLabelClassName}>Namespace</span>
-              <input
-                value={namespace}
-                onChange={(event) => setNamespace(event.target.value)}
-                className={fieldInputClassName}
-                placeholder="docs"
-              />
-            </label>
-            <label className={fieldGroupClassName}>
-              <span className={fieldLabelClassName}>Workspace ID</span>
-              <input
-                value={workspaceId}
-                onChange={(event) => setWorkspaceId(event.target.value)}
-                className={fieldInputClassName}
-                placeholder="optional"
-              />
-            </label>
-            <label className={fieldGroupClassName}>
-              <span className={fieldLabelClassName}>Tenant ID</span>
-              <input
-                value={tenantId}
-                onChange={(event) => setTenantId(event.target.value)}
-                className={fieldInputClassName}
-                placeholder="optional"
-              />
-            </label>
-            <label className={fieldGroupClassName}>
-              <span className={fieldLabelClassName}>Search</span>
-              <div className="flex gap-2">
-                <input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  className={fieldInputClassName}
-                  placeholder="document, source, metadata..."
-                />
-                <button
-                  type="button"
-                  className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-                  onClick={() => void refreshDocuments()}
-                >
-                  Go
-                </button>
-              </div>
-            </label>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {scopeSummary.map((item) => (
-              <div
-                key={item}
-                className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi"
+              <button
+                type="button"
+                className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+                onClick={() => void refreshDocuments()}
               >
-                {item}
+                Go
+              </button>
+            </div>
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {scopeSummary.map((item) => (
+            <div
+              key={item}
+              className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi"
+            >
+              {item}
+            </div>
+          ))}
+        </div>
+      </ScreenHeader>
+
+      <div className="mt-3 grid gap-3 xl:grid-cols-[1.2fr,1fr,1fr]">
+        <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
+                Index New
               </div>
+              <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Manual Indexing</h2>
+              <p className="mt-2 text-sm leading-6 text-text-md">
+                Choose a source mode, attach scope, then index new content or replace the currently
+                selected document.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1"
+              onClick={clearForm}
+            >
+              Clear Form
+            </button>
+          </div>
+
+          <div className="mt-6 grid gap-3">
+            {INDEX_MODES.map((mode) => (
+              <RagModeButton
+                key={mode.id}
+                active={indexMode === mode.id}
+                label={mode.label}
+                description={mode.description}
+                onClick={() => setIndexMode(mode.id)}
+              />
             ))}
           </div>
-        </ScreenHeader>
 
-        <div className="mt-3 grid gap-3 xl:grid-cols-[1.2fr,1fr,1fr]">
-          <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
-                  Index New
-                </div>
-                <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Manual Indexing</h2>
-                <p className="mt-2 text-sm leading-6 text-text-md">
-                  Choose a source mode, attach scope, then index new content or replace the currently
-                  selected document.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1"
-                onClick={clearForm}
-              >
-                Clear Form
-              </button>
-            </div>
-
-            <div className="mt-6 grid gap-3">
-              {INDEX_MODES.map((mode) => (
-                <RagModeButton
-                  key={mode.id}
-                  active={indexMode === mode.id}
-                  label={mode.label}
-                  description={mode.description}
-                  onClick={() => setIndexMode(mode.id)}
-                />
-              ))}
-            </div>
-
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <label className={fieldGroupClassName}>
-                <span className={fieldLabelClassName}>Document ID</span>
-                <input
-                  value={documentIdInput}
-                  onChange={(event) => setDocumentIdInput(event.target.value)}
-                  className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
-                  placeholder="docs/user-guide.md"
-                />
-              </label>
-              <label className={fieldGroupClassName}>
-                <span className={fieldLabelClassName}>Source URI</span>
-                <input
-                  value={sourceUriInput}
-                  onChange={(event) => setSourceUriInput(event.target.value)}
-                  className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
-                  placeholder="docs/user-guide.md"
-                />
-              </label>
-            </div>
-
-            {indexMode === "markdown" ? (
-              <label className={`mt-4 block ${fieldGroupClassName}`}>
-                <span className={fieldLabelClassName}>Markdown Content</span>
-                <textarea
-                  value={markdownText}
-                  onChange={(event) => setMarkdownText(event.target.value)}
-                  className="h-64 w-full rounded-3xl border border-subtle bg-surface-1 px-4 py-4 font-mono text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
-                  placeholder="# User Guide&#10;&#10;Paste markdown content here."
-                />
-              </label>
-            ) : null}
-
-            {indexMode === "text" ? (
-              <label className={`mt-4 block ${fieldGroupClassName}`}>
-                <span className={fieldLabelClassName}>Plain Text</span>
-                <textarea
-                  value={plainText}
-                  onChange={(event) => setPlainText(event.target.value)}
-                  className="h-64 w-full rounded-3xl border border-subtle bg-surface-1 px-4 py-4 font-mono text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
-                  placeholder="Paste plain text content here."
-                />
-              </label>
-            ) : null}
-
-            {indexMode === "workspace_file" ? (
-              <label className={`mt-4 block ${fieldGroupClassName}`}>
-                <span className={fieldLabelClassName}>Workspace File Path</span>
-                <input
-                  value={workspacePath}
-                  onChange={(event) => setWorkspacePath(event.target.value)}
-                  className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
-                  placeholder="docs/rag-playbook.md"
-                />
-              </label>
-            ) : null}
-
-            {indexMode === "workspace_directory" ? (
-              <div className="mt-3 grid gap-3 md:grid-cols-[1fr,auto]">
-                <label className={fieldGroupClassName}>
-                  <span className={fieldLabelClassName}>Workspace Directory</span>
-                  <input
-                    value={directoryPath}
-                    onChange={(event) => setDirectoryPath(event.target.value)}
-                    className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
-                    placeholder="docs"
-                  />
-                </label>
-                <label className="flex items-center gap-3 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
-                  <input
-                    type="checkbox"
-                    checked={recursiveDirectory}
-                    onChange={(event) => setRecursiveDirectory(event.target.checked)}
-                    className="h-4 w-4 rounded border-subtle"
-                  />
-                  Recursive
-                </label>
-              </div>
-            ) : null}
-
-            <label className={`mt-4 block ${fieldGroupClassName}`}>
-              <span className={fieldLabelClassName}>Metadata JSON</span>
-              <textarea
-                value={metadataText}
-                onChange={(event) => setMetadataText(event.target.value)}
-                className="h-44 w-full rounded-3xl border border-subtle bg-surface-1 px-4 py-4 font-mono text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className={fieldGroupClassName}>
+              <span className={fieldLabelClassName}>Document ID</span>
+              <input
+                value={documentIdInput}
+                onChange={(event) => setDocumentIdInput(event.target.value)}
+                className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+                placeholder="docs/user-guide.md"
               />
             </label>
+            <label className={fieldGroupClassName}>
+              <span className={fieldLabelClassName}>Source URI</span>
+              <input
+                value={sourceUriInput}
+                onChange={(event) => setSourceUriInput(event.target.value)}
+                className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+                placeholder="docs/user-guide.md"
+              />
+            </label>
+          </div>
 
-            {formError ? (
-              <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                {formError}
-              </div>
-            ) : null}
-            {notice ? (
-              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                {notice}
-              </div>
-            ) : null}
+          {indexMode === "markdown" ? (
+            <label className={`mt-4 block ${fieldGroupClassName}`}>
+              <span className={fieldLabelClassName}>Markdown Content</span>
+              <textarea
+                value={markdownText}
+                onChange={(event) => setMarkdownText(event.target.value)}
+                className="h-64 w-full rounded-3xl border border-subtle bg-surface-1 px-4 py-4 font-mono text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+                placeholder="# User Guide&#10;&#10;Paste markdown content here."
+              />
+            </label>
+          ) : null}
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button
-                type="button"
-                className="rounded-full border border-subtle bg-surface-1 px-5 py-3 text-sm font-semibold text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => void submitIndex()}
-                disabled={indexing}
-              >
-                {indexing ? "Indexing..." : "Index Now"}
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-subtle bg-surface-1 px-5 py-3 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => void replaceSelectedDocument()}
-                disabled={replacing || !selectedDocumentId}
-              >
-                {replacing ? "Replacing..." : "Replace Selected"}
-              </button>
+          {indexMode === "text" ? (
+            <label className={`mt-4 block ${fieldGroupClassName}`}>
+              <span className={fieldLabelClassName}>Plain Text</span>
+              <textarea
+                value={plainText}
+                onChange={(event) => setPlainText(event.target.value)}
+                className="h-64 w-full rounded-3xl border border-subtle bg-surface-1 px-4 py-4 font-mono text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+                placeholder="Paste plain text content here."
+              />
+            </label>
+          ) : null}
+
+          {indexMode === "workspace_file" ? (
+            <label className={`mt-4 block ${fieldGroupClassName}`}>
+              <span className={fieldLabelClassName}>Workspace File Path</span>
+              <input
+                value={workspacePath}
+                onChange={(event) => setWorkspacePath(event.target.value)}
+                className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+                placeholder="docs/rag-playbook.md"
+              />
+            </label>
+          ) : null}
+
+          {indexMode === "workspace_directory" ? (
+            <div className="mt-3 grid gap-3 md:grid-cols-[1fr,auto]">
+              <label className={fieldGroupClassName}>
+                <span className={fieldLabelClassName}>Workspace Directory</span>
+                <input
+                  value={directoryPath}
+                  onChange={(event) => setDirectoryPath(event.target.value)}
+                  className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+                  placeholder="docs"
+                />
+              </label>
+              <label className="flex items-center gap-3 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-hi">
+                <input
+                  type="checkbox"
+                  checked={recursiveDirectory}
+                  onChange={(event) => setRecursiveDirectory(event.target.checked)}
+                  className="h-4 w-4 rounded border-subtle"
+                />
+                Recursive
+              </label>
             </div>
-          </section>
+          ) : null}
 
-          <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
-                  Documents
-                </div>
-                <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Indexed Inventory</h2>
-                <p className="mt-2 text-sm leading-6 text-text-md">
-                  Review indexed documents in the active scope, then open one to inspect its stored
-                  chunks.
-                </p>
+          <label className={`mt-4 block ${fieldGroupClassName}`}>
+            <span className={fieldLabelClassName}>Metadata JSON</span>
+            <textarea
+              value={metadataText}
+              onChange={(event) => setMetadataText(event.target.value)}
+              className="h-44 w-full rounded-3xl border border-subtle bg-surface-1 px-4 py-4 font-mono text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none"
+            />
+          </label>
+
+          {formError ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {formError}
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {notice}
+            </div>
+          ) : null}
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button
+              type="button"
+              className="rounded-full border border-subtle bg-surface-1 px-5 py-3 text-sm font-semibold text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => void submitIndex()}
+              disabled={indexing}
+            >
+              {indexing ? "Indexing..." : "Index Now"}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-subtle bg-surface-1 px-5 py-3 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => void replaceSelectedDocument()}
+              disabled={replacing || !selectedDocumentId}
+            >
+              {replacing ? "Replacing..." : "Replace Selected"}
+            </button>
+          </div>
+        </section>
+
+        <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
+                Documents
               </div>
-              <div className="rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-right">
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-md">
-                  Loaded
-                </div>
-                <div className="mt-1 text-base font-semibold tracking-tight text-text-hi">
-                  {documents.length}
-                </div>
+              <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Indexed Inventory</h2>
+              <p className="mt-2 text-sm leading-6 text-text-md">
+                Review indexed documents in the active scope, then open one to inspect its stored
+                chunks.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-right">
+              <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-md">
+                Loaded
+              </div>
+              <div className="mt-1 text-base font-semibold tracking-tight text-text-hi">
+                {documents.length}
               </div>
             </div>
+          </div>
 
-            {documentsError ? (
-              <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                {documentsError}
-              </div>
-            ) : null}
-
-            <div className="mt-6 space-y-3">
-              {documentsLoading ? (
-                <div className="rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-12 text-center text-sm text-text-md">
-                  Loading indexed documents...
-                </div>
-              ) : documents.length === 0 ? (
-                <div className="rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-12 text-center text-sm text-text-md">
-                  No indexed documents match the current scope.
-                </div>
-              ) : (
-                documents.map((document) => {
-                  const selected = document.document_id === selectedDocumentId;
-                  return (
-                    <button
-                      key={document.document_id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedDocumentId(document.document_id);
-                        void loadDocumentChunks(document.document_id);
-                      }}
-                      className={`w-full rounded-3xl border p-4 text-left transition ${
-                        selected
-                          ? "border-sky-300/35 bg-accent-sky text-text-hi shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
-                          : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="truncate text-lg font-semibold tracking-[-0.02em]">
-                            {document.filename || document.document_id}
-                          </div>
-                          <div
-                            className={`mt-1 truncate text-xs uppercase tracking-[0.14em] ${
-                              selected ? "text-text-sky-token" : "text-text-md"
-                            }`}
-                          >
-                            {document.source_uri}
-                          </div>
-                        </div>
-                        <div
-                          className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-                            selected
-                              ? "bg-surface-2 text-text-hi"
-                              : "bg-surface-1 text-text-md"
-                          }`}
-                        >
-                          {document.chunk_count} chunks
-                        </div>
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {document.namespace ? (
-                          <div
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-                              selected
-                                ? "bg-surface-1 text-text-hi"
-                                : "bg-surface-1 text-text-md"
-                            }`}
-                          >
-                            {document.namespace}
-                          </div>
-                        ) : null}
-                        {document.chunking_strategy ? (
-                          <div
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-                              selected
-                                ? "bg-surface-1 text-text-hi"
-                                : "bg-surface-1 text-text-md"
-                            }`}
-                          >
-                            {document.chunking_strategy}
-                          </div>
-                        ) : null}
-                        {document.content_type ? (
-                          <div
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-                              selected
-                                ? "bg-surface-1 text-text-hi"
-                                : "bg-surface-1 text-text-md"
-                            }`}
-                          >
-                            {document.content_type}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div
-                        className={`mt-4 text-[11px] font-medium uppercase tracking-[0.14em] ${
-                          selected ? "text-text-sky-token" : "text-text-md"
-                        }`}
-                      >
-                        Indexed {formatTimestamp(document.indexed_at)}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
+          {documentsError ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {documentsError}
             </div>
-          </section>
+          ) : null}
 
-          <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
-                  Inspector
-                </div>
-                <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Document Details</h2>
-                <p className="mt-2 text-sm leading-6 text-text-md">
-                  Inspect document metadata and chunk payloads before you rerank or generate against
-                  them.
-                </p>
+          <div className="mt-6 space-y-3">
+            {documentsLoading ? (
+              <div className="rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-12 text-center text-sm text-text-md">
+                Loading indexed documents...
               </div>
-              <button
-                type="button"
-                className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => selectedDocumentId && void loadDocumentChunks(selectedDocumentId)}
-                disabled={!selectedDocumentId || chunksLoading}
-              >
-                Reload
-              </button>
-            </div>
-
-            {chunksError ? (
-              <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                {chunksError}
-              </div>
-            ) : null}
-
-            {!selectedDocument ? (
-              <div className="mt-6 rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-12 text-center text-sm text-text-md">
-                Select a document to inspect its stored chunks and lifecycle actions.
+            ) : documents.length === 0 ? (
+              <div className="rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-12 text-center text-sm text-text-md">
+                No indexed documents match the current scope.
               </div>
             ) : (
-              <>
-                <div className="mt-6 rounded-3xl border border-subtle bg-surface-1 p-4">
-                  <div className="text-base font-semibold tracking-tight text-text-hi">
-                    {selectedDocument.filename || selectedDocument.document_id}
-                  </div>
-                  <div className="mt-2 break-all text-xs uppercase tracking-[0.14em] text-text-md">
-                    {selectedDocument.source_uri}
-                  </div>
-                  <dl className="mt-4 grid gap-3 text-sm md:grid-cols-2">
-                    <div>
-                      <dt className={fieldLabelClassName}>Document ID</dt>
-                      <dd className="mt-1 break-all text-text-md">
-                        {selectedDocument.document_id}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className={fieldLabelClassName}>Indexed</dt>
-                      <dd className="mt-1 text-text-md">
-                        {formatTimestamp(selectedDocument.indexed_at)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className={fieldLabelClassName}>Namespace</dt>
-                      <dd className="mt-1 text-text-md">{selectedDocument.namespace || "—"}</dd>
-                    </div>
-                    <div>
-                      <dt className={fieldLabelClassName}>Chunk Count</dt>
-                      <dd className="mt-1 text-text-md">{selectedDocument.chunk_count}</dd>
-                    </div>
-                  </dl>
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      className="rounded-full border border-rose-300/20 bg-accent-rose px-4 py-2 text-sm font-semibold text-text-rose-token transition hover:border-rose-300/30 hover:bg-accent-rose disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void deleteSelectedDocument()}
-                      disabled={deleting}
-                    >
-                      {deleting ? "Deleting..." : "Delete Document"}
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void replaceSelectedDocument()}
-                      disabled={replacing || (indexMode !== "markdown" && indexMode !== "text")}
-                    >
-                      {replacing ? "Replacing..." : "Replace With Form"}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-[22px] font-semibold tracking-[-0.03em] text-text-hi">Stored Chunks</div>
-                    <div className="text-xs uppercase tracking-[0.24em] text-text-md">
-                      {chunkResponse?.chunks.length ?? 0} loaded
-                    </div>
-                  </div>
-                  <div className="mt-3 space-y-3">
-                    {chunksLoading ? (
-                      <div className="rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-10 text-center text-sm text-text-md">
-                        Loading chunks...
-                      </div>
-                    ) : (
-                      chunkResponse?.chunks.map((chunk) => (
-                        <article
-                          key={chunk.chunk_id}
-                          className="rounded-3xl border border-subtle bg-surface-1 p-4"
+              documents.map((document) => {
+                const selected = document.document_id === selectedDocumentId;
+                return (
+                  <button
+                    key={document.document_id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDocumentId(document.document_id);
+                      void loadDocumentChunks(document.document_id);
+                    }}
+                    className={`w-full rounded-3xl border p-4 text-left transition ${
+                      selected
+                        ? "border-sky-300/35 bg-accent-sky text-text-hi shadow-[0_8px_18px_rgba(14,165,233,0.16)]"
+                        : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="truncate text-lg font-semibold tracking-[-0.02em]">
+                          {document.filename || document.document_id}
+                        </div>
+                        <div
+                          className={`mt-1 truncate text-xs uppercase tracking-[0.14em] ${
+                            selected ? "text-text-sky-token" : "text-text-md"
+                          }`}
                         >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-base font-semibold tracking-[-0.02em] text-text-hi">
-                              Chunk {chunk.chunk_index ?? "—"}
-                            </div>
-                            <div className="truncate text-[11px] uppercase tracking-[0.14em] text-text-md">
-                              {chunk.chunk_id}
-                            </div>
-                          </div>
-                          <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-text-md">
-                            {chunk.text}
-                          </div>
-                          {Object.keys(chunk.metadata || {}).length > 0 ? (
-                            <pre className="mt-3 overflow-x-auto rounded-2xl bg-slate-950 px-4 py-3 text-xs text-slate-50">
-                              {prettyJson(chunk.metadata)}
-                            </pre>
-                          ) : null}
-                        </article>
-                      ))
-                    )}
+                          {document.source_uri}
+                        </div>
+                      </div>
+                      <div
+                        className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                          selected ? "bg-surface-2 text-text-hi" : "bg-surface-1 text-text-md"
+                        }`}
+                      >
+                        {document.chunk_count} chunks
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {document.namespace ? (
+                        <div
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                            selected ? "bg-surface-1 text-text-hi" : "bg-surface-1 text-text-md"
+                          }`}
+                        >
+                          {document.namespace}
+                        </div>
+                      ) : null}
+                      {document.chunking_strategy ? (
+                        <div
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                            selected ? "bg-surface-1 text-text-hi" : "bg-surface-1 text-text-md"
+                          }`}
+                        >
+                          {document.chunking_strategy}
+                        </div>
+                      ) : null}
+                      {document.content_type ? (
+                        <div
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                            selected ? "bg-surface-1 text-text-hi" : "bg-surface-1 text-text-md"
+                          }`}
+                        >
+                          {document.content_type}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div
+                      className={`mt-4 text-[11px] font-medium uppercase tracking-[0.14em] ${
+                        selected ? "text-text-sky-token" : "text-text-md"
+                      }`}
+                    >
+                      Indexed {formatTimestamp(document.indexed_at)}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-[24px] border border-subtle bg-gradient-panel p-4 shadow-[0_12px_32px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.05)]">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.24em] text-text-sky-token">
+                Inspector
+              </div>
+              <h2 className="mt-2 text-base font-semibold tracking-tight text-text-hi">Document Details</h2>
+              <p className="mt-2 text-sm leading-6 text-text-md">
+                Inspect document metadata and chunk payloads before you rerank or generate against
+                them.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => selectedDocumentId && void loadDocumentChunks(selectedDocumentId)}
+              disabled={!selectedDocumentId || chunksLoading}
+            >
+              Reload
+            </button>
+          </div>
+
+          {chunksError ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {chunksError}
+            </div>
+          ) : null}
+
+          {!selectedDocument ? (
+            <div className="mt-6 rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-12 text-center text-sm text-text-md">
+              Select a document to inspect its stored chunks and lifecycle actions.
+            </div>
+          ) : (
+            <>
+              <div className="mt-6 rounded-3xl border border-subtle bg-surface-1 p-4">
+                <div className="text-base font-semibold tracking-tight text-text-hi">
+                  {selectedDocument.filename || selectedDocument.document_id}
+                </div>
+                <div className="mt-2 break-all text-xs uppercase tracking-[0.14em] text-text-md">
+                  {selectedDocument.source_uri}
+                </div>
+                <dl className="mt-4 grid gap-3 text-sm md:grid-cols-2">
+                  <div>
+                    <dt className={fieldLabelClassName}>Document ID</dt>
+                    <dd className="mt-1 break-all text-text-md">{selectedDocument.document_id}</dd>
+                  </div>
+                  <div>
+                    <dt className={fieldLabelClassName}>Indexed</dt>
+                    <dd className="mt-1 text-text-md">{formatTimestamp(selectedDocument.indexed_at)}</dd>
+                  </div>
+                  <div>
+                    <dt className={fieldLabelClassName}>Namespace</dt>
+                    <dd className="mt-1 text-text-md">{selectedDocument.namespace || "—"}</dd>
+                  </div>
+                  <div>
+                    <dt className={fieldLabelClassName}>Chunk Count</dt>
+                    <dd className="mt-1 text-text-md">{selectedDocument.chunk_count}</dd>
+                  </div>
+                </dl>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className="rounded-full border border-rose-300/20 bg-accent-rose px-4 py-2 text-sm font-semibold text-text-rose-token transition hover:border-rose-300/30 hover:bg-accent-rose disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void deleteSelectedDocument()}
+                    disabled={deleting}
+                  >
+                    {deleting ? "Deleting..." : "Delete Document"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-subtle hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void replaceSelectedDocument()}
+                    disabled={replacing || (indexMode !== "markdown" && indexMode !== "text")}
+                  >
+                    {replacing ? "Replacing..." : "Replace With Form"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-6">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-[22px] font-semibold tracking-[-0.03em] text-text-hi">Stored Chunks</div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-text-md">
+                    {chunkResponse?.chunks.length ?? 0} loaded
                   </div>
                 </div>
-              </>
-            )}
-          </section>
-        </div>
-    </AppShell>
+                <div className="mt-3 space-y-3">
+                  {chunksLoading ? (
+                    <div className="rounded-3xl border border-dashed border-subtle bg-surface-1 px-4 py-10 text-center text-sm text-text-md">
+                      Loading chunks...
+                    </div>
+                  ) : (
+                    chunkResponse?.chunks.map((chunk) => (
+                      <article
+                        key={chunk.chunk_id}
+                        className="rounded-3xl border border-subtle bg-surface-1 p-4"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-base font-semibold tracking-[-0.02em] text-text-hi">
+                            Chunk {chunk.chunk_index ?? "—"}
+                          </div>
+                          <div className="truncate text-[11px] uppercase tracking-[0.14em] text-text-md">
+                            {chunk.chunk_id}
+                          </div>
+                        </div>
+                        <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-text-md">
+                          {chunk.text}
+                        </div>
+                        {Object.keys(chunk.metadata || {}).length > 0 ? (
+                          <pre className="mt-3 overflow-x-auto rounded-2xl bg-slate-950 px-4 py-3 text-xs text-slate-50">
+                            {prettyJson(chunk.metadata)}
+                          </pre>
+                        ) : null}
+                      </article>
+                    ))
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import AppShell from "../../components/AppShell";
+import { useShell } from "../../lib/shell";
 import FeedbackInsightsPanel from "../../components/feedback/FeedbackInsightsPanel";
 import { apiFetch } from "../../lib/auth";
 import type { FeedbackSummaryResponse } from "../../lib/feedback";
@@ -188,13 +188,10 @@ export default function ObservabilityScreen() {
     });
   };
 
+  useShell({ title: "Observability", breadcrumbs: [{ label: "Observability" }] });
+
   return (
-    <AppShell
-      activeScreen="observability"
-      title="Observability"
-      breadcrumbs={[{ label: "Observability" }]}
-    >
-      <div className="mx-auto max-w-5xl space-y-4 px-4 py-6">
+    <div className="mx-auto max-w-5xl space-y-4 px-4 py-6">
         <FeedbackInsightsPanel
           summary={feedbackSummary}
           loading={feedbackLoading}
@@ -381,7 +378,6 @@ export default function ObservabilityScreen() {
             </ul>
           )}
         </section>
-      </div>
-    </AppShell>
+    </div>
   );
 }

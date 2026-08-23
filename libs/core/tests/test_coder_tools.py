@@ -10,9 +10,7 @@ class _PlanProvider(LLMProvider):
 
     def generate_request(self, request: LLMRequest) -> LLMResponse:
         self.requests.append(request)
-        return LLMResponse(
-            content='{"steps":[{"title":"Create app","files":["src/app.py"]}]}'
-        )
+        return LLMResponse(content='{"steps":[{"title":"Create app","files":["src/app.py"]}]}')
 
 
 def test_coding_agent_generate_writes_workspace_files() -> None:

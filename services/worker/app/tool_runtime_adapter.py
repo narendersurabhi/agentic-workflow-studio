@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from libs.core import llm_provider, models, tool_bootstrap, tool_registry
+from libs.core import llm_provider, models, tool_registry
 from libs.framework.tool_runtime import Tool, ToolRegistry
 
 
@@ -54,7 +54,7 @@ def build_worker_tool_runtime(
     llm_provider_instance: llm_provider.LLMProvider | None,
     service_name: str = "worker",
 ) -> WorkerToolRuntime:
-    registry = tool_bootstrap.build_default_registry(
+    registry = tool_registry.build_default_registry(
         http_fetch_enabled=http_fetch_enabled,
         llm_enabled=llm_enabled,
         llm_provider=llm_provider_instance,

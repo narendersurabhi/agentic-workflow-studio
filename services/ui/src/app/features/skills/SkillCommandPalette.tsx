@@ -120,7 +120,7 @@ export default function SkillCommandPalette({
         ) : null}
 
         {filteredSkills.length === 0 && filteredCaps.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-text-lo">No results for "{query}"</div>
+          <div className="px-3 py-4 text-center text-xs text-text-lo">No results for &quot;{query}&quot;</div>
         ) : null}
       </div>
     </div>

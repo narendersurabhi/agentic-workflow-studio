@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import AppShell from "./components/AppShell";
+import { useShell, ShellActions } from "./lib/shell";
 import ComposerDagCanvas from "./components/composer/ComposerDagCanvas";
 import ScreenHeader, {
   screenHeaderPrimaryActionClassName,
@@ -724,12 +724,82 @@ type ChatAssistantAction = {
   context_json?: Record<string, unknown>;
 };
 
+type ToolStepItem = {
+  capability: string;
+  label: string;
+  status: "running" | "done";
+  result?: Record<string, unknown>;
+};
+
+function artifactDownloadUrl(rawPath: string): string {
+  // Strip leading /shared/artifacts/ prefix — API endpoint is relative to that root
+  const relative = rawPath.replace(/^\/shared\/artifacts\/?/, "");
+  return `/artifacts/download?path=${encodeURIComponent(relative)}`;
+}
+
+function ToolProgressCard({
+  intent,
+  steps,
+}: {
+  intent?: string;
+  steps: ToolStepItem[];
+}) {
+  if (!intent && steps.length === 0) return null;
+  const anyRunning = steps.some((s) => s.status === "running");
+  const downloads = steps.filter(
+    (s) => s.status === "done" && typeof s.result?.path === "string"
+  );
+  return (
+    <div className="mb-2 rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2.5 text-[12px] text-text-sky-token">
+      {intent && steps.length === 0 && (
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
+          <span>{intent}</span>
+        </div>
+      )}
+      {steps.map((step) => (
+        <div key={step.capability} className="flex items-center gap-2 py-0.5">
+          {step.status === "running" ? (
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
+          ) : (
+            <span className="text-emerald-400">&#x2713;</span>
+          )}
+          <span className={step.status === "done" ? "text-text-md" : ""}>{step.label}</span>
+        </div>
+      ))}
+      {anyRunning && (
+        <div className="mt-1 text-[11px] text-text-lo">Working&hellip;</div>
+      )}
+      {downloads.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1 border-t border-sky-300/20 pt-2">
+          {downloads.map((step) => {
+            const filePath = step.result!.path as string;
+            const filename = filePath.split("/").pop() ?? "download";
+            return (
+              <a
+                key={step.capability}
+                href={artifactDownloadUrl(filePath)}
+                download={filename}
+                className="flex items-center gap-2 rounded-lg border border-sky-300/30 bg-sky-900/20 px-2.5 py-1.5 text-sky-300 transition-colors hover:bg-sky-900/40 hover:text-sky-100"
+              >
+                <span>&#x1F4C4;</span>
+                <span className="flex-1 truncate font-medium">{filename}</span>
+                <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-70">Download</span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
   if (!content) return null;
   // During streaming show plain text to avoid flicker from partial parse trees
   // (e.g. unclosed code fences).  Once the turn is complete, render as markdown.
   if (streaming) {
-    return <span className="whitespace-pre-wrap break-words">{content}</span>;
+    return <span className="whitespace-pre-wrap wrap-break-word">{content}</span>;
   }
   return (
     <ReactMarkdown
@@ -823,6 +893,15 @@ const appendChatMessage = (session: ChatSession, message: ChatMessage): ChatSess
   updated_at: message.created_at,
   messages: [...(Array.isArray(session.messages) ? session.messages : []), message],
 });
+
+// ─── Chat state cache ─────────────────────────────────────────────────────────
+// Survives client-side navigation within the same tab. Keeps the active chat
+// session and draft input alive when the user switches to another screen and
+// navigates back.
+const _chatCache: { session: ChatSession | null; input: string } = {
+  session: null,
+  input: "",
+};
 
 type Plan = {
   id: string;
@@ -2307,6 +2386,17 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const showWelcomeScreen = initialScreen === "home";
   const showComposeScreen = initialScreen === "compose";
   const showChatScreen = initialScreen === "chat";
+
+  const shellTitle = showWelcomeScreen
+    ? "AI Workflow Workspace"
+    : showChatScreen
+    ? "Chat"
+    : "Run from Prompt";
+  useShell({
+    title: shellTitle,
+    breadcrumbs: showWelcomeScreen ? [{ label: "Welcome" }] : [{ label: shellTitle }],
+  });
+
   const { user: authUser } = useAuth();
   const [goal, setGoal] = useState("");
   const [contextJson, setContextJson] = useState("{}");
@@ -2378,8 +2468,22 @@ export function WorkspaceSurfaceContent({ screen }: { screen: WorkspaceScreen })
   const [isReorderMode, setIsReorderMode] = useState(false);
   const [draggingTemplateId, setDraggingTemplateId] = useState<string | null>(null);
   const [dragOverTemplateId, setDragOverTemplateId] = useState<string | null>(null);
-  const [chatSession, setChatSession] = useState<ChatSession | null>(null);
-  const [chatInput, setChatInput] = useState("");
+  const [chatSession, setChatSessionState] = useState<ChatSession | null>(() => _chatCache.session);
+  const setChatSession = (s: ChatSession | null | ((prev: ChatSession | null) => ChatSession | null)) => {
+    if (typeof s === "function") {
+      setChatSessionState((prev) => { const next = s(prev); _chatCache.session = next; return next; });
+    } else {
+      _chatCache.session = s; setChatSessionState(s);
+    }
+  };
+  const [chatInput, setChatInputState] = useState<string>(() => _chatCache.input);
+  const setChatInput = (v: string | ((prev: string) => string)) => {
+    if (typeof v === "function") {
+      setChatInputState((prev) => { const next = v(prev); _chatCache.input = next; return next; });
+    } else {
+      _chatCache.input = v; setChatInputState(v);
+    }
+  };
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
@@ -6531,6 +6635,13 @@ const openTemplateModal = (template: Template) => {
       // Append an empty assistant bubble immediately so the user sees activity.
       const streamingMsgId = `streaming-${Date.now()}`;
       const resolvedSessionId = session.id;
+      type ToolStep = {
+        capability: string;
+        label: string;
+        status: "running" | "done";
+        result?: Record<string, unknown>;
+      };
+      let toolSteps: ToolStep[] = [];
       setChatSession((current) =>
         current
           ? appendChatMessage(current, {
@@ -6588,6 +6699,10 @@ const openTemplateModal = (template: Template) => {
             workflow_run?: Record<string, unknown> | null;
             user_message?: ChatMessage;
             assistant_message?: ChatMessage;
+            // tool progress events
+            label?: string;
+            capability?: string;
+            result?: Record<string, unknown>;
           };
           let event: SSEEvent;
           try {
@@ -6595,7 +6710,60 @@ const openTemplateModal = (template: Template) => {
           } catch {
             continue;
           }
-          if (event.type === "token" && event.text) {
+          if (event.type === "tool_intent" && event.label) {
+            const intentLabel = event.label;
+            setChatSession((current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === streamingMsgId
+                        ? { ...m, metadata: { ...m.metadata, toolIntent: intentLabel, toolSteps: [] } }
+                        : m
+                    ),
+                  }
+                : current
+            );
+          } else if (event.type === "tool_start" && event.capability) {
+            const step: ToolStep = {
+              capability: event.capability,
+              label: event.label ?? event.capability,
+              status: "running",
+            };
+            toolSteps = [...toolSteps.filter((s) => s.capability !== event.capability), step];
+            const captured = [...toolSteps];
+            setChatSession((current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === streamingMsgId
+                        ? { ...m, metadata: { ...m.metadata, toolSteps: captured } }
+                        : m
+                    ),
+                  }
+                : current
+            );
+          } else if (event.type === "tool_done" && event.capability) {
+            toolSteps = toolSteps.map((s) =>
+              s.capability === event.capability
+                ? { ...s, status: "done" as const, result: event.result }
+                : s
+            );
+            const captured = [...toolSteps];
+            setChatSession((current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === streamingMsgId
+                        ? { ...m, metadata: { ...m.metadata, toolSteps: captured } }
+                        : m
+                    ),
+                  }
+                : current
+            );
+          } else if (event.type === "token" && event.text) {
             streamedText += event.text;
             const captured = streamedText;
             setChatSession((current) =>
@@ -7199,33 +7367,27 @@ const openTemplateModal = (template: Template) => {
 
   if (showWelcomeScreen) {
     return (
-      <AppShell
-        activeScreen="home"
-        title="AI Workflow Workspace"
-        breadcrumbs={[{ label: "Welcome" }]}
-        actions={
-          <>
-            <Link
-              href="/project"
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-            >
-              Project
-            </Link>
-            <Link
-              href="/workflows"
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-            >
-              Saved Workflows
-            </Link>
-            <Link
-              href="/studio"
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
-            >
-              Open Studio
-            </Link>
-          </>
-        }
-      >
+      <>
+        <ShellActions>
+          <Link
+            href="/project"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+          >
+            Project
+          </Link>
+          <Link
+            href="/workflows"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+          >
+            Saved Workflows
+          </Link>
+          <Link
+            href="/studio"
+            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
+          >
+            Open Studio
+          </Link>
+        </ShellActions>
         <section className="relative">
           <div className="mb-4">
             <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
@@ -7274,7 +7436,7 @@ const openTemplateModal = (template: Template) => {
             ))}
           </div>
         </section>
-      </AppShell>
+      </>
     );
   }
 
@@ -7296,8 +7458,7 @@ const openTemplateModal = (template: Template) => {
       : "border-sky-300/22 bg-accent-sky text-text-sky-token";
 
     return (
-      <AppShell activeScreen="chat" title="Chat">
-        <div className="flex h-[calc(100dvh-60px)] flex-col gap-0 overflow-hidden">
+      <div className="flex h-[calc(100dvh-60px)] flex-col gap-0 overflow-hidden">
           {/* ── Top bar ── */}
           <div className="flex shrink-0 items-center justify-between gap-4 border-b border-subtle px-4 py-3">
             <div>
@@ -7355,6 +7516,10 @@ const openTemplateModal = (template: Template) => {
                       <span className="text-text-lo">{formatTimestamp(message.created_at)}</span>
                     </div>
                     <div className="mt-2">
+                      <ToolProgressCard
+                        intent={message.metadata?.toolIntent as string | undefined}
+                        steps={(message.metadata?.toolSteps as ToolStepItem[] | undefined) ?? []}
+                      />
                       <MarkdownContent
                         content={message.content}
                         streaming={Boolean(message.metadata?.streaming)}
@@ -7531,7 +7696,6 @@ const openTemplateModal = (template: Template) => {
             ) : null}
           </div>
         </div>
-      </AppShell>
     );
   }
 
@@ -7579,10 +7743,6 @@ const openTemplateModal = (template: Template) => {
   const sidebarToggleTopClassName = useStudioSurfaceTheme ? "top-[92px]" : "top-4";
 
   return (
-    <AppShell
-      activeScreen={showComposeScreen ? "compose" : "chat"}
-      title={showComposeScreen ? "Run from Prompt" : "Chat"}
-    >
     <div className={`relative${isResizing || isCapabilityResizing ? " select-none" : ""}`}>
       {!useStudioSurfaceTheme ? (
         <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-cyan-200/40 blur-3xl animate-float-soft" />
@@ -8345,11 +8505,11 @@ const openTemplateModal = (template: Template) => {
                       >
                         {item.id}
                         <span
-                          className={`ml-1 rounded-full border px-1 py-[1px] text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(item.source)}`}
+                          className={`ml-1 rounded-full border px-1 py-px text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(item.source)}`}
                         >
                           {capabilitySourceLabel(item.source)}
                         </span>
-                        <span className="ml-1 rounded-full bg-slate-100 px-1 py-[1px] text-[9px] text-slate-600">
+                        <span className="ml-1 rounded-full bg-slate-100 px-1 py-px text-[9px] text-slate-600">
                           {item.score.toFixed(1)}
                         </span>
                       </button>
@@ -9172,7 +9332,7 @@ const openTemplateModal = (template: Template) => {
               {activeTemplate.variables?.filter((variable) => !AUTO_TEMPLATE_KEYS.has(variable.key))
                 .length === 0 ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                  Date fields are auto-filled with today's date.
+                  Date fields are auto-filled with today&apos;s date.
                 </div>
               ) : null}
               {templateInputError ? (
@@ -9476,13 +9636,13 @@ const openTemplateModal = (template: Template) => {
                                             {capabilityId}
                                             {ranking?.source ? (
                                               <span
-                                                className={`ml-1 rounded-full border px-1 py-[1px] text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(ranking.source)}`}
+                                                className={`ml-1 rounded-full border px-1 py-px text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(ranking.source)}`}
                                               >
                                                 {capabilitySourceLabel(ranking.source)}
                                               </span>
                                             ) : null}
                                             {typeof ranking?.score === "number" ? (
-                                              <span className="ml-1 rounded-full bg-slate-100 px-1 py-[1px] text-[9px] text-slate-600">
+                                              <span className="ml-1 rounded-full bg-slate-100 px-1 py-px text-[9px] text-slate-600">
                                                 {ranking.score.toFixed(1)}
                                               </span>
                                             ) : null}
@@ -10296,7 +10456,7 @@ const openTemplateModal = (template: Template) => {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div
-                      className={`break-words text-sm font-semibold ${
+                      className={`wrap-break-word text-sm font-semibold ${
                         useStudioSurfaceTheme ? "text-text-hi" : "text-slate-900"
                       }`}
                     >
@@ -10316,7 +10476,7 @@ const openTemplateModal = (template: Template) => {
                         {expandedJobGoals.has(job.id) ? "Show less" : "Show more"}
                       </button>
                     ) : null}
-                    <div className={`mt-1 break-words text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
+                    <div className={`mt-1 wrap-break-word text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
                       {job.id}
                     </div>
                     <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
@@ -10563,7 +10723,7 @@ const openTemplateModal = (template: Template) => {
               </div>
               {jobDetailsIntentGraphCollapsed ? (
                 <div className={`text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-slate-600"}`}>
-                  Collapsed. Click Expand to view this job's intent graph.
+                  Collapsed. Click Expand to view this job&apos;s intent graph.
                 </div>
               ) : selectedJob &&
                 selectedJob.metadata &&
@@ -11901,7 +12061,6 @@ const openTemplateModal = (template: Template) => {
 
       </div>
     </div>
-    </AppShell>
   );
 }
 

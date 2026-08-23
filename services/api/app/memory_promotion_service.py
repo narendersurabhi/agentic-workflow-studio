@@ -64,14 +64,17 @@ def merge_user_profile_payload(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    merged = models.UserProfilePayload.model_validate(existing_payload or {}).model_dump(mode="json")
+    merged = models.UserProfilePayload.model_validate(existing_payload or {}).model_dump(
+        mode="json"
+    )
     preferences = (
-        dict(merged.get("preferences"))
-        if isinstance(merged.get("preferences"), Mapping)
-        else {}
+        dict(merged.get("preferences")) if isinstance(merged.get("preferences"), Mapping) else {}
     )
     for decision in decisions:
-        if not decision.accepted or decision.candidate_type != models.MemoryCandidateType.user_profile_update:
+        if (
+            not decision.accepted
+            or decision.candidate_type != models.MemoryCandidateType.user_profile_update
+        ):
             continue
         payload = decision.payload if isinstance(decision.payload, Mapping) else {}
         payload_preferences = (

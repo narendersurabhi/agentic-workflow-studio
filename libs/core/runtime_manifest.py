@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from libs.framework.tool_runtime import ToolRegistry
 
-from . import capability_registry, mcp_gateway, tool_bootstrap
+from . import capability_registry, mcp_gateway, tool_registry
 from .llm_provider import MockLLMProvider
 
 SCHEMA_VERSION = "runtime-manifest.v1"
@@ -56,9 +56,7 @@ def build_runtime_manifest(service_name: str = "worker") -> RuntimeManifest:
     capabilities: dict[str, RuntimeCapabilityStatus] = {}
     for capability_id, spec in registry.capabilities.items():
         adapter_types = tuple(
-            adapter.type
-            for adapter in spec.adapters
-            if getattr(adapter, "enabled", True)
+            adapter.type for adapter in spec.adapters if getattr(adapter, "enabled", True)
         )
         details: list[str] = []
         reason = ""
@@ -67,9 +65,7 @@ def build_runtime_manifest(service_name: str = "worker") -> RuntimeManifest:
         if capability_mode == "disabled":
             available = False
             reason = "capability_mode_disabled"
-            details.append(
-                f"capability mode is disabled for service '{normalized_service}'"
-            )
+            details.append(f"capability mode is disabled for service '{normalized_service}'")
         elif not spec.enabled:
             available = False
             reason = "capability_disabled"
@@ -227,7 +223,7 @@ def _build_tool_registry_for_service(
     provider = MockLLMProvider() if llm_enabled else None
     try:
         return (
-            tool_bootstrap.build_default_registry(
+            tool_registry.build_default_registry(
                 http_fetch_enabled=http_fetch_enabled,
                 llm_enabled=llm_enabled,
                 llm_provider=provider,

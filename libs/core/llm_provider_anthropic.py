@@ -5,9 +5,10 @@ from typing import Any, Dict, Iterator, List, Optional
 
 try:
     import anthropic as _anthropic_sdk
+
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
-    _anthropic_sdk = None  # type: ignore[assignment]
+    _anthropic_sdk = None
     _ANTHROPIC_AVAILABLE = False
 
 from libs.core.llm_provider import (
@@ -55,7 +56,9 @@ class AnthropicProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     def generate_request(self, request: LLMRequest) -> LLMResponse:
-        blocks = request.prompt_blocks or [PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)]
+        blocks = request.prompt_blocks or [
+            PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)
+        ]
         session = CacheSessionRef(provider="anthropic")
         return self.generate_cached(blocks, session, request)
 
@@ -91,8 +94,7 @@ class AnthropicProvider(LLMProvider):
             raise LLMProviderError("AnthropicProvider: no non-empty prompt blocks")
 
         thinking_enabled = (
-            request.reasoning_effort is not None
-            and request.reasoning_effort != "none"
+            request.reasoning_effort is not None and request.reasoning_effort != "none"
         )
         budget = self._THINKING_BUDGETS.get(request.reasoning_effort or "", 0)
 
@@ -124,9 +126,7 @@ class AnthropicProvider(LLMProvider):
                 raise LLMUnavailableError(f"Anthropic API unavailable: {exc}") from exc
             raise LLMProviderError(f"Anthropic API error: {exc}") from exc
 
-        text = "".join(
-            block.text for block in response.content if hasattr(block, "text")
-        )
+        text = "".join(block.text for block in response.content if hasattr(block, "text"))
         if not text:
             raise LLMProviderError("Anthropic API returned empty output")
 
@@ -141,7 +141,9 @@ class AnthropicProvider(LLMProvider):
 
     def stream_request(self, request: LLMRequest) -> Iterator[str]:
         """Stream response tokens via Anthropic Messages streaming API."""
-        blocks = request.prompt_blocks or [PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)]
+        blocks = request.prompt_blocks or [
+            PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)
+        ]
         content: List[Dict[str, Any]] = []
         for block in blocks:
             if not block.text:
@@ -155,8 +157,7 @@ class AnthropicProvider(LLMProvider):
             raise LLMProviderError("AnthropicProvider: no non-empty prompt blocks")
 
         thinking_enabled = (
-            request.reasoning_effort is not None
-            and request.reasoning_effort != "none"
+            request.reasoning_effort is not None and request.reasoning_effort != "none"
         )
         budget = self._THINKING_BUDGETS.get(request.reasoning_effort or "", 0)
 

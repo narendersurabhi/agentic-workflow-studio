@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import os
 import re
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -201,9 +201,7 @@ def _reference_segments(path_spec: Any) -> list[str] | None:
             raw = raw[2:]
         if raw.startswith("/"):
             segments = [
-                item.replace("~1", "/").replace("~0", "~")
-                for item in raw.split("/")[1:]
-                if item
+                item.replace("~1", "/").replace("~0", "~") for item in raw.split("/")[1:] if item
             ]
         else:
             segments = [item for item in raw.split(".") if item]
@@ -237,8 +235,10 @@ def _completed_step_contexts(raw: Any) -> list[models.CompletedStepContext]:
         if not task_id or not name:
             continue
         status = _non_empty_string(entry.get("status")) or models.TaskStatus.completed.value
-        outputs = dict(entry.get("outputs")) if isinstance(entry.get("outputs"), Mapping) else {}
-        result = dict(entry.get("result")) if isinstance(entry.get("result"), Mapping) else {}
+        raw_outputs = entry.get("outputs")
+        outputs = dict(raw_outputs) if isinstance(raw_outputs, Mapping) else {}
+        raw_result = entry.get("result")
+        result = dict(raw_result) if isinstance(raw_result, Mapping) else {}
         items.append(
             models.CompletedStepContext(
                 task_id=task_id,
@@ -264,7 +264,9 @@ def _failed_step_context(raw: Mapping[str, Any] | None) -> models.FailedStepCont
                     break
     if capability_id is None:
         capability_id = _non_empty_string(raw.get("failing_tool"))
-    error_message = _non_empty_string(raw.get("failed_task_error")) or _non_empty_string(raw.get("error"))
+    error_message = _non_empty_string(raw.get("failed_task_error")) or _non_empty_string(
+        raw.get("error")
+    )
     retry_classification = _non_empty_string(raw.get("retry_classification"))
     retryable = bool(raw.get("retryable"))
     if not retryable and retry_classification == "retryable":
@@ -350,38 +352,52 @@ def parse_revision_context_from_metadata(
         for key, value in raw_context.items()
         if str(key) not in _REVISION_CONTEXT_EXCLUDED_KEYS
     }
+    raw_evaluator_signal = raw_context.get("evaluator_signal")
+    raw_checkpoint_lineage = raw_context.get("checkpoint_lineage")
     return models.PlanRevisionContext(
         revision_number=_int_or_zero(raw_context.get("prior_revision_number")),
         prior_plan_id=_non_empty_string(raw_context.get("prior_plan_id")),
         trigger_reason=_non_empty_string(raw_context.get("reason")),
         selected_strategy=_non_empty_string(raw_context.get("selected_strategy")),
         strategy_reason=_non_empty_string(raw_context.get("strategy_reason")),
-        evaluator_signal=dict(raw_context.get("evaluator_signal"))
-        if isinstance(raw_context.get("evaluator_signal"), Mapping)
+        evaluator_signal=dict(raw_evaluator_signal)
+        if isinstance(raw_evaluator_signal, Mapping)
         else {},
-        checkpoint_lineage=dict(raw_context.get("checkpoint_lineage"))
-        if isinstance(raw_context.get("checkpoint_lineage"), Mapping)
+        checkpoint_lineage=dict(raw_checkpoint_lineage)
+        if isinstance(raw_checkpoint_lineage, Mapping)
         else {},
         preserved_task_ids=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("preserved_task_ids", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("preserved_task_ids", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("preserved_task_ids"), list)
         else [],
         preserved_task_names=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("preserved_task_names", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("preserved_task_names", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("preserved_task_names"), list)
         else [],
         replacement_task_ids=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("replacement_task_ids", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("replacement_task_ids", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("replacement_task_ids"), list)
         else [],
         replacement_task_names=[
-            item for item in (_non_empty_string(entry) for entry in raw_context.get("replacement_task_names", []))
+            item
+            for item in (
+                _non_empty_string(entry) for entry in raw_context.get("replacement_task_names", [])
+            )
             if item is not None
         ]
         if isinstance(raw_context.get("replacement_task_names"), list)
@@ -495,14 +511,18 @@ def project_planner_job_context(job: models.Job) -> dict[str, Any]:
 
     interaction_summaries = _planner_interaction_summaries(projected)
     if interaction_summaries:
-        projected["interaction_summaries"] = interaction_summaries[:_PLANNER_INTERACTION_SUMMARY_LIMIT]
+        projected["interaction_summaries"] = interaction_summaries[
+            :_PLANNER_INTERACTION_SUMMARY_LIMIT
+        ]
     else:
         projected.pop("interaction_summaries", None)
 
     normalized_intent_envelope = normalized_intent_envelope_for_job(job)
     capability_candidates = _planner_capability_candidates(projected, normalized_intent_envelope)
     if capability_candidates:
-        projected["capability_candidates"] = capability_candidates[:_PLANNER_CAPABILITY_CANDIDATE_LIMIT]
+        projected["capability_candidates"] = capability_candidates[
+            :_PLANNER_CAPABILITY_CANDIDATE_LIMIT
+        ]
     else:
         projected.pop("capability_candidates", None)
 
@@ -543,7 +563,9 @@ def build_plan_request(
     if normalized_intent_envelope is not None and normalized_intent_envelope.graph.segments:
         goal_intent_graph = normalized_intent_envelope.graph
     if goal_intent_graph is None:
-        goal_intent_graph = workflow_contracts.parse_intent_graph(job_metadata.get("goal_intent_graph"))
+        goal_intent_graph = workflow_contracts.parse_intent_graph(
+            job_metadata.get("goal_intent_graph")
+        )
     return PlanRequest(
         job_id=job.id,
         goal=job.goal,
@@ -625,7 +647,10 @@ def _planner_interaction_summary_is_noisy(item: Mapping[str, Any]) -> bool:
     tokens = [token for token in normalized.split() if token]
     return bool(
         tokens
-        and all(token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"} for token in tokens)
+        and all(
+            token in {"yes", "yeah", "yep", "ok", "okay", "thanks", "thank", "you"}
+            for token in tokens
+        )
     )
 
 
@@ -775,7 +800,12 @@ def _full_capability_values(
     | None,
 ) -> list[Any]:
     if isinstance(full_capabilities, capability_registry.CapabilityRegistry):
-        return list(full_capabilities.capabilities.values())
+        # mypy fails to narrow away `PlanRequest` here (confirmed via reveal_type: the
+        # isinstance check above evaluates true at runtime but mypy still infers
+        # `CapabilityRegistry | PlanRequest`, a narrowing gap reproducible even with a
+        # 2-member union). The cast reflects what the isinstance check already verified.
+        registry = cast("capability_registry.CapabilityRegistry", full_capabilities)
+        return list(registry.capabilities.values())
     if full_capabilities is None:
         try:
             return list(capability_registry.load_capability_registry().capabilities.values())
@@ -893,7 +923,9 @@ def canonicalize_planner_request_ids(
 
 
 def planner_task_request_ids(task: Any) -> list[str]:
-    request_ids = getattr(task, "capability_requests", None) or getattr(task, "tool_requests", None) or []
+    request_ids = (
+        getattr(task, "capability_requests", None) or getattr(task, "tool_requests", None) or []
+    )
     normalized: list[str] = []
     seen: set[str] = set()
     for request_id in request_ids:

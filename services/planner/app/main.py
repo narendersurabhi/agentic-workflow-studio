@@ -25,6 +25,7 @@ from libs.core import (
     workflow_contracts,
 )
 from libs.core.cache_session_store import CacheSessionStore
+
 try:
     from . import bootstrap, planner_service, runtime_service
 except ImportError:  # pragma: no cover - compatibility for direct module loading in tests
@@ -200,10 +201,12 @@ def _planner_cache_session_store() -> CacheSessionStore:
 def _planner_service_runtime() -> planner_service.PlannerServiceRuntime:
     return planner_service.PlannerServiceRuntime(
         load_capabilities=_planner_capabilities,
-        build_semantic_capability_hints=lambda job, capabilities, limit: _planner_semantic_capability_hints(
-            job,
-            capabilities,
-            limit=limit,
+        build_semantic_capability_hints=lambda job, capabilities, limit: (
+            _planner_semantic_capability_hints(
+                job,
+                capabilities,
+                limit=limit,
+            )
         ),
         parse_llm_plan=_parse_llm_plan,
         ensure_llm_tool=_ensure_llm_tool,
@@ -278,9 +281,7 @@ def _llm_prompt(job: models.Job, tools: List[models.ToolSpec]) -> str:
     return planner_service.build_llm_prompt(request)
 
 
-def _llm_plan_repair_prompt(
-    *, raw_output: str, tools: List[models.ToolSpec]
-) -> str:
+def _llm_plan_repair_prompt(*, raw_output: str, tools: List[models.ToolSpec]) -> str:
     request = planner_contracts.PlanRequest(
         job_id="repair",
         goal="",
@@ -373,7 +374,9 @@ def _default_schema_ref_for_task_candidate(task: Mapping[str, Any]) -> str:
         raw = task.get(key)
         if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
             continue
-        request_ids.extend(str(item or "").strip().lower() for item in raw if str(item or "").strip())
+        request_ids.extend(
+            str(item or "").strip().lower() for item in raw if str(item or "").strip()
+        )
     request_blob = " ".join(request_ids)
     if "document.spec.generate" in request_blob or "llm_generate_document_spec" in request_blob:
         return "schemas/document_spec"
@@ -409,9 +412,7 @@ def _ensure_llm_tool(plan: models.PlanCreate) -> models.PlanCreate:
                 )
                 continue
         elif tool_requests:
-            updated_tasks.append(
-                task.model_copy(update={"capability_requests": tool_requests})
-            )
+            updated_tasks.append(task.model_copy(update={"capability_requests": tool_requests}))
             continue
         else:
             default_request = "llm.text.generate"
@@ -476,7 +477,11 @@ def _ensure_task_intents(
             intent_source = "normalized_envelope"
             intent_confidence = max(intent_confidence, 0.92)
         # If text inference falls back to generate, prefer known tool intent where unambiguous.
-        if inferred == models.ToolIntent.generate.value and not task.intent and not goal_segment_intent:
+        if (
+            inferred == models.ToolIntent.generate.value
+            and not task.intent
+            and not goal_segment_intent
+        ):
             if len(unique_tool_intents) == 1:
                 inferred = next(iter(unique_tool_intents)).value
                 intent_source = "tool_intent"
@@ -1056,8 +1061,7 @@ def _ensure_renderer_required_inputs(plan: models.PlanCreate) -> models.PlanCrea
         paths = {
             str(export.path or "").strip()
             for export in spec.exports
-            if str(export.name or "").strip() == "document_spec"
-            and str(export.path or "").strip()
+            if str(export.name or "").strip() == "document_spec" and str(export.path or "").strip()
         }
         if not paths:
             continue
@@ -1089,6 +1093,7 @@ def _ensure_renderer_required_inputs(plan: models.PlanCreate) -> models.PlanCrea
         "llm_iterative_improve_document_spec",
         "document.spec.repair",
     }
+
     def _ref_task_exists(value: Any) -> bool:
         if not isinstance(value, dict):
             return False
@@ -1165,8 +1170,7 @@ def _ensure_renderer_required_inputs(plan: models.PlanCreate) -> models.PlanCrea
             (
                 req
                 for req in (task.tool_requests or [])
-                if str(req) in renderer_requests
-                or str(req) in document_spec_consumer_requests
+                if str(req) in renderer_requests or str(req) in document_spec_consumer_requests
             ),
             None,
         )
@@ -1190,8 +1194,7 @@ def _ensure_renderer_required_inputs(plan: models.PlanCreate) -> models.PlanCrea
                     continue
                 payload["document_spec"] = {
                     "$from": (
-                        f"dependencies_by_name.{source_task_name}."
-                        f"{source_request_id}.{export_path}"
+                        f"dependencies_by_name.{source_task_name}.{source_request_id}.{export_path}"
                     )
                 }
                 changed = True
@@ -1472,7 +1475,9 @@ def _build_capability_validation_payload_for_request(
     raw_tool_inputs: dict[str, Any],
     request: planner_contracts.PlanRequest,
 ) -> dict[str, Any]:
-    request_id = next((str(item).strip() for item in task.tool_requests or [] if str(item).strip()), "")
+    request_id = next(
+        (str(item).strip() for item in task.tool_requests or [] if str(item).strip()), ""
+    )
     return planner_service.build_capability_validation_payload(
         task,
         request_id,

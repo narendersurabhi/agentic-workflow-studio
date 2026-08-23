@@ -16,14 +16,17 @@ def configure_logging(service_name: str) -> None:
     ]
 
     # Route stdlib logging records through structlog's JSON renderer.
-    # This makes logger.info("event", extra={...}) emit a JSON line that
-    # includes all extra fields alongside the event name.
+    # ExtraAdder copies extra={...} fields from stdlib LogRecords into the
+    # event dict so they appear as top-level JSON keys in the output.
     formatter = structlog.stdlib.ProcessorFormatter(
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             structlog.processors.JSONRenderer(),
         ],
-        foreign_pre_chain=shared_processors,
+        foreign_pre_chain=[
+            structlog.stdlib.ExtraAdder(),
+            *shared_processors,
+        ],
     )
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)

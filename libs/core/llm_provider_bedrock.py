@@ -6,9 +6,10 @@ from typing import Any, Dict, Iterator, List, Optional
 
 try:
     import boto3 as _boto3
+
     _BOTO3_AVAILABLE = True
 except ImportError:
-    _boto3 = None  # type: ignore[assignment]
+    _boto3 = None
     _BOTO3_AVAILABLE = False
 
 from libs.core.llm_provider import (
@@ -66,7 +67,7 @@ class BedrockAnthropicProvider(LLMProvider):
             "bedrock-runtime",
             region_name=region,
             verify=verify_ssl,
-            config=_boto3.session.Config(  # type: ignore[attr-defined]
+            config=_boto3.session.Config(
                 connect_timeout=timeout_s,
                 read_timeout=timeout_s,
             ),
@@ -80,7 +81,9 @@ class BedrockAnthropicProvider(LLMProvider):
         )
 
     def generate_request(self, request: LLMRequest) -> LLMResponse:
-        blocks = request.prompt_blocks or [PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)]
+        blocks = request.prompt_blocks or [
+            PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)
+        ]
         session = CacheSessionRef(provider="bedrock-anthropic")
         return self.generate_cached(blocks, session, request)
 
@@ -107,8 +110,7 @@ class BedrockAnthropicProvider(LLMProvider):
             )
 
         thinking_enabled = (
-            request.reasoning_effort is not None
-            and request.reasoning_effort != "none"
+            request.reasoning_effort is not None and request.reasoning_effort != "none"
         )
         budget = self._THINKING_BUDGETS.get(request.reasoning_effort or "", 0)
 
@@ -140,9 +142,7 @@ class BedrockAnthropicProvider(LLMProvider):
                 raise LLMUnavailableError(
                     f"Bedrock API unavailable ({self._error_context()}): {exc}"
                 ) from exc
-            raise LLMProviderError(
-                f"Bedrock API error ({self._error_context()}): {exc}"
-            ) from exc
+            raise LLMProviderError(f"Bedrock API error ({self._error_context()}): {exc}") from exc
 
         text = "".join(
             block.get("text", "")
@@ -150,9 +150,7 @@ class BedrockAnthropicProvider(LLMProvider):
             if block.get("type") == "text"
         )
         if not text:
-            raise LLMProviderError(
-                f"Bedrock API returned empty output ({self._error_context()})"
-            )
+            raise LLMProviderError(f"Bedrock API returned empty output ({self._error_context()})")
 
         usage = response_body.get("usage", {})
         return LLMResponse(
@@ -166,10 +164,11 @@ class BedrockAnthropicProvider(LLMProvider):
 
     def stream_request(self, request: LLMRequest) -> Iterator[str]:
         """Stream response tokens via Bedrock invoke_model_with_response_stream."""
-        blocks = request.prompt_blocks or [PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)]
+        blocks = request.prompt_blocks or [
+            PromptBlock(text=request.prompt, stability=Stability.DYNAMIC)
+        ]
         content: List[Dict[str, Any]] = [
-            {"type": "text", "text": block.text}
-            for block in blocks if block.text
+            {"type": "text", "text": block.text} for block in blocks if block.text
         ]
         if not content:
             raise LLMProviderError(
@@ -177,8 +176,7 @@ class BedrockAnthropicProvider(LLMProvider):
             )
 
         thinking_enabled = (
-            request.reasoning_effort is not None
-            and request.reasoning_effort != "none"
+            request.reasoning_effort is not None and request.reasoning_effort != "none"
         )
         budget = self._THINKING_BUDGETS.get(request.reasoning_effort or "", 0)
 
@@ -208,9 +206,7 @@ class BedrockAnthropicProvider(LLMProvider):
                 raise LLMUnavailableError(
                     f"Bedrock API unavailable ({self._error_context()}): {exc}"
                 ) from exc
-            raise LLMProviderError(
-                f"Bedrock API error ({self._error_context()}): {exc}"
-            ) from exc
+            raise LLMProviderError(f"Bedrock API error ({self._error_context()}): {exc}") from exc
 
         event_stream = raw.get("body")
         if event_stream is None:

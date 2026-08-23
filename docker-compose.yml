@@ -1,7 +1,6 @@
-version: "3.9"
 services:
   db:
-    image: postgres:15
+    image: postgres:18.6
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -9,13 +8,13 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - db-data:/var/lib/postgresql
   redis:
-    image: redis:7
+    image: valkey/valkey:9.1.1
     ports:
       - "16379:6379"
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.19.0
     environment:
       QDRANT__TELEMETRY_DISABLED: ${QDRANT__TELEMETRY_DISABLED:-true}
     ports:

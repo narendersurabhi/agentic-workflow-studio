@@ -14,9 +14,7 @@ def test_invalid_task_transition():
 
 
 def test_valid_job_transition_from_queued_to_failed():
-    assert state_machine.validate_job_transition(
-        models.JobStatus.queued, models.JobStatus.failed
-    )
+    assert state_machine.validate_job_transition(models.JobStatus.queued, models.JobStatus.failed)
 
 
 def test_invalid_job_transition_from_succeeded_to_failed():

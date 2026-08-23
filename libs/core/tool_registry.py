@@ -6,16 +6,17 @@ import math
 import os
 import re
 import shutil
-import time
 from datetime import UTC, datetime
 from subprocess import CompletedProcess, run
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
+from dataclasses import dataclass
+
 from .llm_provider import LLMProvider, LLMRequest
-from . import tool_bootstrap, tool_catalog, tool_governance, tool_plugins, tracing as core_tracing
-from libs.core import mcp_gateway
+from . import tool_governance, tool_plugins, tracing as core_tracing
+from libs.core import mcp_gateway, sub_agent_dispatch
 from .models import ToolSpec
 from libs.framework.tool_runtime import (
     Tool as _FrameworkTool,
@@ -29,10 +30,24 @@ from libs.tools.document_spec_llm import (
     llm_generate_document_spec as _llm_generate_document_spec_external,
     llm_improve_document_spec as _llm_improve_document_spec_external,
 )
-from libs.tools.core_ops import CoreOpsHandlers
+from libs.tools.core_ops import CoreOpsHandlers, register_core_ops_tools
+from libs.tools.docx_render_from_spec import register_docx_tools
+from libs.tools.document_spec_iterative import register_document_spec_iterative_tools
+from libs.tools.document_spec_llm import register_document_spec_llm_tools
+from libs.tools.document_spec_validate import register_document_spec_tools
+from libs.tools.github_tools import register_github_tools
+from libs.tools.llm_tool_groups import (
+    register_agent_tool,
+    register_coding_agent_tools,
+    register_llm_contextual_text_tool,
+    register_llm_text_tool,
+)
+from libs.tools.openapi_iterative import register_openapi_iterative_tools
+from libs.tools.pdf_render_from_spec import register_pdf_tools
 from libs.tools import mcp_client
 from libs.tools import coder_tools
 from libs.tools import agent_tools
+from . import planner_support_tools
 
 LOGGER = logging.getLogger(__name__)
 
@@ -286,11 +301,104 @@ def _load_entrypoint_plugins(
     )
 
 
+@dataclass(frozen=True)
+class ToolCatalogHandlers:
+    core_ops_handlers: CoreOpsHandlers
+    resolve_llm_timeout_s: Callable[[Optional[LLMProvider]], int]
+    resolve_coding_agent_timeout_s: Callable[[], int]
+    resolve_llm_iterative_timeout_s: Callable[[Optional[LLMProvider]], int]
+    llm_generate: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    llm_generate_with_context: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    coding_agent_generate: Callable[[Dict[str, Any]], Dict[str, Any]]
+    coding_agent_autonomous: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    coding_agent_publish_pr: Callable[[Dict[str, Any]], Dict[str, Any]]
+    agent: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    llm_generate_document_spec: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    llm_improve_document_spec: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
+    sanitize_document_spec: Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def register_default_tools(
+    registry: ToolRegistry,
+    *,
+    handlers: ToolCatalogHandlers,
+    http_fetch_enabled: bool = False,
+    llm_enabled: bool = False,
+    llm_provider: Optional[LLMProvider] = None,
+) -> None:
+    register_core_ops_tools(
+        registry,
+        handlers=handlers.core_ops_handlers,
+        http_fetch_enabled=http_fetch_enabled,
+    )
+    register_docx_tools(registry)
+    register_pdf_tools(registry)
+    register_document_spec_tools(registry)
+    register_github_tools(registry)
+
+    if not llm_enabled:
+        return
+    if llm_provider is None:
+        raise ValueError("llm_enabled requires a llm_provider instance")
+
+    llm_timeout_s = handlers.resolve_llm_timeout_s(llm_provider)
+    coding_agent_timeout_s = handlers.resolve_coding_agent_timeout_s()
+    llm_iterative_timeout_s = handlers.resolve_llm_iterative_timeout_s(llm_provider)
+
+    register_llm_text_tool(
+        registry,
+        timeout_s=llm_timeout_s,
+        handler=lambda payload, provider=llm_provider: handlers.llm_generate(payload, provider),
+    )
+    register_llm_contextual_text_tool(
+        registry,
+        timeout_s=llm_timeout_s,
+        handler=lambda payload, provider=llm_provider: handlers.llm_generate_with_context(
+            payload, provider
+        ),
+    )
+    register_coding_agent_tools(
+        registry,
+        timeout_s=coding_agent_timeout_s,
+        handler_generate=handlers.coding_agent_generate,
+        handler_autonomous=lambda payload, provider=llm_provider: handlers.coding_agent_autonomous(
+            payload, provider
+        ),
+        handler_publish_pr=handlers.coding_agent_publish_pr,
+    )
+    register_agent_tool(
+        registry,
+        timeout_s=coding_agent_timeout_s,
+        handler=lambda payload, provider=llm_provider: handlers.agent(payload, provider),
+    )
+    register_document_spec_llm_tools(
+        registry,
+        llm_provider,
+        timeout_s=llm_timeout_s,
+        sanitize_document_spec=handlers.sanitize_document_spec,
+    )
+    register_document_spec_iterative_tools(
+        registry,
+        llm_provider,
+        timeout_s=llm_iterative_timeout_s,
+        generate_document_spec=handlers.llm_generate_document_spec,
+        improve_document_spec=handlers.llm_improve_document_spec,
+        sanitize_document_spec=handlers.sanitize_document_spec,
+    )
+    register_openapi_iterative_tools(
+        registry,
+        llm_provider,
+        timeout_s=llm_iterative_timeout_s,
+    )
+
+
+def build_planner_support_tool_specs() -> list[ToolSpec]:
+    return planner_support_tools.build_planner_support_tool_specs()
+
+
 def _build_core_ops_handlers() -> CoreOpsHandlers:
     return CoreOpsHandlers(
         math_eval=_math_eval,
-        text_summarize=_text_summarize,
-        file_write_artifact=lambda payload: _write_text_file(payload, default_filename="artifact.txt"),
         file_write_text=_write_text_file,
         file_write_code=_file_write_code,
         file_read_text=_file_read_text,
@@ -316,13 +424,12 @@ def _build_core_ops_handlers() -> CoreOpsHandlers:
         memory_semantic_write=_memory_semantic_write,
         memory_semantic_search=_memory_semantic_search,
         docx_render=_docx_render,
-        sleep=_sleep,
         http_fetch=_http_fetch,
     )
 
 
-def _default_catalog_handlers() -> tool_catalog.ToolCatalogHandlers:
-    return tool_catalog.ToolCatalogHandlers(
+def _default_catalog_handlers() -> ToolCatalogHandlers:
+    return ToolCatalogHandlers(
         core_ops_handlers=_build_core_ops_handlers(),
         resolve_llm_timeout_s=_resolve_llm_timeout_s,
         resolve_coding_agent_timeout_s=_resolve_coding_agent_timeout_s,
@@ -332,10 +439,52 @@ def _default_catalog_handlers() -> tool_catalog.ToolCatalogHandlers:
         coding_agent_generate=_coding_agent_generate,
         coding_agent_autonomous=_coding_agent_autonomous,
         coding_agent_publish_pr=_coding_agent_publish_pr,
-        agent_run=_agent_run,
+        agent=_agent,
         llm_generate_document_spec=_llm_generate_document_spec,
         llm_improve_document_spec=_llm_improve_document_spec,
         sanitize_document_spec=_sanitize_document_spec,
+    )
+
+
+def build_tool_registry(
+    *,
+    handlers: ToolCatalogHandlers,
+    http_fetch_enabled: bool = False,
+    llm_enabled: bool = False,
+    llm_provider: Optional[LLMProvider] = None,
+    service_name: str | None = None,
+) -> ToolRegistry:
+    registry = ToolRegistry()
+    register_default_tools(
+        registry,
+        handlers=handlers,
+        http_fetch_enabled=http_fetch_enabled,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+    )
+    tool_plugins.load_configured_plugins(
+        registry,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+        http_fetch_enabled=http_fetch_enabled,
+    )
+    tool_governance.filter_registry_tools(registry, service_name)
+    return registry
+
+
+def build_default_registry(
+    *,
+    http_fetch_enabled: bool = False,
+    llm_enabled: bool = False,
+    llm_provider: Optional[LLMProvider] = None,
+    service_name: str | None = None,
+) -> ToolRegistry:
+    return build_tool_registry(
+        handlers=_default_catalog_handlers(),
+        http_fetch_enabled=http_fetch_enabled,
+        llm_enabled=llm_enabled,
+        llm_provider=llm_provider,
+        service_name=service_name,
     )
 
 
@@ -345,8 +494,7 @@ def default_registry(
     llm_provider: Optional[LLMProvider] = None,
     service_name: Optional[str] = None,
 ) -> ToolRegistry:
-    return tool_bootstrap.build_tool_registry(
-        handlers=_default_catalog_handlers(),
+    return build_default_registry(
         http_fetch_enabled=http_fetch_enabled,
         llm_enabled=llm_enabled,
         llm_provider=llm_provider,
@@ -359,12 +507,6 @@ def _math_eval(payload: Dict[str, Any]) -> Dict[str, Any]:
     allowed = {"sqrt": math.sqrt, "pow": pow}
     value = eval(expr, {"__builtins__": {}}, allowed)  # noqa: S307
     return {"value": value}
-
-
-def _text_summarize(payload: Dict[str, Any]) -> Dict[str, Any]:
-    text = payload.get("text", "")
-    summary = text[:200]
-    return {"summary": summary}
 
 
 def _write_text_file(
@@ -802,8 +944,7 @@ def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:
     def clean_label(value: Any) -> str:
         if not isinstance(value, str):
             return ""
-        # Keep output human-readable while stripping filesystem-unsafe characters.
-        cleaned = re.sub(r'[<>:"/\\\\|?*]', " ", value)
+        cleaned = re.sub(r'[<>:"/\\|?*]', " ", value)
         cleaned = re.sub(r"[,_;:]+", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
         return cleaned
@@ -813,14 +954,15 @@ def _derive_output_filename(payload: Dict[str, Any]) -> Dict[str, Any]:
         cleaned = re.sub(r"_+", "_", cleaned).strip("_")
         return cleaned
 
-    if (not isinstance(role_name, str) or not role_name.strip()) and isinstance(job_description, str):
+    if (not isinstance(role_name, str) or not role_name.strip()) and isinstance(
+        job_description, str
+    ):
         role_name = _derive_role_name_from_jd(job_description)
 
     role_label = clean_label(role_name)
     if not role_label:
         raise ToolExecutionError("Missing target_role_name")
     if not isinstance(date_value, str) or not date_value.strip():
-        # Fallback for plans that omit date/today in output-path derivation.
         date_value = datetime.now(UTC).date().isoformat()
 
     role_slug = slugify(role_label or str(role_name), r"[^a-z0-9]+") or "document"
@@ -1152,12 +1294,6 @@ def _docx_render(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"path": str(candidate)}
 
 
-def _sleep(payload: Dict[str, Any]) -> Dict[str, Any]:
-    seconds = float(payload.get("seconds", 0))
-    time.sleep(seconds)
-    return {"slept": seconds}
-
-
 def _http_fetch(payload: Dict[str, Any]) -> Dict[str, Any]:
     import urllib.request
 
@@ -1306,11 +1442,18 @@ def _coding_agent_autonomous(payload: Dict[str, Any], provider: LLMProvider) -> 
     )
 
 
-def _agent_run(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int = 0) -> Dict[str, Any]:
+def _agent(
+    payload: Dict[str, Any], provider: LLMProvider, _recursion_depth: int = 0
+) -> Dict[str, Any]:
     def _execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        # Intercept recursive agent_run calls to thread depth through
-        if tool_name == "agent_run" or tool_name == "agent__run":
-            return _agent_run(arguments, provider, _recursion_depth=_recursion_depth + 1)
+        # Intercept recursive agent calls: dispatch as an independent job when
+        # API_URL is available (true process isolation); fall back to in-process
+        # recursion in dev/test environments where API_URL is not set.
+        if tool_name == "agent" or tool_name == "agent__run":
+            api_url = sub_agent_dispatch.get_api_url()
+            if api_url:
+                return sub_agent_dispatch.dispatch_sub_agent(arguments, api_url=api_url)
+            return _agent(arguments, provider, _recursion_depth=_recursion_depth + 1)
         reg = default_registry(
             http_fetch_enabled=True,
             llm_enabled=True,
@@ -1319,10 +1462,11 @@ def _agent_run(payload: Dict[str, Any], provider: LLMProvider, _recursion_depth:
         tool = reg.get(tool_name)
         if tool is None:
             from libs.framework.tool_runtime import ToolExecutionError as _TEE
+
             raise _TEE(f"tool_not_found:{tool_name}")
         return tool.handler(arguments)
 
-    return agent_tools.agent_run(
+    return agent_tools.agent(
         payload,
         provider,
         invoke_capability=lambda cap_id, args: mcp_gateway.invoke_capability(
@@ -1375,9 +1519,17 @@ def _llm_generate_with_context(payload: Dict[str, Any], provider: LLMProvider) -
     if not isinstance(system_prompt, str) or not system_prompt.strip():
         system_prompt = None
     raw_temperature = payload.get("temperature")
-    temperature = raw_temperature if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool) else None
+    temperature = (
+        raw_temperature
+        if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool)
+        else None
+    )
     raw_max_tokens = payload.get("max_output_tokens")
-    max_output_tokens = raw_max_tokens if isinstance(raw_max_tokens, int) and not isinstance(raw_max_tokens, bool) else None
+    max_output_tokens = (
+        raw_max_tokens
+        if isinstance(raw_max_tokens, int) and not isinstance(raw_max_tokens, bool)
+        else None
+    )
     meta: Dict[str, Any] = {
         "component": "tools",
         "tool": "llm_generate_with_context",

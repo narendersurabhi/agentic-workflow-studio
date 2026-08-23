@@ -238,9 +238,7 @@ def coding_agent_autonomous(
             written_paths.append(target_path)
         statuses[idx - 1] = True
         plan_md = render_plan_markdown(goal, steps, statuses)
-        write_workspace_text_file(
-            {"path": plan_path, "content": plan_md}, "IMPLEMENTATION_PLAN.md"
-        )
+        write_workspace_text_file({"path": plan_path, "content": plan_md}, "IMPLEMENTATION_PLAN.md")
 
     return {
         "plan_path": plan_path,

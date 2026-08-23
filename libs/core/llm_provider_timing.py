@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Iterator, List, Optional
+from typing import Iterator, List
 
 import structlog
 
@@ -77,9 +77,7 @@ class TimingLLMProvider(LLMProvider):
                     fields[key] = meta[key]
             logger.info("llm_stream_latency", **fields)
 
-    def open_cache_session(
-        self, job_id: str, static_blocks: List[PromptBlock]
-    ) -> CacheSessionRef:
+    def open_cache_session(self, job_id: str, static_blocks: List[PromptBlock]) -> CacheSessionRef:
         return self._inner.open_cache_session(job_id, static_blocks)
 
     def close_cache_session(self, ref: CacheSessionRef) -> None:
@@ -102,9 +100,7 @@ class TimingLLMProvider(LLMProvider):
             "cached_input_tokens": response.cached_input_tokens,
             "output_tokens": response.output_tokens,
             "cache_hit": cache_hit,
-            "cache_hit_ratio": round(
-                response.cached_input_tokens / response.input_tokens, 3
-            )
+            "cache_hit_ratio": round(response.cached_input_tokens / response.input_tokens, 3)
             if response.input_tokens
             else 0.0,
         }

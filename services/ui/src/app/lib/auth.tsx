@@ -18,6 +18,7 @@ type AuthState = {
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, displayName: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  updateProfile: (displayName: string, currentPassword?: string, newPassword?: string) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState>({
@@ -26,6 +27,7 @@ const AuthContext = createContext<AuthState>({
   login: async () => {},
   register: async () => {},
   logout: async () => {},
+  updateProfile: async () => {},
 });
 
 export function getAuthToken(): string | null {
@@ -118,6 +120,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.replace("/");
   }, [router]);
 
+  const updateProfile = useCallback(async (displayName: string, currentPassword?: string, newPassword?: string) => {
+    const body: Record<string, string> = {};
+    if (displayName.trim()) body.display_name = displayName.trim();
+    if (currentPassword && newPassword) {
+      body.current_password = currentPassword;
+      body.new_password = newPassword;
+    }
+    const res = await apiFetch(`${API_BASE}/auth/me`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { detail?: string };
+      throw new Error(err.detail || "Update failed");
+    }
+    const data = await res.json() as AuthUser;
+    setUser(data);
+  }, []);
+
   const logout = useCallback(async () => {
     const token = getAuthToken();
     if (token) {
@@ -132,7 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );

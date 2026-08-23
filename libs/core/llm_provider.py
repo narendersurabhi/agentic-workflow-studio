@@ -13,8 +13,9 @@ import time
 
 class Stability(Enum):
     """How stable a prompt block's content is across LLM calls."""
-    STATIC = "static"    # never changes (rules, schema, full capability catalog)
-    RUN = "run"          # stable within one job run (accumulated task summaries)
+
+    STATIC = "static"  # never changes (rules, schema, full capability catalog)
+    RUN = "run"  # stable within one job run (accumulated task summaries)
     DYNAMIC = "dynamic"  # changes every call (goal, payload, current task)
 
 
@@ -31,9 +32,10 @@ class CacheSessionRef:
     For Anthropic/OpenAI: inline caching — handle is None, pinned_hash detects drift.
     For Gemini: handle holds the cachedContent resource name; must be closed at job end.
     """
+
     provider: str
-    handle: Optional[str] = None        # Gemini: cachedContent name; others: None
-    pinned_hash: Optional[str] = None   # sha256 of static blocks at session open
+    handle: Optional[str] = None  # Gemini: cachedContent name; others: None
+    pinned_hash: Optional[str] = None  # sha256 of static blocks at session open
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -42,8 +44,8 @@ class LLMResponse:
     content: str
     input_tokens: int = 0
     output_tokens: int = 0
-    cached_input_tokens: int = 0       # tokens read from provider cache
-    cache_creation_tokens: int = 0     # tokens written to provider cache (Anthropic)
+    cached_input_tokens: int = 0  # tokens read from provider cache
+    cache_creation_tokens: int = 0  # tokens written to provider cache (Anthropic)
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,7 @@ class LLMProviderError(Exception):
 
 class LLMUnavailableError(LLMProviderError):
     """Raised when the LLM service is temporarily unavailable (quota, rate limit, network)."""
+
     pass
 
 
@@ -141,16 +144,35 @@ def is_llm_unavailable_error(exc: BaseException) -> bool:
     if isinstance(exc, HTTPError):
         return int(exc.code) in _RETRYABLE_HTTP_STATUS_CODES
     msg = str(exc).lower()
-    return any(tok in msg for tok in (
-        "429", "500", "502", "503", "504",
-        "quota", "insufficient_quota", "rate_limit", "rate limit",
-        "resource_exhausted", "too many requests",
-        "service unavailable", "temporarily unavailable",
-        "upstream unavailable", "overloaded", "over capacity",
-        "timeout", "timed out", "deadline exceeded",
-        "connection error", "connection refused", "connection reset",
-        "network", "dns",
-    ))
+    return any(
+        tok in msg
+        for tok in (
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "quota",
+            "insufficient_quota",
+            "rate_limit",
+            "rate limit",
+            "resource_exhausted",
+            "too many requests",
+            "service unavailable",
+            "temporarily unavailable",
+            "upstream unavailable",
+            "overloaded",
+            "over capacity",
+            "timeout",
+            "timed out",
+            "deadline exceeded",
+            "connection error",
+            "connection refused",
+            "connection reset",
+            "network",
+            "dns",
+        )
+    )
 
 
 def _is_llm_unavailable_error(exc: BaseException) -> bool:
@@ -271,7 +293,9 @@ class OpenAIProvider(LLMProvider):
                 text = _extract_output_text(response_data)
                 if not text:
                     raise LLMProviderError("OpenAI API returned empty output")
-                input_tokens, output_tokens, cached_tokens = _extract_usage_from_response(response_data)
+                input_tokens, output_tokens, cached_tokens = _extract_usage_from_response(
+                    response_data
+                )
                 return LLMResponse(
                     content=text,
                     input_tokens=input_tokens,
@@ -292,7 +316,11 @@ class OpenAIProvider(LLMProvider):
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
-                if _is_retryable_http_error(exc.code) or is_llm_unavailable_error(exc) or is_llm_unavailable_error(Exception(detail)):
+                if (
+                    _is_retryable_http_error(exc.code)
+                    or is_llm_unavailable_error(exc)
+                    or is_llm_unavailable_error(Exception(detail))
+                ):
                     raise _llm_unavailable("OpenAI API", detail) from exc
                 raise LLMProviderError(f"OpenAI API error: {detail}") from exc
             except (URLError, TimeoutError) as exc:
@@ -312,9 +340,7 @@ class OpenAIProvider(LLMProvider):
         if request.max_output_tokens is not None:
             payload["max_output_tokens"] = request.max_output_tokens
         if request.metadata:
-            payload["metadata"] = {
-                str(key): str(value) for key, value in request.metadata.items()
-            }
+            payload["metadata"] = {str(key): str(value) for key, value in request.metadata.items()}
         return payload
 
     def _build_http_request(self, payload: Dict[str, Any]) -> Request:
@@ -378,7 +404,9 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                 text = _extract_chat_completion_text(response_data)
                 if not text:
                     raise LLMProviderError(f"{self.provider_label} API returned empty output")
-                input_tokens, output_tokens, cached_tokens = _extract_usage_from_chat_completion(response_data)
+                input_tokens, output_tokens, cached_tokens = _extract_usage_from_chat_completion(
+                    response_data
+                )
                 return LLMResponse(
                     content=text,
                     input_tokens=input_tokens,
@@ -391,7 +419,11 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                     self._sleep_before_retry(attempt)
                     attempt += 1
                     continue
-                if _is_retryable_http_error(exc.code) or is_llm_unavailable_error(exc) or is_llm_unavailable_error(Exception(detail)):
+                if (
+                    _is_retryable_http_error(exc.code)
+                    or is_llm_unavailable_error(exc)
+                    or is_llm_unavailable_error(Exception(detail))
+                ):
                     raise _llm_unavailable(f"{self.provider_label} API", detail) from exc
                 raise LLMProviderError(f"{self.provider_label} API error: {detail}") from exc
             except (URLError, TimeoutError) as exc:
@@ -441,9 +473,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         if request.json_mode:
             payload["response_format"] = {"type": "json_object"}
         if request.metadata and "generativelanguage.googleapis.com" not in self.base_url:
-            payload["metadata"] = {
-                str(key): str(value) for key, value in request.metadata.items()
-            }
+            payload["metadata"] = {str(key): str(value) for key, value in request.metadata.items()}
         return payload
 
     def _build_http_request(self, payload: Dict[str, Any]) -> Request:
@@ -496,6 +526,7 @@ def resolve_provider(
         )
     if name == "anthropic":
         from libs.core.llm_provider_anthropic import AnthropicProvider  # lazy import
+
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY") or api_key
         anthropic_model = os.getenv("ANTHROPIC_MODEL") or model
         if not anthropic_api_key:
@@ -521,8 +552,7 @@ def resolve_provider(
         return OpenAIChatCompletionsProvider(
             api_key=gemini_api_key,
             model=gemini_model,
-            base_url=gemini_base_url
-            or "https://generativelanguage.googleapis.com/v1beta/openai",
+            base_url=gemini_base_url or "https://generativelanguage.googleapis.com/v1beta/openai",
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             timeout_s=timeout_s or 30.0,
@@ -531,6 +561,7 @@ def resolve_provider(
         )
     if name in {"bedrock", "bedrock-anthropic", "bedrock_anthropic"}:
         from libs.core.llm_provider_bedrock import BedrockAnthropicProvider  # lazy import
+
         bedrock_model_id = model or os.getenv("BEDROCK_MODEL_ID")
         bedrock_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
         bedrock_verify_ssl = os.getenv("BEDROCK_VERIFY_SSL", "false").strip().lower() not in {
@@ -544,7 +575,9 @@ def resolve_provider(
         return BedrockAnthropicProvider(
             model_id=bedrock_model_id,
             region=bedrock_region,
-            max_output_tokens=int(max_output_tokens or os.getenv("BEDROCK_MAX_OUTPUT_TOKENS") or 8192),
+            max_output_tokens=int(
+                max_output_tokens or os.getenv("BEDROCK_MAX_OUTPUT_TOKENS") or 8192
+            ),
             temperature=temperature,
             timeout_s=timeout_s or 60.0,
             verify_ssl=bedrock_verify_ssl,
@@ -683,9 +716,7 @@ def parse_json_object(text: str) -> Dict[str, Any]:
         if isinstance(parsed, str):
             queue.append(parsed)
     preview = (last_non_object or text or "").replace("\n", "\\n")[:300]
-    raise LLMProviderError(
-        f"Top-level structured output must be a JSON object: {preview}"
-    )
+    raise LLMProviderError(f"Top-level structured output must be a JSON object: {preview}")
 
 
 def _strip_markdown_fence(text: str) -> str:

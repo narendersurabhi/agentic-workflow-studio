@@ -746,6 +746,7 @@ capabilities:
         mode: rag_matches
         max_items: 5
         excerpt_chars: 180
+      rag_grounded_synthesis: true
     enabled: true
     adapters:
       - type: mcp
@@ -974,6 +975,13 @@ capabilities:
         output_format: [output_format, format, target_format]
       chat_field_examples:
         tone: [practical, concise, technical, formal, conversational, executive]
+      allow_chat_direct: true
+      chat_thread_hints:
+        action_tokens: [create, generate, write, make, export, save, produce, build]
+        artifact_tokens: [document, documents, doc, docs, docx, word, pdf, report, summary, guide, readme, spec, draft, file]
+      chains_to:
+        docx: document.docx.render
+        pdf: document.pdf.render
     enabled: true
     adapters:
       - type: tool
@@ -1244,6 +1252,7 @@ capabilities:
         path: bytes_written
         description: Number of bytes written to the rendered DOCX artifact.
     planner_hints:
+      allow_chat_direct: true
       task_intents: [render]
       required_output_extension: docx
       chat_output_format_tokens:
@@ -1312,6 +1321,7 @@ capabilities:
         path: bytes_written
         description: Number of bytes written to the rendered PDF artifact.
     planner_hints:
+      allow_chat_direct: true
       task_intents: [render]
       required_output_extension: pdf
       chat_output_format_tokens:
@@ -1491,7 +1501,7 @@ capabilities:
     idempotency: unsafe_write
     group: agent
     subgroup: loop
-    input_schema_ref: agent_run_capability_input
+    input_schema_ref: agent_capability_input
     output_schema_ref: ""
     tags:
       - agent
@@ -1509,7 +1519,7 @@ capabilities:
     adapters:
       - type: tool
         server_id: local_worker
-        tool_name: agent_run
+        tool_name: agent
         arg_map: {}
         enabled: true
   - id: codegen.publish_pr

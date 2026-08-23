@@ -24,4 +24,3 @@ def test_artifact_local_path_under_root(monkeypatch: pytest.MonkeyPatch, tmp_pat
     target = document_store.artifact_local_path("documents/a.docx")
     assert str(target).startswith(str(tmp_path.resolve()))
     assert target.as_posix().endswith("documents/a.docx")
-

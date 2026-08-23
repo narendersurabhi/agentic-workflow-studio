@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time as _time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -159,6 +160,8 @@ def planner_collectible_inputs_for_capability(
 
 _CAPABILITY_CACHE_KEY: tuple[str, float] | None = None
 _CAPABILITY_CACHE_VALUE: CapabilityRegistry | None = None
+_CAPABILITY_CACHE_CHECKED_AT: float = 0.0  # monotonic time of last stat() check
+_CAPABILITY_CACHE_TTL: float = 30.0  # skip stat() for 30 s after a confirmed-fresh load
 
 _CATALOG_JSON_CACHE: dict[str, str] = {}
 
@@ -215,7 +218,9 @@ def evaluate_capability_allowlist(
 ) -> CapabilityAllowDecision:
     normalized_capability_id = canonicalize_capability_id(capability_id)
     if not normalized_capability_id:
-        return CapabilityAllowDecision(False, "missing_capability_id", mode="enforce", violated=True)
+        return CapabilityAllowDecision(
+            False, "missing_capability_id", mode="enforce", violated=True
+        )
     if not _capability_governance_enabled():
         return CapabilityAllowDecision(True, "governance_disabled", mode="enforce", violated=False)
 
@@ -308,10 +313,7 @@ def load_capability_catalog_json(path: Path | None = None) -> str:
                 for e in spec.exports
             ],
             "planner_hints": dict(sorted(spec.planner_hints.items())),
-            "adapters": [
-                {"server_id": a.server_id, "type": a.type}
-                for a in spec.adapters
-            ],
+            "adapters": [{"server_id": a.server_id, "type": a.type} for a in spec.adapters],
         }
         for spec in registry.capabilities.values()
         if spec.enabled
@@ -323,14 +325,32 @@ def load_capability_catalog_json(path: Path | None = None) -> str:
 
 
 def load_capability_registry(path: Path | None = None) -> CapabilityRegistry:
-    global _CAPABILITY_CACHE_KEY, _CAPABILITY_CACHE_VALUE
+    global _CAPABILITY_CACHE_KEY, _CAPABILITY_CACHE_VALUE, _CAPABILITY_CACHE_CHECKED_AT
 
+    now = _time.monotonic()
     resolved = (path or resolve_capability_registry_path()).expanduser()
+
+    # Fast path: if the cache is warm *for this resolved path* and we checked the
+    # file recently, skip stat(). The file changes only on deploys; 30 s staleness
+    # is acceptable in production. The resolved-path check (cheap: no I/O) keeps
+    # this correct when a caller passes an explicit `path` or changes
+    # CAPABILITY_REGISTRY_PATH between calls (e.g. tests swapping in a fixture
+    # registry) — without it, the fast path would silently keep serving whatever
+    # registry happened to be cached first, ignoring the new path entirely.
+    if (
+        _CAPABILITY_CACHE_VALUE is not None
+        and _CAPABILITY_CACHE_KEY is not None
+        and _CAPABILITY_CACHE_KEY[0] == str(resolved)
+        and now - _CAPABILITY_CACHE_CHECKED_AT < _CAPABILITY_CACHE_TTL
+    ):
+        return _CAPABILITY_CACHE_VALUE
+
     try:
         mtime = resolved.stat().st_mtime
     except OSError:
         mtime = -1.0
     cache_key = (str(resolved), mtime)
+    _CAPABILITY_CACHE_CHECKED_AT = now
     if _CAPABILITY_CACHE_KEY == cache_key and _CAPABILITY_CACHE_VALUE is not None:
         return _CAPABILITY_CACHE_VALUE
     if mtime < 0:

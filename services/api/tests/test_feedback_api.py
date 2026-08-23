@@ -32,7 +32,9 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _create_plan_for_job(job_id: str, *, planner_version: str = "test_feedback_v1") -> tuple[str, str]:
+def _create_plan_for_job(
+    job_id: str, *, planner_version: str = "test_feedback_v1"
+) -> tuple[str, str]:
     plan_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
     now = _utcnow()
@@ -75,7 +77,9 @@ def _create_plan_for_job(job_id: str, *, planner_version: str = "test_feedback_v
     return plan_id, task_id
 
 
-def _update_job(job_id: str, *, metadata: dict[str, Any] | None = None, status: str | None = None) -> None:
+def _update_job(
+    job_id: str, *, metadata: dict[str, Any] | None = None, status: str | None = None
+) -> None:
     now = _utcnow()
     with SessionLocal() as db:
         job = db.query(JobRecord).filter(JobRecord.id == job_id).first()
@@ -118,13 +122,13 @@ def _update_job_intent_metadata(
                     "id": "s1",
                     "intent": intent,
                     "objective": "Intent review test",
-                    "suggested_capabilities": [candidate_capability] if candidate_capability else [],
+                    "suggested_capabilities": [candidate_capability]
+                    if candidate_capability
+                    else [],
                 }
             ]
         },
-        "candidate_capabilities": {
-            "s1": [candidate_capability] if candidate_capability else []
-        },
+        "candidate_capabilities": {"s1": [candidate_capability] if candidate_capability else []},
         "clarification": {
             "needs_clarification": bool(missing_inputs),
             "requires_blocking_clarification": bool(missing_inputs),
@@ -151,7 +155,9 @@ def _update_job_intent_metadata(
     )
 
 
-def _update_task(task_id: str, *, status: str | None = None, rework_count: int | None = None) -> None:
+def _update_task(
+    task_id: str, *, status: str | None = None, rework_count: int | None = None
+) -> None:
     now = _utcnow()
     with SessionLocal() as db:
         task = db.query(TaskRecord).filter(TaskRecord.id == task_id).first()
@@ -307,7 +313,9 @@ def _create_chat_message_with_routing_decision(
     return session_id, message_id, job_id
 
 
-def _metric_value(metrics_text: str, metric_name: str, labels: dict[str, str] | None = None) -> float:
+def _metric_value(
+    metrics_text: str, metric_name: str, labels: dict[str, str] | None = None
+) -> float:
     for line in metrics_text.splitlines():
         if not line or line.startswith("#"):
             continue
@@ -361,7 +369,9 @@ def test_submit_chat_message_feedback_and_list_for_session() -> None:
     assert any(item["id"] == body["id"] for item in list_body["items"])
 
 
-def test_chat_message_feedback_carries_boundary_dimensions_into_summary_export_and_metrics() -> None:
+def test_chat_message_feedback_carries_boundary_dimensions_into_summary_export_and_metrics() -> (
+    None
+):
     before_metrics = client.get("/metrics")
     assert before_metrics.status_code == 200
     boundary_feedback_before = _metric_value(
@@ -377,7 +387,11 @@ def test_chat_message_feedback_carries_boundary_dimensions_into_summary_export_a
             "evidence": {
                 "conversation_mode_hint": "execution_oriented",
                 "top_families": [
-                    {"family": "documents", "score": 1.7, "capability_ids": ["document.spec.generate"]}
+                    {
+                        "family": "documents",
+                        "score": 1.7,
+                        "capability_ids": ["document.spec.generate"],
+                    }
                 ],
             },
         }
@@ -430,7 +444,9 @@ def test_chat_message_feedback_carries_boundary_dimensions_into_summary_export_a
     exported = next(item for item in export["items"] if item["feedback"]["id"] == body["id"])
     assert exported["dimensions"]["boundary_decision"] == "chat_reply"
     assert exported["dimensions"]["boundary_top_family"] == "documents"
-    assert exported["snapshot"]["metadata"]["boundary_decision"]["reason_code"] == "conversation_first"
+    assert (
+        exported["snapshot"]["metadata"]["boundary_decision"]["reason_code"] == "conversation_first"
+    )
 
     after_metrics = client.get("/metrics")
     assert after_metrics.status_code == 200
@@ -523,7 +539,9 @@ def test_chat_boundary_review_queue_orders_likely_misroutes() -> None:
     assert filtered.status_code == 200
     filtered_body = filtered.json()
     assert filtered_body["total"] >= 1
-    assert all(item["dimensions"]["boundary_decision"] == "chat_reply" for item in filtered_body["items"])
+    assert all(
+        item["dimensions"]["boundary_decision"] == "chat_reply" for item in filtered_body["items"]
+    )
     assert all(item["review_label"] == "likely_false_chat_reply" for item in filtered_body["items"])
 
 
@@ -677,13 +695,20 @@ def test_chat_routing_review_queue_returns_route_errors_and_filters() -> None:
     assert filtered.status_code == 200
     filtered_body = filtered.json()
     assert filtered_body["total"] >= 1
-    assert all(item["review_label"] == "likely_wrong_direct_candidate" for item in filtered_body["items"])
-    assert all(item["dimensions"]["routing_decision_route"] == "tool_call" for item in filtered_body["items"])
+    assert all(
+        item["review_label"] == "likely_wrong_direct_candidate" for item in filtered_body["items"]
+    )
+    assert all(
+        item["dimensions"]["routing_decision_route"] == "tool_call"
+        for item in filtered_body["items"]
+    )
     assert all(
         item["dimensions"]["routing_selected_candidate_type"] == "direct_agent"
         for item in filtered_body["items"]
     )
-    assert all(item["dimensions"]["routing_fallback_used"] == "no" for item in filtered_body["items"])
+    assert all(
+        item["dimensions"]["routing_fallback_used"] == "no" for item in filtered_body["items"]
+    )
 
 
 def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> None:
@@ -781,7 +806,10 @@ def test_chat_clarification_feedback_captures_slot_loss_and_family_drift() -> No
         "What filename should I use?"
     )
     assert body["metadata"]["dimensions"]["clarification_current_question_field"] == "path"
-    assert body["metadata"]["dimensions"]["clarification_slot_loss_state"] == "resolved_field_still_pending"
+    assert (
+        body["metadata"]["dimensions"]["clarification_slot_loss_state"]
+        == "resolved_field_still_pending"
+    )
     assert body["metadata"]["dimensions"]["clarification_family_alignment"] == "drift"
     assert body["metadata"]["dimensions"]["clarification_answer_count"] == 2
     assert body["metadata"]["dimensions"]["clarification_resolved_slot_count"] == 2
@@ -966,9 +994,7 @@ def test_submit_intent_and_plan_feedback_updates_same_actor_record() -> None:
     assert second_body["snapshot"]["plan_id"] == plan_id
     assert second_body["snapshot"]["task_count"] == 1
 
-    filtered = client.get(
-        f"/feedback?target_type=plan&target_id={plan_id}&actor_key=tester-plan"
-    )
+    filtered = client.get(f"/feedback?target_type=plan&target_id={plan_id}&actor_key=tester-plan")
     assert filtered.status_code == 200
     filtered_body = filtered.json()
     assert filtered_body["summary"]["total"] == 1
@@ -1062,7 +1088,9 @@ def test_job_feedback_endpoint_returns_intent_plan_and_outcome_feedback() -> Non
         },
     )
     assert intent_feedback.status_code == 200
-    assert intent_feedback.json()["snapshot"]["normalized_intent_envelope"]["goal"] == "Plan a report"
+    assert (
+        intent_feedback.json()["snapshot"]["normalized_intent_envelope"]["goal"] == "Plan a report"
+    )
 
     plan_feedback = client.post(
         "/feedback",
@@ -1208,13 +1236,18 @@ def test_feedback_summary_filters_breaks_down_dimensions_and_correlates() -> Non
         bucket["key"] == "intent_assessment" and bucket["total"] == 1
         for bucket in body["target_type_counts"]
     )
-    assert any(bucket["key"] == workflow_source and bucket["total"] == 3 for bucket in body["workflow_sources"])
+    assert any(
+        bucket["key"] == workflow_source and bucket["total"] == 3
+        for bucket in body["workflow_sources"]
+    )
     assert any(bucket["key"] == llm_model and bucket["total"] == 3 for bucket in body["llm_models"])
     assert any(
         bucket["key"] == planner_version and bucket["total"] == 3
         for bucket in body["planner_versions"]
     )
-    assert any(bucket["key"] == "failed" and bucket["total"] == 3 for bucket in body["job_statuses"])
+    assert any(
+        bucket["key"] == "failed" and bucket["total"] == 3 for bucket in body["job_statuses"]
+    )
     assert set(reason["reason_code"] for reason in body["negative_reasons"]) >= {
         "wrong_scope",
         "missing_step",
@@ -1413,8 +1446,7 @@ def test_intent_review_queue_returns_labeled_items_and_filters() -> None:
         for item in filtered_body["items"]
     )
     assert all(
-        item["dimensions"]["intent_assessment_source"] == "llm"
-        for item in filtered_body["items"]
+        item["dimensions"]["intent_assessment_source"] == "llm" for item in filtered_body["items"]
     )
 
 
@@ -1475,18 +1507,18 @@ def test_intent_tuning_report_summarizes_failure_slices() -> None:
     body = response.json()
     assert body["total"] >= 2
     assert any(
-        bucket["key"] == "likely_wrong_intent_interpretation"
-        for bucket in body["review_labels"]
+        bucket["key"] == "likely_wrong_intent_interpretation" for bucket in body["review_labels"]
     )
     assert any(
-        bucket["key"] == "likely_missing_constraint_or_slot"
-        for bucket in body["review_labels"]
+        bucket["key"] == "likely_missing_constraint_or_slot" for bucket in body["review_labels"]
     )
     assert any(
         bucket["key"] == "assessment_prompt_and_capability_evidence"
         for bucket in body["tuning_focuses"]
     )
-    assert any(bucket["key"] == "document.spec.generate" for bucket in body["intent_top_capabilities"])
+    assert any(
+        bucket["key"] == "document.spec.generate" for bucket in body["intent_top_capabilities"]
+    )
     assert any(bucket["key"] == "document" for bucket in body["intent_top_families"])
     assert any(bucket["key"] == "2" for bucket in body["missing_input_counts"])
     assert set(reason["reason_code"] for reason in body["negative_reasons"]) >= {
@@ -1529,9 +1561,7 @@ def test_intent_tuning_candidates_export_observed_case_and_gold_stub() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["total"] >= 1
-    candidate = next(
-        item for item in body["items"] if item["feedback"]["target_id"] == job["id"]
-    )
+    candidate = next(item for item in body["items"] if item["feedback"]["target_id"] == job["id"])
     assert candidate["review_label"] == "likely_wrong_intent_interpretation"
     assert candidate["tuning_focus"] == "assessment_prompt_and_capability_evidence"
     assert candidate["suggested_case_id"]

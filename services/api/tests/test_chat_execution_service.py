@@ -19,7 +19,9 @@ class _FakeRegistry:
             )
         )
 
-    def execute(self, tool_name: str, *, payload, idempotency_key: str, trace_id: str, max_output_bytes: int):
+    def execute(
+        self, tool_name: str, *, payload, idempotency_key: str, trace_id: str, max_output_bytes: int
+    ):
         return models.ToolCall(
             tool_name=tool_name,
             input=dict(payload),
@@ -84,7 +86,6 @@ def test_execute_capability_allows_read_only_native_tool(monkeypatch) -> None:
     assert "README.md" in result.assistant_response
 
 
-
 def test_execute_capability_allows_rag_retrieve_mcp(monkeypatch) -> None:
     spec = capability_registry.CapabilitySpec(
         capability_id="rag.retrieve",
@@ -98,7 +99,9 @@ def test_execute_capability_allows_rag_retrieve_mcp(monkeypatch) -> None:
                 tool_name="retrieve",
             ),
         ),
-        planner_hints={"chat_response_hint": {"mode": "rag_matches", "max_items": 5, "excerpt_chars": 180}},
+        planner_hints={
+            "chat_response_hint": {"mode": "rag_matches", "max_items": 5, "excerpt_chars": 180}
+        },
         enabled=True,
     )
     monkeypatch.setattr(

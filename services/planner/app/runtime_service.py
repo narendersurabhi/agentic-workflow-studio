@@ -8,7 +8,14 @@ from typing import Any, Callable
 
 import redis
 
-from libs.core import events, llm_provider, logging as core_logging, models, run_specs, tool_bootstrap
+from libs.core import (
+    events,
+    llm_provider,
+    logging as core_logging,
+    models,
+    run_specs,
+    tool_registry,
+)
 from libs.core.llm_provider_timing import TimingLLMProvider
 
 
@@ -63,18 +70,18 @@ def resolve_execution_context(config: PlannerRuntimeConfig) -> PlannerExecutionC
             component="planner",
             model=(config.openai_model or "unknown").strip(),
         )
-        registry = tool_bootstrap.build_default_registry(
+        registry = tool_registry.build_default_registry(
             http_fetch_enabled=False,
             llm_enabled=True,
             llm_provider=provider,
             service_name="planner",
         )
     else:
-        registry = tool_bootstrap.build_default_registry(
+        registry = tool_registry.build_default_registry(
             http_fetch_enabled=False,
             service_name="planner",
         )
-    planner_tool_specs = tool_bootstrap.build_planner_support_tool_specs()
+    planner_tool_specs = tool_registry.build_planner_support_tool_specs()
     return PlannerExecutionContext(
         provider=provider,
         tool_specs=registry.list_specs(),

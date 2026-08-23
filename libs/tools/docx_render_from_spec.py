@@ -12,11 +12,27 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 
 
 def _artifacts_dir() -> Path:
     return Path(os.getenv("ARTIFACTS_DIR", "/shared/artifacts"))
+
+
+class DocxRenderFromSpecInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(description="Relative .docx filename to write under /shared/artifacts")
+    document_spec: dict[str, Any] | None = None
+    render_context: dict[str, Any] | None = None
+    strict: bool | None = None
+
+
+class DocxRenderFromSpecOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    bytes_written: int
 
 
 def register_docx_tools(registry) -> None:
@@ -35,24 +51,8 @@ def register_docx_tools(registry) -> None:
                     "Supported blocks: text, paragraph, heading, bullets, spacer, "
                     "optional_paragraph, repeat."
                 ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "document_spec": {"type": "object"},
-                        "path": {"type": "string"},
-                        "render_context": {"type": "object"},
-                        "strict": {"type": "boolean"},
-                    },
-                    "required": ["path"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "bytes_written": {"type": "integer"},
-                    },
-                    "required": ["path", "bytes_written"],
-                },
+                input_schema=DocxRenderFromSpecInput.model_json_schema(),
+                output_schema=DocxRenderFromSpecOutput.model_json_schema(),
                 memory_reads=["job_context", "task_outputs"],
                 timeout_s=25,
                 risk_level=RiskLevel.medium,

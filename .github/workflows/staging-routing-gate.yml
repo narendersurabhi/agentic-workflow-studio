@@ -81,9 +81,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -151,14 +151,14 @@ jobs:
 
       - name: Upload regression report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chat-boundary-live-report
           path: artifacts/evals/chat_boundary_live_report.json
 
       - name: Upload calibrator artifacts
         if: always() && env.BUILD_CHAT_ROUTING_CALIBRATOR == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chat-routing-calibrator-artifacts
           if-no-files-found: ignore
@@ -171,7 +171,7 @@ jobs:
 
       - name: Upload DeepEval staging replay report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: deepeval-staging-replay-report
           if-no-files-found: ignore

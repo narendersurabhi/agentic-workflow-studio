@@ -5,7 +5,7 @@ import { apiFetch, useAuth } from "../../lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import AppShell from "../../components/AppShell";
+import { useShell, ShellActions } from "../../lib/shell";
 import StudioWorkflowLibrary from "./StudioWorkflowLibrary";
 import type {
   WorkflowDefinition,
@@ -44,10 +44,12 @@ export default function WorkflowLibraryPage() {
   const [deletingWorkflowDefinitionId, setDeletingWorkflowDefinitionId] = useState<string | null>(
     null
   );
+  const [deletingWorkflowVersionId, setDeletingWorkflowVersionId] = useState<string | null>(null);
   const [workflowActionLoading, setWorkflowActionLoading] = useState<"delete" | "save" | "run" | null>(
     null
   );
   const [notice, setNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const activeWorkflowDefinition = useMemo(
     () => workflowDefinitions.find((definition) => definition.id === activeWorkflowDefinitionId) || null,
@@ -214,16 +216,9 @@ export default function WorkflowLibraryPage() {
   }, [activeWorkflowVersionId, workflowVersions]);
 
   const deleteWorkflowDefinition = async (definition: WorkflowDefinition) => {
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        `Delete saved draft "${definition.title}" and its published versions, triggers, and run history?`
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
     setWorkflowActionLoading("delete");
     setDeletingWorkflowDefinitionId(definition.id);
+    setActionError(null);
     try {
       const response = await apiFetch(
         `${apiUrl}/workflows/definitions/${encodeURIComponent(definition.id)}`,
@@ -234,11 +229,39 @@ export default function WorkflowLibraryPage() {
         throw new Error(detailMessage(body, `Delete draft failed (${response.status}).`));
       }
       setWorkflowDefinitions((prev) => prev.filter((item) => item.id !== definition.id));
-      setNotice(`Deleted saved draft ${definition.title}.`);
+      setNotice(`Deleted "${definition.title}".`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Failed to delete saved draft.");
+      console.error("[WorkflowLibrary] deleteWorkflowDefinition:", error);
+      setActionError(error instanceof Error ? error.message : "Failed to delete saved draft.");
     } finally {
       setDeletingWorkflowDefinitionId(null);
+      setWorkflowActionLoading(null);
+    }
+  };
+
+  const deleteWorkflowVersion = async (version: WorkflowVersion) => {
+    setWorkflowActionLoading("delete");
+    setDeletingWorkflowVersionId(version.id);
+    setActionError(null);
+    try {
+      const response = await apiFetch(
+        `${apiUrl}/workflows/versions/${encodeURIComponent(version.id)}`,
+        { method: "DELETE" }
+      );
+      const body = response.status === 204 ? null : ((await response.json()) as { detail?: unknown } | null);
+      if (!response.ok) {
+        throw new Error(detailMessage(body, `Delete version failed (${response.status}).`));
+      }
+      setWorkflowVersions((prev) => prev.filter((v) => v.id !== version.id));
+      if (activeWorkflowDefinitionId) {
+        void refreshWorkflowRuns(activeWorkflowDefinitionId);
+      }
+      setNotice(`Deleted version v${version.version_number}.`);
+    } catch (error) {
+      console.error("[WorkflowLibrary] deleteWorkflowVersion:", error);
+      setActionError(error instanceof Error ? error.message : "Failed to delete version.");
+    } finally {
+      setDeletingWorkflowVersionId(null);
       setWorkflowActionLoading(null);
     }
   };
@@ -313,31 +336,35 @@ export default function WorkflowLibraryPage() {
     activeWorkflowDefinition ? `active ${activeWorkflowDefinition.title}` : "no active draft",
   ];
 
+  useShell({
+    title: "Saved Workflows",
+    breadcrumbs: [
+      { label: "Project", href: "/project" },
+      { label: "Saved Workflows" },
+    ],
+  });
+
   return (
-    <AppShell
-      activeScreen="workflows"
-      title="Saved Workflows"
-      breadcrumbs={[
-        { label: "Project", href: "/project" },
-        { label: "Saved Workflows" },
-      ]}
-      actions={
-        <>
-          <Link
-            href="/studio"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
-          >
-            Open Studio
-          </Link>
-          <Link
-            href="/studio?mode=new"
-            className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
-          >
-            New Workflow
-          </Link>
-        </>
-      }
-    >
+    <>
+      <ShellActions>
+        <Link
+          href="/studio"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+        >
+          Open Studio
+        </Link>
+        <Link
+          href="/studio?mode=new"
+          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35"
+        >
+          New Workflow
+        </Link>
+      </ShellActions>
+      {actionError ? (
+        <div className="mb-4 rounded-[24px] border border-rose-300/20 bg-accent-rose px-4 py-3 text-sm text-text-rose-token">
+          {actionError}
+        </div>
+      ) : null}
       {notice ? (
         <div className="mb-4 rounded-[24px] border border-sky-300/15 bg-accent-sky px-4 py-3 text-sm text-text-sky-token">
           {notice}
@@ -401,6 +428,7 @@ export default function WorkflowLibraryPage() {
                     void deleteWorkflowDefinition(definition);
                   }}
                   openDefinitionLabel="Open In Studio"
+                  deletingWorkflowVersionId={deletingWorkflowVersionId}
                   onSelectVersion={(version) => {
                     setActiveWorkflowVersionId(version.id);
                   }}
@@ -408,6 +436,9 @@ export default function WorkflowLibraryPage() {
                     router.push(
                       `/studio?definition=${encodeURIComponent(version.definition_id)}&version=${encodeURIComponent(version.id)}`
                     );
+                  }}
+                  onDeleteVersion={(version) => {
+                    void deleteWorkflowVersion(version);
                   }}
                   openVersionLabel="Open Version"
                   onCreateManualTrigger={() => {
@@ -419,6 +450,6 @@ export default function WorkflowLibraryPage() {
                 />
               </div>
       </section>
-    </AppShell>
+    </>
   );
 }

@@ -112,9 +112,7 @@ def _blocked_risk_by_service_from_raw(raw: Any) -> dict[str, set[str]]:
         if not norm_key:
             continue
         if isinstance(value, list):
-            mapped[norm_key] = {
-                str(entry).strip().lower() for entry in value if str(entry).strip()
-            }
+            mapped[norm_key] = {str(entry).strip().lower() for entry in value if str(entry).strip()}
     return mapped
 
 
@@ -153,7 +151,9 @@ def _load_governance_config() -> _GovernanceConfig:
             data = {}
         gov = data.get("tool_governance", {}) if isinstance(data, dict) else {}
         if isinstance(gov, dict):
-            mode = _tool_governance_mode_env() or str(gov.get("mode", "")).strip().lower() or "enforce"
+            mode = (
+                _tool_governance_mode_env() or str(gov.get("mode", "")).strip().lower() or "enforce"
+            )
             if mode not in {"enforce", "dry_run"}:
                 mode = "enforce"
             loaded = _GovernanceConfig(
