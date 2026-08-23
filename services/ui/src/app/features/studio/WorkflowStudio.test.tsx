@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 
 import WorkflowStudio from "./WorkflowStudio";
 import { ShellProvider } from "../../lib/shell";
+import { AppQueryProvider } from "../../lib/queryClient";
 
 const searchParams = new URLSearchParams({ definition: "def-1" });
 
@@ -61,9 +62,11 @@ function renderStudio() {
   vi.stubGlobal("fetch", fetchMock);
 
   return render(
-    <ShellProvider>
-      <WorkflowStudio />
-    </ShellProvider>,
+    <AppQueryProvider>
+      <ShellProvider>
+        <WorkflowStudio />
+      </ShellProvider>
+    </AppQueryProvider>,
   );
 }
 
