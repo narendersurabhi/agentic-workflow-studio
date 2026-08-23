@@ -8,6 +8,7 @@ import type {
   WorkflowVersion,
 } from "./types";
 import { formatTimestamp } from "./utils";
+import Button from "../../components/ui/Button";
 
 type StudioWorkflowLibraryProps = {
   workflowDefinitions: WorkflowDefinition[];
@@ -51,8 +52,6 @@ const libraryActiveEmeraldCardClassName =
   "rounded-2xl border border-emerald-300/28 bg-accent-emerald px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 const libraryPillClassName =
   "rounded-full border border-subtle bg-surface-1 px-2.5 py-1 text-text-md";
-const libraryActionButtonClassName =
-  "rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-hi transition hover:border-sky-300/40 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50";
 
 export default function StudioWorkflowLibrary({
   workflowDefinitions,
@@ -95,12 +94,9 @@ export default function StudioWorkflowLibrary({
           </div>
           <h3 className="mt-1 font-display text-2xl text-text-hi">Workflow Versions</h3>
         </div>
-        <button
-          className="rounded-full border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/40 hover:bg-surface-1"
-          onClick={onRefresh}
-        >
+        <Button variant="secondary" className="rounded-full" onClick={onRefresh}>
           Refresh
-        </button>
+        </Button>
       </div>
 
       <p className="mt-3 text-sm leading-6 text-text-md">
@@ -161,20 +157,24 @@ export default function StudioWorkflowLibrary({
                     ) : null}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      className={libraryActionButtonClassName}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="rounded-full"
                       onClick={(event) => {
                         event.stopPropagation();
                         onOpenDefinition(definition);
                       }}
                     >
                       {openDefinitionLabel}
-                    </button>
+                    </Button>
                     {confirmDeleteDefinitionId === definition.id ? (
                       <>
                         <span className="self-center text-xs text-text-rose-token">Delete this workflow?</span>
-                        <button
-                          className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="rounded-full"
                           onClick={(event) => {
                             event.stopPropagation();
                             setConfirmDeleteDefinitionId(null);
@@ -183,20 +183,24 @@ export default function StudioWorkflowLibrary({
                           disabled={deletingWorkflowDefinitionId === definition.id}
                         >
                           {deletingWorkflowDefinitionId === definition.id ? "Deleting..." : "Yes, Delete"}
-                        </button>
-                        <button
-                          className={libraryActionButtonClassName}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="rounded-full"
                           onClick={(event) => {
                             event.stopPropagation();
                             setConfirmDeleteDefinitionId(null);
                           }}
                         >
                           Cancel
-                        </button>
+                        </Button>
                       </>
                     ) : (
-                      <button
-                        className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="rounded-full"
                         onClick={(event) => {
                           event.stopPropagation();
                           setConfirmDeleteDefinitionId(definition.id);
@@ -204,7 +208,7 @@ export default function StudioWorkflowLibrary({
                         disabled={deletingWorkflowDefinitionId === definition.id}
                       >
                         {deletingWorkflowDefinitionId === definition.id ? "Deleting..." : "Delete"}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </article>
@@ -217,13 +221,15 @@ export default function StudioWorkflowLibrary({
       <div className="mt-6">
         <div className="flex items-center justify-between gap-3">
           <div className={librarySectionHeadingClassName}>Triggers</div>
-          <button
-            className={libraryActionButtonClassName}
+          <Button
+            variant="secondary"
+            size="sm"
+            className="rounded-full"
             onClick={onCreateManualTrigger}
             disabled={!activeWorkflowDefinitionId}
           >
             Create Manual Trigger
-          </button>
+          </Button>
         </div>
         {!activeWorkflowDefinitionId ? (
           <div className="mt-3 rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-4 text-sm text-text-lo">
@@ -268,13 +274,15 @@ export default function StudioWorkflowLibrary({
                       </span>
                     </div>
                   </div>
-                  <button
-                    className={libraryActionButtonClassName}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="rounded-full"
                     onClick={() => onInvokeTrigger(trigger)}
                     disabled={!trigger.enabled}
                   >
                     Invoke
-                  </button>
+                  </Button>
                 </div>
               </article>
             ))}
@@ -335,21 +343,25 @@ export default function StudioWorkflowLibrary({
                     {version.goal || version.title || "Published workflow version"}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      className={libraryActionButtonClassName}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="rounded-full"
                       onClick={(event) => {
                         event.stopPropagation();
                         onOpenVersion(version);
                       }}
                     >
                       {openVersionLabel}
-                    </button>
+                    </Button>
                     {onDeleteVersion ? (
                       confirmDeleteVersionId === version.id ? (
                         <>
                           <span className="self-center text-xs text-text-rose-token">Delete v{version.version_number}?</span>
-                          <button
-                            className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="rounded-full"
                             onClick={(event) => {
                               event.stopPropagation();
                               setConfirmDeleteVersionId(null);
@@ -358,20 +370,24 @@ export default function StudioWorkflowLibrary({
                             disabled={deletingWorkflowVersionId === version.id}
                           >
                             {deletingWorkflowVersionId === version.id ? "Deleting..." : "Yes, Delete"}
-                          </button>
-                          <button
-                            className={libraryActionButtonClassName}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="rounded-full"
                             onClick={(event) => {
                               event.stopPropagation();
                               setConfirmDeleteVersionId(null);
                             }}
                           >
                             Cancel
-                          </button>
+                          </Button>
                         </>
                       ) : (
-                        <button
-                          className="rounded-full border border-rose-300/30 bg-accent-rose px-3 py-1.5 text-xs font-semibold text-text-rose-token transition hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="rounded-full"
                           onClick={(event) => {
                             event.stopPropagation();
                             setConfirmDeleteVersionId(version.id);
@@ -379,7 +395,7 @@ export default function StudioWorkflowLibrary({
                           disabled={deletingWorkflowVersionId === version.id}
                         >
                           Delete
-                        </button>
+                        </Button>
                       )
                     ) : null}
                   </div>
