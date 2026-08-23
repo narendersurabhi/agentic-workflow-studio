@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 from libs.core import capability_registry
-from libs.core import mcp_gateway
 from libs.framework.tool_runtime import ToolExecutionError
+from libs.mcp import mcp_gateway
 
 
 def _write_json(path: Path, payload: dict) -> None:

@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from libs.core.models import RiskLevel, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolRegistry
-
-from .models import RiskLevel, ToolSpec
 
 try:  # Optional at import-time; policy service already depends on PyYAML.
     import yaml

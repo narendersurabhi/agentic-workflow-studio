@@ -1,5 +1,4 @@
 import json
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -7,14 +6,10 @@ import pytest
 
 from libs.core.llm_provider import LLMProvider, LLMRequest, LLMResponse
 from libs.core.models import RiskLevel, ToolSpec
-from libs.core.tool_registry import (
-    Tool,
-    ToolExecutionError,
-    ToolRegistry,
-    default_registry,
-    evaluate_tool_allowlist,
-)
-from libs.core import tool_registry as tool_registry_module
+from libs.framework.tool_runtime import Tool, ToolExecutionError, ToolRegistry
+from libs.tool_manager.registry import default_registry
+from libs.tool_manager.tool_governance import evaluate_tool_allowlist
+from libs.tools.document_spec_llm import _sanitize_document_spec
 
 
 def test_input_schema_validation() -> None:
@@ -68,6 +63,8 @@ def test_output_schema_validation() -> None:
 
 
 def test_timeout_enforced() -> None:
+    import time
+
     registry = ToolRegistry()
 
     def slow_handler(payload: dict) -> dict:
@@ -95,6 +92,8 @@ def test_timeout_enforced() -> None:
 
 
 def test_timeout_returns_without_waiting_for_handler_completion() -> None:
+    import time
+
     registry = ToolRegistry()
 
     def very_slow_handler(payload: dict) -> dict:
@@ -379,8 +378,8 @@ def test_default_registry_api_includes_chat_direct_read_tools(monkeypatch) -> No
     monkeypatch.delenv("API_DISABLED_TOOLS", raising=False)
     monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "true")
     monkeypatch.setenv("TOOL_GOVERNANCE_MODE", "enforce")
-    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_KEY", None)
-    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_VALUE", None)
+    monkeypatch.setattr("libs.tool_manager.tool_governance._GOVERNANCE_CACHE_KEY", None)
+    monkeypatch.setattr("libs.tool_manager.tool_governance._GOVERNANCE_CACHE_VALUE", None)
 
     registry = default_registry(service_name="api")
     specs = {spec.name for spec in registry.list_specs()}
@@ -398,8 +397,8 @@ def test_default_registry_worker_includes_memory_read_tools(monkeypatch) -> None
     monkeypatch.delenv("WORKER_DISABLED_TOOLS", raising=False)
     monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "true")
     monkeypatch.setenv("TOOL_GOVERNANCE_MODE", "enforce")
-    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_KEY", None)
-    monkeypatch.setattr("libs.core.tool_governance._GOVERNANCE_CACHE_VALUE", None)
+    monkeypatch.setattr("libs.tool_manager.tool_governance._GOVERNANCE_CACHE_KEY", None)
+    monkeypatch.setattr("libs.tool_manager.tool_governance._GOVERNANCE_CACHE_VALUE", None)
 
     registry = default_registry(service_name="worker")
     specs = {spec.name for spec in registry.list_specs()}
@@ -552,196 +551,6 @@ def test_derive_output_filename_derives_role_from_jd_for_date_fallback() -> None
     assert call.output_or_error["path"] == "documents/principal_backend_engineer_2026_02_13.docx"
 
 
-def test_post_mcp_tool_call_uses_mcp_subpath_first(monkeypatch) -> None:
-    seen: list[str] = []
-
-    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
-        seen.append(url)
-        assert timeout_s > 0
-        return {"ok": True, "tool_name": tool_name, "arguments": arguments}
-
-    monkeypatch.setattr(tool_registry_module, "_call_mcp_tool_sdk", fake_call)
-    result = tool_registry_module._post_mcp_tool_call(
-        "http://service:8000",
-        "example_tool",
-        {"job": {"id": "1"}},
-    )
-    assert result["ok"] is True
-    assert seen == ["http://service:8000/mcp/rpc/mcp"]
-
-
-def test_post_mcp_tool_call_biases_first_attempt_timeout(monkeypatch) -> None:
-    seen_timeouts: list[float] = []
-
-    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
-        seen_timeouts.append(timeout_s)
-        return {"ok": True}
-
-    monkeypatch.setenv("MCP_TOOL_TIMEOUT_S", "600")
-    monkeypatch.setenv("MCP_TOOL_MAX_RETRIES", "2")
-    monkeypatch.setenv("MCP_TOOL_RETRY_SLEEP_S", "0")
-    monkeypatch.setattr(tool_registry_module, "_call_mcp_tool_sdk", fake_call)
-    result = tool_registry_module._post_mcp_tool_call(
-        "http://service:8000",
-        "example_tool",
-        {"job": {"id": "1"}},
-    )
-    assert result["ok"] is True
-    assert len(seen_timeouts) == 1
-    # With 600s global budget and reserved retry budget, first attempt should receive most of the deadline.
-    assert seen_timeouts[0] >= 560.0
-
-
-def test_resolve_mcp_timeout_falls_back_to_openai_timeout(monkeypatch) -> None:
-    monkeypatch.delenv("MCP_TOOL_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("MCP_TIMEOUT_S", raising=False)
-    monkeypatch.setenv("OPENAI_TIMEOUT_S", "60")
-    assert tool_registry_module._resolve_mcp_timeout_s() == 60.0
-
-
-def test_resolve_mcp_timeout_clamps_large_openai_timeout(monkeypatch) -> None:
-    monkeypatch.delenv("MCP_TOOL_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("MCP_TIMEOUT_S", raising=False)
-    monkeypatch.setenv("OPENAI_TIMEOUT_S", "600")
-    assert tool_registry_module._resolve_mcp_timeout_s() == 180.0
-
-
-def test_resolve_mcp_tool_timeout_adds_outer_headroom(monkeypatch) -> None:
-    monkeypatch.setenv("MCP_TOOL_TIMEOUT_S", "120")
-    monkeypatch.delenv("MCP_TOOL_OUTER_TIMEOUT_HEADROOM_S", raising=False)
-    assert tool_registry_module._resolve_mcp_tool_timeout_s() == 135
-
-
-def test_post_mcp_tool_call_falls_back_to_legacy_mcp_root(monkeypatch) -> None:
-    seen: list[str] = []
-
-    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
-        seen.append(url)
-        assert timeout_s > 0
-        if url.endswith("/mcp/rpc/mcp"):
-            raise ToolExecutionError("not_found")
-        return {"ok": True, "tool_name": tool_name, "arguments": arguments}
-
-    monkeypatch.setattr(tool_registry_module, "_call_mcp_tool_sdk", fake_call)
-    result = tool_registry_module._post_mcp_tool_call(
-        "http://service:8000",
-        "example_tool",
-        {"job": {"id": "1"}},
-    )
-    assert result["ok"] is True
-    assert seen == [
-        "http://service:8000/mcp/rpc/mcp",
-        "http://service:8000/mcp/rpc",
-    ]
-
-
-def test_post_mcp_tool_call_does_not_retry_on_tool_error(monkeypatch) -> None:
-    seen: list[str] = []
-
-    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
-        seen.append(url)
-        raise ToolExecutionError("mcp_tool_error:bad_input")
-
-    monkeypatch.setattr(tool_registry_module, "_call_mcp_tool_sdk", fake_call)
-    try:
-        tool_registry_module._post_mcp_tool_call(
-            "http://service:8000",
-            "example_tool",
-            {"job": {"id": "1"}},
-        )
-    except ToolExecutionError as exc:
-        assert str(exc) == "mcp_tool_error:bad_input"
-    else:
-        raise AssertionError("expected ToolExecutionError")
-
-
-def test_post_mcp_tool_call_retries_retryable_sdk_error(monkeypatch) -> None:
-    seen: list[str] = []
-    attempts = {"count": 0}
-
-    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
-        seen.append(url)
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise ToolExecutionError("mcp_sdk_error:Session terminated")
-        return {"ok": True, "tool_name": tool_name, "arguments": arguments}
-
-    monkeypatch.setenv("MCP_TOOL_MAX_RETRIES", "1")
-    monkeypatch.setenv("MCP_TOOL_RETRY_SLEEP_S", "0")
-    monkeypatch.setattr(tool_registry_module, "_call_mcp_tool_sdk", fake_call)
-    result = tool_registry_module._post_mcp_tool_call(
-        "http://service:8000",
-        "example_tool",
-        {"job": {"id": "1"}},
-    )
-    assert result["ok"] is True
-    assert seen == [
-        "http://service:8000/mcp/rpc/mcp",
-        "http://service:8000/mcp/rpc/mcp",
-    ]
-
-
-def test_post_mcp_tool_call_bounds_retries_by_deadline(monkeypatch) -> None:
-    attempts: list[float] = []
-
-    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
-        attempts.append(timeout_s)
-        # Simulate consuming the full per-attempt budget.
-        time.sleep(timeout_s)
-        raise ToolExecutionError("mcp_sdk_error:Session terminated")
-
-    monkeypatch.setenv("MCP_TOOL_TIMEOUT_S", "1")
-    # Exaggerated retries to ensure deadline budget stops execution early.
-    monkeypatch.setenv("MCP_TOOL_MAX_RETRIES", "50")
-    monkeypatch.setenv("MCP_TOOL_RETRY_SLEEP_S", "0")
-    monkeypatch.setattr(tool_registry_module, "_call_mcp_tool_sdk", fake_call)
-    started = time.monotonic()
-    with pytest.raises(ToolExecutionError) as exc:
-        tool_registry_module._post_mcp_tool_call(
-            "http://service:8000",
-            "example_tool",
-            {"job": {"id": "1"}},
-        )
-    elapsed = time.monotonic() - started
-    assert str(exc.value).startswith(("mcp_sdk_timeout:", "mcp_sdk_all_routes_failed:"))
-    # 2 routes * (50 retries + 1 initial) = 102 slots; deadline must stop far earlier.
-    assert len(attempts) < 102
-    assert elapsed < 2.5
-
-
-def test_resolve_mcp_isolation_mode_defaults_to_process(monkeypatch) -> None:
-    monkeypatch.delenv("MCP_TOOL_ISOLATION_MODE", raising=False)
-    assert tool_registry_module._resolve_mcp_isolation_mode() == "process"
-
-
-def test_extract_mcp_sdk_result_includes_error_detail() -> None:
-    class _TextItem:
-        text = "Error executing tool example_tool: invalid input"
-
-    class _Result:
-        isError = True
-        structuredContent = None
-        content = [_TextItem()]
-
-    try:
-        tool_registry_module._extract_mcp_sdk_result(_Result())
-    except ToolExecutionError as exc:
-        assert "invalid input" in str(exc)
-    else:
-        raise AssertionError("expected ToolExecutionError")
-
-
-def test_extract_mcp_sdk_result_unwraps_fastmcp_result_wrapper() -> None:
-    class _Result:
-        isError = False
-        structuredContent = {"result": {"files": [{"path": "app.py", "content": "print('hi')"}]}}
-        content = []
-
-    payload = tool_registry_module._extract_mcp_sdk_result(_Result())
-    assert "files" in payload
-    assert payload["files"][0]["path"] == "app.py"
-
-
 def test_sanitize_document_spec_removes_spacers_and_empty_items() -> None:
     spec = {
         "blocks": [
@@ -751,7 +560,7 @@ def test_sanitize_document_spec_removes_spacers_and_empty_items() -> None:
             {"type": "bullets", "items": ["alpha", "", "   ", "beta"]},
         ]
     }
-    sanitized = tool_registry_module._sanitize_document_spec(spec)
+    sanitized = _sanitize_document_spec(spec)
     assert sanitized["blocks"] == [
         {"type": "heading", "level": 1, "text": "Title"},
         {"type": "bullets", "items": ["alpha", "beta"]},
@@ -773,7 +582,7 @@ def test_sanitize_document_spec_cleans_repeat_template() -> None:
             }
         ]
     }
-    sanitized = tool_registry_module._sanitize_document_spec(spec)
+    sanitized = _sanitize_document_spec(spec)
     assert sanitized["blocks"] == [
         {
             "type": "repeat",

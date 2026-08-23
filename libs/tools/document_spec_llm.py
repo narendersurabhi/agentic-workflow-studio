@@ -333,3 +333,52 @@ def _resolve_allowed_block_types(raw: Any) -> list[str]:
     if not normalized:
         raise ToolExecutionError("allowed_block_types must contain at least one value")
     return normalized
+
+
+def _sanitize_document_spec(document_spec: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(document_spec)
+    blocks = sanitized.get("blocks")
+    if isinstance(blocks, list):
+        sanitized["blocks"] = _sanitize_document_blocks(blocks)
+    return sanitized
+
+
+def _sanitize_document_blocks(blocks: list[Any]) -> list[dict[str, Any]]:
+    cleaned: list[dict[str, Any]] = []
+    for raw in blocks:
+        if not isinstance(raw, dict):
+            continue
+        block = dict(raw)
+        block_type = block.get("type")
+
+        if block_type == "spacer":
+            # Spacer maps to an empty paragraph in DOCX; skip to avoid blank lines.
+            continue
+
+        if block_type in {"text", "paragraph", "heading", "optional_paragraph"}:
+            text = block.get("text")
+            if isinstance(text, str) and not text.strip():
+                continue
+
+        if block_type == "bullets":
+            items = block.get("items")
+            if isinstance(items, list):
+                filtered_items = []
+                for item in items:
+                    if isinstance(item, str) and not item.strip():
+                        continue
+                    filtered_items.append(item)
+                if not filtered_items:
+                    continue
+                block["items"] = filtered_items
+
+        if block_type == "repeat":
+            template = block.get("template")
+            if isinstance(template, list):
+                cleaned_template = _sanitize_document_blocks(template)
+                if not cleaned_template:
+                    continue
+                block["template"] = cleaned_template
+
+        cleaned.append(block)
+    return cleaned

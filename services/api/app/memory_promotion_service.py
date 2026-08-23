@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 import re
 from typing import Any, Mapping
 
-from libs.core import memory_redaction, models
+from libs.core import models
+from libs.memory import memory_redaction
 
 _OUTPUT_FORMAT_RE = re.compile(
     r"\b(?:i prefer|prefer|default to|use)\s+(docx|pdf|markdown|md|json|yaml|csv|txt)\b",

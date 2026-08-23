@@ -7,9 +7,8 @@ from importlib import import_module
 from importlib import metadata as importlib_metadata
 from typing import Any, Callable, Optional
 
+from libs.core.llm_provider import LLMProvider
 from libs.framework.tool_runtime import ToolExecutionError, ToolRegistry
-
-from .llm_provider import LLMProvider
 
 LOGGER = logging.getLogger(__name__)
 

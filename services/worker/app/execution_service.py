@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from libs.core import (
-    agent_cancel,
     capability_registry,
     execution_contracts,
     intent_contract,
@@ -18,6 +17,7 @@ from libs.core import (
     tracing as core_tracing,
 )
 from libs.framework.tool_runtime import sanitize_payload as sanitize_tool_payload
+from libs.harness import agent_cancel
 from services.worker.app import capability_runtime_adapter, tool_runtime_adapter
 
 

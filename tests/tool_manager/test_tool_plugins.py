@@ -1,5 +1,5 @@
-from libs.core import tool_plugins
 from libs.framework.tool_runtime import ToolRegistry
+from libs.tool_manager import tool_plugins
 
 
 def test_call_register_fn_passes_supported_context_kwargs() -> None:

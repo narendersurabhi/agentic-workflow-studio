@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.core.tool_registry import ToolExecutionError, ToolRegistry
+from libs.framework.tool_runtime import ToolExecutionError, ToolRegistry
 from libs.tools.pdf_render_from_spec import register_pdf_tools
 
 

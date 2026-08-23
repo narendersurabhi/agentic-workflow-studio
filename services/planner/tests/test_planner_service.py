@@ -756,9 +756,9 @@ def test_validate_plan_request_prefers_normalized_goal_segment_for_ambiguous_tas
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        planner_service.tool_registry,
+        planner_service.tool_governance,
         "evaluate_tool_allowlist",
-        lambda *_args, **_kwargs: planner_service.tool_registry.ToolAllowDecision(
+        lambda *_args, **_kwargs: planner_service.tool_governance.ToolAllowDecision(
             allowed=True,
             reason="allowed_for_test",
         ),

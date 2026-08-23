@@ -5,8 +5,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from libs.core import capability_registry, mcp_gateway, tool_registry, tool_governance
+from libs.core import capability_registry, tool_registry
+from libs.tool_manager import tool_governance
 from libs.framework.tool_runtime import ToolExecutionError, ToolRegistry
+from libs.mcp import mcp_gateway
 
 
 DEFAULT_CHAT_DIRECT_CAPABILITIES = {

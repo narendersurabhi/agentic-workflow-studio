@@ -4,7 +4,7 @@ import logging
 import pytest
 
 from libs.framework.tool_runtime import ToolExecutionError
-from libs.tools import mcp_client
+from libs.mcp import mcp_client
 
 
 class _Span:
@@ -218,3 +218,74 @@ def test_extract_mcp_sdk_result_reports_v2_snake_case_errors() -> None:
         mcp_client.extract_mcp_sdk_result(_Result())
 
     assert "invalid input" in str(exc.value)
+
+
+def test_post_mcp_tool_call_biases_first_attempt_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_timeouts: list[float] = []
+
+    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
+        del url, tool_name, arguments
+        seen_timeouts.append(timeout_s)
+        return {"ok": True}
+
+    monkeypatch.setenv("MCP_TOOL_TIMEOUT_S", "600")
+    monkeypatch.setenv("MCP_TOOL_MAX_RETRIES", "2")
+    monkeypatch.setenv("MCP_TOOL_RETRY_SLEEP_S", "0")
+    result = mcp_client.post_mcp_tool_call(
+        "http://service:8000",
+        "example_tool",
+        {"job": {"id": "1"}},
+        call_mcp_tool_sdk=fake_call,
+        classify_tool_error=_classify,
+        logger=logging.getLogger(__name__),
+        tracing_module=_Tracing,
+    )
+    assert result["ok"] is True
+    assert len(seen_timeouts) == 1
+    # With 600s global budget and reserved retry budget, first attempt should receive most of the deadline.
+    assert seen_timeouts[0] >= 560.0
+
+
+def test_post_mcp_tool_call_bounds_retries_by_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    attempts: list[float] = []
+
+    def fake_call(url: str, tool_name: str, arguments: dict, timeout_s: float) -> dict:
+        del url, tool_name, arguments
+        attempts.append(timeout_s)
+        # Simulate consuming the full per-attempt budget.
+        time.sleep(timeout_s)
+        raise ToolExecutionError("mcp_sdk_error:Session terminated")
+
+    monkeypatch.setenv("MCP_TOOL_TIMEOUT_S", "1")
+    # Exaggerated retries to ensure deadline budget stops execution early.
+    monkeypatch.setenv("MCP_TOOL_MAX_RETRIES", "50")
+    monkeypatch.setenv("MCP_TOOL_RETRY_SLEEP_S", "0")
+    started = time.monotonic()
+    with pytest.raises(ToolExecutionError) as exc:
+        mcp_client.post_mcp_tool_call(
+            "http://service:8000",
+            "example_tool",
+            {"job": {"id": "1"}},
+            call_mcp_tool_sdk=fake_call,
+            classify_tool_error=_classify,
+            logger=logging.getLogger(__name__),
+            tracing_module=_Tracing,
+        )
+    elapsed = time.monotonic() - started
+    assert str(exc.value).startswith(("mcp_sdk_timeout:", "mcp_sdk_all_routes_failed:"))
+    # 2 routes * (50 retries + 1 initial) = 102 slots; deadline must stop far earlier.
+    assert len(attempts) < 102
+    assert elapsed < 2.5
+
+
+def test_resolve_mcp_tool_timeout_adds_outer_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_TOOL_TIMEOUT_S", "120")
+    monkeypatch.delenv("MCP_TOOL_OUTER_TIMEOUT_HEADROOM_S", raising=False)
+    assert mcp_client.resolve_mcp_tool_timeout_s() == 135
+
+
+def test_resolve_mcp_isolation_mode_defaults_to_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MCP_TOOL_ISOLATION_MODE", raising=False)
+    assert mcp_client.resolve_mcp_isolation_mode() == "process"

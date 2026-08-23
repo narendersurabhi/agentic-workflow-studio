@@ -6,7 +6,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from libs.core import memory_registry, models
+from libs.core import models
+from libs.memory import memory_registry
 from .models import MemoryRecord
 
 

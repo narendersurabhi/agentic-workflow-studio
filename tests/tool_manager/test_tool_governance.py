@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from libs.core import tool_governance
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
 from libs.framework.tool_runtime import Tool, ToolRegistry
+from libs.tool_manager import tool_governance
 
 
 def _register_tool(registry: ToolRegistry, name: str) -> None:

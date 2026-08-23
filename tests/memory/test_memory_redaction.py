@@ -1,4 +1,5 @@
-from libs.core import memory_redaction, models
+from libs.core import models
+from libs.memory import memory_redaction
 
 
 def test_sanitize_memory_payload_redacts_sensitive_keys() -> None:

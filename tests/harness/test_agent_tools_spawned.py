@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from libs.core.llm_provider import LLMRequest, LLMResponse
-from libs.tools import agent_tools
+from libs.harness import agent_tools
 
 
 class _StubProvider:

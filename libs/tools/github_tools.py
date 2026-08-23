@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from pydantic import BaseModel, ConfigDict, Field
 
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
+from libs.framework.tool_runtime import Tool
 
 
 class GithubRepoCreateInput(BaseModel):
@@ -162,8 +163,6 @@ class GithubRepoPushPrOutput(BaseModel):
 
 
 def register_github_tools(registry) -> None:
-    from libs.core.tool_registry import Tool
-
     registry.register(
         Tool(
             spec=ToolSpec(

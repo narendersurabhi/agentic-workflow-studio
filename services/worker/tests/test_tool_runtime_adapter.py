@@ -38,7 +38,7 @@ def test_build_worker_tool_runtime_uses_tool_bootstrap(monkeypatch) -> None:
 
 def test_worker_tool_runtime_delegates_allowlist(monkeypatch) -> None:
     runtime = tool_runtime_adapter.WorkerToolRuntime(registry=object(), service_name="worker")
-    expected = tool_runtime_adapter.tool_registry.ToolAllowDecision(True, "allowed")
+    expected = tool_runtime_adapter.tool_governance.ToolAllowDecision(True, "allowed")
     seen: list[tuple[str, str, dict[str, object] | None, models.ToolSpec | None]] = []
 
     def fake_evaluate(
@@ -52,7 +52,7 @@ def test_worker_tool_runtime_delegates_allowlist(monkeypatch) -> None:
         return expected
 
     monkeypatch.setattr(
-        tool_runtime_adapter.tool_registry,
+        tool_runtime_adapter.tool_governance,
         "evaluate_tool_allowlist",
         fake_evaluate,
     )

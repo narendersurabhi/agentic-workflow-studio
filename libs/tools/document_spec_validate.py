@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Set
 from pydantic import BaseModel, ConfigDict, Field
 
 from libs.core.models import RiskLevel, ToolIntent, ToolSpec
+from libs.framework.tool_runtime import Tool, ToolExecutionError
 
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
@@ -30,8 +31,6 @@ class DocumentSpecValidateOutput(BaseModel):
 
 
 def register_document_spec_tools(registry) -> None:
-    from libs.core.tool_registry import Tool
-
     registry.register(
         Tool(
             spec=ToolSpec(
@@ -59,8 +58,6 @@ def register_document_spec_tools(registry) -> None:
 def _document_spec_validate(payload: Dict[str, Any]) -> Dict[str, Any]:
     spec = payload.get("document_spec")
     if not isinstance(spec, dict):
-        from libs.core.tool_registry import ToolExecutionError
-
         raise ToolExecutionError(
             "document_spec missing (not found in memory). Provide document_spec explicitly."
         )
