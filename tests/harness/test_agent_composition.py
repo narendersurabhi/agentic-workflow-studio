@@ -122,3 +122,69 @@ def test_execute_tool_looks_up_registry_for_non_agent_tool(monkeypatch) -> None:
 
     assert result == {"ok": True}
     assert handler_calls == [{"x": 1}]
+
+
+def test_execute_tool_builds_registry_once_across_multiple_tool_calls(monkeypatch) -> None:
+    def _fake_agent(payload, provider, *, invoke_capability, _recursion_depth=0):
+        # Simulate a multi-step ReAct loop making several tool calls.
+        for _ in range(5):
+            invoke_capability("some_capability", {})
+        return {"result": "done"}
+
+    class _FakeTool:
+        def handler(self, arguments):
+            return {"ok": True}
+
+    class _FakeRegistry:
+        def get(self, name):
+            return _FakeTool()
+
+    build_calls: list[None] = []
+
+    def _fake_build_default_registry(**kwargs):
+        build_calls.append(None)
+        return _FakeRegistry()
+
+    monkeypatch.setattr(harness_agent.agent_tools, "agent", _fake_agent)
+    monkeypatch.setattr(
+        harness_agent.mcp_gateway,
+        "invoke_capability",
+        lambda cap_id, args, execute_tool: execute_tool("some_tool", args),
+    )
+    monkeypatch.setattr(core_tool_registry, "build_default_registry", _fake_build_default_registry)
+
+    provider = MagicMock()
+    result = harness_agent._agent({"goal": "test"}, provider)
+
+    assert result == {"result": "done"}
+    assert len(build_calls) == 1
+
+
+def test_execute_tool_never_builds_registry_when_only_recursive_agent_calls_made(
+    monkeypatch,
+) -> None:
+    def _fake_agent(payload, provider, *, invoke_capability, _recursion_depth=0):
+        if _recursion_depth == 0:
+            return invoke_capability("agent.run", {"goal": "nested"})
+        return {"result": "recursed"}
+
+    build_calls: list[None] = []
+
+    def _fake_build_default_registry(**kwargs):
+        build_calls.append(None)
+        raise AssertionError("registry should not be built for a purely recursive run")
+
+    monkeypatch.setattr(harness_agent.agent_tools, "agent", _fake_agent)
+    monkeypatch.setattr(
+        harness_agent.mcp_gateway,
+        "invoke_capability",
+        lambda cap_id, args, execute_tool: execute_tool("agent", args),
+    )
+    monkeypatch.setattr(harness_agent.sub_agent_dispatch, "get_api_url", lambda: "")
+    monkeypatch.setattr(core_tool_registry, "build_default_registry", _fake_build_default_registry)
+
+    provider = MagicMock()
+    result = harness_agent._agent({"goal": "test"}, provider)
+
+    assert result == {"result": "recursed"}
+    assert build_calls == []
