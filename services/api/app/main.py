@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from contextlib import asynccontextmanager
 import difflib
 import json
@@ -15730,7 +15731,7 @@ def _compile_plan_preflight(
             context["dependencies_by_name"][dep_name] = stub
             context["dependencies"][dep_name] = stub
         if isinstance(job_context, dict) and job_context:
-            context["job_context"] = job_context
+            context["job_context"] = copy.deepcopy(job_context)
 
         normalized_tool_inputs = _normalize_preflight_reference_payload(
             task.tool_inputs or {},
