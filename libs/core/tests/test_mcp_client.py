@@ -197,3 +197,24 @@ def test_streamable_http_client_kwargs_supports_http_client_auth() -> None:
     client = kwargs["http_client"]
     assert client.headers.get("Authorization") == "Bearer test-token"
     asyncio.run(client.aclose())
+
+
+def test_extract_mcp_sdk_result_accepts_v2_snake_case_fields() -> None:
+    class _Result:
+        is_error = False
+        structured_content = {"answer": 42}
+        content = []
+
+    assert mcp_client.extract_mcp_sdk_result(_Result()) == {"answer": 42}
+
+
+def test_extract_mcp_sdk_result_reports_v2_snake_case_errors() -> None:
+    class _Result:
+        is_error = True
+        structured_content = {"detail": "invalid input"}
+        content = []
+
+    with pytest.raises(ToolExecutionError) as exc:
+        mcp_client.extract_mcp_sdk_result(_Result())
+
+    assert "invalid input" in str(exc.value)

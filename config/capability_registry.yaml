@@ -753,9 +753,10 @@ capabilities:
         server_id: rag_retriever_qdrant
         tool_name: retrieve
         route_paths:
-          - /mcp
-          - /mcp/rpc
           - /mcp/rpc/mcp
+          - /mcp/mcp
+          - /mcp/rpc
+          - /mcp
         timeout_s: 20
         max_retries: 1
         retry_sleep_s: 0.25
@@ -781,9 +782,10 @@ capabilities:
         server_id: rag_retriever_qdrant
         tool_name: rerank
         route_paths:
-          - /mcp
-          - /mcp/rpc
           - /mcp/rpc/mcp
+          - /mcp/mcp
+          - /mcp/rpc
+          - /mcp
         timeout_s: 20
         max_retries: 1
         retry_sleep_s: 0.25
@@ -808,9 +810,10 @@ capabilities:
         server_id: rag_retriever_qdrant
         tool_name: ensure_collection
         route_paths:
-          - /mcp
-          - /mcp/rpc
           - /mcp/rpc/mcp
+          - /mcp/mcp
+          - /mcp/rpc
+          - /mcp
         timeout_s: 30
         max_retries: 1
         retry_sleep_s: 0.25
@@ -836,9 +839,10 @@ capabilities:
         server_id: rag_retriever_qdrant
         tool_name: upsert_texts
         route_paths:
-          - /mcp
-          - /mcp/rpc
           - /mcp/rpc/mcp
+          - /mcp/mcp
+          - /mcp/rpc
+          - /mcp
         timeout_s: 60
         max_retries: 1
         retry_sleep_s: 0.25
@@ -865,9 +869,10 @@ capabilities:
         server_id: rag_retriever_qdrant
         tool_name: index_workspace_file
         route_paths:
-          - /mcp
-          - /mcp/rpc
           - /mcp/rpc/mcp
+          - /mcp/mcp
+          - /mcp/rpc
+          - /mcp
         timeout_s: 90
         max_retries: 1
         retry_sleep_s: 0.25
@@ -893,9 +898,10 @@ capabilities:
         server_id: rag_retriever_qdrant
         tool_name: index_markdown
         route_paths:
-          - /mcp
-          - /mcp/rpc
           - /mcp/rpc/mcp
+          - /mcp/mcp
+          - /mcp/rpc
+          - /mcp
         timeout_s: 90
         max_retries: 1
         retry_sleep_s: 0.25
@@ -922,9 +928,10 @@ capabilities:
         server_id: rag_retriever_qdrant
         tool_name: index_workspace_directory
         route_paths:
-          - /mcp
-          - /mcp/rpc
           - /mcp/rpc/mcp
+          - /mcp/mcp
+          - /mcp/rpc
+          - /mcp
         timeout_s: 120
         max_retries: 1
         retry_sleep_s: 0.25
