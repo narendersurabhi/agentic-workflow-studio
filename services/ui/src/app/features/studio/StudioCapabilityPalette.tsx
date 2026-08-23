@@ -8,6 +8,8 @@ import {
 } from "../../components/workflow/WorkflowNodeIcon";
 import type { AgentDefinition, CapabilityItem, StudioControlKind } from "./types";
 import { getCapabilityRequiredInputs, taskNameFromCapability } from "./utils";
+import Button from "../../components/ui/Button";
+import Input from "../../components/ui/Input";
 
 type StudioCapabilityPaletteProps = {
   capabilities: CapabilityItem[];
@@ -199,8 +201,8 @@ export default function StudioCapabilityPalette({
   return (
     <aside className="flex h-full min-h-0 flex-col px-2.5 py-2.5 text-text-hi">
       <div className="grid gap-1.5">
-        <input
-          className={inputClassName}
+        <Input
+          className="rounded-lg px-2.5 py-1.5 text-xs"
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder="Search nodes"
@@ -219,13 +221,14 @@ export default function StudioCapabilityPalette({
             ))}
           </select>
           {hasFilters ? (
-            <button
-              type="button"
-              className="shrink-0 rounded-lg border border-subtle bg-surface-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-md transition hover:text-text-hi"
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-auto shrink-0 rounded-lg border border-subtle px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
               onClick={() => { onQueryChange(""); onGroupChange("all"); }}
             >
               Clear
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
