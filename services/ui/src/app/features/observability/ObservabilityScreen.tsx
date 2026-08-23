@@ -1,14 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { useShell } from "../../lib/shell";
 import FeedbackInsightsPanel from "../../components/feedback/FeedbackInsightsPanel";
 import { apiFetch } from "../../lib/auth";
 import type { FeedbackSummaryResponse } from "../../lib/feedback";
 import { useAppTheme } from "../../lib/theme";
+import Button from "../../components/ui/Button";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+
+const observabilityKeys = {
+  feedbackSummary: () => ["observability", "feedback-summary"] as const,
+  jobs: () => ["observability", "jobs"] as const,
+  jobDetails: (jobId: string) => ["observability", "job-details", jobId] as const,
+};
 
 type EventEnvelope = {
   type: string;
@@ -59,91 +67,63 @@ function jobStatusColor(status: string): string {
   return STATUS_COLORS[status] ?? "border-subtle bg-surface-1 text-text-md";
 }
 
+const fetchJobs = async (): Promise<Job[]> => {
+  const res = await apiFetch(`${apiUrl}/jobs?limit=100`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json() as { items?: Job[] } | Job[];
+  return Array.isArray(data) ? data : (data.items ?? []);
+};
+
+const fetchJobDetails = async (jobId: string): Promise<JobDetails> => {
+  const res = await apiFetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}/details`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as JobDetails;
+};
+
+const fetchFeedbackSummary = async (): Promise<FeedbackSummaryResponse> => {
+  const res = await apiFetch(`${apiUrl}/feedback/summary?limit=500`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as FeedbackSummaryResponse;
+};
+
 export default function ObservabilityScreen() {
   const { theme } = useAppTheme();
   const isStudio = theme === "dark";
   const searchParams = useSearchParams();
   const initialJobId = searchParams.get("job");
-
-  const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummaryResponse | null>(null);
-  const [feedbackLoading, setFeedbackLoading] = useState(false);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const [events, setEvents] = useState<EventEnvelope[]>([]);
   const [expandedEvents, setExpandedEvents] = useState<Set<number>>(new Set());
 
-  // Jobs state
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [jobsLoading, setJobsLoading] = useState(true);
-  const [jobsError, setJobsError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(initialJobId);
-  const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
-  const [detailsLoading, setDetailsLoading] = useState(false);
-  const [detailsError, setDetailsError] = useState<string | null>(null);
   const [showAllJobs, setShowAllJobs] = useState(false);
   const selectedJobIdRef = useRef<string | null>(initialJobId);
 
-  const loadJobs = useCallback(async () => {
-    setJobsLoading(true);
-    setJobsError(null);
-    try {
-      const res = await apiFetch(`${apiUrl}/jobs?limit=100`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { items?: Job[] } | Job[];
-      setJobs(Array.isArray(data) ? data : (data.items ?? []));
-    } catch (e) {
-      setJobsError(e instanceof Error ? e.message : "Failed to load jobs.");
-    } finally {
-      setJobsLoading(false);
-    }
-  }, []);
+  const feedbackQuery = useQuery({
+    queryKey: observabilityKeys.feedbackSummary(),
+    queryFn: fetchFeedbackSummary,
+  });
+  const feedbackSummary = feedbackQuery.data ?? null;
+  const feedbackLoading = feedbackQuery.isLoading;
+  const feedbackError = feedbackQuery.error instanceof Error ? feedbackQuery.error.message : null;
 
-  const loadJobDetails = useCallback(async (jobId: string) => {
-    setDetailsLoading(true);
-    setDetailsError(null);
-    setJobDetails(null);
-    try {
-      const res = await apiFetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}/details`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as JobDetails;
-      setJobDetails(data);
-    } catch (e) {
-      setDetailsError(e instanceof Error ? e.message : "Failed to load job details.");
-    } finally {
-      setDetailsLoading(false);
-    }
-  }, []);
+  const jobsQuery = useQuery({
+    queryKey: observabilityKeys.jobs(),
+    queryFn: fetchJobs,
+  });
+  const jobs = jobsQuery.data ?? [];
+  const jobsLoading = jobsQuery.isLoading;
+  const jobsError = jobsQuery.error instanceof Error ? jobsQuery.error.message : null;
 
-  const loadFeedbackSummary = useCallback(async () => {
-    setFeedbackLoading(true);
-    setFeedbackError(null);
-    try {
-      const res = await apiFetch(`${apiUrl}/feedback/summary?limit=500`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as FeedbackSummaryResponse;
-      setFeedbackSummary(data);
-    } catch (e) {
-      setFeedbackError(e instanceof Error ? e.message : "Failed to load feedback summary.");
-    } finally {
-      setFeedbackLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadFeedbackSummary();
-  }, [loadFeedbackSummary]);
-
-  useEffect(() => {
-    void loadJobs();
-  }, [loadJobs]);
-
-  // Auto-open job from URL query param
-  useEffect(() => {
-    if (initialJobId) {
-      selectedJobIdRef.current = initialJobId;
-      void loadJobDetails(initialJobId);
-    }
-  }, [initialJobId, loadJobDetails]);
+  const jobDetailsQuery = useQuery({
+    queryKey: observabilityKeys.jobDetails(selectedJobId ?? ""),
+    queryFn: () => fetchJobDetails(selectedJobId as string),
+    enabled: Boolean(selectedJobId),
+  });
+  const jobDetails = jobDetailsQuery.data ?? null;
+  const detailsLoading = jobDetailsQuery.isFetching;
+  const detailsError = jobDetailsQuery.error instanceof Error ? jobDetailsQuery.error.message : null;
 
   // Keep ref in sync for EventSource handler
   useEffect(() => {
@@ -159,10 +139,10 @@ export default function ObservabilityScreen() {
         setEvents((prev) => [envelope, ...prev].slice(0, 50));
         // Refresh jobs list on terminal events
         if (envelope.type === "task.completed" || envelope.type === "task.failed") {
-          void loadJobs();
+          void queryClient.invalidateQueries({ queryKey: observabilityKeys.jobs() });
           const activeId = selectedJobIdRef.current;
           if (activeId && envelope.job_id === activeId) {
-            void loadJobDetails(activeId);
+            void queryClient.invalidateQueries({ queryKey: observabilityKeys.jobDetails(activeId) });
           }
         }
       } catch {
@@ -173,7 +153,7 @@ export default function ObservabilityScreen() {
       // silently ignore; browser will reconnect automatically for EventSource
     };
     return () => source.close();
-  }, [loadJobs, loadJobDetails]);
+  }, [queryClient]);
 
   useEffect(() => {
     setExpandedEvents(new Set());
@@ -196,7 +176,7 @@ export default function ObservabilityScreen() {
           summary={feedbackSummary}
           loading={feedbackLoading}
           error={feedbackError}
-          onRefresh={() => void loadFeedbackSummary()}
+          onRefresh={() => void feedbackQuery.refetch()}
           theme={isStudio ? "studio" : "default"}
         />
 
@@ -208,18 +188,12 @@ export default function ObservabilityScreen() {
               <p className="mt-1 text-xs text-text-md">All submitted runs — click to inspect.</p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                className="rounded-lg border border-subtle bg-surface-1 px-3 py-1.5 text-xs text-text-md transition hover:bg-surface-2"
-                onClick={() => void loadJobs()}
-              >
+              <Button variant="secondary" size="sm" onClick={() => void jobsQuery.refetch()}>
                 Refresh
-              </button>
-              <button
-                className="rounded-lg border border-subtle bg-surface-1 px-3 py-1.5 text-xs text-text-md transition hover:bg-surface-2"
-                onClick={() => setShowAllJobs((p) => !p)}
-              >
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setShowAllJobs((p) => !p)}>
                 {showAllJobs ? "Show recent" : "Show all"}
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -241,15 +215,7 @@ export default function ObservabilityScreen() {
                     <button
                       type="button"
                       className="w-full text-left"
-                      onClick={() => {
-                        if (isSelected) {
-                          setSelectedJobId(null);
-                          setJobDetails(null);
-                        } else {
-                          setSelectedJobId(job.id);
-                          void loadJobDetails(job.id);
-                        }
-                      }}
+                      onClick={() => setSelectedJobId(isSelected ? null : job.id)}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <p className="text-sm font-medium text-text-hi line-clamp-2">{job.goal}</p>
