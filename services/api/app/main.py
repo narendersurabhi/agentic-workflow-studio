@@ -3437,7 +3437,8 @@ def _chat_route_goal_intent_profile(
             for question in profile.questions
             if isinstance(question, str) and question.strip()
         ]
-        if preserve_intent_disagreement and profile.questions
+        if (preserve_intent_disagreement or preserve_capability_required_inputs)
+        and profile.questions
         else [_slot_question(slot_name, goal) for slot_name in chat_missing_slots]
     )
     return profile.model_copy(
@@ -3475,6 +3476,9 @@ def _looks_like_conversational_turn(content: str) -> bool:
         "open pr",
         "check repo",
         "list repos",
+        "list workspace",
+        "list files",
+        "workspace files",
         "write file",
         "update file",
         "make a workflow",
@@ -3518,6 +3522,17 @@ def _looks_like_conversational_turn(content: str) -> bool:
     )
     message_tokens = frozenset(re.findall(r"[a-z0-9]+", lowered))
     if message_tokens & _INTENT_VERBS:
+        if message_tokens & {
+            "report",
+            "document",
+            "doc",
+            "pdf",
+            "docx",
+            "file",
+            "workflow",
+            "artifact",
+        }:
+            return False
         try:
             hints = chat_service.get_chat_thread_hints()
             if message_tokens & hints.artifact_tokens:
@@ -4300,6 +4315,7 @@ def _scoped_chat_visible_capabilities(
         capabilities=capabilities,
         lexical_matches=lexical_matches,
         entries=entries,
+        require_lexical_signal=False,
     )
     if not hybrid_matches:
         return scope_query, []
@@ -4378,14 +4394,22 @@ def _hybrid_chat_capability_matches(
     capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
     lexical_matches: list[dict[str, Any]],
     entries: list[dict[str, Any]],
+    require_lexical_signal: bool | None = None,
 ) -> list[dict[str, Any]]:
+    should_run_vector = (
+        any(float(m.get("score") or 0.0) > 0.0 for m in lexical_matches)
+        if require_lexical_signal is True
+        else True
+        if require_lexical_signal is False
+        else _should_run_capability_vector_search(lexical_matches)
+    )
     vector_matches = (
         _vector_chat_capability_matches(
             query=query,
             capabilities=capabilities,
             entries=entries,
         )
-        if _should_run_capability_vector_search(lexical_matches)
+        if should_run_vector
         else []
     )
     combined: dict[str, dict[str, Any]] = {}
@@ -4963,6 +4987,12 @@ def _route_chat_turn(
     if _t_worker is not None:
         logger.info("chat_route_entry", extra={"pre_route_ms": round((_t0 - _t_worker) * 1000, 1)})
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
+    active_job_confirmation_plan = _active_job_confirmation_turn_plan(
+        content=content,
+        session_metadata=session_metadata,
+    )
+    if active_job_confirmation_plan is not None:
+        return active_job_confirmation_plan
     if CHAT_RESPONSE_MODE != "answer_or_handoff":
         return _route_chat_turn_legacy(
             content=content,
@@ -4994,7 +5024,12 @@ def _route_chat_turn(
     # Build lightweight capability evidence (lexical + vector, no LLM) only when the
     # message also has execution-like tokens — so _capability_offer_hint can still
     # inject a capability offer when relevant. Pure chat questions skip even that.
-    if not pending_clarification and _is_question_turn(content):
+    boundary_provider_available = (_chat_boundary_provider or _chat_response_provider) is not None
+    if (
+        not (CHAT_RESPONSE_MODE == "answer_or_handoff" and boundary_provider_available)
+        and not pending_clarification
+        and _is_question_turn(content)
+    ):
         # Always build capability evidence for question turns — the vector search (~50-150ms)
         # is the only way to detect RAG grounding need and non-RAG capability offers.
         # We never call the boundary LLM here, so even "conversational-looking" questions
@@ -5134,13 +5169,31 @@ def _route_chat_turn(
     if not _skip_prefetch:
         _prefetch_thread.start()
 
-    boundary = _generate_chat_boundary_decision(
-        content=content,
-        candidate_goal=candidate_goal,
-        session_metadata=session_metadata,
-        merged_context=merged_context,
-        messages=messages,
-    )
+    try:
+        boundary = _generate_chat_boundary_decision(
+            content=content,
+            candidate_goal=candidate_goal,
+            session_metadata=session_metadata,
+            merged_context=merged_context,
+            messages=messages,
+        )
+    except llm_provider.LLMUnavailableError:
+        if _chat_router_provider is None:
+            raise
+        if pending_clarification:
+            return _chat_clarification_turn_plan(
+                goal=candidate_goal,
+                clarification_questions=[
+                    "Do you want to continue the current workflow request, or should I answer here in chat instead?"
+                ],
+                session_metadata=session_metadata,
+                source="chat_boundary_unavailable",
+            )
+        return _chat_response_turn_plan(
+            goal=content.strip(),
+            assistant_content="I can help you create workflows.",
+            source="chat_boundary_unavailable",
+        )
 
     if boundary is None:
         raise llm_provider.LLMUnavailableError("chat_boundary_decision_unavailable")
@@ -5242,9 +5295,18 @@ def _route_chat_turn(
                 merged_context=merged_context,
                 messages=messages,
                 prefetched_route_request=_prefetch_result[0],
+                finalize_response=False,
             ),
             boundary=boundary,
             candidate_goal=candidate_goal,
+        )
+        router_turn_plan = _finalize_chat_turn_plan(
+            router_turn_plan,
+            content=content,
+            candidate_goal=candidate_goal,
+            merged_context=merged_context,
+            messages=messages,
+            session_metadata=session_metadata,
         )
         return _attach_chat_boundary_decision(
             router_turn_plan,
@@ -5419,6 +5481,7 @@ def _route_chat_turn_with_router(
     merged_context: Mapping[str, Any] | None,
     messages: Sequence[chat_contracts.ChatMessage] | None,
     prefetched_route_request: chat_contracts.ChatRouteRequest | None = None,
+    finalize_response: bool = True,
 ) -> dict[str, Any]:
     pending_clarification = chat_service.pending_clarification_is_active(session_metadata)
     if _chat_router_provider is None:
@@ -5455,13 +5518,16 @@ def _route_chat_turn_with_router(
                 },
             )
         )
+        turn_plan = _normalize_chat_route(
+            parsed,
+            content=content,
+            candidate_goal=candidate_goal,
+            route_request=route_request,
+        )
+        if not finalize_response:
+            return turn_plan
         return _finalize_chat_turn_plan(
-            _normalize_chat_route(
-                parsed,
-                content=content,
-                candidate_goal=candidate_goal,
-                route_request=route_request,
-            ),
+            turn_plan,
             content=content,
             candidate_goal=candidate_goal,
             merged_context=merged_context,
@@ -6212,6 +6278,9 @@ def _build_chat_route_request(
         user_context={"user_id": resolved_user_id} if resolved_user_id else {},
         policy_context={
             "service": "api",
+            "_normalized_intent_envelope": (
+                workflow_contracts.dump_normalized_intent_envelope(normalized) or {}
+            ),
             "workflow_reference_required": False,
             "workflow_candidate_selection_allowed": True,
             "direct_capability_count": len(
@@ -6245,6 +6314,7 @@ def _build_chat_route_request(
                 "blocking_slots": list(heuristic.blocking_slots or []),
                 "questions": list(heuristic.questions or []),
                 "slot_values": dict(heuristic.slot_values or {}),
+                "clarification_mode": str(heuristic.clarification_mode or "").strip(),
                 "workflow_target_available": workflow_invocation is not None
                 and workflow_invocation.has_target(),
                 "recommended_fallback_route": recommended_fallback_route,
@@ -6331,6 +6401,9 @@ def _build_chat_router_prompt(
         if candidate.candidate_type == chat_contracts.ChatRouteCandidateType.direct_agent
     ]
     route_request_dump = route_request.model_dump(mode="json", exclude_none=True)
+    policy_context = route_request_dump.get("policy_context")
+    if isinstance(policy_context, dict):
+        policy_context.pop("_normalized_intent_envelope", None)
     if stripped_context is not None and "context_json" in route_request_dump:
         route_request_dump["context_json"] = dict(stripped_context)
     payload = {
@@ -6794,11 +6867,7 @@ def _build_chat_boundary_decision_prompt(
         ],
         "context_json": dict(merged_context or {}),
         "boundary_evidence": (
-            boundary_evidence.model_dump(
-                mode="json",
-                exclude_none=True,
-                exclude={"conversation_mode_hint"},
-            )
+            boundary_evidence.model_dump(mode="json", exclude_none=True)
             if boundary_evidence is not None
             else {}
         ),
@@ -7021,25 +7090,9 @@ def _generate_chat_boundary_decision(
 ) -> chat_contracts.ChatBoundaryDecision | None:
     if CHAT_RESPONSE_MODE != "answer_or_handoff":
         return None
-    if _chat_boundary_provider is None:
+    provider = _chat_boundary_provider or _chat_response_provider
+    if provider is None:
         raise llm_provider.LLMUnavailableError("chat_boundary_provider_unavailable")
-    # Fast-exit: skip capability search + LLM boundary call for messages the heuristic
-    # can confidently classify as conversational (no workflow tokens, no pending state).
-    # The heuristic rejects messages containing workflow tokens first, so this is safe.
-    _quick_lifecycle = chat_service.clarification_lifecycle_from_metadata(session_metadata)
-    if not _quick_lifecycle.active and _looks_like_conversational_turn(content):
-        return chat_contracts.ChatBoundaryDecision(
-            decision=chat_contracts.ChatBoundaryDecisionType.chat_reply,
-            assistant_response="",
-            confidence=1.0,
-            reason_code="conversational_fast_exit",
-            evidence=chat_contracts.ChatBoundaryEvidence(
-                goal=str(candidate_goal or "").strip(),
-                conversation_mode_hint="conversational",
-                pending_clarification=False,
-                execution_signal_strength="none",
-            ),
-        )
     chat_session_id = str((session_metadata or {}).get("_chat_session_id") or "").strip()
     boundary_evidence = _build_chat_boundary_evidence(
         content=content,
@@ -7091,7 +7144,7 @@ def _generate_chat_boundary_decision(
         merged_context=merged_context,
     )
     try:
-        parsed = _chat_boundary_provider.generate_request_json_object(
+        parsed = provider.generate_request_json_object(
             LLMRequest(
                 prompt="",
                 prompt_blocks=prompt_blocks,
@@ -7152,6 +7205,24 @@ def _postprocess_chat_boundary_decision(
     evidence = boundary.evidence or chat_contracts.ChatBoundaryEvidence()
     # Non-pending meta_clarification: resolve to execution_request only when the
     # capability signal is strong, otherwise trust the model's conversational intent.
+    if (
+        not evidence.pending_clarification
+        and boundary.decision == chat_contracts.ChatBoundaryDecisionType.chat_reply
+        and evidence.conversation_mode_hint == "execution_oriented"
+        and str(evidence.intent or "").strip().lower() not in {"", "other", "inform", "clarify"}
+        and (
+            evidence.execution_signal_strength in {"strong", "moderate"}
+            or (evidence.needs_clarification and bool(evidence.missing_inputs))
+        )
+        and not _is_question_turn(content)
+    ):
+        return boundary.model_copy(
+            update={
+                "decision": chat_contracts.ChatBoundaryDecisionType.execution_request,
+                "assistant_response": "",
+                "reason_code": "execution_signal_override",
+            }
+        )
     if (
         not evidence.pending_clarification
         and boundary.decision == chat_contracts.ChatBoundaryDecisionType.meta_clarification
@@ -7381,6 +7452,52 @@ def _normalize_chat_route(
     )
     clarification_questions = list(decision.clarification_questions or [])
     assistant_response = str(decision.assistant_response or "").strip()
+    heuristic_questions = [
+        str(question).strip()
+        for question in boundary_features.get("questions", [])
+        if isinstance(question, str) and question.strip()
+    ]
+    heuristic_clarification_mode = str(boundary_features.get("clarification_mode") or "").strip()
+    if (
+        route == "ask_clarification"
+        and heuristic_clarification_mode == "intent_disagreement"
+        and heuristic_questions
+    ):
+        intent = heuristic_intent or intent
+        risk_level = heuristic_risk_level or risk_level
+        confidence = heuristic_confidence
+        threshold = (
+            float(heuristic_threshold_raw)
+            if isinstance(heuristic_threshold_raw, (int, float))
+            else threshold
+        )
+        low_confidence = confidence < threshold
+        blocking_slots = heuristic_blocking_slots or ["intent_action"]
+        missing_slots = heuristic_missing_slots or ["intent_action"]
+        slot_values["intent_action"] = intent
+        slot_values["risk_level"] = risk_level
+        clarification_questions = heuristic_questions[:1]
+        assistant_response = "\n".join(clarification_questions)
+    if route == "ask_clarification" and heuristic_missing_slots and heuristic_questions:
+        clarification_questions = heuristic_questions[:1]
+        assistant_response = "\n".join(clarification_questions)
+        if intent == "generate" and "topic_query" in missing_slots and "path" in missing_slots:
+            missing_slots = [
+                *(["instruction"] if "instruction" not in missing_slots else []),
+                *[
+                    field
+                    for field in missing_slots
+                    if field not in {"topic_query", "query", "instruction"}
+                ],
+            ]
+            blocking_slots = [
+                *(["instruction"] if "instruction" not in blocking_slots else []),
+                *[
+                    field
+                    for field in blocking_slots
+                    if field not in {"topic_query", "query", "instruction"}
+                ],
+            ]
     if route == "ask_clarification" and missing_slots:
         filtered_questions: list[str] = []
         for question in clarification_questions:
@@ -7471,6 +7588,9 @@ def _normalize_chat_route(
         fallback_used = True
         fallback_reason = fallback_reason or "invalid_direct_capability"
     if route == "tool_call" and _is_chat_direct_capability(capability_id):
+        if missing_slots and risk_level == "read_only" and arguments:
+            missing_slots = []
+            blocking_slots = []
         if missing_slots:
             # Clarify first — even pre-authorized capabilities need required inputs.
             route = "ask_clarification"
@@ -7555,12 +7675,34 @@ def _normalize_chat_route(
         fallback_reason = fallback_reason or "resolved_clarification_submits_job"
     if route == "submit_job" and missing_slots:
         route = "ask_clarification"
+        if heuristic_questions:
+            clarification_questions = heuristic_questions[:1]
+            assistant_response = "\n".join(clarification_questions)
+            if intent == "generate" and "topic_query" in missing_slots and "path" in missing_slots:
+                missing_slots = [
+                    *(["instruction"] if "instruction" not in missing_slots else []),
+                    *[
+                        field
+                        for field in missing_slots
+                        if field not in {"topic_query", "query", "instruction"}
+                    ],
+                ]
+                blocking_slots = [
+                    *(["instruction"] if "instruction" not in blocking_slots else []),
+                    *[
+                        field
+                        for field in blocking_slots
+                        if field not in {"topic_query", "query", "instruction"}
+                    ],
+                ]
         fallback_used = True
         fallback_reason = fallback_reason or "missing_inputs_before_submit"
     if route == "respond" and (
         clarification_questions or (missing_slots and not conversational_turn)
     ):
         route = "ask_clarification"
+        if not clarification_questions and assistant_response:
+            clarification_questions = [assistant_response]
         fallback_used = True
         fallback_reason = fallback_reason or "respond_requires_clarification"
     if route == "respond" and not assistant_response and execution_oriented:
@@ -7640,6 +7782,11 @@ def _normalize_chat_route(
         "arguments": arguments,
         "clarification_questions": clarification_questions,
         "goal_intent_profile": workflow_contracts.dump_goal_intent_profile(assessment) or {},
+        "normalized_intent_envelope": (
+            dict(route_request.policy_context.get("_normalized_intent_envelope"))
+            if isinstance(route_request.policy_context.get("_normalized_intent_envelope"), Mapping)
+            else {}
+        ),
         "resolved_goal": candidate_goal,
         "context_json_updates": workflow_context_updates,
         "response_generated": False,
@@ -8168,9 +8315,10 @@ def _normalize_chat_submit_context(
             context_json=context_updates,
         )
 
+    refreshed_goal = goal_with_clarification if updates else goal
     refreshed_normalized = (
         _normalize_goal_intent(
-            goal,
+            refreshed_goal,
             db=db,
             user_id=user_id,
             context_envelope=updated_envelope,
@@ -8195,6 +8343,22 @@ def _normalize_chat_submit_context(
         if _context_has_clarification_value(effective_intent_context, normalized_field):
             continue
         reconciled_missing_fields.append(normalized_field)
+    if pending_state is not None and _chat_clarification_normalizer_provider is None:
+        pending_field_set = {
+            field
+            for field in (
+                intent_contract.normalize_required_input_key(raw_field)
+                for raw_field in (
+                    list(clarification_lifecycle.pending_fields or ())
+                    + list(clarification_lifecycle.required_fields or ())
+                )
+            )
+            if field
+        }
+        if pending_field_set:
+            reconciled_missing_fields = [
+                field for field in reconciled_missing_fields if field in pending_field_set
+            ]
     refreshed_assessment["missing_slots"] = list(reconciled_missing_fields)
     refreshed_assessment["blocking_slots"] = list(reconciled_missing_fields)
     refreshed_assessment["needs_clarification"] = bool(reconciled_missing_fields)
@@ -8261,7 +8425,7 @@ def _normalize_chat_submit_context(
     if not context_updates and not clarification_questions:
         return None
     return chat_service.ChatSubmitNormalizationResult(
-        goal=goal_with_clarification if updates else goal,
+        goal=refreshed_goal,
         context_json=context_updates,
         clarification_questions=clarification_questions,
         requires_blocking_clarification=requires_blocking_clarification,

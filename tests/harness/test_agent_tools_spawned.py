@@ -18,7 +18,7 @@ class _StubProvider:
 
 def test_agent_run_reports_self_descriptor() -> None:
     provider = _StubProvider('{"thought": "done", "final_answer": "ok"}')
-    result = agent_tools.agent_run(
+    result = agent_tools.agent(
         {"goal": "do a thing", "role": "researcher"},
         provider,
         invoke_capability=lambda cap_id, args: {},
@@ -34,7 +34,7 @@ def test_agent_run_reports_self_descriptor() -> None:
 
 def test_agent_run_honours_explicit_agent_id() -> None:
     provider = _StubProvider('{"final_answer": "ok"}')
-    result = agent_tools.agent_run(
+    result = agent_tools.agent(
         {"goal": "x", "agent_id": "lead-agent"},
         provider,
         invoke_capability=lambda cap_id, args: {},

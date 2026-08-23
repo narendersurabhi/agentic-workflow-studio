@@ -32,3 +32,5 @@ export function ThinkingState() {
     </div>
   );
 }
+
+export default ThinkingState;

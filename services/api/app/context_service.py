@@ -370,6 +370,8 @@ def chat_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
     *,
     include_intent_slots: bool = False,
+    include_user_profile: bool = True,
+    stage: str = "chat",
 ) -> dict[str, Any]:
     """Unified view for all chat-path stages (routing, intent, submit, preflight).
 
@@ -380,9 +382,9 @@ def chat_context_view(
     parsed = workflow_contracts.parse_context_envelope(envelope)
     if parsed is None:
         return {}
-    base_context = budget_context_for_stage(parsed, stage="chat")
+    base_context = budget_context_for_stage(parsed, stage=stage)
     context = _merge_clarification_slot_ledger(base_context, parsed.session_scope)
-    if parsed.profile:
+    if include_user_profile and parsed.profile:
         budgeted_profile = _trim_to_token_budget([parsed.profile], _TOKEN_BUDGETS["user_profile"])
         if budgeted_profile:
             context["user_profile"] = dict(budgeted_profile[0])
@@ -459,7 +461,7 @@ def preflight_context_view(
 def chat_route_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    return chat_context_view(envelope)
+    return chat_context_view(envelope, stage="chat_route")
 
 
 def intent_context_view(
@@ -471,7 +473,7 @@ def intent_context_view(
 def chat_submit_context_view(
     envelope: workflow_contracts.ContextEnvelope | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    return chat_context_view(envelope)
+    return chat_context_view(envelope, include_user_profile=False, stage="chat_submit")
 
 
 def rank_context_items(
@@ -787,7 +789,7 @@ def _rank_interaction_summaries(
     interaction_summaries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     goal_tokens = _goal_tokens(goal)
-    scored: list[tuple[float, int, dict[str, Any]]] = []
+    scored: list[tuple[float, int, int, dict[str, Any]]] = []
     for index, item in enumerate(interaction_summaries):
         if _interaction_summary_is_noisy(item):
             continue
@@ -795,9 +797,11 @@ def _rank_interaction_summaries(
         lexical_score = sum(1 for token in goal_tokens if token in haystack)
         recency_score = float(index) / max(1, len(interaction_summaries))
         score = float(lexical_score * 4) + recency_score
-        scored.append((score, index, dict(item)))
-    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [item for _score, _index, item in scored]
+        scored.append((score, lexical_score, index, dict(item)))
+    if any(lexical_score > 0 for _score, lexical_score, _index, _item in scored):
+        scored = [item for item in scored if item[1] > 0]
+    scored.sort(key=lambda item: (item[0], item[2]), reverse=True)
+    return [item for _score, _lexical_score, _index, item in scored]
 
 
 def _rank_capability_candidates(

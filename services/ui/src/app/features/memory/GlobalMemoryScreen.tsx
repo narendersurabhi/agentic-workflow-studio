@@ -1,12 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, useAuth } from "../../lib/auth";
 
 import { useShell, ShellActions } from "../../lib/shell";
 import ScreenHeader from "../../components/ScreenHeader";
+import Button from "../../components/ui/Button";
+import Input from "../../components/ui/Input";
+import Textarea from "../../components/ui/Textarea";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+
+const memoryKeys = {
+  specs: () => ["memory", "specs"] as const,
+  entries: (name: string, userId: string) => ["memory", "entries", name, userId] as const,
+};
 
 type MemoryScope = "request" | "session" | "user" | "project" | "global";
 
@@ -42,16 +51,35 @@ const formatTimestamp = (value?: string | null) => {
   return date.toLocaleString();
 };
 
+const fetchMemorySpecs = async (): Promise<MemorySpec[]> => {
+  const response = await apiFetch(`${apiUrl}/memory/specs`);
+  const body = (await response.json()) as MemorySpec[] | { detail?: string };
+  if (!response.ok) {
+    throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory specs (${response.status})`);
+  }
+  return (body as MemorySpec[]).filter((entry) => entry.scope === "user");
+};
+
+const fetchMemoryEntries = async (name: string, userId: string): Promise<MemoryEntry[]> => {
+  const params = new URLSearchParams({
+    name,
+    scope: "user",
+    user_id: userId,
+    limit: "200",
+  });
+  const response = await apiFetch(`${apiUrl}/memory/read?${params.toString()}`);
+  const body = (await response.json()) as MemoryEntry[] | { detail?: string };
+  if (!response.ok) {
+    throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory entries (${response.status})`);
+  }
+  return body as MemoryEntry[];
+};
+
 export default function GlobalMemoryScreen() {
   const { user: authUser } = useAuth();
-  const [specs, setSpecs] = useState<MemorySpec[]>([]);
-  const [specsLoading, setSpecsLoading] = useState(true);
-  const [specsError, setSpecsError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [userId, setUserId] = useState("");
   const [selectedName, setSelectedName] = useState("user_profile");
-  const [entries, setEntries] = useState<MemoryEntry[]>([]);
-  const [entriesLoading, setEntriesLoading] = useState(false);
-  const [entriesError, setEntriesError] = useState<string | null>(null);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [editorKey, setEditorKey] = useState("");
   const [payloadText, setPayloadText] = useState(prettyJson({}));
@@ -67,39 +95,35 @@ export default function GlobalMemoryScreen() {
     }
   }, [authUser?.user_id]);
 
+  const specsQuery = useQuery({
+    queryKey: memoryKeys.specs(),
+    queryFn: fetchMemorySpecs,
+  });
+  const specs = useMemo(() => specsQuery.data ?? [], [specsQuery.data]);
+  const specsLoading = specsQuery.isLoading;
+  const specsError = specsQuery.error instanceof Error ? specsQuery.error.message : null;
+
   useEffect(() => {
-    let ignore = false;
-    const loadSpecs = async () => {
-      setSpecsLoading(true);
-      setSpecsError(null);
-      try {
-        const response = await apiFetch(`${apiUrl}/memory/specs`);
-        const body = (await response.json()) as MemorySpec[] | { detail?: string };
-        if (!response.ok) {
-          throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory specs (${response.status})`);
-        }
-        const userSpecs = (body as MemorySpec[]).filter((entry) => entry.scope === "user");
-        if (!ignore) {
-          setSpecs(userSpecs);
-          if (userSpecs.length > 0 && !userSpecs.some((entry) => entry.name === selectedName)) {
-            setSelectedName(userSpecs[0].name);
-          }
-        }
-      } catch (error) {
-        if (!ignore) {
-          setSpecsError(error instanceof Error ? error.message : "Failed to load memory specs.");
-        }
-      } finally {
-        if (!ignore) {
-          setSpecsLoading(false);
-        }
-      }
-    };
-    void loadSpecs();
-    return () => {
-      ignore = true;
-    };
-  }, [selectedName]);
+    if (specs.length > 0 && !specs.some((entry) => entry.name === selectedName)) {
+      setSelectedName(specs[0].name);
+    }
+  }, [specs, selectedName]);
+
+  const trimmedUserId = userId.trim();
+  const entriesQuery = useQuery({
+    queryKey: memoryKeys.entries(selectedName, trimmedUserId),
+    queryFn: () => fetchMemoryEntries(selectedName, trimmedUserId),
+    enabled: Boolean(selectedName && trimmedUserId),
+  });
+  const entries = useMemo(() => entriesQuery.data ?? [], [entriesQuery.data]);
+  const entriesLoading = entriesQuery.isFetching;
+  const entriesError = entriesQuery.error instanceof Error ? entriesQuery.error.message : null;
+
+  useEffect(() => {
+    if (selectedEntryId && !entries.some((entry) => entry.id === selectedEntryId)) {
+      setSelectedEntryId(null);
+    }
+  }, [entries, selectedEntryId]);
 
   const selectedSpec = useMemo(
     () => specs.find((entry) => entry.name === selectedName) || null,
@@ -112,39 +136,8 @@ export default function GlobalMemoryScreen() {
   );
 
   const refreshEntries = async () => {
-    if (!selectedName || !userId.trim()) {
-      setEntries([]);
-      return;
-    }
-    setEntriesLoading(true);
-    setEntriesError(null);
-    try {
-      const params = new URLSearchParams({
-        name: selectedName,
-        scope: "user",
-        user_id: userId.trim(),
-        limit: "200",
-      });
-      const response = await apiFetch(`${apiUrl}/memory/read?${params.toString()}`);
-      const body = (await response.json()) as MemoryEntry[] | { detail?: string };
-      if (!response.ok) {
-        throw new Error(typeof (body as { detail?: string }).detail === "string" ? (body as { detail: string }).detail : `Failed to load memory entries (${response.status})`);
-      }
-      const nextEntries = body as MemoryEntry[];
-      setEntries(nextEntries);
-      if (selectedEntryId && !nextEntries.some((entry) => entry.id === selectedEntryId)) {
-        setSelectedEntryId(null);
-      }
-    } catch (error) {
-      setEntriesError(error instanceof Error ? error.message : "Failed to load memory entries.");
-    } finally {
-      setEntriesLoading(false);
-    }
+    await queryClient.invalidateQueries({ queryKey: memoryKeys.entries(selectedName, trimmedUserId) });
   };
-
-  useEffect(() => {
-    void refreshEntries();
-  }, [selectedName, userId]);
 
   const resetEditor = () => {
     setSelectedEntryId(null);
@@ -268,27 +261,15 @@ export default function GlobalMemoryScreen() {
   return (
     <>
       <ShellActions>
-        <button
-          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={resetEditor}
-          disabled={saving || deleting}
-        >
+        <Button variant="secondary" size="sm" onClick={resetEditor} disabled={saving || deleting}>
           New Entry
-        </button>
-        <button
-          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={() => void refreshEntries()}
-          disabled={entriesLoading}
-        >
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => void refreshEntries()} disabled={entriesLoading}>
           {entriesLoading ? "Refreshing..." : "Refresh"}
-        </button>
-        <button
-          className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={saveEntry}
-          disabled={saving}
-        >
+        </Button>
+        <Button variant="primary" size="sm" onClick={saveEntry} disabled={saving}>
           {saving ? "Saving..." : "Save Context"}
-        </button>
+        </Button>
       </ShellActions>
       <div className="space-y-5">
       <ScreenHeader
@@ -400,20 +381,16 @@ export default function GlobalMemoryScreen() {
                 {selectedEntry ? "Update Context Entry" : "Create Context Entry"}
               </h2>
             </div>
-            <button
-              className="rounded-full border border-rose-300/20 bg-accent-rose px-4 py-2 text-sm font-semibold text-text-rose-token transition hover:border-rose-300/30 hover:bg-accent-rose disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={deleteEntry}
-              disabled={deleting || saving}
-            >
+            <Button variant="destructive" size="sm" onClick={deleteEntry} disabled={deleting || saving}>
               {deleting ? "Deleting..." : "Delete"}
-            </button>
+            </Button>
           </div>
 
           <div className="mt-3 grid gap-3">
             <label className="block">
               <div className="text-sm font-medium text-text-hi">Key</div>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi shadow-sm outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/20"
+              <Input
+                className="mt-1"
                 value={editorKey}
                 onChange={(event) => setEditorKey(event.target.value)}
                 placeholder="preferences"
@@ -421,16 +398,16 @@ export default function GlobalMemoryScreen() {
             </label>
             <label className="block">
               <div className="text-sm font-medium text-text-hi">Payload JSON</div>
-              <textarea
-                className="mt-1 min-h-[220px] w-full rounded-2xl border border-subtle bg-surface-1 px-3 py-3 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-surface-1"
+              <Textarea
+                className="mt-1 min-h-[220px] font-mono text-xs"
                 value={payloadText}
                 onChange={(event) => setPayloadText(event.target.value)}
               />
             </label>
             <label className="block">
               <div className="text-sm font-medium text-text-hi">Metadata JSON</div>
-              <textarea
-                className="mt-1 min-h-[120px] w-full rounded-2xl border border-subtle bg-surface-1 px-3 py-3 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-surface-1"
+              <Textarea
+                className="mt-1 min-h-[120px] font-mono text-xs"
                 value={metadataText}
                 onChange={(event) => setMetadataText(event.target.value)}
               />

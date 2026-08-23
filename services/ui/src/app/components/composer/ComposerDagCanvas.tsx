@@ -71,16 +71,16 @@ type DagCanvasPanState = {
 type ComposerDagCanvasProps = {
   visualChainNodes: ComposerDraftNode[];
   dagEdgeDraftSourceNodeId: string | null;
-  setDagEdgeDraftSourceNodeId: React.Dispatch<React.SetStateAction<string | null>>;
-  setDagConnectorDrag: React.Dispatch<React.SetStateAction<DagConnectorDragState | null>>;
-  setDagConnectorHoverTargetNodeId: React.Dispatch<React.SetStateAction<string | null>>;
+  setDagEdgeDraftSourceNodeId: (nodeId: string | null) => void;
+  setDagConnectorDrag: (drag: DagConnectorDragState | null) => void;
+  setDagConnectorHoverTargetNodeId: (nodeId: string | null) => void;
   autoLayoutDagCanvas: () => void;
   dagCanvasViewportRef: React.RefObject<HTMLDivElement | null>;
   dagCanvasRef: React.RefObject<HTMLDivElement | null>;
   dagCanvasSurface: { width: number; height: number };
   dagCanvasEdges: DagCanvasEdge[];
   hoveredDagEdgeKey: string | null;
-  setHoveredDagEdgeKey: React.Dispatch<React.SetStateAction<string | null>>;
+  setHoveredDagEdgeKey: (edgeKey: string | null) => void;
   removeDagEdge: (fromNodeId: string, toNodeId: string) => void;
   dagConnectorPreview: { path: string } | null;
   dagCanvasNodes: DagCanvasNode[];
@@ -97,7 +97,7 @@ type ComposerDagCanvasProps = {
     }
   >;
   selectedDagNodeId: string | null;
-  setSelectedDagNodeId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedDagNodeId: (nodeId: string | null) => void;
   dagConnectorDrag: DagConnectorDragState | null;
   dagCanvasDraggingNodeId: string | null;
   dagConnectorHoverTargetNodeId: string | null;
@@ -810,9 +810,11 @@ export default function ComposerDagCanvas({
                   key={`composer-edge-${edge.edgeKey}`}
                   data-composer-edge="true"
                   onMouseEnter={() => setHoveredDagEdgeKey(edge.edgeKey)}
-                  onMouseLeave={() =>
-                    setHoveredDagEdgeKey((prev) => (prev === edge.edgeKey ? null : prev))
-                  }
+                  onMouseLeave={() => {
+                    if (hoveredDagEdgeKey === edge.edgeKey) {
+                      setHoveredDagEdgeKey(null);
+                    }
+                  }}
                 >
                   <path
                     d={edge.path}
@@ -1011,7 +1013,9 @@ export default function ComposerDagCanvas({
                   }
                 }}
                 onMouseLeave={() => {
-                  setDagConnectorHoverTargetNodeId((prev) => (prev === node.id ? null : prev));
+                  if (dagConnectorHoverTargetNodeId === node.id) {
+                    setDagConnectorHoverTargetNodeId(null);
+                  }
                 }}
                 onMouseUp={(event) => {
                   if (dagConnectorDrag && dagConnectorDrag.sourceNodeId !== node.id) {

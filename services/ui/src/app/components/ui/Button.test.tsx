@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import Button from "./Button";
 
@@ -50,5 +51,21 @@ describe("Button", () => {
     render(<Button>Focus me</Button>);
     const button = screen.getByRole("button", { name: "Focus me" });
     expect(button.className).toContain("focus-visible:ring-2");
+  });
+
+  it("is reachable via Tab and activates on both Enter and Space", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    render(<Button onClick={onClick}>Save</Button>);
+
+    await user.tab();
+    const button = screen.getByRole("button", { name: "Save" });
+    expect(button).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(onClick).toHaveBeenCalledTimes(1);
+
+    await user.keyboard(" ");
+    expect(onClick).toHaveBeenCalledTimes(2);
   });
 });
