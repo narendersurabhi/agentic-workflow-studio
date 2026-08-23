@@ -1,6 +1,7 @@
 "use client";
 
 import ScreenHeader from "./ScreenHeader";
+import PrimitivesShowcase from "./gallery/PrimitivesShowcase";
 import WorkflowNodeCard, {
   workflowNodeCardToneForVisual,
   workflowNodeCardToneStyles,
@@ -239,6 +240,8 @@ export default function ComponentsGalleryPage() {
         activeScreen="components"
         compact
       />
+
+      <PrimitivesShowcase />
 
       <section className="mt-6 overflow-hidden rounded-[30px] border border-slate-900/10 bg-[#07111d] shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
         <div className="border-b border-subtle bg-gradient-panel-deep px-6 py-4">
