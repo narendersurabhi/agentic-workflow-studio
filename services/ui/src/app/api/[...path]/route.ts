@@ -114,51 +114,62 @@ async function proxy(request: Request, path: string[] | undefined): Promise<Resp
   }
 }
 
+type RouteContext = {
+  params: Promise<{ path: string[] }>;
+};
+
 export async function GET(
   request: Request,
-  context: { params: { path?: string[] } }
+  context: RouteContext
 ): Promise<Response> {
-  return proxy(request, context.params.path);
+  const { path } = await context.params;
+  return proxy(request, path);
 }
 
 export async function POST(
   request: Request,
-  context: { params: { path?: string[] } }
+  context: RouteContext
 ): Promise<Response> {
-  return proxy(request, context.params.path);
+  const { path } = await context.params;
+  return proxy(request, path);
 }
 
 export async function PUT(
   request: Request,
-  context: { params: { path?: string[] } }
+  context: RouteContext
 ): Promise<Response> {
-  return proxy(request, context.params.path);
+  const { path } = await context.params;
+  return proxy(request, path);
 }
 
 export async function PATCH(
   request: Request,
-  context: { params: { path?: string[] } }
+  context: RouteContext
 ): Promise<Response> {
-  return proxy(request, context.params.path);
+  const { path } = await context.params;
+  return proxy(request, path);
 }
 
 export async function DELETE(
   request: Request,
-  context: { params: { path?: string[] } }
+  context: RouteContext
 ): Promise<Response> {
-  return proxy(request, context.params.path);
+  const { path } = await context.params;
+  return proxy(request, path);
 }
 
 export async function OPTIONS(
   request: Request,
-  context: { params: { path?: string[] } }
+  context: RouteContext
 ): Promise<Response> {
-  return proxy(request, context.params.path);
+  const { path } = await context.params;
+  return proxy(request, path);
 }
 
 export async function HEAD(
   request: Request,
-  context: { params: { path?: string[] } }
+  context: RouteContext
 ): Promise<Response> {
-  return proxy(request, context.params.path);
+  const { path } = await context.params;
+  return proxy(request, path);
 }

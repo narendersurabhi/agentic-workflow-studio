@@ -212,12 +212,12 @@ export default function WorkflowNodeCard({
       }}
     >
       <div
-        className="pointer-events-none absolute inset-[1px] rounded-[17px]"
+        className="pointer-events-none absolute inset-px rounded-[17px]"
         style={{ background: toneStyle.shell }}
       />
 
       <div
-        className="absolute -left-[6px] top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border"
+        className="absolute left-[-6px] top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border"
         style={{
           borderColor: inputActive ? "#22c55e" : "rgba(255,255,255,0.54)",
           background: inputActive ? "#86efac" : "rgba(241, 245, 249, 0.88)",
