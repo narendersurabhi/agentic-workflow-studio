@@ -16,6 +16,18 @@ import {
   fetchWorkflowRuns,
 } from "./workflowLibraryQueries";
 import { useStudioCanvasStore } from "./studioCanvasStore";
+import Button from "../../components/ui/Button";
+import Input from "../../components/ui/Input";
+import Textarea from "../../components/ui/Textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogBody,
+  DialogTitle,
+  DialogDescription,
+} from "../../components/ui/Dialog";
 import ComposerValidationPanel from "../../components/composer/ComposerValidationPanel";
 import {
   WorkflowNodeIcon,
@@ -6470,33 +6482,41 @@ export default function WorkflowStudio() {
         </div>
         {activeStudioSurface === "workflow" ? (
           <>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={startFreshStudioDraft}
             >
               New Workflow
-            </button>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={saveWorkflowDefinition}
               disabled={workflowActionLoading !== null}
             >
               {workflowActionLoading === "save" ? "Saving..." : "Save"}
-            </button>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={publishWorkflowVersion}
               disabled={workflowActionLoading !== null}
             >
               {workflowActionLoading === "publish" ? "Publishing..." : "Publish"}
-            </button>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="uppercase tracking-[0.16em]"
               onClick={runWorkflowVersion}
               disabled={workflowActionLoading !== null}
             >
               {workflowActionLoading === "run" ? "Starting..." : "Run Workflow"}
-            </button>
+            </Button>
           </>
         ) : null}
       </ShellActions>
@@ -6751,83 +6771,68 @@ export default function WorkflowStudio() {
       </datalist>
 
       {/* ── Save workflow dialog ── */}
-      {saveDialogOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <button
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={() => setSaveDialogOpen(false)}
-            aria-label="Cancel"
-          />
-          <div className="relative z-10 w-full max-w-md rounded-[24px] border border-white/12 bg-[rgba(9,14,23,0.95)] p-6 shadow-[0_32px_80px_rgba(9,14,23,0.7)] backdrop-blur-xl">
-            <div className="mb-5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
-                Workflow Studio
+      <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-text-sky-token">
+              Workflow Studio
+            </div>
+            <DialogTitle>Save workflow</DialogTitle>
+            <DialogDescription>
+              Give this workflow a name before saving. You can rename it later from the Workflows page.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            <label className="block">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                Name <span className="text-rose-400">*</span>
               </div>
-              <h2 className="mt-1 text-lg font-semibold tracking-tight text-text-hi">
-                Save workflow
-              </h2>
-              <p className="mt-0.5 text-xs text-text-md">
-                Give this workflow a name before saving. You can rename it later from the Workflows page.
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              <label className="block">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
-                  Name <span className="text-rose-400">*</span>
-                </div>
-                <input
-                  autoFocus
-                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10"
-                  placeholder="e.g. Document generation pipeline"
-                  value={saveDialogTitle}
-                  onChange={(e) => setSaveDialogTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && saveDialogTitle.trim()) {
-                      setSaveDialogOpen(false);
-                      void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
-                    }
-                    if (e.key === "Escape") setSaveDialogOpen(false);
-                  }}
-                />
-              </label>
-              <label className="block">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
-                  Goal <span className="text-text-lo">(optional)</span>
-                </div>
-                <textarea
-                  rows={2}
-                  className="mt-1.5 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:ring-2 focus:ring-sky-300/10 resize-none"
-                  placeholder="What does this workflow accomplish?"
-                  value={saveDialogGoal}
-                  onChange={(e) => setSaveDialogGoal(e.target.value)}
-                />
-              </label>
-            </div>
-
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-xl border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-md transition hover:text-text-hi"
-                onClick={() => setSaveDialogOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="rounded-xl border border-sky-300/35 bg-accent-sky px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/55 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!saveDialogTitle.trim()}
-                onClick={() => {
-                  setSaveDialogOpen(false);
-                  void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+              <Input
+                autoFocus
+                className="mt-1.5"
+                placeholder="e.g. Document generation pipeline"
+                value={saveDialogTitle}
+                onChange={(e) => setSaveDialogTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && saveDialogTitle.trim()) {
+                    setSaveDialogOpen(false);
+                    void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+                  }
                 }}
-              >
-                Save workflow
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+              />
+            </label>
+            <label className="block">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">
+                Goal <span className="text-text-lo">(optional)</span>
+              </div>
+              <Textarea
+                rows={2}
+                className="mt-1.5"
+                placeholder="What does this workflow accomplish?"
+                value={saveDialogGoal}
+                onChange={(e) => setSaveDialogGoal(e.target.value)}
+              />
+            </label>
+          </DialogBody>
+
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setSaveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!saveDialogTitle.trim()}
+              onClick={() => {
+                setSaveDialogOpen(false);
+                void executeSaveWorkflowDefinition(saveDialogTitle.trim(), saveDialogGoal.trim() || undefined);
+              }}
+            >
+              Save workflow
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
