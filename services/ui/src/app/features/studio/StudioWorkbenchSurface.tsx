@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
 import {
@@ -15,10 +16,10 @@ import {
   publishAgentDefinitionVersion,
   searchCapabilities,
   updateAgentDefinition,
-  type CapabilitySearchItem,
   type WorkbenchDebuggerData,
   type WorkbenchRunLaunchResponse,
 } from "./studioApi";
+import { studioWorkbenchKeys } from "./studioWorkbenchQueries";
 import { mapDebuggerStepToReplayDraft, mapRunToWorkbenchFork, mapRunToWorkflowPromotion } from "./studioWorkbenchMappings";
 import type {
   AgentDefinition,
@@ -578,18 +579,13 @@ export default function StudioWorkbenchSurface({
   workspaceUserId: string;
   onPromoteWorkflowDraft?: (draft: WorkbenchWorkflowPromotionDraft) => void;
 }) {
+  const queryClient = useQueryClient();
   const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("agent");
   const [catalogCollapsed, setCatalogCollapsed] = useState(false);
   const [showDevPreview, setShowDevPreview] = useState(false);
   const [showAgentAdvanced, setShowAgentAdvanced] = useState(false);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
-  const [catalogLoading, setCatalogLoading] = useState(true);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [catalog, setCatalog] = useState<CapabilityItem[]>([]);
   const [catalogQuery, setCatalogQuery] = useState("");
-  const [catalogSearchError, setCatalogSearchError] = useState<string | null>(null);
-  const [catalogSearchLoading, setCatalogSearchLoading] = useState(false);
-  const [catalogSearchItems, setCatalogSearchItems] = useState<CapabilitySearchItem[]>([]);
   const [groupFilter, setGroupFilter] = useState("all");
   const [riskFilter, setRiskFilter] = useState("all");
   const [idempotencyFilter, setIdempotencyFilter] = useState("all");
@@ -612,13 +608,7 @@ export default function StudioWorkbenchSurface({
   ]);
   const [agentAllowedCapabilityIds, setAgentAllowedCapabilityIds] = useState<string[]>([]);
   const [agentRawRunSpecText, setAgentRawRunSpecText] = useState("{\n  \n}");
-  const [agentDefinitions, setAgentDefinitions] = useState<AgentDefinition[]>([]);
-  const [agentDefinitionsLoading, setAgentDefinitionsLoading] = useState(false);
-  const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
   const [selectedAgentDefinitionId, setSelectedAgentDefinitionId] = useState("");
-  const [agentDefinitionVersions, setAgentDefinitionVersions] = useState<AgentDefinitionVersion[]>([]);
-  const [agentDefinitionVersionsLoading, setAgentDefinitionVersionsLoading] = useState(false);
-  const [agentDefinitionVersionsError, setAgentDefinitionVersionsError] = useState<string | null>(null);
   const [selectedAgentDefinitionVersionId, setSelectedAgentDefinitionVersionId] = useState("");
   const [agentProfileVersionNote, setAgentProfileVersionNote] = useState("");
   const [agentProfileName, setAgentProfileName] = useState("");
@@ -631,9 +621,6 @@ export default function StudioWorkbenchSurface({
   const [launchLoading, setLaunchLoading] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchResponse, setLaunchResponse] = useState<WorkbenchRunLaunchResponse | null>(null);
-  const [debuggerData, setDebuggerData] = useState<WorkbenchDebuggerData | null>(null);
-  const [debuggerLoading, setDebuggerLoading] = useState(false);
-  const [debuggerError, setDebuggerError] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [workbenchBanner, setWorkbenchBanner] = useState<WorkbenchBanner | null>(null);
 
@@ -651,150 +638,90 @@ export default function StudioWorkbenchSurface({
     }
   }, [agentUserId, workspaceUserId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadCatalog = async () => {
-      setCatalogLoading(true);
-      setCatalogError(null);
-      try {
-        const response = await fetchCapabilityCatalog(true);
-        if (cancelled) {
-          return;
-        }
-        setCatalog(response.items);
-        setSelectedCapabilityId((current) => current || response.items[0]?.id || "");
-        const agentRunInCatalog = response.items.some((item) => item.id === AGENT_RUN_CAPABILITY_ID);
-        if (agentRunInCatalog) {
-          setAgentSteps((current) => {
-            if (current.length === 1 && current[0].capabilityId === DEFAULT_AGENT_CAPABILITY_ID) {
-              return [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
-            }
-            return current;
-          });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setCatalogError(
-            error instanceof Error ? error.message : "Failed to load capability catalog."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setCatalogLoading(false);
-        }
-      }
-    };
-    void loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const catalogQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.capabilityCatalog(),
+    queryFn: () => fetchCapabilityCatalog(true),
+  });
+  const catalog = useMemo(() => catalogQueryResult.data?.items ?? [], [catalogQueryResult.data]);
+  const catalogLoading = catalogQueryResult.isLoading;
+  const catalogError =
+    catalogQueryResult.error instanceof Error ? catalogQueryResult.error.message : null;
 
   useEffect(() => {
-    let cancelled = false;
-    const loadAgentDefinitions = async () => {
-      setAgentDefinitionsLoading(true);
-      setAgentDefinitionsError(null);
-      try {
-        const response = await fetchAgentDefinitions(workspaceUserId.trim() || undefined);
-        if (!cancelled) {
-          setAgentDefinitions(sortAgentDefinitions(response));
+    const items = catalogQueryResult.data?.items;
+    if (!items) {
+      return;
+    }
+    setSelectedCapabilityId((current) => current || items[0]?.id || "");
+    const agentRunInCatalog = items.some((item) => item.id === AGENT_RUN_CAPABILITY_ID);
+    if (agentRunInCatalog) {
+      setAgentSteps((current) => {
+        if (current.length === 1 && current[0].capabilityId === DEFAULT_AGENT_CAPABILITY_ID) {
+          return [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
         }
-      } catch (error) {
-        if (!cancelled) {
-          setAgentDefinitionsError(
-            error instanceof Error ? error.message : "Failed to load agent profiles."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setAgentDefinitionsLoading(false);
-        }
-      }
-    };
-    void loadAgentDefinitions();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceUserId]);
+        return current;
+      });
+    }
+  }, [catalogQueryResult.data]);
+
+  const agentDefinitionsQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+    queryFn: () => fetchAgentDefinitions(workspaceUserId.trim() || undefined),
+  });
+  const agentDefinitions = useMemo(
+    () => sortAgentDefinitions(agentDefinitionsQueryResult.data ?? []),
+    [agentDefinitionsQueryResult.data]
+  );
+  const agentDefinitionsLoading = agentDefinitionsQueryResult.isLoading;
+  const agentDefinitionsError =
+    agentDefinitionsQueryResult.error instanceof Error
+      ? agentDefinitionsQueryResult.error.message
+      : null;
+
+  const agentDefinitionVersionsQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.agentDefinitionVersions(selectedAgentDefinitionId),
+    queryFn: () => fetchAgentDefinitionVersions(selectedAgentDefinitionId),
+    enabled: Boolean(selectedAgentDefinitionId),
+  });
+  const agentDefinitionVersions = useMemo(
+    () =>
+      selectedAgentDefinitionId
+        ? sortAgentDefinitionVersions(agentDefinitionVersionsQueryResult.data ?? [])
+        : [],
+    [selectedAgentDefinitionId, agentDefinitionVersionsQueryResult.data]
+  );
+  const agentDefinitionVersionsLoading = agentDefinitionVersionsQueryResult.isLoading;
+  const agentDefinitionVersionsError =
+    agentDefinitionVersionsQueryResult.error instanceof Error
+      ? agentDefinitionVersionsQueryResult.error.message
+      : null;
 
   useEffect(() => {
     if (!selectedAgentDefinitionId) {
-      setAgentDefinitionVersions([]);
       setSelectedAgentDefinitionVersionId("");
-      setAgentDefinitionVersionsError(null);
-      setAgentDefinitionVersionsLoading(false);
       return;
     }
-    let cancelled = false;
-    const loadAgentDefinitionVersions = async () => {
-      setAgentDefinitionVersionsLoading(true);
-      setAgentDefinitionVersionsError(null);
-      try {
-        const response = await fetchAgentDefinitionVersions(selectedAgentDefinitionId);
-        if (cancelled) {
-          return;
-        }
-        const sortedVersions = sortAgentDefinitionVersions(response);
-        setAgentDefinitionVersions(sortedVersions);
-        setSelectedAgentDefinitionVersionId((current) =>
-          sortedVersions.some((version) => version.id === current) ? current : ""
-        );
-      } catch (error) {
-        if (!cancelled) {
-          setAgentDefinitionVersions([]);
-          setSelectedAgentDefinitionVersionId("");
-          setAgentDefinitionVersionsError(
-            error instanceof Error ? error.message : "Failed to load published versions."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setAgentDefinitionVersionsLoading(false);
-        }
-      }
-    };
-    void loadAgentDefinitionVersions();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedAgentDefinitionId]);
+    setSelectedAgentDefinitionVersionId((current) =>
+      agentDefinitionVersions.some((version) => version.id === current) ? current : ""
+    );
+  }, [selectedAgentDefinitionId, agentDefinitionVersions]);
 
-  useEffect(() => {
-    const query = deferredCatalogQuery.trim();
-    if (!query) {
-      setCatalogSearchItems([]);
-      setCatalogSearchError(null);
-      setCatalogSearchLoading(false);
-      return;
-    }
-    let cancelled = false;
-    const runSearch = async () => {
-      setCatalogSearchLoading(true);
-      setCatalogSearchError(null);
-      try {
-        const response = await searchCapabilities(query, 12);
-        if (!cancelled) {
-          setCatalogSearchItems(response.items);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setCatalogSearchItems([]);
-          setCatalogSearchError(
-            error instanceof Error ? error.message : "Capability search failed."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setCatalogSearchLoading(false);
-        }
-      }
-    };
-    void runSearch();
-    return () => {
-      cancelled = true;
-    };
-  }, [deferredCatalogQuery]);
+  const trimmedCatalogQuery = deferredCatalogQuery.trim();
+  const catalogSearchQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.capabilitySearch(trimmedCatalogQuery),
+    queryFn: () => searchCapabilities(trimmedCatalogQuery, 12),
+    enabled: Boolean(trimmedCatalogQuery),
+  });
+  const catalogSearchItems = useMemo(
+    () => (trimmedCatalogQuery ? catalogSearchQueryResult.data?.items ?? [] : []),
+    [trimmedCatalogQuery, catalogSearchQueryResult.data]
+  );
+  const catalogSearchLoading = trimmedCatalogQuery ? catalogSearchQueryResult.isLoading : false;
+  const catalogSearchError = trimmedCatalogQuery
+    ? catalogSearchQueryResult.error instanceof Error
+      ? catalogSearchQueryResult.error.message
+      : null
+    : null;
 
   const selectedCapability = useMemo(
     () => catalog.find((item) => item.id === selectedCapabilityId) ?? null,
@@ -1101,6 +1028,20 @@ export default function StudioWorkbenchSurface({
     workbenchMode,
   ]);
 
+  const debuggerQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.runDebugger(activeRunId ?? ""),
+    queryFn: () => fetchRunDebugger(activeRunId as string),
+    enabled: Boolean(active && activeRunId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.run?.status;
+      return status && TERMINAL_RUN_STATUSES.has(status) ? false : 2500;
+    },
+  });
+  const debuggerData = activeRunId ? debuggerQueryResult.data ?? null : null;
+  const debuggerLoading = debuggerQueryResult.isLoading;
+  const debuggerError =
+    debuggerQueryResult.error instanceof Error ? debuggerQueryResult.error.message : null;
+
   const currentRunStatus =
     debuggerData?.run?.status ||
     launchResponse?.run?.status ||
@@ -1226,7 +1167,6 @@ export default function StudioWorkbenchSurface({
     setAgentEditorMode("structured");
     setSelectedAgentDefinitionId("");
     setSelectedAgentDefinitionVersionId("");
-    setAgentDefinitionVersions([]);
     setAgentProfileVersionNote("");
     setAgentProfileName("");
     setAgentProfileDescription("");
@@ -1251,12 +1191,10 @@ export default function StudioWorkbenchSurface({
     try {
       const payload = buildAgentDefinitionPayload();
       const updated = await updateAgentDefinition(selectedAgentDefinitionId, payload);
-      setAgentDefinitions((current) =>
-        sortAgentDefinitions(
-          current.map((definition) =>
-            definition.id === updated.id ? updated : definition
-          )
-        )
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) =>
+          (current ?? []).map((definition) => (definition.id === updated.id ? updated : definition))
       );
       setSelectedAgentDefinitionId(updated.id);
       setSelectedAgentDefinitionVersionId("");
@@ -1281,15 +1219,15 @@ export default function StudioWorkbenchSurface({
     try {
       const payload = buildAgentDefinitionPayload();
       const created = await createAgentDefinition(payload);
-      setAgentDefinitions((current) =>
-        sortAgentDefinitions([
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) => [
           created,
-          ...current.filter((definition) => definition.id !== created.id),
-        ])
+          ...(current ?? []).filter((definition) => definition.id !== created.id),
+        ]
       );
       setSelectedAgentDefinitionId(created.id);
       setSelectedAgentDefinitionVersionId("");
-      setAgentDefinitionVersions([]);
       setAgentProfileName(created.name);
       setAgentProfileDescription(created.description ?? "");
       setWorkbenchBanner({
@@ -1315,12 +1253,10 @@ export default function StudioWorkbenchSurface({
     try {
       const payload = buildAgentDefinitionPayload();
       const updated = await updateAgentDefinition(selectedAgentDefinitionId, payload);
-      setAgentDefinitions((current) =>
-        sortAgentDefinitions(
-          current.map((definition) =>
-            definition.id === updated.id ? updated : definition
-          )
-        )
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) =>
+          (current ?? []).map((definition) => (definition.id === updated.id ? updated : definition))
       );
       const published = await publishAgentDefinitionVersion(updated.id, {
         version_note: agentProfileVersionNote.trim() || null,
@@ -1329,11 +1265,12 @@ export default function StudioWorkbenchSurface({
           surface: "studio_workbench",
         },
       });
-      setAgentDefinitionVersions((current) =>
-        sortAgentDefinitionVersions([
+      queryClient.setQueryData<AgentDefinitionVersion[]>(
+        studioWorkbenchKeys.agentDefinitionVersions(updated.id),
+        (current: AgentDefinitionVersion[] | undefined) => [
           published,
-          ...current.filter((version) => version.id !== published.id),
-        ])
+          ...(current ?? []).filter((version) => version.id !== published.id),
+        ]
       );
       setSelectedAgentDefinitionId(updated.id);
       setSelectedAgentDefinitionVersionId(published.id);
@@ -1365,12 +1302,13 @@ export default function StudioWorkbenchSurface({
     setAgentProfileError(null);
     try {
       await deleteAgentDefinition(selectedAgentDefinitionId);
-      setAgentDefinitions((current) =>
-        current.filter((definition) => definition.id !== selectedAgentDefinitionId)
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) =>
+          (current ?? []).filter((definition) => definition.id !== selectedAgentDefinitionId)
       );
       setSelectedAgentDefinitionId("");
       setSelectedAgentDefinitionVersionId("");
-      setAgentDefinitionVersions([]);
       setAgentProfileVersionNote("");
       setAgentProfileName("");
       setAgentProfileDescription("");
@@ -1424,7 +1362,6 @@ export default function StudioWorkbenchSurface({
     setWorkbenchMode("agent");
     setSelectedAgentDefinitionId("");
     setSelectedAgentDefinitionVersionId("");
-    setAgentDefinitionVersions([]);
     setAgentProfileVersionNote("");
     setAgentProfileName("");
     setAgentProfileDescription("");
@@ -1494,46 +1431,6 @@ export default function StudioWorkbenchSurface({
     }
     onPromoteWorkflowDraft(workflowPromotionResult.draft);
   };
-
-  useEffect(() => {
-    if (!active || !activeRunId) {
-      return;
-    }
-    let cancelled = false;
-    const refreshDebugger = async () => {
-      setDebuggerLoading(true);
-      setDebuggerError(null);
-      try {
-        const response = await fetchRunDebugger(activeRunId);
-        if (!cancelled) {
-          setDebuggerData(response);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setDebuggerError(
-            error instanceof Error ? error.message : "Failed to load workbench run debugger."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setDebuggerLoading(false);
-        }
-      }
-    };
-    void refreshDebugger();
-    if (currentRunStatus && TERMINAL_RUN_STATUSES.has(currentRunStatus)) {
-      return () => {
-        cancelled = true;
-      };
-    }
-    const intervalId = window.setInterval(() => {
-      void refreshDebugger();
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [active, activeRunId, currentRunStatus]);
 
   const handleCapabilityInsert = (item: CapabilityItem) => {
     setWorkbenchMode("capability");
@@ -1668,8 +1565,6 @@ export default function StudioWorkbenchSurface({
   const launchCurrentWorkbenchRun = async () => {
     setLaunchLoading(true);
     setLaunchError(null);
-    setDebuggerError(null);
-    setDebuggerData(null);
     setWorkbenchBanner(null);
 
     try {
@@ -1742,15 +1637,9 @@ export default function StudioWorkbenchSurface({
       }
 
       setLaunchResponse(response);
+      // Setting activeRunId enables and keys debuggerQueryResult for the new
+      // run, so it fetches (and then polls) reactively — no manual fetch here.
       setActiveRunId(response.run.id);
-      try {
-        const initialDebugger = await fetchRunDebugger(response.run.id);
-        setDebuggerData(initialDebugger);
-      } catch (error) {
-        setDebuggerError(
-          error instanceof Error ? error.message : "Failed to load workbench run debugger."
-        );
-      }
     } catch (error) {
       setLaunchError(error instanceof Error ? error.message : "Workbench launch failed.");
     } finally {
@@ -2152,7 +2041,6 @@ export default function StudioWorkbenchSurface({
                         if (!nextId) {
                           setSelectedAgentDefinitionId("");
                           setSelectedAgentDefinitionVersionId("");
-                          setAgentDefinitionVersions([]);
                           setAgentProfileName("");
                           setAgentProfileDescription("");
                           setAgentInstructions("");
