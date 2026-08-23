@@ -694,7 +694,7 @@ export default function ComposerDagCanvas({
       <div
         ref={dagCanvasViewportRef as React.RefObject<HTMLDivElement>}
         data-composer-canvas-viewport="true"
-        className={`relative h-full overflow-auto bg-[#506478] [background-image:linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_82%_24%,rgba(125,211,252,0.08),transparent_14%),linear-gradient(180deg,rgba(24,36,49,0.2),rgba(9,16,27,0.34))] [background-size:24px_24px,24px_24px,100%_100%,100%_100%,100%_100%] transition-[box-shadow] ${
+        className={`relative h-full overflow-auto bg-[#506478] bg-[linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),radial-gradient(circle_at_16%_18%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_82%_24%,rgba(125,211,252,0.08),transparent_14%),linear-gradient(180deg,rgba(24,36,49,0.2),rgba(9,16,27,0.34))] bg-size-[24px_24px,24px_24px,100%_100%,100%_100%,100%_100%] transition-shadow ${
           dagCanvasPanState ? "cursor-grabbing" : "cursor-grab"
         } ${isDragOver ? "ring-2 ring-inset ring-sky-400/40" : ""}`}
         onAuxClick={(event) => {

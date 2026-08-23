@@ -799,7 +799,7 @@ function MarkdownContent({ content, streaming = false }: { content: string; stre
   // During streaming show plain text to avoid flicker from partial parse trees
   // (e.g. unclosed code fences).  Once the turn is complete, render as markdown.
   if (streaming) {
-    return <span className="whitespace-pre-wrap break-words">{content}</span>;
+    return <span className="whitespace-pre-wrap wrap-break-word">{content}</span>;
   }
   return (
     <ReactMarkdown
@@ -8505,11 +8505,11 @@ const openTemplateModal = (template: Template) => {
                       >
                         {item.id}
                         <span
-                          className={`ml-1 rounded-full border px-1 py-[1px] text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(item.source)}`}
+                          className={`ml-1 rounded-full border px-1 py-px text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(item.source)}`}
                         >
                           {capabilitySourceLabel(item.source)}
                         </span>
-                        <span className="ml-1 rounded-full bg-slate-100 px-1 py-[1px] text-[9px] text-slate-600">
+                        <span className="ml-1 rounded-full bg-slate-100 px-1 py-px text-[9px] text-slate-600">
                           {item.score.toFixed(1)}
                         </span>
                       </button>
@@ -9636,13 +9636,13 @@ const openTemplateModal = (template: Template) => {
                                             {capabilityId}
                                             {ranking?.source ? (
                                               <span
-                                                className={`ml-1 rounded-full border px-1 py-[1px] text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(ranking.source)}`}
+                                                className={`ml-1 rounded-full border px-1 py-px text-[9px] uppercase tracking-[0.12em] ${capabilitySourceBadgeClass(ranking.source)}`}
                                               >
                                                 {capabilitySourceLabel(ranking.source)}
                                               </span>
                                             ) : null}
                                             {typeof ranking?.score === "number" ? (
-                                              <span className="ml-1 rounded-full bg-slate-100 px-1 py-[1px] text-[9px] text-slate-600">
+                                              <span className="ml-1 rounded-full bg-slate-100 px-1 py-px text-[9px] text-slate-600">
                                                 {ranking.score.toFixed(1)}
                                               </span>
                                             ) : null}
@@ -10456,7 +10456,7 @@ const openTemplateModal = (template: Template) => {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div
-                      className={`break-words text-sm font-semibold ${
+                      className={`wrap-break-word text-sm font-semibold ${
                         useStudioSurfaceTheme ? "text-text-hi" : "text-slate-900"
                       }`}
                     >
@@ -10476,7 +10476,7 @@ const openTemplateModal = (template: Template) => {
                         {expandedJobGoals.has(job.id) ? "Show less" : "Show more"}
                       </button>
                     ) : null}
-                    <div className={`mt-1 break-words text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
+                    <div className={`mt-1 wrap-break-word text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>
                       {job.id}
                     </div>
                     <div className={`mt-1 text-xs ${useStudioSurfaceTheme ? "text-text-md" : "text-text-lo"}`}>

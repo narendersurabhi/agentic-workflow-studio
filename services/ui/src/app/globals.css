@@ -1,148 +1,278 @@
 /* ─── Design Tokens ──────────────────────────────────────────────────────── */
 
-:root {
-  /* Surfaces */
-  --surface-page:   #4f6274;
-  --surface-1:      rgba(255, 255, 255, 0.05);
-  --surface-2:      rgba(255, 255, 255, 0.08);
-  --surface-input:  rgba(15, 23, 42, 0.32);
+@import 'tailwindcss';
 
-  /* Text */
-  --text-hi:          rgb(248 250 252);
-  --text-md:          rgb(226 232 240 / 0.90);
-  --text-lo:          rgb(203 213 225 / 0.76);
-  --text-placeholder: rgb(226 232 240 / 0.76);
-
-  /* Semantic accent text */
-  --text-sky:     rgb(224 242 254 / 0.92);
-  --text-emerald: rgb(209 250 229 / 0.94);
-  --text-rose:    rgb(255 228 230 / 0.94);
-  --text-amber:   rgb(254 243 199 / 0.94);
-
-  /* Borders */
-  --border-subtle:  rgba(255, 255, 255, 0.10);
-  --border-default: rgba(255, 255, 255, 0.16);
-
-  /* Accent backgrounds */
-  --bg-sky:     rgba(56, 189, 248, 0.12);
-  --bg-emerald: rgba(52, 211, 153, 0.12);
-  --bg-rose:    rgba(251, 113, 133, 0.13);
-  --bg-amber:   rgba(251, 191, 36, 0.13);
-
-  /* Gradients */
-  --gradient-card: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
-  --gradient-panel: linear-gradient(180deg, rgba(63, 78, 95, 0.62), rgba(37, 49, 62, 0.82));
-  --gradient-panel-deep: linear-gradient(180deg, rgba(37, 49, 61, 0.86), rgba(16, 24, 34, 0.90));
-  --gradient-panel-mid: linear-gradient(180deg, rgba(63, 79, 95, 0.54), rgba(47, 60, 74, 0.68));
-
-  /* Shell structural gradients — defaults (ocean); overridden by .shell-theme-* */
-  --gradient-shell:   linear-gradient(180deg, #435365 0px, #435365 78px, #55697c 78px, #55697c 100%);
-  --gradient-header:  linear-gradient(180deg, rgba(67, 83, 101, 0.98), rgba(60, 74, 90, 0.98));
-  --gradient-sidebar: linear-gradient(180deg, rgba(49, 61, 74, 0.96), rgba(44, 56, 69, 0.98));
-  --gradient-hero:    linear-gradient(135deg, rgb(28, 25, 23), rgb(15, 23, 42), rgb(8, 30, 58));
-
-  /* Navigation tokens */
-  --nav-active-bg:     rgba(56, 189, 248, 0.18);
-  --nav-active-border: rgba(125, 211, 252, 0.35);
-  --nav-active-text:   rgb(240 249 255);
-  --nav-inactive-bg:   rgba(15, 23, 42, 0.18);
-  --nav-inactive-border: rgba(255, 255, 255, 0.10);
-  --nav-inactive-text: rgb(226 232 240);
-
-  /* Header / shell borders & shadows */
-  --border-header: rgba(255, 255, 255, 0.10);
-  --shadow-header: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
-
-  /* Shadows */
-  --shadow-card: 0 18px 44px rgba(15, 23, 42, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+@theme {
+  --color-surface-page: var(--surface-page);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-input: var(--surface-input);
+  --color-text-hi: var(--text-hi);
+  --color-text-md: var(--text-md);
+  --color-text-lo: var(--text-lo);
+  --color-accent-sky: var(--bg-sky);
+  --color-accent-emerald: var(--bg-emerald);
+  --color-accent-rose: var(--bg-rose);
+  --color-accent-amber: var(--bg-amber);
+  --color-text-sky-token: var(--text-sky);
+  --color-text-emerald-token: var(--text-emerald);
+  --color-text-rose-token: var(--text-rose);
+  --color-text-amber-token: var(--text-amber);
+  --color-subtle: var(--border-subtle);
+  --color-default-theme: var(--border-default);
+  --shadow-card: var(--shadow-card);
 }
 
-:root[data-theme="light"] {
-  /* Surfaces */
-  --surface-page:  #eaf1f7;
-  --surface-1:     rgba(255, 255, 255, 0.84);
-  --surface-2:     rgba(255, 255, 255, 0.92);
-  --surface-input: rgba(255, 255, 255, 1);
+@layer base {
+  :root {
+    /* Surfaces */
+    --surface-page: #4f6274;
+    --surface-1: rgba(255, 255, 255, 0.05);
+    --surface-2: rgba(255, 255, 255, 0.08);
+    --surface-input: rgba(15, 23, 42, 0.32);
 
-  /* Text */
-  --text-hi:          rgb(15 23 42 / 0.96);
-  --text-md:          rgb(51 65 85 / 0.86);
-  --text-lo:          rgb(100 116 139 / 0.90);
-  --text-placeholder: rgb(100 116 139 / 0.72);
+    /* Text */
+    --text-hi: rgb(248 250 252);
+    --text-md: rgb(226 232 240 / 0.9);
+    --text-lo: rgb(203 213 225 / 0.76);
+    --text-placeholder: rgb(226 232 240 / 0.76);
 
-  /* Semantic accent text */
-  --text-sky:     rgb(3 105 161 / 0.92);
-  --text-emerald: rgb(6 95 70 / 0.94);
-  --text-rose:    rgb(159 18 57 / 0.94);
-  --text-amber:   rgb(146 64 14 / 0.94);
+    /* Semantic accent text */
+    --text-sky: rgb(224 242 254 / 0.92);
+    --text-emerald: rgb(209 250 229 / 0.94);
+    --text-rose: rgb(255 228 230 / 0.94);
+    --text-amber: rgb(254 243 199 / 0.94);
 
-  /* Borders */
-  --border-subtle:  rgba(203, 213, 225, 0.88);
-  --border-default: rgba(148, 163, 184, 0.60);
+    /* Borders */
+    --border-subtle: rgba(255, 255, 255, 0.1);
+    --border-default: rgba(255, 255, 255, 0.16);
 
-  /* Accent backgrounds */
-  --bg-sky:     rgba(14, 165, 233, 0.12);
-  --bg-emerald: rgba(16, 185, 129, 0.12);
-  --bg-rose:    rgba(244, 63, 94, 0.12);
-  --bg-amber:   rgba(245, 158, 11, 0.14);
+    /* Accent backgrounds */
+    --bg-sky: rgba(56, 189, 248, 0.12);
+    --bg-emerald: rgba(52, 211, 153, 0.12);
+    --bg-rose: rgba(251, 113, 133, 0.13);
+    --bg-amber: rgba(251, 191, 36, 0.13);
 
-  /* Gradients */
-  --gradient-card: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.98));
-  --gradient-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.98));
-  --gradient-panel-deep: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(238, 245, 252, 0.98));
-  --gradient-panel-mid: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(241, 245, 249, 0.96));
+    /* Gradients */
+    --gradient-card: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.06),
+      rgba(255, 255, 255, 0.03)
+    );
+    --gradient-panel: linear-gradient(
+      180deg,
+      rgba(63, 78, 95, 0.62),
+      rgba(37, 49, 62, 0.82)
+    );
+    --gradient-panel-deep: linear-gradient(
+      180deg,
+      rgba(37, 49, 61, 0.86),
+      rgba(16, 24, 34, 0.9)
+    );
+    --gradient-panel-mid: linear-gradient(
+      180deg,
+      rgba(63, 79, 95, 0.54),
+      rgba(47, 60, 74, 0.68)
+    );
 
-  /* Hero header gradient — light mode content area only */
-  --gradient-hero: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(238, 245, 252, 0.98));
+    /* Shell structural gradients — defaults (ocean); overridden by .shell-theme-* */
+    --gradient-shell: linear-gradient(
+      180deg,
+      #435365 0px,
+      #435365 78px,
+      #55697c 78px,
+      #55697c 100%
+    );
+    --gradient-header: linear-gradient(
+      180deg,
+      rgba(67, 83, 101, 0.98),
+      rgba(60, 74, 90, 0.98)
+    );
+    --gradient-sidebar: linear-gradient(
+      180deg,
+      rgba(49, 61, 74, 0.96),
+      rgba(44, 56, 69, 0.98)
+    );
+    --gradient-hero: linear-gradient(
+      135deg,
+      rgb(28, 25, 23),
+      rgb(15, 23, 42),
+      rgb(8, 30, 58)
+    );
 
-  /* Navigation tokens */
-  --nav-active-bg:     rgba(14, 165, 233, 0.12);
-  --nav-active-border: rgba(56, 189, 248, 0.55);
-  --nav-active-text:   rgb(3 105 161);
-  --nav-inactive-bg:   rgba(255, 255, 255, 0.82);
-  --nav-inactive-border: rgba(203, 213, 225, 1.0);
-  --nav-inactive-text: rgb(71 85 105);
+    /* Navigation tokens */
+    --nav-active-bg: rgba(56, 189, 248, 0.18);
+    --nav-active-border: rgba(125, 211, 252, 0.35);
+    --nav-active-text: rgb(240 249 255);
+    --nav-inactive-bg: rgba(15, 23, 42, 0.18);
+    --nav-inactive-border: rgba(255, 255, 255, 0.1);
+    --nav-inactive-text: rgb(226 232 240);
 
-  /* Header / shell borders & shadows */
-  --border-header: rgba(203, 213, 225, 1.0);
-  --shadow-header: inset 0 -1px 0 rgba(148, 163, 184, 0.16);
+    /* Header / shell borders & shadows */
+    --border-header: rgba(255, 255, 255, 0.1);
+    --shadow-header: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
 
-  /* Shadows */
-  --shadow-card: 0 18px 44px rgba(148, 163, 184, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+    /* Shadows */
+    --shadow-card:
+      0 18px 44px rgba(15, 23, 42, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  :root[data-theme='light'] {
+    /* Surfaces */
+    --surface-page: #eaf1f7;
+    --surface-1: rgba(255, 255, 255, 0.84);
+    --surface-2: rgba(255, 255, 255, 0.92);
+    --surface-input: rgba(255, 255, 255, 1);
+
+    /* Text */
+    --text-hi: rgb(15 23 42 / 0.96);
+    --text-md: rgb(51 65 85 / 0.86);
+    --text-lo: rgb(100 116 139 / 0.9);
+    --text-placeholder: rgb(100 116 139 / 0.72);
+
+    /* Semantic accent text */
+    --text-sky: rgb(3 105 161 / 0.92);
+    --text-emerald: rgb(6 95 70 / 0.94);
+    --text-rose: rgb(159 18 57 / 0.94);
+    --text-amber: rgb(146 64 14 / 0.94);
+
+    /* Borders */
+    --border-subtle: rgba(203, 213, 225, 0.88);
+    --border-default: rgba(148, 163, 184, 0.6);
+
+    /* Accent backgrounds */
+    --bg-sky: rgba(14, 165, 233, 0.12);
+    --bg-emerald: rgba(16, 185, 129, 0.12);
+    --bg-rose: rgba(244, 63, 94, 0.12);
+    --bg-amber: rgba(245, 158, 11, 0.14);
+
+    /* Gradients */
+    --gradient-card: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.96),
+      rgba(241, 245, 249, 0.98)
+    );
+    --gradient-panel: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.96),
+      rgba(241, 245, 249, 0.98)
+    );
+    --gradient-panel-deep: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.96),
+      rgba(238, 245, 252, 0.98)
+    );
+    --gradient-panel-mid: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.94),
+      rgba(241, 245, 249, 0.96)
+    );
+
+    /* Hero header gradient — light mode content area only */
+    --gradient-hero: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.98),
+      rgba(238, 245, 252, 0.98)
+    );
+
+    /* Navigation tokens */
+    --nav-active-bg: rgba(14, 165, 233, 0.12);
+    --nav-active-border: rgba(56, 189, 248, 0.55);
+    --nav-active-text: rgb(3 105 161);
+    --nav-inactive-bg: rgba(255, 255, 255, 0.82);
+    --nav-inactive-border: rgba(203, 213, 225, 1);
+    --nav-inactive-text: rgb(71 85 105);
+
+    /* Header / shell borders & shadows */
+    --border-header: rgba(203, 213, 225, 1);
+    --shadow-header: inset 0 -1px 0 rgba(148, 163, 184, 0.16);
+
+    /* Shadows */
+    --shadow-card:
+      0 18px 44px rgba(148, 163, 184, 0.16),
+      inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  }
+  .studio-contrast-surface {
+    --surface-1: rgba(255, 255, 255, 0.06);
+    --surface-2: rgba(255, 255, 255, 0.1);
+    --surface-input: rgba(15, 23, 42, 0.4);
+    --text-hi: rgb(248 250 252);
+    --text-md: rgb(226 232 240 / 0.9);
+    --text-lo: rgb(203 213 225 / 0.76);
+    --text-placeholder: rgb(203 213 225 / 0.62);
+    --text-sky: rgb(224 242 254 / 0.92);
+    --text-emerald: rgb(209 250 229 / 0.94);
+    --text-rose: rgb(255 228 230 / 0.94);
+    --text-amber: rgb(254 243 199 / 0.94);
+    --border-subtle: rgba(255, 255, 255, 0.12);
+    --border-default: rgba(255, 255, 255, 0.18);
+    --bg-sky: rgba(56, 189, 248, 0.12);
+    --bg-emerald: rgba(52, 211, 153, 0.12);
+    --bg-rose: rgba(251, 113, 133, 0.13);
+    --bg-amber: rgba(251, 191, 36, 0.13);
+    /* Keep gradient and shadow tokens dark so panel shells stay dark */
+    --gradient-card: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.06),
+      rgba(255, 255, 255, 0.03)
+    );
+    --gradient-panel: linear-gradient(
+      180deg,
+      rgba(63, 78, 95, 0.62),
+      rgba(37, 49, 62, 0.82)
+    );
+    --gradient-panel-deep: linear-gradient(
+      180deg,
+      rgba(37, 49, 61, 0.86),
+      rgba(16, 24, 34, 0.9)
+    );
+    --gradient-panel-mid: linear-gradient(
+      180deg,
+      rgba(63, 79, 95, 0.54),
+      rgba(47, 60, 74, 0.68)
+    );
+    --shadow-card:
+      0 18px 44px rgba(15, 23, 42, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+}
+
+@utility bg-gradient-card {
+  background-image: var(--gradient-card);
+}
+
+@utility bg-gradient-panel {
+  background-image: var(--gradient-panel);
+}
+
+@utility bg-gradient-panel-deep {
+  background-image: var(--gradient-panel-deep);
+}
+
+@utility bg-gradient-panel-mid {
+  background-image: var(--gradient-panel-mid);
+}
+
+@utility bg-gradient-shell {
+  background-image: var(--gradient-shell);
+}
+
+@utility bg-gradient-header {
+  background-image: var(--gradient-header);
+}
+
+@utility bg-gradient-sidebar {
+  background-image: var(--gradient-sidebar);
+}
+
+@utility bg-gradient-hero {
+  background-image: var(--gradient-hero);
 }
 
 /* Studio canvas is always dark regardless of page theme */
-.studio-contrast-surface {
-  --surface-1:      rgba(255, 255, 255, 0.06);
-  --surface-2:      rgba(255, 255, 255, 0.10);
-  --surface-input:  rgba(15, 23, 42, 0.40);
-  --text-hi:        rgb(248 250 252);
-  --text-md:        rgb(226 232 240 / 0.90);
-  --text-lo:        rgb(203 213 225 / 0.76);
-  --text-placeholder: rgb(203 213 225 / 0.62);
-  --text-sky:     rgb(224 242 254 / 0.92);
-  --text-emerald: rgb(209 250 229 / 0.94);
-  --text-rose:    rgb(255 228 230 / 0.94);
-  --text-amber:   rgb(254 243 199 / 0.94);
-  --border-subtle:  rgba(255, 255, 255, 0.12);
-  --border-default: rgba(255, 255, 255, 0.18);
-  --bg-sky:     rgba(56, 189, 248, 0.12);
-  --bg-emerald: rgba(52, 211, 153, 0.12);
-  --bg-rose:    rgba(251, 113, 133, 0.13);
-  --bg-amber:   rgba(251, 191, 36, 0.13);
-  /* Keep gradient and shadow tokens dark so panel shells stay dark */
-  --gradient-card:       linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
-  --gradient-panel:      linear-gradient(180deg, rgba(63, 78, 95, 0.62), rgba(37, 49, 62, 0.82));
-  --gradient-panel-deep: linear-gradient(180deg, rgba(37, 49, 61, 0.86), rgba(16, 24, 34, 0.90));
-  --gradient-panel-mid:  linear-gradient(180deg, rgba(63, 79, 95, 0.54), rgba(47, 60, 74, 0.68));
-  --shadow-card: 0 18px 44px rgba(15, 23, 42, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 
 /* ─── Named shell themes ──────────────────────────────────────────────────────
    Each class sets CSS custom properties on the app-shell root element.
