@@ -1089,14 +1089,8 @@ def _rag_retriever_request_json(
 
 
 def _init_db() -> None:
-    _run_migrations()
     Base.metadata.create_all(bind=engine)
-    if EVENT_OUTBOX_ENABLED:
-        _start_event_outbox_dispatcher()
-    if ORCHESTRATOR_ENABLED:
-        _start_orchestrator()
-    if JOB_RECOVERY_ENABLED:
-        _recover_jobs()
+    _run_migrations()
 
 
 def _apply_idempotent_schema_patches() -> None:
