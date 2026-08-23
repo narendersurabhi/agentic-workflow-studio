@@ -37,6 +37,9 @@ class _FakeCoderProvider:
     def generate(self, _prompt: str) -> _FakeLLMResponse:
         return _FakeLLMResponse('{"files":[{"path":"hello.py","content":"print(\\"hello\\")"}]}')
 
+    def generate_request(self, request: Any) -> _FakeLLMResponse:
+        return self.generate(request.prompt)
+
 
 def _pick_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -97,11 +100,8 @@ def _candidate_mcp_urls(mcp_url: str) -> list[str]:
 
 def _mcp_list_tools(mcp_url: str) -> list[str]:
     async def _run(candidate_url: str) -> list[str]:
-        async with streamable_http_client(candidate_url) as (
-            read_stream,
-            write_stream,
-            _session_id,
-        ):
+        async with streamable_http_client(candidate_url) as streams:
+            read_stream, write_stream = streams[:2]
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 result = await session.list_tools()
@@ -127,11 +127,8 @@ def _mcp_list_tools(mcp_url: str) -> list[str]:
 
 def _mcp_call_tool(mcp_url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     async def _run(candidate_url: str) -> dict[str, Any]:
-        async with streamable_http_client(candidate_url) as (
-            read_stream,
-            write_stream,
-            _session_id,
-        ):
+        async with streamable_http_client(candidate_url) as streams:
+            read_stream, write_stream = streams[:2]
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 result = await session.call_tool(name, arguments)

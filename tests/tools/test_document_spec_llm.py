@@ -16,8 +16,8 @@ class _ProviderStub(LLMProvider):
     def generate(self, prompt: str):  # pragma: no cover - compatibility only
         raise NotImplementedError
 
-    def generate_json_object(self, prompt: str) -> dict:
-        del prompt
+    def generate_request_json_object(self, request) -> dict:
+        del request
         return {"blocks": [{"type": "paragraph", "text": "hello"}]}
 
 
