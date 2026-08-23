@@ -32,8 +32,10 @@ def _dimensions_payload(example: Mapping[str, Any], feedback: Mapping[str, Any])
     if isinstance(dimensions, Mapping):
         return dict(dimensions)
     metadata = feedback.get("metadata")
-    if isinstance(metadata, Mapping) and isinstance(metadata.get("dimensions"), Mapping):
-        return dict(metadata.get("dimensions"))
+    if isinstance(metadata, Mapping):
+        metadata_dimensions = metadata.get("dimensions")
+        if isinstance(metadata_dimensions, Mapping):
+            return dict(metadata_dimensions)
     return {}
 
 
@@ -41,8 +43,9 @@ def _snapshot_payload(example: Mapping[str, Any], feedback: Mapping[str, Any]) -
     snapshot = example.get("snapshot")
     if isinstance(snapshot, Mapping):
         return dict(snapshot)
-    if isinstance(feedback.get("snapshot"), Mapping):
-        return dict(feedback.get("snapshot"))
+    feedback_snapshot = feedback.get("snapshot")
+    if isinstance(feedback_snapshot, Mapping):
+        return dict(feedback_snapshot)
     return {}
 
 

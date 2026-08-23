@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import os
 import re
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -235,8 +235,10 @@ def _completed_step_contexts(raw: Any) -> list[models.CompletedStepContext]:
         if not task_id or not name:
             continue
         status = _non_empty_string(entry.get("status")) or models.TaskStatus.completed.value
-        outputs = dict(entry.get("outputs")) if isinstance(entry.get("outputs"), Mapping) else {}
-        result = dict(entry.get("result")) if isinstance(entry.get("result"), Mapping) else {}
+        raw_outputs = entry.get("outputs")
+        outputs = dict(raw_outputs) if isinstance(raw_outputs, Mapping) else {}
+        raw_result = entry.get("result")
+        result = dict(raw_result) if isinstance(raw_result, Mapping) else {}
         items.append(
             models.CompletedStepContext(
                 task_id=task_id,
@@ -350,17 +352,19 @@ def parse_revision_context_from_metadata(
         for key, value in raw_context.items()
         if str(key) not in _REVISION_CONTEXT_EXCLUDED_KEYS
     }
+    raw_evaluator_signal = raw_context.get("evaluator_signal")
+    raw_checkpoint_lineage = raw_context.get("checkpoint_lineage")
     return models.PlanRevisionContext(
         revision_number=_int_or_zero(raw_context.get("prior_revision_number")),
         prior_plan_id=_non_empty_string(raw_context.get("prior_plan_id")),
         trigger_reason=_non_empty_string(raw_context.get("reason")),
         selected_strategy=_non_empty_string(raw_context.get("selected_strategy")),
         strategy_reason=_non_empty_string(raw_context.get("strategy_reason")),
-        evaluator_signal=dict(raw_context.get("evaluator_signal"))
-        if isinstance(raw_context.get("evaluator_signal"), Mapping)
+        evaluator_signal=dict(raw_evaluator_signal)
+        if isinstance(raw_evaluator_signal, Mapping)
         else {},
-        checkpoint_lineage=dict(raw_context.get("checkpoint_lineage"))
-        if isinstance(raw_context.get("checkpoint_lineage"), Mapping)
+        checkpoint_lineage=dict(raw_checkpoint_lineage)
+        if isinstance(raw_checkpoint_lineage, Mapping)
         else {},
         preserved_task_ids=[
             item
@@ -796,7 +800,12 @@ def _full_capability_values(
     | None,
 ) -> list[Any]:
     if isinstance(full_capabilities, capability_registry.CapabilityRegistry):
-        return list(full_capabilities.capabilities.values())
+        # mypy fails to narrow away `PlanRequest` here (confirmed via reveal_type: the
+        # isinstance check above evaluates true at runtime but mypy still infers
+        # `CapabilityRegistry | PlanRequest`, a narrowing gap reproducible even with a
+        # 2-member union). The cast reflects what the isinstance check already verified.
+        registry = cast("capability_registry.CapabilityRegistry", full_capabilities)
+        return list(registry.capabilities.values())
     if full_capabilities is None:
         try:
             return list(capability_registry.load_capability_registry().capabilities.values())
