@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS builder
+FROM python:3.13-slim AS builder
 WORKDIR /app
 ENV PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -14,7 +14,7 @@ COPY services/coder /app/services/coder
 WORKDIR /app/services/coder
 RUN uv pip install --system --no-cache -e /app/libs/core -e .
 
-FROM python:3.11-slim
+FROM python:3.13-slim
 WORKDIR /app/services/coder
 ENV PYTHONPATH=/app \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -22,7 +22,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
 EXPOSE 8000
