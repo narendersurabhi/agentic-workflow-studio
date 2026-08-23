@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import { useShell, ShellActions } from "./lib/shell";
 import ComposerDagCanvas from "./components/composer/ComposerDagCanvas";
 import ScreenHeader, {
@@ -12,13 +11,18 @@ import ScreenHeader, {
 } from "./components/ScreenHeader";
 import ComposerStepInspector from "./components/composer/ComposerStepInspector";
 import ComposerValidationPanel from "./components/composer/ComposerValidationPanel";
-import { ThinkingState } from "./components/chat/ThinkingState";
 import FeedbackControl from "./components/feedback/FeedbackControl";
-import ChatMessageFeedback from "./components/feedback/ChatMessageFeedback";
 import StudioWorkbenchIcon from "./features/studio/StudioWorkbenchIcon";
 import type { AdaptiveReplanStatus } from "./features/studio/types";
 import SkillCommandPalette from "./features/skills/SkillCommandPalette";
 import type { CapabilityItem as SkillCapabilityItem, Skill } from "./features/skills/types";
+import ChatScreen from "./features/chat/ChatScreen";
+import {
+  appendChatMessage,
+  makeOptimisticChatMessage,
+  type ChatMessage,
+  type ChatSession,
+} from "./features/chat/types";
 import {
   WorkflowNodeSvgIcon,
   resolveWorkflowNodeVisual,
@@ -688,7 +692,7 @@ const mergeContextWithCapabilityTemplates = (
   };
 };
 
-type Job = {
+export type Job = {
   id: string;
   goal: string;
   status: string;
@@ -701,198 +705,6 @@ type Job = {
   metadata?: Record<string, unknown>;
   context_json?: Record<string, unknown>;
 };
-
-type ChatAssistantAction = {
-  type:
-    | "respond"
-    | "tool_call"
-    | "ask_clarification"
-    | "submit_job"
-    | "run_workflow"
-    | "attach_to_job"
-    | "summarize_job";
-  goal?: string | null;
-  job_id?: string | null;
-  workflow_run_id?: string | null;
-  workflow_definition_id?: string | null;
-  workflow_version_id?: string | null;
-  workflow_trigger_id?: string | null;
-  capability_id?: string | null;
-  tool_name?: string | null;
-  clarification_questions?: string[];
-  goal_intent_profile?: Record<string, unknown>;
-  context_json?: Record<string, unknown>;
-};
-
-type ToolStepItem = {
-  capability: string;
-  label: string;
-  status: "running" | "done";
-  result?: Record<string, unknown>;
-};
-
-function artifactDownloadUrl(rawPath: string): string {
-  // Strip leading /shared/artifacts/ prefix — API endpoint is relative to that root
-  const relative = rawPath.replace(/^\/shared\/artifacts\/?/, "");
-  return `/artifacts/download?path=${encodeURIComponent(relative)}`;
-}
-
-function ToolProgressCard({
-  intent,
-  steps,
-}: {
-  intent?: string;
-  steps: ToolStepItem[];
-}) {
-  if (!intent && steps.length === 0) return null;
-  const anyRunning = steps.some((s) => s.status === "running");
-  const downloads = steps.filter(
-    (s) => s.status === "done" && typeof s.result?.path === "string"
-  );
-  return (
-    <div className="mb-2 rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2.5 text-[12px] text-text-sky-token">
-      {intent && steps.length === 0 && (
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
-          <span>{intent}</span>
-        </div>
-      )}
-      {steps.map((step) => (
-        <div key={step.capability} className="flex items-center gap-2 py-0.5">
-          {step.status === "running" ? (
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
-          ) : (
-            <span className="text-emerald-400">&#x2713;</span>
-          )}
-          <span className={step.status === "done" ? "text-text-md" : ""}>{step.label}</span>
-        </div>
-      ))}
-      {anyRunning && (
-        <div className="mt-1 text-[11px] text-text-lo">Working&hellip;</div>
-      )}
-      {downloads.length > 0 && (
-        <div className="mt-2 flex flex-col gap-1 border-t border-sky-300/20 pt-2">
-          {downloads.map((step) => {
-            const filePath = step.result!.path as string;
-            const filename = filePath.split("/").pop() ?? "download";
-            return (
-              <a
-                key={step.capability}
-                href={artifactDownloadUrl(filePath)}
-                download={filename}
-                className="flex items-center gap-2 rounded-lg border border-sky-300/30 bg-sky-900/20 px-2.5 py-1.5 text-sky-300 transition-colors hover:bg-sky-900/40 hover:text-sky-100"
-              >
-                <span>&#x1F4C4;</span>
-                <span className="flex-1 truncate font-medium">{filename}</span>
-                <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-70">Download</span>
-              </a>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
-  if (!content) return null;
-  // During streaming show plain text to avoid flicker from partial parse trees
-  // (e.g. unclosed code fences).  Once the turn is complete, render as markdown.
-  if (streaming) {
-    return <span className="whitespace-pre-wrap wrap-break-word">{content}</span>;
-  }
-  return (
-    <ReactMarkdown
-      components={{
-        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-        h1: ({ children }) => <h1 className="mb-2 mt-3 text-base font-bold">{children}</h1>,
-        h2: ({ children }) => <h2 className="mb-1.5 mt-3 text-sm font-bold">{children}</h2>,
-        h3: ({ children }) => <h3 className="mb-1 mt-2 text-sm font-semibold">{children}</h3>,
-        ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-0.5">{children}</ul>,
-        ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-0.5">{children}</ol>,
-        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-        code: ({ children, className }) => {
-          const isBlock = className?.startsWith("language-");
-          return isBlock ? (
-            <code className="block overflow-x-auto rounded-lg bg-black/30 px-3 py-2 font-mono text-[12px] leading-relaxed">
-              {children}
-            </code>
-          ) : (
-            <code className="rounded bg-black/25 px-1 py-0.5 font-mono text-[12px]">{children}</code>
-          );
-        },
-        pre: ({ children }) => <pre className="mb-2 mt-1">{children}</pre>,
-        blockquote: ({ children }) => (
-          <blockquote className="mb-2 border-l-2 border-text-lo pl-3 text-text-md italic">
-            {children}
-          </blockquote>
-        ),
-        a: ({ href, children }) => (
-          <a href={href} className="text-sky-400 underline hover:text-sky-300" target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        ),
-        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-        em: ({ children }) => <em className="italic">{children}</em>,
-        hr: () => <hr className="my-3 border-subtle" />,
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  );
-}
-
-type ChatMessage = {
-  id: string;
-  session_id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  created_at: string;
-  metadata?: Record<string, unknown>;
-  action?: ChatAssistantAction | null;
-  job_id?: string | null;
-};
-
-type ChatSession = {
-  id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-  metadata?: Record<string, unknown>;
-  active_job_id?: string | null;
-  messages: ChatMessage[];
-};
-
-type ChatTurnResponse = {
-  session: ChatSession;
-  user_message: ChatMessage;
-  assistant_message: ChatMessage;
-  job?: Job | null;
-  workflow_run?: Record<string, unknown> | null;
-};
-
-const makeOptimisticChatMessage = (sessionId: string, content: string): ChatMessage => {
-  const createdAt = new Date().toISOString();
-  return {
-    id: `optimistic-${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
-    session_id: sessionId,
-    role: "user",
-    content,
-    created_at: createdAt,
-    metadata: {
-      optimistic: true,
-      pending: true,
-    },
-    action: null,
-    job_id: null,
-  };
-};
-
-const appendChatMessage = (session: ChatSession, message: ChatMessage): ChatSession => ({
-  ...session,
-  updated_at: message.created_at,
-  messages: [...(Array.isArray(session.messages) ? session.messages : []), message],
-});
 
 // ─── Chat state cache ─────────────────────────────────────────────────────────
 // Survives client-side navigation within the same tab. Keeps the active chat
@@ -1206,7 +1018,7 @@ type CapabilityItem = {
   planner_hints?: Record<string, unknown> | null;
 };
 
-type CapabilityCatalog = {
+export type CapabilityCatalog = {
   mode: string;
   items: CapabilityItem[];
 };
@@ -7442,260 +7254,38 @@ const openTemplateModal = (template: Template) => {
 
   // ── Full-height Chat layout (Chat screen only) ────────────────────────────
   if (showChatScreen) {
-    const activeJob = chatSession?.active_job_id
-      ? jobs.find((j) => j.id === chatSession.active_job_id)
-      : null;
-    const activeJobStatus = activeJob?.status ?? (chatSession?.active_job_id ? "running" : null);
-    const isJobTerminal = activeJobStatus
-      ? ["succeeded", "failed", "canceled", "completed", "accepted"].includes(activeJobStatus)
-      : false;
-    const jobStatusColor = !activeJobStatus
-      ? ""
-      : activeJobStatus === "succeeded" || activeJobStatus === "completed" || activeJobStatus === "accepted"
-      ? "border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
-      : activeJobStatus === "failed" || activeJobStatus === "canceled"
-      ? "border-rose-300/20 bg-accent-rose text-text-rose-token"
-      : "border-sky-300/22 bg-accent-sky text-text-sky-token";
-
     return (
-      <div className="flex h-[calc(100dvh-60px)] flex-col gap-0 overflow-hidden">
-          {/* ── Top bar ── */}
-          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-subtle px-4 py-3">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-text-sky-token">
-                AI Workflow Workspace
-              </div>
-              <h1 className="mt-0.5 text-lg font-semibold tracking-tight text-text-hi">Chat</h1>
-            </div>
-            <button
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={resetChatSession}
-              disabled={chatLoading}
-            >
-              New Chat
-            </button>
-          </div>
-
-          {/* ── Transcript ── */}
-          <div
-            ref={chatTranscriptRef}
-            className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
-          >
-            {chatMessages.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <div className="text-3xl">💬</div>
-                <p className="text-sm text-text-md">
-                  Describe what you need in plain language. Type{" "}
-                  <kbd className="rounded border border-subtle bg-surface-1 px-1.5 py-0.5 text-[11px]">/</kbd>{" "}
-                  for Skills.
-                </p>
-              </div>
-            ) : (
-              chatMessages.map((message) => {
-                const isPending = Boolean(message.metadata?.pending);
-                return (
-                  <div
-                    key={message.id}
-                    className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
-                      message.role === "user"
-                        ? "ml-auto bg-white text-slate-900"
-                        : "border border-subtle bg-surface-1 text-text-hi"
-                    } ${isPending ? "opacity-70" : ""}`}
-                  >
-                    <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
-                      <div className="flex items-center gap-2">
-                        <span className={message.role === "user" ? "text-slate-400" : "text-text-md"}>
-                          {message.role}
-                        </span>
-                        {isPending ? (
-                          <span className="rounded-full border border-amber-400/30 bg-accent-amber px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
-                            Pending
-                          </span>
-                        ) : null}
-                      </div>
-                      <span className="text-text-lo">{formatTimestamp(message.created_at)}</span>
-                    </div>
-                    <div className="mt-2">
-                      <ToolProgressCard
-                        intent={message.metadata?.toolIntent as string | undefined}
-                        steps={(message.metadata?.toolSteps as ToolStepItem[] | undefined) ?? []}
-                      />
-                      <MarkdownContent
-                        content={message.content}
-                        streaming={Boolean(message.metadata?.streaming)}
-                      />
-                    </div>
-                    {message.action?.clarification_questions &&
-                    message.action.clarification_questions.length > 0 ? (
-                      <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
-                        {message.action.clarification_questions.map((q, i) => (
-                          <div key={`${message.id}-q-${i}`}>{q}</div>
-                        ))}
-                      </div>
-                    ) : null}
-                    {message.job_id ? (
-                      <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-accent-emerald px-3 py-2 text-[12px] text-text-emerald-token">
-                        <span>Job {message.job_id}</span>
-                        <a
-                          href={`/observability?job=${encodeURIComponent(message.job_id)}`}
-                          className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
-                        >
-                          View in Observability
-                        </a>
-                      </div>
-                    ) : null}
-                    {message.role === "assistant" && !isPending ? (
-                      <ChatMessageFeedback
-                        reasonOptions={CHAT_FEEDBACK_REASONS}
-                        existing={feedbackByTarget[feedbackTargetKey("chat_message", message.id)] || null}
-                        submitting={Boolean(feedbackSubmitting[feedbackTargetKey("chat_message", message.id)])}
-                        onSubmit={(payload) => submitFeedback("chat_message", message.id, payload)}
-                      />
-                    ) : null}
-                  </div>
-                );
-              })
-            )}
-            {chatLoading ? (
-              <div className="flex items-center gap-2 rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-md max-w-[82%]">
-                <span className="inline-flex gap-1">
-                  <span className="animate-bounce delay-0">●</span>
-                  <span className="animate-bounce delay-100">●</span>
-                  <span className="animate-bounce delay-200">●</span>
-                </span>
-                <span>Thinking…</span>
-              </div>
-            ) : null}
-          </div>
-
-          {/* ── Active job card ── */}
-          {chatSession?.active_job_id ? (
-            <div className={`mx-4 mb-2 shrink-0 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5 text-sm ${jobStatusColor}`}>
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
-                  {isJobTerminal ? "Last job" : "Running job"}
-                </span>
-                <span className="truncate font-mono text-xs">{chatSession.active_job_id}</span>
-                <span className="text-[11px] capitalize opacity-80">{activeJobStatus}</span>
-              </div>
-              <a
-                href={`/observability?job=${encodeURIComponent(chatSession.active_job_id)}`}
-                className="shrink-0 rounded-xl border border-current/30 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] opacity-90 transition hover:opacity-100"
-              >
-                View details
-              </a>
-            </div>
-          ) : null}
-
-          {/* ── Input bar ── */}
-          <div className="shrink-0 border-t border-subtle bg-gradient-panel px-4 py-3 space-y-2">
-            {chatError ? (
-              <div className="rounded-xl border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
-                {chatError}
-              </div>
-            ) : null}
-            {chatNotice ? (
-              <div className="rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2 text-sm text-text-sky-token">
-                {chatNotice}
-              </div>
-            ) : null}
-            {feedbackError ? (
-              <div className="rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-sm text-text-amber-token">
-                Feedback error: {feedbackError}
-              </div>
-            ) : null}
-            <div className="relative">
-              {showSkillPalette ? (
-                <SkillCommandPalette
-                  skills={skills}
-                  capabilities={(capabilityCatalog?.items ?? []) as SkillCapabilityItem[]}
-                  onSelectSkill={(expanded) => {
-                    setChatInput(expanded);
-                    setShowSkillPalette(false);
-                    setTimeout(() => chatInputRef.current?.focus(), 0);
-                  }}
-                  onSelectCapability={(id) => {
-                    setChatInput((prev) => (prev ? `${prev} ${id}` : id));
-                    setShowSkillPalette(false);
-                    setTimeout(() => chatInputRef.current?.focus(), 0);
-                  }}
-                  onClose={() => {
-                    setShowSkillPalette(false);
-                    setTimeout(() => chatInputRef.current?.focus(), 0);
-                  }}
-                />
-              ) : null}
-              <textarea
-                ref={chatInputRef}
-                rows={3}
-                className="w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20 resize-none"
-                value={chatInput}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setChatInput(value);
-                  if ((event.nativeEvent as InputEvent).data === "/") setShowSkillPalette(true);
-                  else if (showSkillPalette && value === "") setShowSkillPalette(false);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                    event.preventDefault();
-                    void submitChatTurn();
-                  }
-                  if (event.key === "Escape") setShowSkillPalette(false);
-                }}
-                placeholder="Ask for work in natural language. Type / for Skills. Cmd/Ctrl+Enter sends."
-              />
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <button
-                className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[11px] font-semibold text-text-md transition hover:bg-surface-2"
-                onClick={() => {
-                  setSaveSkillName("");
-                  setSaveSkillDesc("");
-                  setSaveSkillError(null);
-                  setShowSaveSkillForm((p) => !p);
-                }}
-              >
-                Save as Skill
-              </button>
-              <button
-                className="rounded-xl border border-sky-300/26 bg-accent-sky px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-sky-300/40 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => void submitChatTurn()}
-                disabled={chatLoading || !chatInput.trim()}
-              >
-                {chatLoading ? "Sending…" : "Send"}
-              </button>
-            </div>
-            {showSaveSkillForm ? (
-              <div className="rounded-xl border border-subtle bg-surface-1 p-4 space-y-3">
-                <div className="text-xs font-semibold text-text-md">Save as Skill</div>
-                {saveSkillError ? <div className="text-xs text-rose-500">{saveSkillError}</div> : null}
-                <input
-                  className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
-                  placeholder="Skill name"
-                  value={saveSkillName}
-                  onChange={(e) => setSaveSkillName(e.target.value)}
-                />
-                <input
-                  className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
-                  placeholder="Description (optional)"
-                  value={saveSkillDesc}
-                  onChange={(e) => setSaveSkillDesc(e.target.value)}
-                />
-                <div className="flex gap-2 justify-end">
-                  <button
-                    className="rounded-lg border border-subtle bg-surface-1 px-3 py-1.5 text-xs font-semibold text-text-md transition hover:bg-surface-2"
-                    onClick={() => setShowSaveSkillForm(false)}
-                  >Cancel</button>
-                  <button
-                    className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-600"
-                    onClick={() => void saveCurrentAsSkill()}
-                  >Save</button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
+      <ChatScreen
+        jobs={jobs}
+        chatSession={chatSession}
+        chatLoading={chatLoading}
+        chatError={chatError}
+        chatNotice={chatNotice}
+        feedbackError={feedbackError}
+        chatInput={chatInput}
+        setChatInput={setChatInput}
+        resetChatSession={resetChatSession}
+        submitChatTurn={submitChatTurn}
+        chatTranscriptRef={chatTranscriptRef}
+        chatInputRef={chatInputRef}
+        showSkillPalette={showSkillPalette}
+        setShowSkillPalette={setShowSkillPalette}
+        skills={skills}
+        capabilityCatalog={capabilityCatalog}
+        showSaveSkillForm={showSaveSkillForm}
+        setShowSaveSkillForm={setShowSaveSkillForm}
+        saveSkillName={saveSkillName}
+        setSaveSkillName={setSaveSkillName}
+        saveSkillDesc={saveSkillDesc}
+        setSaveSkillDesc={setSaveSkillDesc}
+        saveSkillError={saveSkillError}
+        setSaveSkillError={setSaveSkillError}
+        saveCurrentAsSkill={saveCurrentAsSkill}
+        feedbackByTarget={feedbackByTarget}
+        feedbackSubmitting={feedbackSubmitting}
+        submitFeedback={submitFeedback}
+        formatTimestamp={formatTimestamp}
+      />
     );
   }
 
@@ -9404,19 +8994,6 @@ const openTemplateModal = (template: Template) => {
                   </button>
                 </>
               ) : null}
-              {showChatScreen ? (
-                <button
-                  className={
-                    showChatScreen
-                      ? "rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
-                      : screenHeaderSecondaryActionClassName
-                  }
-                  onClick={resetChatSession}
-                  disabled={chatLoading}
-                >
-                  New Chat
-                </button>
-              ) : null}
             </>
           }
         >
@@ -10158,229 +9735,6 @@ const openTemplateModal = (template: Template) => {
                       }`}
                     >
                       {submitDisabledReason}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-              ) : null}
-              {showChatScreen ? (
-              <div className={studioSurfacePrimarySectionClassName}>
-                {chatMessages.length > 0 ? (
-                  <div
-                    ref={chatTranscriptRef}
-                    className="mt-4 max-h-[26rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-[24px] border border-subtle bg-surface-1 p-4"
-                  >
-                    {chatMessages.map((message) => {
-                      const isPending = Boolean(message.metadata?.pending);
-                      return (
-                        <div
-                          key={message.id}
-                          className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
-                            message.role === "user"
-                              ? "ml-auto bg-white text-slate-900"
-                              : "border border-subtle bg-surface-1 text-text-hi"
-                          } ${isPending ? "opacity-80" : ""}`}
-                        >
-                          <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]">
-                            <div className="flex items-center gap-2">
-                              <span className={message.role === "user" ? "text-text-lo" : "text-text-md"}>
-                                {message.role}
-                              </span>
-                              {isPending ? (
-                                <span className="rounded-full border border-amber-400/30 bg-accent-amber px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] text-amber-200">
-                                  Pending
-                                </span>
-                              ) : null}
-                            </div>
-                            <span className="text-text-lo">
-                              {formatTimestamp(message.created_at)}
-                            </span>
-                          </div>
-                          <div className="mt-2">
-                      <MarkdownContent
-                        content={message.content}
-                        streaming={Boolean(message.metadata?.streaming)}
-                      />
-                    </div>
-                          {message.action?.clarification_questions &&
-                          message.action.clarification_questions.length > 0 ? (
-                            <div className="mt-3 space-y-1 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-[12px] text-text-amber-token">
-                              {message.action.clarification_questions.map((question, index) => (
-                                <div key={`${message.id}-question-${index}`}>{question}</div>
-                              ))}
-                            </div>
-                          ) : null}
-                          {message.job_id ? (
-                            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-accent-emerald px-3 py-2 text-[12px] text-text-emerald-token">
-                              <span>Job {message.job_id}</span>
-                              <button
-                                className="rounded-full border border-emerald-200/30 px-2 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-100/60"
-                                onClick={() => loadJobDetails(message.job_id || "")}
-                              >
-                                Open
-                              </button>
-                            </div>
-                          ) : null}
-                          {message.role === "assistant" && !isPending ? (
-                            <ChatMessageFeedback
-                              reasonOptions={CHAT_FEEDBACK_REASONS}
-                              existing={
-                                feedbackByTarget[feedbackTargetKey("chat_message", message.id)] || null
-                              }
-                              submitting={
-                                Boolean(
-                                  feedbackSubmitting[feedbackTargetKey("chat_message", message.id)]
-                                )
-                              }
-                              onSubmit={(payload) =>
-                                submitFeedback("chat_message", message.id, payload)
-                              }
-                            />
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                    {chatLoading ? <ThinkingState /> : null}
-                  </div>
-                ) : null}
-                {chatError ? (
-                  <div className="mt-3 rounded-xl border border-rose-300/20 bg-accent-rose px-3 py-2 text-sm text-text-rose-token">
-                    {chatError}
-                  </div>
-                ) : null}
-                {chatNotice ? (
-                  <div className="mt-3 rounded-xl border border-sky-300/20 bg-accent-sky px-3 py-2 text-sm text-text-sky-token">
-                    {chatNotice}
-                  </div>
-                ) : null}
-                {feedbackError && showChatScreen ? (
-                  <div className="mt-3 rounded-xl border border-amber-300/20 bg-accent-amber px-3 py-2 text-sm text-text-amber-token">
-                    Feedback error: {feedbackError}
-                  </div>
-                ) : null}
-
-                {/* Active job status card — shown when chat has kicked off a job */}
-                {chatSession?.active_job_id ? (() => {
-                  const activeJob = jobs.find((j) => j.id === chatSession.active_job_id);
-                  const status = activeJob?.status ?? "running";
-                  const isTerminal = ["succeeded", "failed", "canceled", "completed", "accepted"].includes(status);
-                  const statusColor = status === "succeeded" || status === "completed" || status === "accepted"
-                    ? "border-emerald-300/25 bg-accent-emerald text-text-emerald-token"
-                    : status === "failed" || status === "canceled"
-                    ? "border-rose-300/20 bg-accent-rose text-text-rose-token"
-                    : "border-sky-300/22 bg-accent-sky text-text-sky-token";
-                  return (
-                    <div className={`mt-3 flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${statusColor}`}>
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
-                          {isTerminal ? "Last job" : "Running job"}
-                        </span>
-                        <span className="truncate font-mono text-xs">
-                          {chatSession.active_job_id}
-                        </span>
-                        <span className="text-[11px] capitalize opacity-80">{status}</span>
-                      </div>
-                      <a
-                        href={`/observability?job=${encodeURIComponent(chatSession.active_job_id)}`}
-                        className="shrink-0 rounded-xl border border-current/30 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] opacity-90 transition hover:opacity-100"
-                      >
-                        View details
-                      </a>
-                    </div>
-                  );
-                })() : null}
-
-                <div className="mt-4 space-y-3">
-                  <div className="relative">
-                    {showSkillPalette ? (
-                      <SkillCommandPalette
-                        skills={skills}
-                        capabilities={(capabilityCatalog?.items ?? []) as SkillCapabilityItem[]}
-                        onSelectSkill={(expanded) => {
-                          setChatInput(expanded);
-                          setShowSkillPalette(false);
-                          setTimeout(() => chatInputRef.current?.focus(), 0);
-                        }}
-                        onSelectCapability={(id) => {
-                          setChatInput((prev) => (prev ? `${prev} ${id}` : id));
-                          setShowSkillPalette(false);
-                          setTimeout(() => chatInputRef.current?.focus(), 0);
-                        }}
-                        onClose={() => {
-                          setShowSkillPalette(false);
-                          setTimeout(() => chatInputRef.current?.focus(), 0);
-                        }}
-                      />
-                    ) : null}
-                    <textarea
-                      ref={chatInputRef}
-                      className="min-h-[8rem] w-full rounded-2xl border border-subtle bg-surface-1 px-4 py-3 text-sm text-text-hi placeholder:text-text-lo focus:border-sky-300/40 focus:outline-none focus:ring-2 focus:ring-sky-300/20"
-                      value={chatInput}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setChatInput(value);
-                        if ((event.nativeEvent as InputEvent).data === "/") setShowSkillPalette(true);
-                        else if (showSkillPalette && value === "") setShowSkillPalette(false);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                          event.preventDefault();
-                          void submitChatTurn();
-                        }
-                        if (event.key === "Escape") setShowSkillPalette(false);
-                      }}
-                      placeholder="Ask for work in natural language. Type / for Skills. Cmd/Ctrl+Enter sends."
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[11px] font-semibold text-text-md transition hover:bg-surface-2"
-                        onClick={() => {
-                          setSaveSkillName("");
-                          setSaveSkillDesc("");
-                          setSaveSkillError(null);
-                          setShowSaveSkillForm((p) => !p);
-                        }}
-                      >
-                        Save as Skill
-                      </button>
-                    </div>
-                    <button
-                      className="rounded-xl border border-subtle bg-surface-1 px-4 py-2 text-sm font-semibold text-text-hi transition hover:border-default-theme hover:bg-slate-950/35 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={submitChatTurn}
-                      disabled={chatLoading || !chatInput.trim()}
-                    >
-                      Send
-                    </button>
-                  </div>
-                  {showSaveSkillForm ? (
-                    <div className="rounded-xl border border-subtle bg-surface-1 p-4 space-y-3">
-                      <div className="text-xs font-semibold text-text-md">Save as Skill</div>
-                      {saveSkillError ? <div className="text-xs text-rose-500">{saveSkillError}</div> : null}
-                      <input
-                        className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
-                        placeholder="Skill name"
-                        value={saveSkillName}
-                        onChange={(e) => setSaveSkillName(e.target.value)}
-                      />
-                      <input
-                        className="w-full rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-xs text-text-hi focus:outline-none"
-                        placeholder="Description (optional)"
-                        value={saveSkillDesc}
-                        onChange={(e) => setSaveSkillDesc(e.target.value)}
-                      />
-                      <p className="text-[11px] text-text-lo">The current goal text becomes a goal_text step. Edit steps and instructions in the Skills manager.</p>
-                      <div className="flex justify-end gap-2">
-                        <button
-                          className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-text-md transition hover:bg-surface-2"
-                          onClick={() => setShowSaveSkillForm(false)}
-                        >Cancel</button>
-                        <button
-                          className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-600"
-                          onClick={() => void saveCurrentAsSkill()}
-                        >Save</button>
-                      </div>
                     </div>
                   ) : null}
                 </div>
