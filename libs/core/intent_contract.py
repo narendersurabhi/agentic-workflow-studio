@@ -516,7 +516,8 @@ def detect_intent_disagreement(
     )
     graph_intents: list[str] = []
     graph_capabilities: list[str] = []
-    segments = graph_map.get("segments") if isinstance(graph_map.get("segments"), list) else []
+    raw_segments = graph_map.get("segments")
+    segments = raw_segments if isinstance(raw_segments, list) else []
     if trusted_graph:
         for raw_segment in segments:
             if not isinstance(raw_segment, Mapping):
@@ -911,7 +912,8 @@ def derive_segment_missing_inputs(
     if not isinstance(segment, Mapping):
         return []
     slot_values = slot_values if isinstance(slot_values, Mapping) else {}
-    segment_slots = dict(segment.get("slots")) if isinstance(segment.get("slots"), Mapping) else {}
+    raw_segment_slots = segment.get("slots")
+    segment_slots = dict(raw_segment_slots) if isinstance(raw_segment_slots, Mapping) else {}
     objective = str(segment.get("objective") or "").strip()
     candidate_capabilities = _coerce_string_tuple(segment.get("suggested_capabilities"))
     candidate_formats = _segment_candidate_format_hints(candidate_capabilities)
@@ -1038,12 +1040,10 @@ def derive_envelope_clarification(
 ) -> dict[str, Any]:
     profile_map = profile if isinstance(profile, Mapping) else {}
     graph_map = graph if isinstance(graph, Mapping) else {}
-    slot_values = (
-        dict(profile_map.get("slot_values"))
-        if isinstance(profile_map.get("slot_values"), Mapping)
-        else {}
-    )
-    segments = graph_map.get("segments") if isinstance(graph_map.get("segments"), list) else []
+    raw_slot_values = profile_map.get("slot_values")
+    slot_values = dict(raw_slot_values) if isinstance(raw_slot_values, Mapping) else {}
+    raw_segments = graph_map.get("segments")
+    segments = raw_segments if isinstance(raw_segments, list) else []
     low_confidence = bool(profile_map.get("low_confidence"))
     profile_intent = normalize_task_intent(profile_map.get("intent")) or ""
     prioritized_segment_ids: set[str] = set()

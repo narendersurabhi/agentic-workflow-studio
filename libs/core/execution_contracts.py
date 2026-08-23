@@ -190,6 +190,7 @@ def build_task_execution_request(
     context_value = payload.get("context")
     dependency_artifacts_value = payload.get("dependency_artifacts")
     replay_context_value = payload.get("replay_context")
+    retry_policy_value = payload.get("retry_policy")
     return TaskExecutionRequest(
         task_id=_string_value(payload.get("task_id")),
         job_id=_string_value(payload.get("job_id")),
@@ -213,9 +214,7 @@ def build_task_execution_request(
             if isinstance(dependency_artifacts_value, Mapping)
             else {}
         ),
-        retry_policy=dict(payload.get("retry_policy"))
-        if isinstance(payload.get("retry_policy"), Mapping)
-        else {},
+        retry_policy=dict(retry_policy_value) if isinstance(retry_policy_value, Mapping) else {},
         source_payload=payload,
         requests=[
             TaskExecutionStep(

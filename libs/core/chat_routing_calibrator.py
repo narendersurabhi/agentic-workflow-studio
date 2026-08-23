@@ -265,9 +265,8 @@ def calibrate_route_candidates(
         )
         reason_codes = _normalize_str_list(candidate.get("reason_codes"))
         reason_codes.append(f"routing_calibration={probability:.3f}")
-        metadata = (
-            dict(candidate.get("metadata")) if isinstance(candidate.get("metadata"), dict) else {}
-        )
+        candidate_metadata = candidate.get("metadata")
+        metadata = dict(candidate_metadata) if isinstance(candidate_metadata, dict) else {}
         metadata.update(
             {
                 "calibration_probability": probability,
