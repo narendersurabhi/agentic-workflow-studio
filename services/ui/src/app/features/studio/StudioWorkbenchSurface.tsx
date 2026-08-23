@@ -1,7 +1,11 @@
 "use client";
 
 import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import Button from "../../components/ui/Button";
+import Input from "../../components/ui/Input";
+import Textarea from "../../components/ui/Textarea";
 import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
 import {
   createAgentDefinition,
@@ -15,10 +19,10 @@ import {
   publishAgentDefinitionVersion,
   searchCapabilities,
   updateAgentDefinition,
-  type CapabilitySearchItem,
   type WorkbenchDebuggerData,
   type WorkbenchRunLaunchResponse,
 } from "./studioApi";
+import { studioWorkbenchKeys } from "./studioWorkbenchQueries";
 import { mapDebuggerStepToReplayDraft, mapRunToWorkbenchFork, mapRunToWorkflowPromotion } from "./studioWorkbenchMappings";
 import type {
   AgentDefinition,
@@ -578,18 +582,14 @@ export default function StudioWorkbenchSurface({
   workspaceUserId: string;
   onPromoteWorkflowDraft?: (draft: WorkbenchWorkflowPromotionDraft) => void;
 }) {
+  const queryClient = useQueryClient();
   const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("agent");
   const [catalogCollapsed, setCatalogCollapsed] = useState(false);
   const [showDevPreview, setShowDevPreview] = useState(false);
   const [showAgentAdvanced, setShowAgentAdvanced] = useState(false);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
-  const [catalogLoading, setCatalogLoading] = useState(true);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [catalog, setCatalog] = useState<CapabilityItem[]>([]);
+  const [confirmDeleteProfile, setConfirmDeleteProfile] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState("");
-  const [catalogSearchError, setCatalogSearchError] = useState<string | null>(null);
-  const [catalogSearchLoading, setCatalogSearchLoading] = useState(false);
-  const [catalogSearchItems, setCatalogSearchItems] = useState<CapabilitySearchItem[]>([]);
   const [groupFilter, setGroupFilter] = useState("all");
   const [riskFilter, setRiskFilter] = useState("all");
   const [idempotencyFilter, setIdempotencyFilter] = useState("all");
@@ -612,13 +612,7 @@ export default function StudioWorkbenchSurface({
   ]);
   const [agentAllowedCapabilityIds, setAgentAllowedCapabilityIds] = useState<string[]>([]);
   const [agentRawRunSpecText, setAgentRawRunSpecText] = useState("{\n  \n}");
-  const [agentDefinitions, setAgentDefinitions] = useState<AgentDefinition[]>([]);
-  const [agentDefinitionsLoading, setAgentDefinitionsLoading] = useState(false);
-  const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
   const [selectedAgentDefinitionId, setSelectedAgentDefinitionId] = useState("");
-  const [agentDefinitionVersions, setAgentDefinitionVersions] = useState<AgentDefinitionVersion[]>([]);
-  const [agentDefinitionVersionsLoading, setAgentDefinitionVersionsLoading] = useState(false);
-  const [agentDefinitionVersionsError, setAgentDefinitionVersionsError] = useState<string | null>(null);
   const [selectedAgentDefinitionVersionId, setSelectedAgentDefinitionVersionId] = useState("");
   const [agentProfileVersionNote, setAgentProfileVersionNote] = useState("");
   const [agentProfileName, setAgentProfileName] = useState("");
@@ -631,9 +625,6 @@ export default function StudioWorkbenchSurface({
   const [launchLoading, setLaunchLoading] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchResponse, setLaunchResponse] = useState<WorkbenchRunLaunchResponse | null>(null);
-  const [debuggerData, setDebuggerData] = useState<WorkbenchDebuggerData | null>(null);
-  const [debuggerLoading, setDebuggerLoading] = useState(false);
-  const [debuggerError, setDebuggerError] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [workbenchBanner, setWorkbenchBanner] = useState<WorkbenchBanner | null>(null);
 
@@ -652,149 +643,93 @@ export default function StudioWorkbenchSurface({
   }, [agentUserId, workspaceUserId]);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadCatalog = async () => {
-      setCatalogLoading(true);
-      setCatalogError(null);
-      try {
-        const response = await fetchCapabilityCatalog(true);
-        if (cancelled) {
-          return;
-        }
-        setCatalog(response.items);
-        setSelectedCapabilityId((current) => current || response.items[0]?.id || "");
-        const agentRunInCatalog = response.items.some((item) => item.id === AGENT_RUN_CAPABILITY_ID);
-        if (agentRunInCatalog) {
-          setAgentSteps((current) => {
-            if (current.length === 1 && current[0].capabilityId === DEFAULT_AGENT_CAPABILITY_ID) {
-              return [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
-            }
-            return current;
-          });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setCatalogError(
-            error instanceof Error ? error.message : "Failed to load capability catalog."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setCatalogLoading(false);
-        }
-      }
-    };
-    void loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    setConfirmDeleteProfile(false);
+  }, [selectedAgentDefinitionId]);
+
+  const catalogQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.capabilityCatalog(),
+    queryFn: () => fetchCapabilityCatalog(true),
+  });
+  const catalog = useMemo(() => catalogQueryResult.data?.items ?? [], [catalogQueryResult.data]);
+  const catalogLoading = catalogQueryResult.isLoading;
+  const catalogError =
+    catalogQueryResult.error instanceof Error ? catalogQueryResult.error.message : null;
 
   useEffect(() => {
-    let cancelled = false;
-    const loadAgentDefinitions = async () => {
-      setAgentDefinitionsLoading(true);
-      setAgentDefinitionsError(null);
-      try {
-        const response = await fetchAgentDefinitions(workspaceUserId.trim() || undefined);
-        if (!cancelled) {
-          setAgentDefinitions(sortAgentDefinitions(response));
+    const items = catalogQueryResult.data?.items;
+    if (!items) {
+      return;
+    }
+    setSelectedCapabilityId((current) => current || items[0]?.id || "");
+    const agentRunInCatalog = items.some((item) => item.id === AGENT_RUN_CAPABILITY_ID);
+    if (agentRunInCatalog) {
+      setAgentSteps((current) => {
+        if (current.length === 1 && current[0].capabilityId === DEFAULT_AGENT_CAPABILITY_ID) {
+          return [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
         }
-      } catch (error) {
-        if (!cancelled) {
-          setAgentDefinitionsError(
-            error instanceof Error ? error.message : "Failed to load agent profiles."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setAgentDefinitionsLoading(false);
-        }
-      }
-    };
-    void loadAgentDefinitions();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceUserId]);
+        return current;
+      });
+    }
+  }, [catalogQueryResult.data]);
+
+  const agentDefinitionsQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+    queryFn: () => fetchAgentDefinitions(workspaceUserId.trim() || undefined),
+  });
+  const agentDefinitions = useMemo(
+    () => sortAgentDefinitions(agentDefinitionsQueryResult.data ?? []),
+    [agentDefinitionsQueryResult.data]
+  );
+  const agentDefinitionsLoading = agentDefinitionsQueryResult.isLoading;
+  const agentDefinitionsError =
+    agentDefinitionsQueryResult.error instanceof Error
+      ? agentDefinitionsQueryResult.error.message
+      : null;
+
+  const agentDefinitionVersionsQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.agentDefinitionVersions(selectedAgentDefinitionId),
+    queryFn: () => fetchAgentDefinitionVersions(selectedAgentDefinitionId),
+    enabled: Boolean(selectedAgentDefinitionId),
+  });
+  const agentDefinitionVersions = useMemo(
+    () =>
+      selectedAgentDefinitionId
+        ? sortAgentDefinitionVersions(agentDefinitionVersionsQueryResult.data ?? [])
+        : [],
+    [selectedAgentDefinitionId, agentDefinitionVersionsQueryResult.data]
+  );
+  const agentDefinitionVersionsLoading = agentDefinitionVersionsQueryResult.isLoading;
+  const agentDefinitionVersionsError =
+    agentDefinitionVersionsQueryResult.error instanceof Error
+      ? agentDefinitionVersionsQueryResult.error.message
+      : null;
 
   useEffect(() => {
     if (!selectedAgentDefinitionId) {
-      setAgentDefinitionVersions([]);
       setSelectedAgentDefinitionVersionId("");
-      setAgentDefinitionVersionsError(null);
-      setAgentDefinitionVersionsLoading(false);
       return;
     }
-    let cancelled = false;
-    const loadAgentDefinitionVersions = async () => {
-      setAgentDefinitionVersionsLoading(true);
-      setAgentDefinitionVersionsError(null);
-      try {
-        const response = await fetchAgentDefinitionVersions(selectedAgentDefinitionId);
-        if (cancelled) {
-          return;
-        }
-        const sortedVersions = sortAgentDefinitionVersions(response);
-        setAgentDefinitionVersions(sortedVersions);
-        setSelectedAgentDefinitionVersionId((current) =>
-          sortedVersions.some((version) => version.id === current) ? current : ""
-        );
-      } catch (error) {
-        if (!cancelled) {
-          setAgentDefinitionVersions([]);
-          setSelectedAgentDefinitionVersionId("");
-          setAgentDefinitionVersionsError(
-            error instanceof Error ? error.message : "Failed to load published versions."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setAgentDefinitionVersionsLoading(false);
-        }
-      }
-    };
-    void loadAgentDefinitionVersions();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedAgentDefinitionId]);
+    setSelectedAgentDefinitionVersionId((current) =>
+      agentDefinitionVersions.some((version) => version.id === current) ? current : ""
+    );
+  }, [selectedAgentDefinitionId, agentDefinitionVersions]);
 
-  useEffect(() => {
-    const query = deferredCatalogQuery.trim();
-    if (!query) {
-      setCatalogSearchItems([]);
-      setCatalogSearchError(null);
-      setCatalogSearchLoading(false);
-      return;
-    }
-    let cancelled = false;
-    const runSearch = async () => {
-      setCatalogSearchLoading(true);
-      setCatalogSearchError(null);
-      try {
-        const response = await searchCapabilities(query, 12);
-        if (!cancelled) {
-          setCatalogSearchItems(response.items);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setCatalogSearchItems([]);
-          setCatalogSearchError(
-            error instanceof Error ? error.message : "Capability search failed."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setCatalogSearchLoading(false);
-        }
-      }
-    };
-    void runSearch();
-    return () => {
-      cancelled = true;
-    };
-  }, [deferredCatalogQuery]);
+  const trimmedCatalogQuery = deferredCatalogQuery.trim();
+  const catalogSearchQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.capabilitySearch(trimmedCatalogQuery),
+    queryFn: () => searchCapabilities(trimmedCatalogQuery, 12),
+    enabled: Boolean(trimmedCatalogQuery),
+  });
+  const catalogSearchItems = useMemo(
+    () => (trimmedCatalogQuery ? catalogSearchQueryResult.data?.items ?? [] : []),
+    [trimmedCatalogQuery, catalogSearchQueryResult.data]
+  );
+  const catalogSearchLoading = trimmedCatalogQuery ? catalogSearchQueryResult.isLoading : false;
+  const catalogSearchError = trimmedCatalogQuery
+    ? catalogSearchQueryResult.error instanceof Error
+      ? catalogSearchQueryResult.error.message
+      : null
+    : null;
 
   const selectedCapability = useMemo(
     () => catalog.find((item) => item.id === selectedCapabilityId) ?? null,
@@ -1101,6 +1036,20 @@ export default function StudioWorkbenchSurface({
     workbenchMode,
   ]);
 
+  const debuggerQueryResult = useQuery({
+    queryKey: studioWorkbenchKeys.runDebugger(activeRunId ?? ""),
+    queryFn: () => fetchRunDebugger(activeRunId as string),
+    enabled: Boolean(active && activeRunId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.run?.status;
+      return status && TERMINAL_RUN_STATUSES.has(status) ? false : 2500;
+    },
+  });
+  const debuggerData = activeRunId ? debuggerQueryResult.data ?? null : null;
+  const debuggerLoading = debuggerQueryResult.isLoading;
+  const debuggerError =
+    debuggerQueryResult.error instanceof Error ? debuggerQueryResult.error.message : null;
+
   const currentRunStatus =
     debuggerData?.run?.status ||
     launchResponse?.run?.status ||
@@ -1226,7 +1175,6 @@ export default function StudioWorkbenchSurface({
     setAgentEditorMode("structured");
     setSelectedAgentDefinitionId("");
     setSelectedAgentDefinitionVersionId("");
-    setAgentDefinitionVersions([]);
     setAgentProfileVersionNote("");
     setAgentProfileName("");
     setAgentProfileDescription("");
@@ -1251,12 +1199,10 @@ export default function StudioWorkbenchSurface({
     try {
       const payload = buildAgentDefinitionPayload();
       const updated = await updateAgentDefinition(selectedAgentDefinitionId, payload);
-      setAgentDefinitions((current) =>
-        sortAgentDefinitions(
-          current.map((definition) =>
-            definition.id === updated.id ? updated : definition
-          )
-        )
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) =>
+          (current ?? []).map((definition) => (definition.id === updated.id ? updated : definition))
       );
       setSelectedAgentDefinitionId(updated.id);
       setSelectedAgentDefinitionVersionId("");
@@ -1281,15 +1227,15 @@ export default function StudioWorkbenchSurface({
     try {
       const payload = buildAgentDefinitionPayload();
       const created = await createAgentDefinition(payload);
-      setAgentDefinitions((current) =>
-        sortAgentDefinitions([
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) => [
           created,
-          ...current.filter((definition) => definition.id !== created.id),
-        ])
+          ...(current ?? []).filter((definition) => definition.id !== created.id),
+        ]
       );
       setSelectedAgentDefinitionId(created.id);
       setSelectedAgentDefinitionVersionId("");
-      setAgentDefinitionVersions([]);
       setAgentProfileName(created.name);
       setAgentProfileDescription(created.description ?? "");
       setWorkbenchBanner({
@@ -1315,12 +1261,10 @@ export default function StudioWorkbenchSurface({
     try {
       const payload = buildAgentDefinitionPayload();
       const updated = await updateAgentDefinition(selectedAgentDefinitionId, payload);
-      setAgentDefinitions((current) =>
-        sortAgentDefinitions(
-          current.map((definition) =>
-            definition.id === updated.id ? updated : definition
-          )
-        )
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) =>
+          (current ?? []).map((definition) => (definition.id === updated.id ? updated : definition))
       );
       const published = await publishAgentDefinitionVersion(updated.id, {
         version_note: agentProfileVersionNote.trim() || null,
@@ -1329,11 +1273,12 @@ export default function StudioWorkbenchSurface({
           surface: "studio_workbench",
         },
       });
-      setAgentDefinitionVersions((current) =>
-        sortAgentDefinitionVersions([
+      queryClient.setQueryData<AgentDefinitionVersion[]>(
+        studioWorkbenchKeys.agentDefinitionVersions(updated.id),
+        (current: AgentDefinitionVersion[] | undefined) => [
           published,
-          ...current.filter((version) => version.id !== published.id),
-        ])
+          ...(current ?? []).filter((version) => version.id !== published.id),
+        ]
       );
       setSelectedAgentDefinitionId(updated.id);
       setSelectedAgentDefinitionVersionId(published.id);
@@ -1357,20 +1302,18 @@ export default function StudioWorkbenchSurface({
     if (!selectedAgentDefinitionId) {
       return;
     }
-    const definitionName = selectedAgentDefinition?.name || "this agent profile";
-    if (!window.confirm(`Delete ${definitionName}?`)) {
-      return;
-    }
+    setConfirmDeleteProfile(false);
     setAgentProfileDeleting(true);
     setAgentProfileError(null);
     try {
       await deleteAgentDefinition(selectedAgentDefinitionId);
-      setAgentDefinitions((current) =>
-        current.filter((definition) => definition.id !== selectedAgentDefinitionId)
+      queryClient.setQueryData<AgentDefinition[]>(
+        studioWorkbenchKeys.agentDefinitions(workspaceUserId),
+        (current: AgentDefinition[] | undefined) =>
+          (current ?? []).filter((definition) => definition.id !== selectedAgentDefinitionId)
       );
       setSelectedAgentDefinitionId("");
       setSelectedAgentDefinitionVersionId("");
-      setAgentDefinitionVersions([]);
       setAgentProfileVersionNote("");
       setAgentProfileName("");
       setAgentProfileDescription("");
@@ -1424,7 +1367,6 @@ export default function StudioWorkbenchSurface({
     setWorkbenchMode("agent");
     setSelectedAgentDefinitionId("");
     setSelectedAgentDefinitionVersionId("");
-    setAgentDefinitionVersions([]);
     setAgentProfileVersionNote("");
     setAgentProfileName("");
     setAgentProfileDescription("");
@@ -1494,46 +1436,6 @@ export default function StudioWorkbenchSurface({
     }
     onPromoteWorkflowDraft(workflowPromotionResult.draft);
   };
-
-  useEffect(() => {
-    if (!active || !activeRunId) {
-      return;
-    }
-    let cancelled = false;
-    const refreshDebugger = async () => {
-      setDebuggerLoading(true);
-      setDebuggerError(null);
-      try {
-        const response = await fetchRunDebugger(activeRunId);
-        if (!cancelled) {
-          setDebuggerData(response);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setDebuggerError(
-            error instanceof Error ? error.message : "Failed to load workbench run debugger."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setDebuggerLoading(false);
-        }
-      }
-    };
-    void refreshDebugger();
-    if (currentRunStatus && TERMINAL_RUN_STATUSES.has(currentRunStatus)) {
-      return () => {
-        cancelled = true;
-      };
-    }
-    const intervalId = window.setInterval(() => {
-      void refreshDebugger();
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [active, activeRunId, currentRunStatus]);
 
   const handleCapabilityInsert = (item: CapabilityItem) => {
     setWorkbenchMode("capability");
@@ -1668,8 +1570,6 @@ export default function StudioWorkbenchSurface({
   const launchCurrentWorkbenchRun = async () => {
     setLaunchLoading(true);
     setLaunchError(null);
-    setDebuggerError(null);
-    setDebuggerData(null);
     setWorkbenchBanner(null);
 
     try {
@@ -1742,15 +1642,9 @@ export default function StudioWorkbenchSurface({
       }
 
       setLaunchResponse(response);
+      // Setting activeRunId enables and keys debuggerQueryResult for the new
+      // run, so it fetches (and then polls) reactively — no manual fetch here.
       setActiveRunId(response.run.id);
-      try {
-        const initialDebugger = await fetchRunDebugger(response.run.id);
-        setDebuggerData(initialDebugger);
-      } catch (error) {
-        setDebuggerError(
-          error instanceof Error ? error.message : "Failed to load workbench run debugger."
-        );
-      }
     } catch (error) {
       setLaunchError(error instanceof Error ? error.message : "Workbench launch failed.");
     } finally {
@@ -2152,7 +2046,6 @@ export default function StudioWorkbenchSurface({
                         if (!nextId) {
                           setSelectedAgentDefinitionId("");
                           setSelectedAgentDefinitionVersionId("");
-                          setAgentDefinitionVersions([]);
                           setAgentProfileName("");
                           setAgentProfileDescription("");
                           setAgentInstructions("");
@@ -2227,54 +2120,87 @@ export default function StudioWorkbenchSurface({
                       <div className="relative z-10 flex w-full max-w-sm flex-col gap-4 border-l border-subtle bg-surface-1 p-6 shadow-[0_0_48px_rgba(15,23,42,0.4)]">
                         <div className="flex items-center justify-between">
                           <div className="text-sm font-semibold text-text-hi">Manage Profile</div>
-                          <button
+                          <Button
                             type="button"
-                            className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-xs text-text-lo hover:text-text-hi"
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Close profile drawer"
                             onClick={() => setProfileDrawerOpen(false)}
                           >
                             ✕
-                          </button>
+                          </Button>
                         </div>
                         <div className="flex flex-col gap-2">
-                          <button
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-sky-300/26 bg-accent-sky px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                            variant="primary"
+                            className="w-full uppercase tracking-[0.14em]"
                             onClick={() => { void handleSaveAgentProfileAs(); setProfileDrawerOpen(false); }}
                             disabled={agentProfileSaving}
                           >
                             {agentProfileSaving ? "Saving…" : "Save as new profile"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+                            variant="secondary"
+                            className="w-full uppercase tracking-[0.14em]"
                             onClick={() => { void handleSaveAgentProfile(); }}
                             disabled={!selectedAgentDefinitionId || agentProfileSaving}
                           >
                             {agentProfileSaving ? "Saving…" : "Save (update in-place)"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-emerald-300/24 bg-accent-emerald px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-emerald-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                            variant="primary"
+                            className="w-full border-emerald-300/24 bg-accent-emerald uppercase tracking-[0.14em] hover:border-emerald-300/36 hover:bg-accent-emerald/80"
                             onClick={() => void handlePublishAgentProfile()}
                             disabled={!selectedAgentDefinitionId || agentProfileSaving || agentProfilePublishing}
                           >
                             {agentProfilePublishing ? "Publishing…" : "Publish version"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35"
+                            variant="secondary"
+                            className="w-full uppercase tracking-[0.14em]"
                             onClick={() => { handleNewAgentProfile(); setProfileDrawerOpen(false); }}
                           >
                             New profile
-                          </button>
-                          <button
-                            type="button"
-                            className="w-full rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => { void handleDeleteAgentProfile(); setProfileDrawerOpen(false); }}
-                            disabled={!selectedAgentDefinitionId || agentProfileDeleting}
-                          >
-                            {agentProfileDeleting ? "Deleting…" : "Delete profile"}
-                          </button>
+                          </Button>
+                          {confirmDeleteProfile ? (
+                            <div className="flex items-center gap-2">
+                              <span className="flex-1 text-[11px] text-text-rose-token">Delete this profile?</span>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => {
+                                  void handleDeleteAgentProfile();
+                                  setProfileDrawerOpen(false);
+                                }}
+                                disabled={agentProfileDeleting}
+                              >
+                                {agentProfileDeleting ? "Deleting…" : "Yes, delete"}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setConfirmDeleteProfile(false)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              className="w-full uppercase tracking-[0.14em]"
+                              onClick={() => setConfirmDeleteProfile(true)}
+                              disabled={!selectedAgentDefinitionId || agentProfileDeleting}
+                            >
+                              Delete profile
+                            </Button>
+                          )}
                         </div>
                         {agentProfileError ? (
                           <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
@@ -2886,15 +2812,16 @@ export default function StudioWorkbenchSurface({
               ) : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button
+                <Button
                   type="button"
-                  className="inline-flex items-center gap-2 rounded-xl border border-sky-300/26 bg-accent-sky px-5 py-2.5 text-[12px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                  variant="primary"
+                  className="gap-2 px-5 uppercase tracking-[0.16em]"
                   onClick={() => void launchCurrentWorkbenchRun()}
                   disabled={launchLoading}
                 >
                   <StudioWorkbenchIcon kind="run" className="h-4 w-4" />
                   {launchLoading ? "Running..." : workbenchMode === "agent" ? "Run Agent" : "Run"}
-                </button>
+                </Button>
                 {launchError ? <div className="text-xs text-text-rose-token">{launchError}</div> : null}
               </div>
             </SurfacePanel>
