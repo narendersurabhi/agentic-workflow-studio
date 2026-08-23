@@ -30,6 +30,11 @@ _DOCUMENT_SPEC_FINAL_ARTIFACT_KEYS = {
     "output_format",
 }
 
+_DOCUMENT_SPEC_VALIDATION_TOOL_NAMES = {
+    "document_spec_validate",
+    "document.spec.validate",
+}
+
 
 def resolve_tool_inputs(
     tool_requests: list[str],
@@ -85,7 +90,11 @@ def validate_tool_inputs(
         if not isinstance(payload, dict):
             errors[tool_name] = "input schema validation failed: <root>: payload must be an object"
             continue
-        validation_error = _validate_schema(schema, payload, "input")
+        validation_payload = _canonicalize_render_path_aliases_for_validation(
+            payload,
+            tool_name=tool_name,
+        )
+        validation_error = _validate_schema(schema, validation_payload, "input")
         if validation_error:
             errors[tool_name] = validation_error
     return errors
@@ -112,7 +121,7 @@ def resolve_tool_payload(
             )
             has_tool_inputs = True
     payload = _merge_payload_from_task(payload, task_payload, instruction)
-    payload = _fill_payload_from_context(payload, context)
+    payload = _fill_payload_from_context(payload, context, tool_name=tool_name)
     payload = _promote_document_job_fields(payload, tool_name=tool_name)
     payload = _canonicalize_render_path_aliases(payload, tool_name=tool_name)
     payload = _drop_document_spec_final_artifact_fields(payload, tool_name=tool_name)
@@ -194,7 +203,9 @@ def _merge_payload_from_task(payload: dict, task_payload: dict, instruction: str
     return merged
 
 
-def _fill_payload_from_context(payload: dict, context: dict) -> dict:
+def _fill_payload_from_context(
+    payload: dict, context: dict, *, tool_name: str | None = None
+) -> dict:
     filled = dict(payload)
     job_context = context.get("job_context")
     if isinstance(job_context, dict):
@@ -242,7 +253,10 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
         doc = _extract_document_spec_from_context(context)
         if isinstance(doc, dict):
             filled["document_spec"] = doc
-    if "data" not in filled:
+    is_document_spec_validation = (
+        str(tool_name or "").strip().lower() in _DOCUMENT_SPEC_VALIDATION_TOOL_NAMES
+    )
+    if "data" not in filled and not is_document_spec_validation:
         doc = _extract_json_from_context(context)
         if isinstance(doc, dict):
             filled["data"] = doc
@@ -254,7 +268,7 @@ def _fill_payload_from_context(payload: dict, context: dict) -> dict:
         report = _extract_validation_report_from_context(context)
         if isinstance(report, dict):
             filled["validation_report"] = report
-    if "original_spec" not in filled:
+    if "original_spec" not in filled and not is_document_spec_validation:
         doc = _extract_json_from_context(context)
         if isinstance(doc, dict):
             filled["original_spec"] = doc
@@ -346,6 +360,23 @@ def _canonicalize_render_path_aliases(
             canonical["path"] = value.strip()
             break
     return canonical
+
+
+def _canonicalize_render_path_aliases_for_validation(
+    payload: dict[str, Any],
+    *,
+    tool_name: str | None = None,
+) -> dict[str, Any]:
+    canonical = _canonicalize_render_path_aliases(payload, tool_name=tool_name)
+    if not planner_contracts.is_render_request_id(tool_name):
+        return canonical
+    if "path" not in canonical:
+        return canonical
+    return {
+        key: value
+        for key, value in canonical.items()
+        if key not in {"output_path", "filename", "file_name", "output_filename"}
+    }
 
 
 def _drop_document_spec_final_artifact_fields(
@@ -454,6 +485,7 @@ def _walk_path(root: Any, segments: list[Any]) -> Any:
                 # even though document_spec_validate already returns
                 # the report object directly.
                 if segment == "validation_report" and _is_validation_report_dict(current):
+                    index += 1
                     continue
                 # Some plans/reference templates use output_path while
                 # path-derivation tools emit {"path": "..."}.

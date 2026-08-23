@@ -1,59 +1,36 @@
 from __future__ import annotations
 
-from services.worker.app import main as worker_main
-from libs.core import capability_registry
+from datetime import UTC, datetime
+
+from libs.core import models
+from services.worker.app import capability_runtime_adapter
 
 
-class _DummyRegistry:
-    def get(self, _name: str):
-        raise AssertionError("registry.get should not be called for capability execution")
-
-
-def _capability_spec() -> capability_registry.CapabilitySpec:
-    return capability_registry.CapabilitySpec(
-        capability_id="github.repo.list",
-        description="List repos",
-        risk_tier="read_only",
-        idempotency="read",
-        adapters=(
-            capability_registry.CapabilityAdapterSpec(
-                type="mcp",
-                server_id="github_remote",
-                tool_name="github_repo_list",
-                timeout_s=30,
-            ),
+def _build_runtime(**hook_overrides):
+    hooks = capability_runtime_adapter.WorkerCapabilityHooks(
+        load_memory_inputs=hook_overrides.get(
+            "load_memory_inputs", lambda _tool, _task_payload, _trace_id: {}
         ),
-        enabled=True,
-    )
-
-
-def _local_document_validate_capability_spec() -> capability_registry.CapabilitySpec:
-    return capability_registry.CapabilitySpec(
-        capability_id="document.spec.validate",
-        description="Validate DocumentSpec",
-        risk_tier="read_only",
-        idempotency="read",
-        adapters=(
-            capability_registry.CapabilityAdapterSpec(
-                type="tool",
-                server_id="local_worker",
-                tool_name="document_spec_validate",
-                timeout_s=30,
-            ),
+        apply_memory_defaults=hook_overrides.get(
+            "apply_memory_defaults", lambda _tool_name, payload: payload
         ),
-        enabled=True,
+        missing_memory_only_inputs=hook_overrides.get(
+            "missing_memory_only_inputs", lambda _tool_name, _payload: []
+        ),
+        persist_memory_outputs=hook_overrides.get(
+            "persist_memory_outputs", lambda _tool, _task_payload, _call, _trace_id: None
+        ),
+    )
+    return capability_runtime_adapter.build_worker_capability_runtime(
+        logger=object(),
+        hooks=hooks,
+        output_size_cap=1024,
     )
 
 
-def test_execute_task_runs_capability_request(monkeypatch) -> None:
-    monkeypatch.setattr(worker_main.tool_registry, "default_registry", lambda *args, **kwargs: _DummyRegistry())
+def test_execute_capability_runs_mcp_capability_request(monkeypatch) -> None:
     monkeypatch.setattr(
-        worker_main,
-        "_resolve_enabled_capability_request",
-        lambda name: _capability_spec() if name == "github.repo.list" else None,
-    )
-    monkeypatch.setattr(
-        worker_main.mcp_gateway,
+        capability_runtime_adapter.mcp_gateway,
         "invoke_capability",
         lambda capability_id, arguments, **_: {
             "capability_id": capability_id,
@@ -61,82 +38,102 @@ def test_execute_task_runs_capability_request(monkeypatch) -> None:
             "repos": ["awe", "platform"],
         },
     )
-    task_payload = {
-        "task_id": "task-1",
-        "job_id": "job-1",
-        "correlation_id": "trace-1",
-        "tool_requests": ["github.repo.list"],
-        "instruction": "List my repositories",
-        "context": {"job_context": {"topic": "agentic"}},
-        "tool_inputs": {"github.repo.list": {"query": "agentic"}},
-    }
-    result = worker_main.execute_task(task_payload)
-    assert result.status == worker_main.models.TaskStatus.completed
-    assert result.outputs["github.repo.list"]["repos"] == ["awe", "platform"]
+    runtime = _build_runtime()
 
-
-def test_execute_task_marks_capability_timeout(monkeypatch) -> None:
-    monkeypatch.setattr(worker_main.tool_registry, "default_registry", lambda *args, **kwargs: _DummyRegistry())
-    monkeypatch.setattr(
-        worker_main,
-        "_resolve_enabled_capability_request",
-        lambda name: _capability_spec() if name == "github.repo.list" else None,
+    call = runtime.execute_capability(
+        capability_id="github.repo.list",
+        payload={"query": "agentic"},
+        trace_id="trace-1",
+        idempotency_key="id-1",
+        task_payload={"task_id": "task-1"},
+        tool_runtime=object(),  # unused on the mcp adapter path
     )
 
-    def _raise_timeout(_capability_id: str, _arguments: dict, **_: dict):
+    assert call.status == "completed"
+    assert call.output_or_error["repos"] == ["awe", "platform"]
+
+
+def test_execute_capability_marks_timeout_as_failed(monkeypatch) -> None:
+    def _raise_timeout(_capability_id: str, _arguments: dict, **_: dict) -> dict:
         raise RuntimeError("mcp_sdk_timeout:phase=initialize;mcp_call_timed_out_after_10.0s")
 
-    monkeypatch.setattr(worker_main.mcp_gateway, "invoke_capability", _raise_timeout)
-    task_payload = {
-        "task_id": "task-2",
-        "job_id": "job-1",
-        "correlation_id": "trace-2",
-        "tool_requests": ["github.repo.list"],
-        "instruction": "List my repositories",
-        "context": {},
-        "tool_inputs": {"github.repo.list": {"query": "agentic"}},
-    }
-    result = worker_main.execute_task(task_payload)
-    assert result.status == worker_main.models.TaskStatus.failed
-    tool_error = result.outputs["github.repo.list"]["error"]
-    assert "tool_call_timed_out" in tool_error
+    monkeypatch.setattr(capability_runtime_adapter.mcp_gateway, "invoke_capability", _raise_timeout)
+    runtime = _build_runtime()
 
-
-def test_capability_native_tool_hydrates_memory_defaults(monkeypatch) -> None:
-    monkeypatch.setattr(
-        worker_main,
-        "_resolve_enabled_capability_request",
-        lambda name: _local_document_validate_capability_spec()
-        if name == "document.spec.validate"
-        else None,
+    call = runtime.execute_capability(
+        capability_id="github.repo.list",
+        payload={"query": "agentic"},
+        trace_id="trace-2",
+        idempotency_key="id-2",
+        task_payload={"task_id": "task-2"},
+        tool_runtime=object(),
     )
-    monkeypatch.setattr(worker_main, "MEMORY_WRITE_ENABLED", False)
+
+    assert call.status == "failed"
+    assert call.output_or_error["error_code"] == "runtime.timeout"
+
+
+def test_execute_capability_native_tool_hydrates_memory_defaults(monkeypatch) -> None:
+    class _Tool:
+        spec = models.ToolSpec(
+            name="document_spec_validate",
+            description="Validate DocumentSpec",
+            input_schema={},
+            output_schema={},
+            tool_intent=models.ToolIntent.generate,
+        )
+
+    class _ToolRuntime:
+        def __init__(self) -> None:
+            self.registry = self
+            self.calls: list[dict] = []
+
+        def get_tool(self, tool_name: str):
+            assert tool_name == "document_spec_validate"
+            return _Tool()
+
+        def execute_tool(
+            self, tool_name: str, *, payload, idempotency_key, trace_id, max_output_bytes
+        ):
+            self.calls.append(dict(payload))
+            return models.ToolCall(
+                tool_name=tool_name,
+                input=dict(payload),
+                idempotency_key=idempotency_key,
+                trace_id=trace_id,
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                status="completed",
+                output_or_error={"valid": True},
+            )
+
     monkeypatch.setattr(
-        worker_main,
-        "_load_memory_inputs",
-        lambda tool, task_payload, trace_id: {
+        capability_runtime_adapter.mcp_gateway,
+        "invoke_capability",
+        lambda capability_id, payload, execute_tool: execute_tool(
+            "document_spec_validate", payload
+        ),
+    )
+
+    runtime = _build_runtime(
+        load_memory_inputs=lambda _tool, _task_payload, _trace_id: {
             "task_outputs": [
                 {"document_spec": {"blocks": [{"type": "paragraph", "text": "hello"}]}}
             ]
         },
     )
+    tool_runtime = _ToolRuntime()
 
-    def _invoke_capability(capability_id: str, arguments: dict, **kwargs):
-        execute_tool = kwargs.get("execute_tool")
-        assert callable(execute_tool)
-        return execute_tool("document_spec_validate", arguments)
+    call = runtime.execute_capability(
+        capability_id="document.spec.validate",
+        payload={"strict": True},
+        trace_id="trace-3",
+        idempotency_key="id-3",
+        task_payload={"task_id": "task-3"},
+        tool_runtime=tool_runtime,
+    )
 
-    monkeypatch.setattr(worker_main.mcp_gateway, "invoke_capability", _invoke_capability)
-    task_payload = {
-        "task_id": "task-3",
-        "job_id": "job-1",
-        "correlation_id": "trace-3",
-        "tool_requests": ["document.spec.validate"],
-        "instruction": "Validate the spec",
-        "context": {},
-        "tool_inputs": {"document.spec.validate": {"strict": True}},
-    }
-    result = worker_main.execute_task(task_payload)
-    assert result.status == worker_main.models.TaskStatus.completed
-    output = result.outputs["document.spec.validate"]
-    assert output["valid"] is True
+    assert call.status == "completed"
+    assert call.output_or_error["valid"] is True
+    hydrated_memory = tool_runtime.calls[0]["memory"]
+    assert hydrated_memory["task_outputs"][0]["document_spec"]["blocks"][0]["text"] == "hello"

@@ -7131,6 +7131,50 @@ def test_plan_preflight_compiler_accepts_valid_dependency_chain() -> None:
     assert errors == {}
 
 
+def test_plan_preflight_does_not_mutate_job_context_references() -> None:
+    plan = models.PlanCreate(
+        planner_version="test",
+        tasks_summary="job context ref",
+        dag_edges=[],
+        tasks=[
+            models.TaskCreate(
+                name="UseWorkflowVariable",
+                description="Use workflow variable",
+                instruction="Transform the workflow variable.",
+                acceptance_criteria=["done"],
+                expected_output_schema_ref="schemas/json_object",
+                intent=models.ToolIntent.transform,
+                deps=[],
+                tool_requests=["utility.json.transform"],
+                tool_inputs={
+                    "utility.json.transform": {
+                        "input": {
+                            "$from": [
+                                "job_context",
+                                "workflow",
+                                "variables",
+                                "topic_alias",
+                            ]
+                        }
+                    }
+                },
+                critic_required=False,
+            )
+        ],
+    )
+    job_context = {
+        "workflow": {
+            "inputs": {"topic": "Quarterly update"},
+            "variables": {"topic_alias": "Quarterly update"},
+        }
+    }
+
+    errors = main._compile_plan_preflight(plan, job_context=job_context)
+
+    assert errors == {}
+    assert job_context["workflow"]["variables"]["topic_alias"] == "Quarterly update"
+
+
 def test_plan_preflight_compiler_flags_broken_reference_path() -> None:
     plan = models.PlanCreate(
         planner_version="test",

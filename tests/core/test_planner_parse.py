@@ -124,7 +124,7 @@ def test_llm_plan_retries_with_repair_prompt_when_initial_parse_fails() -> None:
         )
     ]
 
-    parsed = planner_main.llm_plan(job, tools, provider)
+    parsed = planner_main.llm_plan(job, tools, tools, provider)
 
     assert parsed.tasks_summary == "sample"
     assert len(provider.requests) == 2

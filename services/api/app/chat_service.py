@@ -206,6 +206,7 @@ class ChatRuntime:
     is_chat_only_correction: Callable[[str], bool] | None = None
     defer_pending_clarification_mapping: bool = False
     progress_callback: Callable[[str, dict], None] | None = None
+    rag_synthesize_callback: Callable[[str, list], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,7 @@ def _decompose_runtime(runtime: ChatServiceRuntime) -> tuple[ChatRuntime, AgentR
         is_chat_only_correction=runtime.is_chat_only_correction,
         defer_pending_clarification_mapping=runtime.defer_pending_clarification_mapping,
         progress_callback=runtime.progress_callback,
+        rag_synthesize_callback=runtime.rag_synthesize_callback,
     )
     agent = AgentRuntime(
         create_job=runtime.create_job,
@@ -253,6 +255,8 @@ class AskClarificationPlan:
     pending_state: dict[str, Any]
     assistant_content: str = ""
     normalized_intent_envelope: dict[str, Any] | None = None
+    boundary_decision: dict[str, Any] | None = None
+    routing_decision: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -262,6 +266,8 @@ class SubmitJobPlan:
     assessment: dict[str, Any]
     assistant_content: str = ""
     normalization: ChatSubmitNormalizationResult | None = None
+    boundary_decision: dict[str, Any] | None = None
+    routing_decision: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -991,6 +997,8 @@ def _clarification_field_from_question(
                 "system do first",
                 "generate, transform, validate, render, or io",
                 "generate, transform, validate, render",
+                "should i generate new content",
+                "fetch, inspect, or list data",
                 "intent action",
             )
         )
@@ -1634,11 +1642,19 @@ def _pending_clarification_state(
             active_capability_id or "",
         ]
     )
+    allowed_fields.update(assessment_unresolved_fields)
     if active_target is not None:
         for raw_field in (*active_target.required_fields, *active_target.unresolved_fields):
             field = _normalize_clarification_field_key(raw_field)
             if field:
                 allowed_fields.add(field)
+    clarification_mode = (
+        str(assessment.get("clarification_mode") or "").strip()
+        if isinstance(assessment, Mapping)
+        else ""
+    )
+    if clarification_mode == "intent_disagreement":
+        allowed_fields.add("intent_action")
     if not allowed_fields:
         allowed_fields = {
             _normalize_clarification_field_key(field)
@@ -2355,6 +2371,8 @@ def _looks_like_pending_clarification_intent_change(
         lowered,
     ):
         return False
+    if "answer:" in lowered:
+        return False
     tokens = set(re.findall(r"[a-z0-9]+", lowered))
     hints = _chat_thread_hints()
     if (
@@ -2573,6 +2591,18 @@ def _build_turn_context(
 
 def _classify_turn(ctx: TurnContext) -> TurnPlan:
     """Route the turn through the chat LLM and convert the raw dict into a typed plan."""
+    fast_turn_dict = _pending_clarification_fast_turn_plan(
+        candidate_goal=ctx.candidate_goal,
+        session_metadata=ctx.session_metadata,
+        normalization=ctx.pre_route_normalization,
+        had_pending_clarification=ctx.had_pending_clarification,
+        had_pending_workflow_input=ctx.had_pending_workflow_input,
+        restarted=ctx.restarted_pending_clarification,
+        exit_pending_to_chat=ctx.exit_pending_to_chat,
+    )
+    if fast_turn_dict is not None:
+        return _plan_from_turn_dict(fast_turn_dict, ctx)
+
     route_context = context_service.chat_route_context_view(ctx.context_envelope)
     try:
         turn_dict = ctx.chat.route_turn(
@@ -2667,6 +2697,8 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
             pending_state=pending_state,
             assistant_content=assistant_content or ("\n".join(questions) if questions else ""),
             normalized_intent_envelope=normalized_intent_envelope,
+            boundary_decision=boundary_decision,
+            routing_decision=routing_decision,
         )
 
     if route_type == "submit_job":
@@ -2676,6 +2708,8 @@ def _plan_from_turn_dict(turn_dict: dict[str, Any], ctx: TurnContext) -> TurnPla
             assessment=assessment,
             assistant_content=assistant_content,
             normalization=ctx.pre_route_normalization,
+            boundary_decision=boundary_decision,
+            routing_decision=routing_decision,
         )
 
     if route_type == "run_workflow":
@@ -2865,6 +2899,8 @@ def _execute_ask_clarification(plan: AskClarificationPlan, ctx: TurnContext) -> 
             goal_intent_profile=dict(plan.assessment),
             context_json=plan.context_json,
         ),
+        boundary_decision=plan.boundary_decision,
+        routing_decision=plan.routing_decision,
     )
 
 
@@ -2956,6 +2992,8 @@ def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
                     goal_intent_profile=dict(assessment),
                     context_json=merged_context,
                 ),
+                boundary_decision=plan.boundary_decision,
+                routing_decision=plan.routing_decision,
             )
 
     job, action = _create_job_and_action(
@@ -2979,7 +3017,13 @@ def _execute_submit_job(plan: SubmitJobPlan, ctx: TurnContext) -> TurnResult:
     content = plan.assistant_content or (
         f"Started job {job.id}. I submitted it to the normal planner and worker pipeline."
     )
-    return TurnResult(assistant_content=content, assistant_action=action, created_job=job)
+    return TurnResult(
+        assistant_content=content,
+        assistant_action=action,
+        created_job=job,
+        boundary_decision=plan.boundary_decision,
+        routing_decision=plan.routing_decision,
+    )
 
 
 def _execute_run_workflow(plan: RunWorkflowPlan, ctx: TurnContext) -> TurnResult:
