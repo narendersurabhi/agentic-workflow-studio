@@ -29,9 +29,6 @@ type StudioNodeInspectorProps = {
   selectedDagNode: ComposerDraftNode | null;
   selectedCapability: CapabilityItem | null;
   agentDefinitions?: AgentDefinition[];
-  selectedDagNodeStatus: {
-    requiredCount: number;
-  } | null;
   inputFields: StudioInspectorField[];
   outputSchemaFields: CapabilitySchemaField[];
   activeComposerIssueFocus: ComposerIssueFocus | null;
@@ -151,13 +148,12 @@ const schemaPropertyDefault = (property: Record<string, unknown> | null) => {
 };
 
 const inspectorPanelClassName =
-  "h-full overflow-auto px-2.5 py-2.5 text-text-hi [&_.border-slate-100]:border-white/8 [&_.border-slate-200]:border-subtle [&_.border-slate-300]:border-subtle [&_.border-sky-200]:border-sky-300/25 [&_.border-emerald-200]:border-emerald-300/25 [&_.border-amber-200]:border-amber-300/25 [&_.border-rose-200]:border-rose-300/25 [&_.bg-slate-50]:bg-surface-1 [&_.bg-slate-100]:bg-surface-1 [&_.bg-white]:bg-surface-1 [&_.bg-sky-50]:bg-accent-sky [&_.bg-sky-100]:bg-accent-sky [&_.bg-emerald-50]:bg-accent-emerald [&_.bg-emerald-100]:bg-accent-emerald [&_.bg-rose-50]:bg-accent-rose [&_.bg-rose-100]:bg-accent-rose [&_.bg-amber-50]:bg-accent-amber [&_.bg-amber-100]:bg-accent-amber [&_.text-slate-900]:text-text-hi [&_.text-slate-800]:text-text-hi [&_.text-slate-700]:text-text-md [&_.text-slate-600]:text-text-md [&_.text-text-lo]:text-text-lo [&_.text-sky-700]:text-text-sky-token [&_.text-emerald-700]:text-text-emerald-token [&_.text-rose-700]:text-text-rose-token [&_.text-amber-700]:text-text-amber-token [&_.text-amber-800]:text-text-amber-token [&_.text-amber-900]:text-amber-50 [&_input]:text-text-hi [&_select]:text-text-hi [&_textarea]:text-text-hi [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-text-sky-token";
+  "h-full overflow-auto px-2.5 py-2.5 text-text-hi [&_input]:text-text-hi [&_select]:text-text-hi [&_textarea]:text-text-hi [&_code]:rounded-md [&_code]:bg-black/20 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-text-sky-token";
 
 export default function StudioNodeInspector({
   selectedDagNode,
   selectedCapability,
   agentDefinitions = [],
-  selectedDagNodeStatus,
   inputFields,
   outputSchemaFields,
   activeComposerIssueFocus,
@@ -226,11 +222,7 @@ export default function StudioNodeInspector({
         compactMode ? "px-2.5 py-2.5 [&_h2]:text-[20px]" : ""
       }`.trim()}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold tracking-tight text-text-hi">{selectedDagNode.taskName}</h2>
-          <div className="truncate text-[10px] text-text-lo">{selectedDagNode.capabilityId}</div>
-        </div>
+      <div className="flex items-start justify-end gap-2">
         <div className="flex shrink-0 items-center gap-1">
           <button
             className="rounded-lg border border-subtle bg-surface-1 px-2 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
@@ -264,7 +256,7 @@ export default function StudioNodeInspector({
             Task Name
           </div>
           <input
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+            className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
             value={selectedDagNode.taskName}
             onChange={(event) =>
               updateNodeBasics(selectedDagNode.id, { taskName: event.target.value })
@@ -276,7 +268,7 @@ export default function StudioNodeInspector({
             {isControlNode ? "Control Node Id" : "Capability Id"}
           </div>
           <input
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+            className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
             list={capabilityIdOptionsId}
             value={selectedDagNode.capabilityId}
             disabled={isControlNode}
@@ -295,7 +287,7 @@ export default function StudioNodeInspector({
             </div>
           </div>
           <input
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+            className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
             value={selectedDagNode.outputPath}
             onChange={(event) =>
               updateNodeBasics(selectedDagNode.id, { outputPath: event.target.value })
@@ -350,15 +342,15 @@ export default function StudioNodeInspector({
       ) : null}
 
       {isControlNode ? (
-        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/70 p-3.5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+        <div className="mt-5 rounded-2xl border border-amber-300/25 bg-accent-amber/70 p-3.5">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-amber-token">
             Control Flow
           </div>
-          <div className="mt-1 text-xs text-amber-900">
+          <div className="mt-1 text-xs text-amber-50">
             <code>if</code>, <code>if_else</code>, and <code>parallel</code> compile into
             execution gates and dependency structure. <code>switch</code> is still authoring-only.
           </div>
-          <div className="mt-2 text-[11px] text-amber-800">
+          <div className="mt-2 text-[11px] text-text-amber-token">
             References: <code>context.*</code>, <code>workflow.input.*</code>,{" "}
             <code>workflow.variable.*</code>, <code>step.{"{task}"}.*</code>. Operators:{" "}
             <code>==</code> <code>!=</code> <code>&gt;</code> <code>&lt;</code> <code>&gt;=</code>{" "}
@@ -371,7 +363,7 @@ export default function StudioNodeInspector({
                 Expression
               </div>
               <input
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40"
                 value={controlConfig.expression || ""}
                 onChange={(event) =>
                   updateNodeControlConfig(selectedDagNode.id, { expression: event.target.value })
@@ -391,7 +383,7 @@ export default function StudioNodeInspector({
                     True Label
                   </div>
                   <input
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                    className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40"
                     value={controlConfig.trueLabel || ""}
                     onChange={(event) =>
                       updateNodeControlConfig(selectedDagNode.id, { trueLabel: event.target.value })
@@ -404,7 +396,7 @@ export default function StudioNodeInspector({
                     False Label
                   </div>
                   <input
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                    className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40"
                     value={controlConfig.falseLabel || ""}
                     onChange={(event) =>
                       updateNodeControlConfig(selectedDagNode.id, { falseLabel: event.target.value })
@@ -421,7 +413,7 @@ export default function StudioNodeInspector({
                   Parallel Mode
                 </div>
                 <select
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                  className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40"
                   value={controlConfig.parallelMode || "fan_out"}
                   onChange={(event) =>
                     updateNodeControlConfig(selectedDagNode.id, {
@@ -436,7 +428,7 @@ export default function StudioNodeInspector({
             ) : null}
 
             {selectedDagNode.controlKind === "switch" ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <div className="rounded-2xl border border-subtle bg-surface-1 p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
@@ -445,7 +437,7 @@ export default function StudioNodeInspector({
                     <div className="mt-1 text-xs text-text-lo">Add labels and match values for each route.</div>
                   </div>
                   <button
-                    className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-semibold text-slate-700"
+                    className="rounded-full border border-subtle px-3 py-1 text-[11px] font-semibold text-text-md"
                     onClick={() => addSwitchCase(selectedDagNode.id)}
                   >
                     Add Case
@@ -453,14 +445,14 @@ export default function StudioNodeInspector({
                 </div>
                 <div className="mt-3 space-y-3">
                   {(controlConfig.switchCases || []).map((item, index) => (
-                    <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div key={item.id} className="rounded-xl border border-subtle bg-surface-1 p-3">
                       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
                         <label className="block">
                           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
                             Case Label
                           </div>
                           <input
-                            className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                            className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40"
                             value={item.label}
                             onChange={(event) =>
                               updateSwitchCase(selectedDagNode.id, item.id, { label: event.target.value })
@@ -473,7 +465,7 @@ export default function StudioNodeInspector({
                             Match Value
                           </div>
                           <input
-                            className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                            className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40"
                             value={item.match}
                             onChange={(event) =>
                               updateSwitchCase(selectedDagNode.id, item.id, { match: event.target.value })
@@ -483,7 +475,7 @@ export default function StudioNodeInspector({
                         </label>
                         <div className="flex items-end">
                           <button
-                            className="rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700"
+                            className="rounded-full border border-rose-300/25 bg-accent-rose px-3 py-2 text-[11px] font-semibold text-text-rose-token"
                             onClick={() => removeSwitchCase(selectedDagNode.id, item.id)}
                           >
                             Delete
@@ -499,7 +491,7 @@ export default function StudioNodeInspector({
         </div>
       ) : null}
 
-      <div className="mt-5 border-t border-slate-100 pt-3.5">
+      <div className="mt-5 border-t border-white/8 pt-3.5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
@@ -510,10 +502,7 @@ export default function StudioNodeInspector({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
-              required {selectedDagNodeStatus?.requiredCount || 0}
-            </div>
-            <div className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">
+            <div className="rounded-full bg-accent-emerald px-3 py-1 text-text-emerald-token">
               context keys {contextPathSuggestions.length}
             </div>
           </div>
@@ -521,13 +510,13 @@ export default function StudioNodeInspector({
 
         <div className="mt-2.5 flex gap-2">
           <input
-            className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+            className="flex-1 rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/40 focus:bg-surface-1"
             value={pendingInputField}
             onChange={(event) => setPendingInputField(event.target.value)}
             placeholder="Add custom input field"
           />
           <button
-            className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+            className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-text-md"
             onClick={() => {
               const field = pendingInputField.trim();
               if (!field) {
@@ -543,7 +532,7 @@ export default function StudioNodeInspector({
 
         <div className="mt-2.5 space-y-2">
           {inputFields.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-text-lo">
+            <div className="rounded-2xl border border-dashed border-subtle bg-surface-1 px-4 py-5 text-sm text-text-lo">
               No inputs configured for this node.
             </div>
           ) : null}
@@ -577,21 +566,21 @@ export default function StudioNodeInspector({
                 className={`rounded-[18px] border px-3 py-2.5 ${
                   activeComposerIssueFocus?.nodeId === selectedDagNode.id &&
                   activeComposerIssueFocus?.field === status.field
-                    ? "border-sky-300 bg-sky-50"
-                    : "border-slate-200 bg-slate-50"
+                    ? "border-sky-300 bg-accent-sky"
+                    : "border-subtle bg-surface-1"
                 }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-sm font-semibold text-slate-800">{status.field}</div>
+                      <div className="text-sm font-semibold text-text-hi">{status.field}</div>
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${
                           status.required
                             ? "bg-slate-900 text-slate-50"
                             : status.custom
-                              ? "border border-slate-300 bg-white text-slate-600"
-                              : "bg-sky-50 text-sky-700"
+                              ? "border border-subtle bg-surface-1 text-text-md"
+                              : "bg-accent-sky text-text-sky-token"
                         }`}
                       >
                         {status.required ? "required" : status.custom ? "custom" : "optional"}
@@ -599,12 +588,12 @@ export default function StudioNodeInspector({
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] ${
                           status.status === "missing"
-                            ? "bg-rose-100 text-rose-700"
+                            ? "bg-accent-rose text-text-rose-token"
                             : status.status === "from_chain"
-                              ? "bg-sky-100 text-sky-700"
+                              ? "bg-accent-sky text-text-sky-token"
                               : status.status === "from_context"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-amber-100 text-amber-700"
+                                ? "bg-accent-emerald text-text-emerald-token"
+                                : "bg-accent-amber text-text-amber-token"
                         }`}
                       >
                         {status.status}
@@ -626,21 +615,21 @@ export default function StudioNodeInspector({
                   <div className="flex flex-wrap items-center gap-2">
                     {status.status === "missing" && sourceNodes.length > 0 && bindingMode !== "from" ? (
                       <button
-                        className="rounded-full border border-slate-300 px-2.5 py-1 text-[11px] text-slate-700"
+                        className="rounded-full border border-subtle px-2.5 py-1 text-[11px] text-text-md"
                         onClick={() => setVisualBindingFromPrevious(selectedDagNode.id, status.field)}
                       >
                         Wire Prev
                       </button>
                     ) : null}
                     <button
-                      className="rounded-full border border-slate-300 px-2.5 py-1 text-[11px] text-slate-700"
+                      className="rounded-full border border-subtle px-2.5 py-1 text-[11px] text-text-md"
                       onClick={() => clearVisualBinding(selectedDagNode.id, status.field)}
                     >
                       Clear
                     </button>
                     {status.custom ? (
                       <button
-                        className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] text-rose-700"
+                        className="rounded-full border border-rose-300/25 bg-accent-rose px-2.5 py-1 text-[11px] text-text-rose-token"
                         onClick={() => removeCustomInputField(selectedDagNode.id, status.field)}
                       >
                         Remove
@@ -654,7 +643,7 @@ export default function StudioNodeInspector({
                     Mapping
                   </label>
                   <select
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                     value={bindingMode}
                     onChange={(event) =>
                       setVisualBindingMode(
@@ -684,7 +673,7 @@ export default function StudioNodeInspector({
                 {bindingMode === "from" && binding?.kind === "step_output" ? (
                   <div className="mt-3 grid gap-2">
                     <select
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                       value={binding.sourceNodeId}
                       onChange={(event) =>
                         updateVisualBindingSourceNode(selectedDagNode.id, status.field, event.target.value)
@@ -700,7 +689,7 @@ export default function StudioNodeInspector({
                       ))}
                     </select>
                     <input
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                       value={binding.sourcePath}
                       onChange={(event) =>
                         updateVisualBindingPath(selectedDagNode.id, status.field, event.target.value)
@@ -720,7 +709,7 @@ export default function StudioNodeInspector({
                   <div className="mt-3 grid gap-2">
                     {enumOptions.length > 0 ? (
                       <select
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={literalValue}
                         onChange={(event) =>
                           updateVisualBindingLiteral(selectedDagNode.id, status.field, event.target.value)
@@ -735,7 +724,7 @@ export default function StudioNodeInspector({
                       </select>
                     ) : schemaType === "boolean" ? (
                       <select
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={literalValue}
                         onChange={(event) =>
                           updateVisualBindingLiteral(selectedDagNode.id, status.field, event.target.value)
@@ -748,7 +737,7 @@ export default function StudioNodeInspector({
                     ) : schemaType === "number" || schemaType === "integer" ? (
                       <input
                         type="number"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={literalValue}
                         onChange={(event) =>
                           updateVisualBindingLiteral(selectedDagNode.id, status.field, event.target.value)
@@ -757,7 +746,7 @@ export default function StudioNodeInspector({
                       />
                     ) : schemaType === "object" || schemaType === "array" ? (
                       <textarea
-                        className="min-h-[96px] w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="min-h-[96px] w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={literalValue}
                         onChange={(event) =>
                           updateVisualBindingLiteral(selectedDagNode.id, status.field, event.target.value)
@@ -766,7 +755,7 @@ export default function StudioNodeInspector({
                       />
                     ) : (
                       <input
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={literalValue}
                         onChange={(event) =>
                           updateVisualBindingLiteral(selectedDagNode.id, status.field, event.target.value)
@@ -783,7 +772,7 @@ export default function StudioNodeInspector({
                 {bindingMode === "context" ? (
                   <div className="mt-3 grid gap-2">
                     <input
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                       list={contextPathListId}
                       value={binding?.kind === "context" ? binding.path : status.field}
                       onChange={(event) =>
@@ -806,7 +795,7 @@ export default function StudioNodeInspector({
                   <div className="mt-3 grid gap-2">
                     <div className="grid gap-2 sm:grid-cols-3">
                       <select
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={binding?.kind === "memory" ? binding.scope : "job"}
                         onChange={(event) =>
                           updateVisualBindingMemory(selectedDagNode.id, status.field, {
@@ -819,7 +808,7 @@ export default function StudioNodeInspector({
                         <option value="global">global</option>
                       </select>
                       <input
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={binding?.kind === "memory" ? binding.name : "task_outputs"}
                         onChange={(event) =>
                           updateVisualBindingMemory(selectedDagNode.id, status.field, {
@@ -829,7 +818,7 @@ export default function StudioNodeInspector({
                         placeholder="memory name"
                       />
                       <input
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                         value={binding?.kind === "memory" ? binding.key || "" : ""}
                         onChange={(event) =>
                           updateVisualBindingMemory(selectedDagNode.id, status.field, {
@@ -845,7 +834,7 @@ export default function StudioNodeInspector({
                 {bindingMode === "workflow_input" ? (
                   <div className="mt-3 grid gap-2">
                     <select
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                       value={binding?.kind === "workflow_input" ? binding.inputKey : ""}
                       onChange={(event) =>
                         updateVisualBindingWorkflowInput(
@@ -871,7 +860,7 @@ export default function StudioNodeInspector({
                 {bindingMode === "workflow_variable" ? (
                   <div className="mt-3 grid gap-2">
                     <select
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                       value={binding?.kind === "workflow_variable" ? binding.variableKey : ""}
                       onChange={(event) =>
                         updateVisualBindingWorkflowVariable(
@@ -899,7 +888,7 @@ export default function StudioNodeInspector({
         </div>
       </div>
 
-      <div className="mt-6 border-t border-slate-100 pt-4">
+      <div className="mt-6 border-t border-white/8 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
@@ -910,7 +899,7 @@ export default function StudioNodeInspector({
             </div>
           </div>
           <button
-            className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+            className="rounded-full border border-subtle px-3 py-1.5 text-[11px] font-semibold text-text-md"
             onClick={() => addNodeOutput(selectedDagNode.id)}
           >
             Add Output
@@ -918,15 +907,15 @@ export default function StudioNodeInspector({
         </div>
 
         {outputSchemaFields.length > 0 ? (
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+          <div className="mt-3 rounded-2xl border border-subtle bg-surface-1 px-3 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-slate-800">Available Schema Outputs</div>
+                <div className="text-sm font-semibold text-text-hi">Available Schema Outputs</div>
                 <div className="mt-1 text-[11px] text-text-lo">
                   Derived from the capability output schema for {selectedCapability?.id || selectedDagNode.capabilityId}.
                 </div>
               </div>
-              <div className="rounded-full bg-white px-3 py-1 text-[11px] text-slate-600">
+              <div className="rounded-full bg-surface-1 px-3 py-1 text-[11px] text-text-md">
                 {outputSchemaFields.length} field{outputSchemaFields.length === 1 ? "" : "s"}
               </div>
             </div>
@@ -934,12 +923,12 @@ export default function StudioNodeInspector({
               {outputSchemaFields.map((field) => (
                 <div
                   key={`studio-schema-output-${selectedDagNode.id}-${field.path}`}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-subtle bg-surface-1 px-3 py-2"
                 >
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-sm font-semibold text-slate-800">{field.path}</div>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-600">
+                      <div className="text-sm font-semibold text-text-hi">{field.path}</div>
+                      <span className="rounded-full bg-surface-1 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-text-md">
                         {field.type}
                       </span>
                     </div>
@@ -948,7 +937,7 @@ export default function StudioNodeInspector({
                     ) : null}
                   </div>
                   <button
-                    className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-semibold text-slate-700"
+                    className="rounded-full border border-subtle px-3 py-1 text-[11px] font-semibold text-text-md"
                     onClick={() => upsertNodeOutputFromSchema(selectedDagNode.id, field)}
                   >
                     Add Alias
@@ -959,22 +948,18 @@ export default function StudioNodeInspector({
           </div>
         ) : null}
 
-        <div className="mt-3 space-y-3">
-          {selectedDagNode.outputs.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-text-lo">
-              No extra outputs defined. Downstream nodes can still use the primary output path above.
-            </div>
-          ) : null}
+        {selectedDagNode.outputs.length > 0 ? (
+          <div className="mt-3 space-y-3">
           {selectedDagNode.outputs.map((output) => (
             <div
               key={`studio-node-output-${selectedDagNode.id}-${output.id}`}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3"
+              className="rounded-2xl border border-subtle bg-surface-1 px-3 py-3"
             >
               <div className="grid gap-2">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-slate-800">Named Output</div>
+                  <div className="text-sm font-semibold text-text-hi">Named Output</div>
                   <button
-                    className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] text-rose-700"
+                    className="rounded-full border border-rose-300/25 bg-accent-rose px-2.5 py-1 text-[11px] text-text-rose-token"
                     onClick={() => removeNodeOutput(selectedDagNode.id, output.id)}
                   >
                     Remove
@@ -982,7 +967,7 @@ export default function StudioNodeInspector({
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <input
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                     value={output.name}
                     onChange={(event) =>
                       updateNodeOutput(selectedDagNode.id, output.id, { name: event.target.value })
@@ -990,7 +975,7 @@ export default function StudioNodeInspector({
                     placeholder="output name"
                   />
                   <input
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                     value={output.path}
                     onChange={(event) =>
                       updateNodeOutput(selectedDagNode.id, output.id, { path: event.target.value })
@@ -999,7 +984,7 @@ export default function StudioNodeInspector({
                   />
                 </div>
                 <input
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                   value={output.description || ""}
                   onChange={(event) =>
                     updateNodeOutput(selectedDagNode.id, output.id, {
@@ -1012,9 +997,10 @@ export default function StudioNodeInspector({
             </div>
           ))}
         </div>
+        ) : null}
       </div>
 
-      <div className="mt-6 border-t border-slate-100 pt-4">
+      <div className="mt-6 border-t border-white/8 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-lo">
@@ -1025,28 +1011,24 @@ export default function StudioNodeInspector({
             </div>
           </div>
           <button
-            className="rounded-full border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+            className="rounded-full border border-subtle px-3 py-1.5 text-[11px] font-semibold text-text-md"
             onClick={() => addNodeVariable(selectedDagNode.id)}
           >
             Add Variable
           </button>
         </div>
 
-        <div className="mt-3 space-y-3">
-          {selectedDagNode.variables.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-text-lo">
-              No variables yet. Add names and values to capture local workflow intent while designing.
-            </div>
-          ) : null}
+        {selectedDagNode.variables.length > 0 ? (
+          <div className="mt-3 space-y-3">
           {selectedDagNode.variables.map((variable) => (
             <div
               key={`studio-node-variable-${selectedDagNode.id}-${variable.id}`}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3"
+              className="rounded-2xl border border-subtle bg-surface-1 px-3 py-3"
             >
               <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-slate-800">Variable</div>
+                <div className="text-sm font-semibold text-text-hi">Variable</div>
                 <button
-                  className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] text-rose-700"
+                  className="rounded-full border border-rose-300/25 bg-accent-rose px-2.5 py-1 text-[11px] text-text-rose-token"
                   onClick={() => removeNodeVariable(selectedDagNode.id, variable.id)}
                 >
                   Remove
@@ -1054,7 +1036,7 @@ export default function StudioNodeInspector({
               </div>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <input
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                   value={variable.key}
                   onChange={(event) =>
                     updateNodeVariable(selectedDagNode.id, variable.id, { key: event.target.value })
@@ -1062,7 +1044,7 @@ export default function StudioNodeInspector({
                   placeholder="variable name"
                 />
                 <input
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                   value={variable.value}
                   onChange={(event) =>
                     updateNodeVariable(selectedDagNode.id, variable.id, { value: event.target.value })
@@ -1071,7 +1053,7 @@ export default function StudioNodeInspector({
                 />
               </div>
               <input
-                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                className="mt-2 w-full rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-sm text-text-hi"
                 value={variable.description || ""}
                 onChange={(event) =>
                   updateNodeVariable(selectedDagNode.id, variable.id, {
@@ -1083,6 +1065,7 @@ export default function StudioNodeInspector({
             </div>
           ))}
         </div>
+        ) : null}
       </div>
     </section>
   );
