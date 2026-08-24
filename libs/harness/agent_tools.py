@@ -8,7 +8,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
+from libs.core.llm_provider import (
+    LLMProvider,
+    LLMProviderError,
+    LLMRequest,
+    resolve_provider_cached,
+)
 from libs.framework.tool_runtime import ToolExecutionError
 from libs.harness import agent_cancel
 
@@ -494,6 +499,17 @@ def agent(
     if not isinstance(raw_cap_ids, list):
         raw_cap_ids = []
     allowed_capability_ids: list[str] = [c for c in raw_cap_ids if isinstance(c, str) and c.strip()]
+
+    # Model/provider override: a bare model override with no provider is ambiguous
+    # (which provider does that model name belong to?), so only a provider override
+    # switches the LLMProvider instance -- model_override just refines which model
+    # within that provider. Falls back to the caller's default provider (the
+    # process-wide singleton) when no provider override is given, matching existing
+    # behavior exactly.
+    provider_override = str(payload.get("provider") or "").strip()
+    model_override = str(payload.get("model") or "").strip()
+    if provider_override:
+        provider = resolve_provider_cached(provider_override, model_override or None)
 
     # Background dispatch: hand off to the job queue and return immediately.
     background = bool(payload.get("background", False))

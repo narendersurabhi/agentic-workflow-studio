@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import uuid
 from urllib.error import HTTPError
 
 from urllib.error import URLError
@@ -572,3 +573,33 @@ def test_generate_json_object_uses_generate_compatibility_path() -> None:
     payload = _LegacyProvider().generate_json_object("hello")
 
     assert payload == {"ok": True}
+
+
+def test_resolve_provider_cached_reuses_instance_for_same_key() -> None:
+    key_model = f"mock-model-{uuid.uuid4()}"
+
+    first = llm_provider_module.resolve_provider_cached("mock", key_model)
+    second = llm_provider_module.resolve_provider_cached("mock", key_model)
+
+    assert first is second
+
+
+def test_resolve_provider_cached_builds_separate_instances_per_key() -> None:
+    suffix = uuid.uuid4()
+
+    first = llm_provider_module.resolve_provider_cached("mock", f"model-a-{suffix}")
+    second = llm_provider_module.resolve_provider_cached("mock", f"model-b-{suffix}")
+
+    assert first is not second
+
+
+def test_resolve_provider_cached_sources_openai_credentials_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "cached-openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    unique_model = f"gpt-cached-{uuid.uuid4()}"
+
+    provider = llm_provider_module.resolve_provider_cached("openai", unique_model)
+
+    assert provider.api_key == "cached-openai-key"
+    assert provider.model == unique_model
+    assert provider.base_url == "https://example.invalid/v1"

@@ -116,6 +116,14 @@ class AgentRunInput(BaseModel):
     instructions: str | None = None
     max_steps: int | None = Field(default=None, ge=1, le=32)
     allowed_capability_ids: list[str] | None = None
+    provider: str | None = Field(
+        default=None,
+        description="Override the LLM provider for this agent's reasoning loop (e.g. 'openai', 'anthropic', 'gemini'). Falls back to the process default when unset.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Override the LLM model name for this agent's reasoning loop. Falls back to the process default when unset.",
+    )
     background: bool = Field(
         default=False,
         description="Return immediately with run_id without waiting for the loop to finish. Requires API_URL to be configured in the worker.",
@@ -311,8 +319,10 @@ def register_agent_tool(
                 ),
                 usage_guidance=(
                     "Provide 'goal' (required), optional 'instructions' (system prompt), "
-                    "'max_steps' (default 12), and 'allowed_capability_ids' (list of "
-                    "capability IDs the agent may call). Returns 'result', 'steps_taken', "
+                    "'max_steps' (default 12), 'allowed_capability_ids' (list of "
+                    "capability IDs the agent may call), and optional 'provider'/'model' to "
+                    "override which LLM this agent's reasoning loop uses (falls back to the "
+                    "process default when unset). Returns 'result', 'steps_taken', "
                     "and 'tool_calls'."
                 ),
                 input_schema=AgentRunInput.model_json_schema(),
