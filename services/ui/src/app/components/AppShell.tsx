@@ -10,6 +10,7 @@ import { PRIMARY_APP_NAV_ITEMS } from "../lib/app-navigation";
 import { SHELL_THEMES, useAppTheme, type ShellTheme } from "../lib/theme";
 import { useShellMeta, useShellActionsSlotRef } from "../lib/shell";
 import { apiFetch, useAuth } from "../lib/auth";
+import { LLM_PROVIDERS } from "../lib/llmProviders";
 
 // ── Avatar color palette ────────────────────────────────────────────────────
 const AVATAR_COLORS = [
@@ -24,14 +25,6 @@ const AVATAR_COLORS = [
 function avatarHex(color: string): string {
   return AVATAR_COLORS.find((c) => c.value === color)?.hex ?? "#0ea5e9";
 }
-
-// ── LLM providers ───────────────────────────────────────────────────────────
-const LLM_PROVIDERS = [
-  { value: "",                  label: "Platform default",     models: [] as string[] },
-  { value: "gemini",            label: "Google Gemini",        models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"] },
-  { value: "openai",            label: "OpenAI",               models: ["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"] },
-  { value: "bedrock-anthropic", label: "Bedrock (Anthropic)",  models: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"] },
-];
 
 const LANGUAGES = ["English", "Spanish", "French", "German", "Portuguese", "Japanese", "Chinese", "Arabic", "Hindi"];
 
