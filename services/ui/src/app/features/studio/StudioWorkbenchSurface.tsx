@@ -1157,11 +1157,7 @@ export default function StudioWorkbenchSurface({
       default_workspace_path: workspacePath || null,
       default_constraints: constraints,
       default_max_steps: maxSteps,
-      model_config: selectedAgentDefinition?.model_config ?? {},
       allowed_capability_ids: allowedCapabilityIds,
-      memory_policy: selectedAgentDefinition?.memory_policy ?? {},
-      guardrail_policy: selectedAgentDefinition?.guardrail_policy ?? {},
-      workspace_policy: selectedAgentDefinition?.workspace_policy ?? {},
       user_id: agentUserId.trim() || workspaceUserId.trim() || null,
       metadata: {
         ...(selectedAgentDefinition?.metadata ?? {}),
@@ -2458,7 +2454,7 @@ export default function StudioWorkbenchSurface({
                                     <input
                                       type="number"
                                       min={1}
-                                      max={12}
+                                      max={32}
                                       value={stringInputValue(primaryAgentStep.inputDraft, "max_steps")}
                                       onChange={(event) =>
                                         updatePrimaryAgentInput("max_steps", event.target.value)
