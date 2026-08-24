@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   WorkflowNodePlateIcon,
@@ -74,6 +74,24 @@ const formatPaletteLabel = (value: string) => {
     .join(" ");
 };
 
+const COLLAPSED_SECTIONS_STORAGE_KEY = "studio-capability-palette-collapsed-sections";
+
+const readStoredCollapsedSections = (): Set<string> => {
+  if (typeof window === "undefined") {
+    return new Set();
+  }
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_SECTIONS_STORAGE_KEY);
+    if (!raw) {
+      return new Set();
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.filter((id) => typeof id === "string")) : new Set();
+  } catch {
+    return new Set();
+  }
+};
+
 const hexToRgba = (hex: string, alpha: number) => {
   const normalized = hex.replace("#", "");
   const expanded =
@@ -107,7 +125,18 @@ export default function StudioCapabilityPalette({
   onAddControl,
   onAddAgent,
 }: StudioCapabilityPaletteProps) {
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(readStoredCollapsedSections);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        COLLAPSED_SECTIONS_STORAGE_KEY,
+        JSON.stringify(Array.from(collapsedSections))
+      );
+    } catch {
+      // Best-effort persistence; ignore storage failures (e.g. private mode quota).
+    }
+  }, [collapsedSections]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const hasFilters = normalizedQuery.length > 0 || selectedGroup !== "all";
@@ -198,6 +227,12 @@ export default function StudioCapabilityPalette({
     });
   };
 
+  const allSectionsCollapsed = sections.length > 0 && sections.every((section) => collapsedSections.has(section.id));
+
+  const toggleAllSections = () => {
+    setCollapsedSections(allSectionsCollapsed ? new Set() : new Set(sections.map((section) => section.id)));
+  };
+
   return (
     <aside className="flex h-full min-h-0 flex-col px-2.5 py-2.5 text-text-hi">
       <div className="grid gap-1.5">
@@ -241,6 +276,22 @@ export default function StudioCapabilityPalette({
       {error ? (
         <div className="mt-2 rounded-[10px] border border-rose-300/20 bg-accent-rose px-2.5 py-1.5 text-xs text-text-rose-token">
           {error}
+        </div>
+      ) : null}
+
+      {sections.length > 0 ? (
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-lo">
+            {sections.length} section{sections.length === 1 ? "" : "s"}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-auto shrink-0 rounded-lg border border-subtle px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]"
+            onClick={toggleAllSections}
+          >
+            {allSectionsCollapsed ? "Expand all" : "Collapse all"}
+          </Button>
         </div>
       ) : null}
 
