@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
 import Textarea from "../../components/ui/Textarea";
+import { LLM_PROVIDERS, modelsForProvider } from "../../lib/llmProviders";
 import StudioWorkbenchIcon from "./StudioWorkbenchIcon";
 import {
   createAgentDefinition,
@@ -624,6 +625,59 @@ function WorkbenchContextJsonField({
   );
 }
 
+const workbenchSelectClassName =
+  "w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35";
+
+function WorkbenchLlmModelFields({
+  provider,
+  model,
+  onProviderChange,
+  onModelChange,
+  unsetLabel,
+}: {
+  provider: string;
+  model: string;
+  onProviderChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+  unsetLabel: string;
+}) {
+  const models = modelsForProvider(provider);
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      <label className="text-xs text-text-md">
+        <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">Provider</span>
+        <select
+          value={provider}
+          onChange={(event) => {
+            onProviderChange(event.target.value);
+            onModelChange("");
+          }}
+          className={workbenchSelectClassName}
+        >
+          {LLM_PROVIDERS.map((option) => (
+            <option key={`llm-provider-${option.value || "default"}`} value={option.value}>
+              {option.value ? option.label : unsetLabel}
+            </option>
+          ))}
+        </select>
+      </label>
+      {models.length > 0 ? (
+        <label className="text-xs text-text-md">
+          <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">Model</span>
+          <select value={model} onChange={(event) => onModelChange(event.target.value)} className={workbenchSelectClassName}>
+            <option value="">Provider default</option>
+            {models.map((modelOption) => (
+              <option key={`llm-model-${modelOption}`} value={modelOption}>
+                {modelOption}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+    </div>
+  );
+}
+
 export default function StudioWorkbenchSurface({
   active,
   workspaceUserId,
@@ -668,6 +722,10 @@ export default function StudioWorkbenchSurface({
   const [agentProfileName, setAgentProfileName] = useState("");
   const [agentProfileDescription, setAgentProfileDescription] = useState("");
   const [agentInstructions, setAgentInstructions] = useState("");
+  const [agentLlmProvider, setAgentLlmProvider] = useState("");
+  const [agentLlmModel, setAgentLlmModel] = useState("");
+  const [runLlmProvider, setRunLlmProvider] = useState("");
+  const [runLlmModel, setRunLlmModel] = useState("");
   const [agentProfileError, setAgentProfileError] = useState<string | null>(null);
   const [agentProfileSaving, setAgentProfileSaving] = useState(false);
   const [agentProfilePublishing, setAgentProfilePublishing] = useState(false);
@@ -934,6 +992,13 @@ export default function StudioWorkbenchSurface({
       ? isAgenticCapability(stepCapability)
       : capabilityId.includes(".autonomous");
     const stepIntent = stepIsAgentic ? "generate" : undefined;
+    // provider+model are inherited as one atomic pair -- run-level override wins
+    // wholesale if set, otherwise fall through to the definition-level pair.
+    // Never mix a provider from one source with a model from the other; a model
+    // name only makes sense paired with the provider it belongs to.
+    const [effectiveLlmProvider, effectiveLlmModel] = runLlmProvider.trim()
+      ? [runLlmProvider.trim(), runLlmModel.trim()]
+      : [agentLlmProvider.trim(), agentLlmModel.trim()];
     return {
       value: {
         version: "1",
@@ -955,6 +1020,12 @@ export default function StudioWorkbenchSurface({
                   ...(agentAllowedCapabilityIds.length > 0
                     ? { allowed_capability_ids: agentAllowedCapabilityIds }
                     : {}),
+                  ...(effectiveLlmProvider
+                    ? {
+                        provider: effectiveLlmProvider,
+                        ...(effectiveLlmModel ? { model: effectiveLlmModel } : {}),
+                      }
+                    : {}),
                 }
               : parsedInputs.value,
             retry_policy: DEFAULT_RETRY_POLICY_PREVIEW,
@@ -975,7 +1046,18 @@ export default function StudioWorkbenchSurface({
       },
       error: null,
     };
-  }, [agentAllowedCapabilityIds, agentGoal, agentInstructions, agentSteps, agentTitle, catalog]);
+  }, [
+    agentAllowedCapabilityIds,
+    agentGoal,
+    agentInstructions,
+    agentLlmModel,
+    agentLlmProvider,
+    agentSteps,
+    agentTitle,
+    catalog,
+    runLlmModel,
+    runLlmProvider,
+  ]);
 
   const predictedExecutionRequestPreview = useMemo(() => {
     const previewValue =
@@ -1068,6 +1150,10 @@ export default function StudioWorkbenchSurface({
     setAgentProfileName(definition.name);
     setAgentProfileDescription(definition.description ?? "");
     setAgentInstructions(definition.instructions || "");
+    setAgentLlmProvider(typeof definition.model_config?.provider === "string" ? definition.model_config.provider : "");
+    setAgentLlmModel(typeof definition.model_config?.model === "string" ? definition.model_config.model : "");
+    setRunLlmProvider("");
+    setRunLlmModel("");
     setAgentTitle(definition.name || "Agent workbench run");
     setAgentGoal(definition.default_goal || "");
     setAgentUserId(definition.user_id || workspaceUserId);
@@ -1089,6 +1175,10 @@ export default function StudioWorkbenchSurface({
     setAgentProfileName(version.name);
     setAgentProfileDescription(version.description ?? "");
     setAgentInstructions(version.instructions || "");
+    setAgentLlmProvider(typeof version.model_config?.provider === "string" ? version.model_config.provider : "");
+    setAgentLlmModel(typeof version.model_config?.model === "string" ? version.model_config.model : "");
+    setRunLlmProvider("");
+    setRunLlmModel("");
     setAgentTitle(version.name || "Agent workbench run");
     setAgentGoal(version.default_goal || "");
     setAgentUserId(version.user_id || workspaceUserId);
@@ -1139,6 +1229,10 @@ export default function StudioWorkbenchSurface({
       default_workspace_path: workspacePath || null,
       default_constraints: constraints,
       default_max_steps: maxSteps,
+      model_config: {
+        ...(agentLlmProvider.trim() ? { provider: agentLlmProvider.trim() } : {}),
+        ...(agentLlmModel.trim() ? { model: agentLlmModel.trim() } : {}),
+      },
       allowed_capability_ids: allowedCapabilityIds,
       user_id: agentUserId.trim() || workspaceUserId.trim() || null,
       metadata: {
@@ -1158,6 +1252,8 @@ export default function StudioWorkbenchSurface({
     setAgentTitle("Agent workbench run");
     setAgentGoal("");
     setAgentSteps([createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]);
+    setRunLlmProvider("");
+    setRunLlmModel("");
     setAgentProfileError(null);
     setLaunchError(null);
     setWorkbenchBanner({
@@ -2237,6 +2333,13 @@ export default function StudioWorkbenchSurface({
                         ) : null}
                       </label>
                     ) : null}
+                    <WorkbenchLlmModelFields
+                      provider={agentLlmProvider}
+                      model={agentLlmModel}
+                      onProviderChange={setAgentLlmProvider}
+                      onModelChange={setAgentLlmModel}
+                      unsetLabel="Platform default"
+                    />
                   </div>
 
                   {/* ── Tools ── */}
@@ -2396,6 +2499,13 @@ export default function StudioWorkbenchSurface({
                         </label>
                       </div>
                     ) : null}
+                    <WorkbenchLlmModelFields
+                      provider={runLlmProvider}
+                      model={runLlmModel}
+                      onProviderChange={setRunLlmProvider}
+                      onModelChange={setRunLlmModel}
+                      unsetLabel="Use agent's default"
+                    />
                     <div className="grid gap-3 lg:grid-cols-2">
                       <WorkbenchTitleField value={agentTitle} onChange={setAgentTitle} />
                       <WorkbenchUserIdField value={agentUserId} onChange={setAgentUserId} />
