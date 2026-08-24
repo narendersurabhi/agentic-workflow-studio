@@ -3751,13 +3751,6 @@ export default function WorkflowStudio() {
     return capabilityById.get(selectedDagNode.capabilityId) || null;
   }, [capabilityById, selectedDagNode]);
 
-  const selectedDagNodeStatus = useMemo(() => {
-    if (!selectedDagNodeId) {
-      return null;
-    }
-    return visualChainNodeStatusById.get(selectedDagNodeId) || null;
-  }, [selectedDagNodeId, visualChainNodeStatusById]);
-
   const selectedDagNodeInspectorFields = useMemo(() => {
     if (!selectedDagNode) {
       return [];
@@ -5294,7 +5287,6 @@ export default function WorkflowStudio() {
   const nodeInspectorPanel = (
     <StudioNodeInspector
       selectedDagNode={selectedDagNode}
-      selectedDagNodeStatus={selectedDagNodeStatus}
       inputFields={selectedDagNodeInspectorFields}
       selectedCapability={selectedCapability}
       agentDefinitions={agentDefinitions}
