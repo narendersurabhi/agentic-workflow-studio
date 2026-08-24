@@ -585,14 +585,11 @@ function JsonPreview({
   );
 }
 
-const workbenchFieldInputClassName =
-  "w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35";
-
 function WorkbenchTitleField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
     <label className="text-xs text-text-md">
       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">Title</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} className={workbenchFieldInputClassName} />
+      <Input value={value} onChange={(event) => onChange(event.target.value)} className="bg-slate-950/45" />
     </label>
   );
 }
@@ -601,7 +598,7 @@ function WorkbenchUserIdField({ value, onChange }: { value: string; onChange: (v
   return (
     <label className="text-xs text-text-md">
       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">User Id</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} className={workbenchFieldInputClassName} />
+      <Input value={value} onChange={(event) => onChange(event.target.value)} className="bg-slate-950/45" />
     </label>
   );
 }
@@ -618,11 +615,11 @@ function WorkbenchContextJsonField({
   return (
     <label className={className}>
       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">Context JSON</span>
-      <textarea
+      <Textarea
         rows={5}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+        className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
       />
     </label>
   );
@@ -1848,11 +1845,11 @@ export default function StudioWorkbenchSurface({
                 {catalogCollapsed ? "›" : "‹"} {catalogCollapsed ? "" : "Collapse"}
               </button>
               {catalogCollapsed ? null : <div className="space-y-3">
-                <input
+                <Input
                   value={catalogQuery}
                   onChange={(event) => setCatalogQuery(event.target.value)}
                   placeholder="Search capabilities"
-                  className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                  className="bg-slate-950/45"
                 />
                 <div className="grid gap-2">
                   <select
@@ -1949,20 +1946,24 @@ export default function StudioWorkbenchSurface({
                           ) : null}
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
-                          <button
+                          <Button
                             type="button"
-                            className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+                            variant="secondary"
+                            size="sm"
+                            className="uppercase tracking-[0.14em]"
                             onClick={() => handleAgentInsert(item)}
                           >
                             {isAgenticCapability(item) ? "Use as Agent" : "Add as Tool"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-lo transition hover:border-sky-300/35 hover:bg-surface-1 hover:text-text-hi"
+                            variant="ghost"
+                            size="sm"
+                            className="uppercase tracking-[0.14em]"
                             onClick={() => handleCapabilityInsert(item)}
                           >
                             Test
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     );
@@ -1993,11 +1994,11 @@ export default function StudioWorkbenchSurface({
                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Capability Id
                       </span>
-                      <input
+                      <Input
                         list="studio-capability-id-options"
                         value={selectedCapabilityId}
                         onChange={(event) => setSelectedCapabilityId(event.target.value)}
-                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                        className="bg-slate-950/45"
                       />
                     </label>
                     <WorkbenchUserIdField value={capabilityUserId} onChange={setCapabilityUserId} />
@@ -2006,10 +2007,10 @@ export default function StudioWorkbenchSurface({
                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Goal
                       </span>
-                      <input
+                      <Input
                         value={capabilityGoal}
                         onChange={(event) => setCapabilityGoal(event.target.value)}
-                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                        className="bg-slate-950/45"
                       />
                     </label>
                   </div>
@@ -2072,7 +2073,7 @@ export default function StudioWorkbenchSurface({
                               {required ? " *" : ""}
                             </span>
                             {multiLine ? (
-                              <textarea
+                              <Textarea
                                 rows={4}
                                 value={fieldValue}
                                 onChange={(event) =>
@@ -2081,10 +2082,10 @@ export default function StudioWorkbenchSurface({
                                     [fieldName]: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                                className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
                               />
                             ) : (
-                              <input
+                              <Input
                                 value={fieldValue}
                                 onChange={(event) =>
                                   setCapabilityInputDraft((current) => ({
@@ -2092,7 +2093,7 @@ export default function StudioWorkbenchSurface({
                                     [fieldName]: event.target.value,
                                   }))
                                 }
-                                className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                className="bg-slate-950/45"
                               />
                             )}
                           </label>
@@ -2112,11 +2113,11 @@ export default function StudioWorkbenchSurface({
                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Raw input override JSON
                       </span>
-                      <textarea
+                      <Textarea
                         rows={6}
                         value={capabilityRawOverrideText}
                         onChange={(event) => setCapabilityRawOverrideText(event.target.value)}
-                        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                        className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
                       />
                     </label>
                   ) : null}
@@ -2125,11 +2126,11 @@ export default function StudioWorkbenchSurface({
                     <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                       Advanced retry / policy override
                     </span>
-                    <textarea
+                    <Textarea
                       rows={4}
                       value={capabilityRetryPolicyText}
                       onChange={(event) => setCapabilityRetryPolicyText(event.target.value)}
-                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                      className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
                     />
                   </label>
                 </div>
@@ -2194,13 +2195,15 @@ export default function StudioWorkbenchSurface({
                         </option>
                       ))}
                     </select>
-                    <button
+                    <Button
                       type="button"
-                      className="ml-auto rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35"
+                      variant="secondary"
+                      size="sm"
+                      className="ml-auto uppercase tracking-[0.14em]"
                       onClick={() => setProfileDrawerOpen(true)}
                     >
                       Manage Profile
-                    </button>
+                    </Button>
                   </div>
                   {(agentDefinitionVersionsError || agentDefinitionsError || agentProfileError) ? (
                     <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
@@ -2315,31 +2318,31 @@ export default function StudioWorkbenchSurface({
                     <div className="grid gap-3 lg:grid-cols-2">
                       <label className="text-xs text-text-md">
                         <span className="mb-1 block uppercase tracking-[0.16em] text-text-lo">Name</span>
-                        <input
+                        <Input
                           value={agentProfileName}
                           onChange={(event) => setAgentProfileName(event.target.value)}
                           placeholder="My agent"
-                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                          className="bg-slate-950/45"
                         />
                       </label>
                       <label className="text-xs text-text-md">
                         <span className="mb-1 block uppercase tracking-[0.16em] text-text-lo">Description</span>
-                        <input
+                        <Input
                           value={agentProfileDescription}
                           onChange={(event) => setAgentProfileDescription(event.target.value)}
                           placeholder="What this agent does"
-                          className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                          className="bg-slate-950/45"
                         />
                       </label>
                     </div>
                     <label className="block text-xs text-text-md">
                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-lo">Instructions</span>
-                      <textarea
+                      <Textarea
                         rows={5}
                         value={agentInstructions}
                         onChange={(event) => setAgentInstructions(event.target.value)}
                         placeholder="You are a helpful agent. Think step by step and use your tools to achieve the goal."
-                        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                        className="rounded-2xl bg-slate-950/45 py-3"
                       />
                     </label>
                   </div>
@@ -2347,7 +2350,7 @@ export default function StudioWorkbenchSurface({
                   {/* ── Goal ── */}
                   <label className="block text-xs text-text-md">
                     <span className="mb-1 block text-sm font-semibold text-text-hi">Goal</span>
-                    <textarea
+                    <Textarea
                       rows={4}
                       value={agentGoal}
                       onChange={(event) => {
@@ -2359,7 +2362,7 @@ export default function StudioWorkbenchSurface({
                         }
                       }}
                       placeholder="Describe what this agent should accomplish…"
-                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                      className="rounded-2xl bg-slate-950/45 py-3"
                     />
                   </label>
 
@@ -2407,9 +2410,9 @@ export default function StudioWorkbenchSurface({
                       </div>
                     )}
                     <div className="mt-3 flex items-center gap-2">
-                      <input
+                      <Input
                         list="studio-capability-id-options"
-                        className="flex-1 rounded-xl border border-subtle bg-slate-950/45 px-3 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/35"
+                        className="flex-1 bg-slate-950/45"
                         placeholder="capability.id"
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
@@ -2418,9 +2421,11 @@ export default function StudioWorkbenchSurface({
                           }
                         }}
                       />
-                      <button
+                      <Button
                         type="button"
-                        className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35"
+                        variant="secondary"
+                        size="sm"
+                        className="uppercase tracking-[0.14em]"
                         onClick={(e) => {
                           const input = (e.currentTarget.previousElementSibling as HTMLInputElement);
                           handleToolInsert(input.value.trim());
@@ -2428,7 +2433,7 @@ export default function StudioWorkbenchSurface({
                         }}
                       >
                         + Add
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
@@ -2500,13 +2505,13 @@ export default function StudioWorkbenchSurface({
                                     <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                       Agent capability
                                     </span>
-                                    <input
+                                    <Input
                                       list="studio-agent-capability-options"
                                       value={primaryAgentStep.capabilityId}
                                       onChange={(event) =>
                                         updatePrimaryAgentCapability(event.target.value)
                                       }
-                                      className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                      className="bg-slate-950/45"
                                     />
                                   </label>
                                   {!isAgentRunCapability(primaryAgentStep.capabilityId) ? (
@@ -2514,7 +2519,7 @@ export default function StudioWorkbenchSurface({
                                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                         Workspace path
                                       </span>
-                                      <input
+                                      <Input
                                         value={stringInputValue(
                                           primaryAgentStep.inputDraft,
                                           "workspace_path"
@@ -2522,7 +2527,7 @@ export default function StudioWorkbenchSurface({
                                         onChange={(event) =>
                                           updatePrimaryAgentInput("workspace_path", event.target.value)
                                         }
-                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                        className="bg-slate-950/45"
                                       />
                                     </label>
                                   ) : null}
@@ -2530,7 +2535,7 @@ export default function StudioWorkbenchSurface({
                                     <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                       Max steps
                                     </span>
-                                    <input
+                                    <Input
                                       type="number"
                                       min={1}
                                       max={32}
@@ -2538,14 +2543,14 @@ export default function StudioWorkbenchSurface({
                                       onChange={(event) =>
                                         updatePrimaryAgentInput("max_steps", event.target.value)
                                       }
-                                      className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                      className="bg-slate-950/45"
                                     />
                                   </label>
                                   <label className="text-xs text-text-md lg:col-span-2">
                                     <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                       Constraints
                                     </span>
-                                    <textarea
+                                    <Textarea
                                       rows={3}
                                       value={stringInputValue(
                                         primaryAgentStep.inputDraft,
@@ -2554,7 +2559,7 @@ export default function StudioWorkbenchSurface({
                                       onChange={(event) =>
                                         updatePrimaryAgentInput("constraints", event.target.value)
                                       }
-                                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                      className="rounded-2xl bg-slate-950/45 py-3"
                                     />
                                   </label>
                                 </div>
@@ -2573,9 +2578,11 @@ export default function StudioWorkbenchSurface({
                                 >
                                   <div className="flex items-center justify-between gap-3">
                                     <div className="text-sm font-semibold text-text-hi">Step {index + 2}</div>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="rounded-xl border border-rose-300/18 bg-accent-rose px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-rose-token transition hover:border-rose-300/28"
+                                      variant="destructive"
+                                      size="sm"
+                                      className="uppercase tracking-[0.14em]"
                                       onClick={() =>
                                         setAgentSteps((current) =>
                                           current.length > 1
@@ -2585,27 +2592,27 @@ export default function StudioWorkbenchSurface({
                                       }
                                     >
                                       remove
-                                    </button>
+                                    </Button>
                                   </div>
                                   <div className="mt-3 grid gap-3 lg:grid-cols-2">
                                     <label className="text-xs text-text-md">
                                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                         Capability id
                                       </span>
-                                      <input
+                                      <Input
                                         list="studio-capability-id-options"
                                         value={step.capabilityId}
                                         onChange={(event) =>
                                           updateAgentStepCapability(step.localId, event.target.value)
                                         }
-                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                        className="bg-slate-950/45"
                                       />
                                     </label>
                                     <label className="text-xs text-text-md">
                                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                         Name
                                       </span>
-                                      <input
+                                      <Input
                                         value={step.name}
                                         onChange={(event) =>
                                           updateAgentStep(step.localId, (current) => ({
@@ -2613,14 +2620,14 @@ export default function StudioWorkbenchSurface({
                                             name: event.target.value,
                                           }))
                                         }
-                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                        className="bg-slate-950/45"
                                       />
                                     </label>
                                     <label className="text-xs text-text-md lg:col-span-2">
                                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                         Depends on
                                       </span>
-                                      <input
+                                      <Input
                                         value={step.dependsOnText}
                                         onChange={(event) =>
                                           updateAgentStep(step.localId, (current) => ({
@@ -2629,7 +2636,7 @@ export default function StudioWorkbenchSurface({
                                           }))
                                         }
                                         placeholder="comma-separated step ids"
-                                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                        className="bg-slate-950/45"
                                       />
                                     </label>
                                     <div className="rounded-2xl border border-white/8 bg-slate-950/30 p-3 text-xs text-text-md lg:col-span-2">
@@ -2708,7 +2715,7 @@ export default function StudioWorkbenchSurface({
                                                   {required ? " *" : ""}
                                                 </span>
                                                 {multiLine ? (
-                                                  <textarea
+                                                  <Textarea
                                                     rows={4}
                                                     value={fieldValue}
                                                     onChange={(event) =>
@@ -2720,10 +2727,10 @@ export default function StudioWorkbenchSurface({
                                                         },
                                                       }))
                                                     }
-                                                    className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                                                    className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
                                                   />
                                                 ) : (
-                                                  <input
+                                                  <Input
                                                     value={fieldValue}
                                                     onChange={(event) =>
                                                       updateAgentStep(step.localId, (current) => ({
@@ -2734,7 +2741,7 @@ export default function StudioWorkbenchSurface({
                                                         },
                                                       }))
                                                     }
-                                                    className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
+                                                    className="bg-slate-950/45"
                                                   />
                                                 )}
                                               </label>
@@ -2753,7 +2760,7 @@ export default function StudioWorkbenchSurface({
                                             <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                               Raw input override JSON
                                             </span>
-                                            <textarea
+                                            <Textarea
                                               rows={5}
                                               value={step.inputJsonText}
                                               onChange={(event) =>
@@ -2762,14 +2769,14 @@ export default function StudioWorkbenchSurface({
                                                   inputJsonText: event.target.value,
                                                 }))
                                               }
-                                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                                              className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
                                             />
                                           </label>
                                           <label className="block text-xs text-text-md">
                                             <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                                               Retry policy JSON
                                             </span>
-                                            <textarea
+                                            <Textarea
                                               rows={4}
                                               value={step.retryPolicyText}
                                               onChange={(event) =>
@@ -2778,7 +2785,7 @@ export default function StudioWorkbenchSurface({
                                                   retryPolicyText: event.target.value,
                                                 }))
                                               }
-                                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                                              className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
                                             />
                                           </label>
                                         </div>
@@ -2788,24 +2795,26 @@ export default function StudioWorkbenchSurface({
                                 </div>
                               );
                             })}
-                            <button
+                            <Button
                               type="button"
-                              className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+                              variant="secondary"
+                              size="sm"
+                              className="uppercase tracking-[0.14em]"
                               onClick={() => setAgentSteps((current) => [...current, createAgentStepDraft()])}
                             >
                               + Add Step
-                            </button>
+                            </Button>
                           </div>
                         ) : (
                           <label className="block text-xs text-text-md">
                             <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                               Raw RunSpec JSON
                             </span>
-                            <textarea
+                            <Textarea
                               rows={18}
                               value={agentRawRunSpecText}
                               onChange={(event) => setAgentRawRunSpecText(event.target.value)}
-                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+                              className="resize-y rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
                             />
                           </label>
                         )}
@@ -2893,22 +2902,26 @@ export default function StudioWorkbenchSurface({
               </div>
               <div className="flex flex-col items-end gap-2">
                 <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button
+                  <Button
                     type="button"
-                    className="rounded-xl border border-subtle bg-surface-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+                    variant="secondary"
+                    size="sm"
+                    className="uppercase tracking-[0.14em]"
                     onClick={applyForkResult}
                     disabled={!forkResult}
                   >
                     Fork Run
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="rounded-xl border border-sky-300/26 bg-accent-sky px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/36 disabled:cursor-not-allowed disabled:opacity-50"
+                    variant="primary"
+                    size="sm"
+                    className="uppercase tracking-[0.14em]"
                     onClick={handlePromoteWorkflowDraft}
                     disabled={!workflowPromotionResult?.promotable || !onPromoteWorkflowDraft}
                   >
                     Promote to Workflow
-                  </button>
+                  </Button>
                 </div>
                 {!onPromoteWorkflowDraft ? (
                   <div className="max-w-[420px] text-right text-[11px] text-text-amber-token">
@@ -3018,14 +3031,16 @@ export default function StudioWorkbenchSurface({
                               <span className="rounded-full border border-subtle bg-surface-1 px-2 py-1">
                                 attempts {stepPayload.attempts.length}
                               </span>
-                              <button
+                              <Button
                                 type="button"
-                                className="rounded-xl border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+                                variant="secondary"
+                                size="sm"
+                                className="uppercase tracking-[0.14em]"
                                 onClick={() => handleReplayStep(stepPayload.step.id)}
                                 disabled={!replayResult?.replayable}
                               >
                                 Replay Step
-                              </button>
+                              </Button>
                             </div>
                           </div>
                           {!replayResult?.replayable ? (
