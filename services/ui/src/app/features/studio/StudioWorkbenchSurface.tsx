@@ -2407,7 +2407,7 @@ export default function StudioWorkbenchSurface({
                         className="bg-slate-950/45"
                       />
                       {toolPickerOpen ? (
-                        <div className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-subtle bg-surface-2 shadow-[0_18px_36px_rgba(15,23,42,0.32)]">
+                        <div className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-subtle bg-surface-page shadow-[0_18px_36px_rgba(15,23,42,0.32)]">
                           {toolPickerCandidates.length > 0 ? (
                             toolPickerCandidates.map((item) => (
                               <button
