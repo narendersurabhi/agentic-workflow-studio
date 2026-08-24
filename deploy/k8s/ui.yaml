@@ -24,6 +24,8 @@ spec:
               value: /api
             - name: API_PROXY_TARGET
               value: http://api.awe.svc.cluster.local:8000
+            - name: HOSTNAME
+              value: "0.0.0.0"
           resources:
             requests:
               cpu: 100m

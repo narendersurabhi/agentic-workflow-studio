@@ -11,6 +11,10 @@ RUN apt-get update \
 COPY libs/core /app/libs/core
 COPY libs/framework /app/libs/framework
 COPY libs/tools /app/libs/tools
+COPY libs/mcp /app/libs/mcp
+COPY libs/memory /app/libs/memory
+COPY libs/harness /app/libs/harness
+COPY libs/tool_manager /app/libs/tool_manager
 COPY config /app/config
 COPY schemas /app/schemas
 COPY services/worker /app/services/worker

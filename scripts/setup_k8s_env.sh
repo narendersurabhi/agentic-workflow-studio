@@ -66,6 +66,12 @@ merge_env_assignments "${env_sources[@]}" >"$tmp_merged"
 grep -Ev '^(OPENAI_API_KEY|GITHUB_TOKEN|GITHUB_CLASSIC_TOKEN|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|GEMINI_API_KEY|QDRANT_API_KEY|RAG_RETRIEVER_MCP_TOKEN)=' "$tmp_merged" >"$tmp_env" || true
 
 # Ensure K8s service DNS defaults exist when the env file is compose-focused.
+# "db" is docker-compose's postgres hostname alias and never resolves inside the
+# cluster (the Service is named "postgres") -- strip it so the k8s-safe default
+# below always applies, instead of only when DATABASE_URL is absent entirely.
+if grep -q '^DATABASE_URL=.*@db:' "$tmp_env"; then
+  grep -v '^DATABASE_URL=' "$tmp_env" >"${tmp_env}.next" && mv "${tmp_env}.next" "$tmp_env"
+fi
 if ! grep -q '^DATABASE_URL=' "$tmp_env"; then
   echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentic" >>"$tmp_env"
 fi
