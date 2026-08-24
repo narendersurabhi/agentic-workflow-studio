@@ -544,6 +544,18 @@ function SurfacePanel({
   );
 }
 
+type WorkbenchDebugPanelId =
+  | "run_spec"
+  | "predicted_execution_request"
+  | "capability_input_schema"
+  | "capability_output_schema"
+  | "retry_policy"
+  | "initial_execution_request"
+  | "execution_requests"
+  | "attempts"
+  | "artifacts"
+  | "timeline";
+
 function JsonPreview({
   title,
   value,
@@ -573,6 +585,49 @@ function JsonPreview({
   );
 }
 
+const workbenchFieldInputClassName =
+  "w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35";
+
+function WorkbenchTitleField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="text-xs text-text-md">
+      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">Title</span>
+      <input value={value} onChange={(event) => onChange(event.target.value)} className={workbenchFieldInputClassName} />
+    </label>
+  );
+}
+
+function WorkbenchUserIdField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="text-xs text-text-md">
+      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">User Id</span>
+      <input value={value} onChange={(event) => onChange(event.target.value)} className={workbenchFieldInputClassName} />
+    </label>
+  );
+}
+
+function WorkbenchContextJsonField({
+  value,
+  onChange,
+  className = "block text-xs text-text-md",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  return (
+    <label className={className}>
+      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">Context JSON</span>
+      <textarea
+        rows={5}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
+      />
+    </label>
+  );
+}
+
 export default function StudioWorkbenchSurface({
   active,
   workspaceUserId,
@@ -585,7 +640,8 @@ export default function StudioWorkbenchSurface({
   const queryClient = useQueryClient();
   const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("agent");
   const [catalogCollapsed, setCatalogCollapsed] = useState(false);
-  const [showDevPreview, setShowDevPreview] = useState(false);
+  const [showDebugData, setShowDebugData] = useState(false);
+  const [activeDebugPanelId, setActiveDebugPanelId] = useState<WorkbenchDebugPanelId>("run_spec");
   const [showAgentAdvanced, setShowAgentAdvanced] = useState(false);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [confirmDeleteProfile, setConfirmDeleteProfile] = useState(false);
@@ -1655,6 +1711,88 @@ export default function StudioWorkbenchSurface({
       ? launchResponse.run.metadata.workbench_mode
       : workbenchMode;
 
+  const debugPanels: { id: WorkbenchDebugPanelId; label: string; value: unknown; emptyLabel: string }[] = [
+    {
+      id: "run_spec",
+      label: "RunSpec Preview",
+      value: workbenchMode === "capability" ? capabilityRunSpecPreview : agentRunSpecPreview.value,
+      emptyLabel: "The current editor state does not yet produce a valid run specification.",
+    },
+    {
+      id: "predicted_execution_request",
+      label: "Predicted First ExecutionRequest",
+      value: predictedExecutionRequestPreview,
+      emptyLabel: "Execution request preview will appear once the first step is valid.",
+    },
+    ...(workbenchMode === "capability" && selectedCapability
+      ? [
+          {
+            id: "capability_input_schema" as const,
+            label: "Capability Input Schema",
+            value: selectedCapability.input_schema,
+            emptyLabel: "No input schema is available for the selected capability.",
+          },
+          {
+            id: "capability_output_schema" as const,
+            label: "Capability Output Schema",
+            value: selectedCapability.output_schema,
+            emptyLabel: "No output schema is available for the selected capability.",
+          },
+        ]
+      : []),
+    {
+      id: "retry_policy",
+      label: "Retry / Policy Snapshot",
+      value:
+        workbenchMode === "capability"
+          ? {
+              retry_policy:
+                capabilityRetryPolicy.value && Object.keys(capabilityRetryPolicy.value).length > 0
+                  ? capabilityRetryPolicy.value
+                  : DEFAULT_RETRY_POLICY_PREVIEW,
+              acceptance_policy: { acceptance_criteria: [], critic_required: false },
+            }
+          : isRecord(predictedExecutionRequestPreview)
+            ? {
+                retry_policy: predictedExecutionRequestPreview.retry_policy ?? {},
+                policy_snapshot: predictedExecutionRequestPreview.policy_snapshot ?? {},
+              }
+            : null,
+      emptyLabel: "Policy preview will appear once the active workbench payload is valid.",
+    },
+    {
+      id: "initial_execution_request",
+      label: "Initial Prepared ExecutionRequest",
+      value: launchResponse?.execution_request,
+      emptyLabel: "The launch response did not include a prepared execution request.",
+    },
+    {
+      id: "execution_requests",
+      label: "Execution Requests",
+      value: debuggerData?.execution_requests,
+      emptyLabel: "No execution requests have been captured for this run yet.",
+    },
+    {
+      id: "attempts",
+      label: "Attempts / Tool Calls",
+      value: { attempts: debuggerData?.attempts ?? [], invocations: debuggerData?.invocations ?? [] },
+      emptyLabel: "No attempts or tool invocations have been captured yet.",
+    },
+    {
+      id: "artifacts",
+      label: "Artifacts",
+      value: artifacts,
+      emptyLabel: "Artifacts will appear once a step produces durable outputs.",
+    },
+    {
+      id: "timeline",
+      label: "Debugger Timeline",
+      value: debuggerData?.events,
+      emptyLabel: "Debugger events will stream in as the canonical runtime advances the run.",
+    },
+  ];
+  const activeDebugPanel = debugPanels.find((panel) => panel.id === activeDebugPanelId) ?? debugPanels[0];
+
   return (
     <section className={active ? "block" : "hidden"} aria-hidden={!active}>
       <div className="relative">
@@ -1669,13 +1807,6 @@ export default function StudioWorkbenchSurface({
               </span>
               Agent Workbench
             </h2>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            {activeRunId ? (
-              <span className="rounded-full border border-sky-300/28 bg-accent-sky px-3 py-1 text-text-hi">
-                run {activeRunId.slice(0, 8)}
-              </span>
-            ) : null}
           </div>
         </div>
 
@@ -1869,26 +2000,8 @@ export default function StudioWorkbenchSurface({
                         className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
                       />
                     </label>
-                    <label className="text-xs text-text-md">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                        User Id
-                      </span>
-                      <input
-                        value={capabilityUserId}
-                        onChange={(event) => setCapabilityUserId(event.target.value)}
-                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                      />
-                    </label>
-                    <label className="text-xs text-text-md">
-                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                        Title
-                      </span>
-                      <input
-                        value={capabilityTitle}
-                        onChange={(event) => setCapabilityTitle(event.target.value)}
-                        className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                      />
-                    </label>
+                    <WorkbenchUserIdField value={capabilityUserId} onChange={setCapabilityUserId} />
+                    <WorkbenchTitleField value={capabilityTitle} onChange={setCapabilityTitle} />
                     <label className="text-xs text-text-md">
                       <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
                         Goal
@@ -1901,17 +2014,7 @@ export default function StudioWorkbenchSurface({
                     </label>
                   </div>
 
-                  <label className="block text-xs text-text-md">
-                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                      Context JSON
-                    </span>
-                    <textarea
-                      rows={5}
-                      value={capabilityContextJsonText}
-                      onChange={(event) => setCapabilityContextJsonText(event.target.value)}
-                      className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
-                    />
-                  </label>
+                  <WorkbenchContextJsonField value={capabilityContextJsonText} onChange={setCapabilityContextJsonText} />
 
                   <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
                     <div className="flex items-center justify-between gap-3">
@@ -2343,37 +2446,13 @@ export default function StudioWorkbenchSurface({
                       <div className="mt-3 space-y-4">
                         {/* Title / User Id / Context JSON */}
                         <div className="grid gap-3 lg:grid-cols-2">
-                          <label className="text-xs text-text-md">
-                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                              Title
-                            </span>
-                            <input
-                              value={agentTitle}
-                              onChange={(event) => setAgentTitle(event.target.value)}
-                              className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                            />
-                          </label>
-                          <label className="text-xs text-text-md">
-                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                              User Id
-                            </span>
-                            <input
-                              value={agentUserId}
-                              onChange={(event) => setAgentUserId(event.target.value)}
-                              className="w-full rounded-xl border border-subtle bg-slate-950/45 px-3 py-2 text-sm text-text-hi outline-none transition focus:border-sky-300/35"
-                            />
-                          </label>
-                          <label className="block text-xs text-text-md lg:col-span-2">
-                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                              Context JSON
-                            </span>
-                            <textarea
-                              rows={5}
-                              value={agentContextJsonText}
-                              onChange={(event) => setAgentContextJsonText(event.target.value)}
-                              className="w-full rounded-2xl border border-subtle bg-slate-950/45 px-3 py-3 font-mono text-[12px] text-text-hi outline-none transition focus:border-sky-300/35"
-                            />
-                          </label>
+                          <WorkbenchTitleField value={agentTitle} onChange={setAgentTitle} />
+                          <WorkbenchUserIdField value={agentUserId} onChange={setAgentUserId} />
+                          <WorkbenchContextJsonField
+                            value={agentContextJsonText}
+                            onChange={setAgentContextJsonText}
+                            className="block text-xs text-text-md lg:col-span-2"
+                          />
                         </div>
 
                         {/* Editor mode toggle */}
@@ -2737,62 +2816,43 @@ export default function StudioWorkbenchSurface({
                 </div>
               )}
 
-              {/* Developer preview — shared between both modes */}
+              {/* Debug Data — consolidated JSON/debug panels, shared between both modes and both
+                  the pre-launch preview data and post-launch run results (previously split across
+                  a "Developer Preview" group and four always-rendered panels further down). */}
               <div className="mt-4">
                 <button
                   type="button"
                   className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-lo transition hover:text-text-hi"
-                  onClick={() => setShowDevPreview((v) => !v)}
+                  onClick={() => setShowDebugData((v) => !v)}
                 >
-                  <span className={`transition-transform ${showDevPreview ? "rotate-90" : ""}`}>▶</span>
-                  Developer Preview
+                  <span className={`transition-transform ${showDebugData ? "rotate-90" : ""}`}>▶</span>
+                  Debug Data
                 </button>
-                {showDevPreview ? (
+                {showDebugData ? (
                   <div className="mt-3 space-y-3">
-                    <JsonPreview
-                      title="RunSpec Preview"
-                      value={workbenchMode === "capability" ? capabilityRunSpecPreview : agentRunSpecPreview.value}
-                      emptyLabel="The current editor state does not yet produce a valid run specification."
-                    />
-                    <JsonPreview
-                      title="Predicted First ExecutionRequest"
-                      value={predictedExecutionRequestPreview}
-                      emptyLabel="Execution request preview will appear once the first step is valid."
-                    />
-                    {workbenchMode === "capability" && selectedCapability ? (
-                      <>
-                        <JsonPreview
-                          title="Capability Input Schema"
-                          value={selectedCapability.input_schema}
-                          emptyLabel="No input schema is available for the selected capability."
-                        />
-                        <JsonPreview
-                          title="Capability Output Schema"
-                          value={selectedCapability.output_schema}
-                          emptyLabel="No output schema is available for the selected capability."
-                        />
-                      </>
+                    <div className="flex flex-wrap gap-1.5">
+                      {debugPanels.map((panel) => (
+                        <button
+                          key={panel.id}
+                          type="button"
+                          className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition ${
+                            activeDebugPanel?.id === panel.id
+                              ? "border-sky-300/35 bg-accent-sky text-text-hi"
+                              : "border-subtle bg-surface-1 text-text-md hover:text-text-hi"
+                          }`}
+                          onClick={() => setActiveDebugPanelId(panel.id)}
+                        >
+                          {panel.label}
+                        </button>
+                      ))}
+                    </div>
+                    {activeDebugPanel ? (
+                      <JsonPreview
+                        title={activeDebugPanel.label}
+                        value={activeDebugPanel.value}
+                        emptyLabel={activeDebugPanel.emptyLabel}
+                      />
                     ) : null}
-                    <JsonPreview
-                      title="Retry / Policy Snapshot"
-                      value={
-                        workbenchMode === "capability"
-                          ? {
-                              retry_policy:
-                                capabilityRetryPolicy.value && Object.keys(capabilityRetryPolicy.value).length > 0
-                                  ? capabilityRetryPolicy.value
-                                  : DEFAULT_RETRY_POLICY_PREVIEW,
-                              acceptance_policy: { acceptance_criteria: [], critic_required: false },
-                            }
-                          : isRecord(predictedExecutionRequestPreview)
-                            ? {
-                                retry_policy: predictedExecutionRequestPreview.retry_policy ?? {},
-                                policy_snapshot: predictedExecutionRequestPreview.policy_snapshot ?? {},
-                              }
-                            : null
-                      }
-                      emptyLabel="Policy preview will appear once the active workbench payload is valid."
-                    />
                   </div>
                 ) : null}
               </div>
@@ -2880,7 +2940,7 @@ export default function StudioWorkbenchSurface({
                 </div>
               </div>
             </div>
-            <div className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+            <div className="px-4 py-4">
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-4">
                   <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-3">
@@ -2927,14 +2987,6 @@ export default function StudioWorkbenchSurface({
                     {debuggerError}
                   </div>
                 ) : null}
-                {launchResponse?.execution_request ? (
-                  <JsonPreview
-                    title="Initial Prepared ExecutionRequest"
-                    value={launchResponse.execution_request}
-                    emptyLabel="The launch response did not include a prepared execution request."
-                  />
-                ) : null}
-
                 <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-md">
                     Steps
@@ -2996,32 +3048,6 @@ export default function StudioWorkbenchSurface({
                     ) : null}
                   </div>
                 </div>
-              </div>
-
-              <div className="space-y-4">
-                <JsonPreview
-                  title="Execution Requests"
-                  value={debuggerData?.execution_requests}
-                  emptyLabel="No execution requests have been captured for this run yet."
-                />
-                <JsonPreview
-                  title="Attempts / Tool Calls"
-                  value={{
-                    attempts: debuggerData?.attempts ?? [],
-                    invocations: debuggerData?.invocations ?? [],
-                  }}
-                  emptyLabel="No attempts or tool invocations have been captured yet."
-                />
-                <JsonPreview
-                  title="Artifacts"
-                  value={artifacts}
-                  emptyLabel="Artifacts will appear once a step produces durable outputs."
-                />
-                <JsonPreview
-                  title="Debugger Timeline"
-                  value={debuggerData?.events}
-                  emptyLabel="Debugger events will stream in as the canonical runtime advances the run."
-                />
               </div>
             </div>
           </div>
