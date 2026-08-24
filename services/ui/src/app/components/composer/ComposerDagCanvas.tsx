@@ -677,16 +677,16 @@ export default function ComposerDagCanvas({
             >
               {focusGraphActive ? "Exit Focus" : "Focus Graph"}
             </button>
-            <button
-              className={`${toolbarButtonClassName} border-subtle bg-[rgba(38,48,61,0.98)]`}
-              onClick={() => {
-                onRunWorkflow?.();
-              }}
-              disabled={runWorkflowDisabled}
-              type="button"
-            >
-              {runWorkflowPending ? "Starting..." : "Run"}
-            </button>
+            {onRunWorkflow ? (
+              <button
+                className={`${toolbarButtonClassName} border-subtle bg-[rgba(38,48,61,0.98)]`}
+                onClick={onRunWorkflow}
+                disabled={runWorkflowDisabled}
+                type="button"
+              >
+                {runWorkflowPending ? "Starting..." : "Run"}
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}

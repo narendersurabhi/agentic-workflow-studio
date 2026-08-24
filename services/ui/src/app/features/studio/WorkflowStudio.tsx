@@ -1766,6 +1766,7 @@ export default function WorkflowStudio() {
   const [drawerPanelId, setDrawerPanelId] = useState<FloatingStudioPanelId | null>(null);
   const [drawerWidth, setDrawerWidth] = useState(320);
   const drawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const drawerPanelBeforeInspectorRef = useRef<FloatingStudioPanelId | null>(null);
 
   const dagCanvasDragOffsetRef = useRef<CanvasPoint>({ x: 0, y: 0 });
   const dagCanvasViewportRef = useRef<HTMLDivElement | null>(null);
@@ -2109,12 +2110,20 @@ export default function WorkflowStudio() {
     };
   }, []);
 
-  // Auto-open inspector drawer when a node is selected
+  // Auto-open inspector drawer when a node is selected, remembering whatever
+  // panel was open beforehand so deselecting the node restores it instead of
+  // force-closing the drawer entirely.
   useEffect(() => {
     if (selectedDagNodeId) {
-      setDrawerPanelId("inspector");
+      setDrawerPanelId((prev) => {
+        if (prev !== "inspector") {
+          drawerPanelBeforeInspectorRef.current = prev;
+        }
+        return "inspector";
+      });
     } else if (drawerPanelId === "inspector") {
-      setDrawerPanelId(null);
+      setDrawerPanelId(drawerPanelBeforeInspectorRef.current);
+      drawerPanelBeforeInspectorRef.current = null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDagNodeId]);
@@ -5192,13 +5201,14 @@ export default function WorkflowStudio() {
             {contextState.invalid ? "json invalid" : "json ready"}
           </span>
         </div>
-        <button
-          type="button"
-          className="shrink-0 rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-hi transition hover:border-sky-300/35"
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-auto shrink-0 rounded-lg px-2.5 py-1 text-[10px] tracking-[0.12em]"
           onClick={() => setWorkflowSetupExpanded((prev) => !prev)}
         >
           {workflowSetupExpanded ? "Collapse" : "Expand"}
-        </button>
+        </Button>
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -5226,8 +5236,8 @@ export default function WorkflowStudio() {
             ].map(({ label, value, onChange, placeholder }) => (
               <label key={label} className="block">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">{label}</div>
-                <input
-                  className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40"
+                <Input
+                  className="mt-1 rounded-lg px-2.5 py-1.5 text-xs"
                   value={value}
                   onChange={(e) => onChange(e.target.value)}
                   placeholder={placeholder}
@@ -5248,9 +5258,9 @@ export default function WorkflowStudio() {
           </div>
           <label className="block max-w-[160px]">
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Max Replans</div>
-            <input
+            <Input
               type="number" min={0} max={10}
-              className="mt-1 w-full rounded-lg border border-subtle bg-surface-1 px-2.5 py-1.5 text-xs text-text-hi outline-none transition focus:border-sky-300/40"
+              className="mt-1 rounded-lg px-2.5 py-1.5 text-xs"
               value={workflowRuntimeSettings.adaptivePolicy?.maxReplans ?? 2}
               onChange={(event) => setWorkflowRuntimeSettings((prev) => ({ executionMode: prev.executionMode || "static", adaptivePolicy: { maxReplans: Math.max(0, Math.min(10, Number(event.target.value) || 0)) } }))}
             />
@@ -5260,8 +5270,8 @@ export default function WorkflowStudio() {
               <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-md">Context JSON</div>
               <div className="text-[10px] text-text-md">{contextState.invalid ? "Invalid" : "Ready"}</div>
             </div>
-            <textarea
-              className="mt-1 min-h-[140px] w-full rounded-[14px] border border-white/8 bg-[#233142] px-2.5 py-2 font-mono text-xs text-text-hi outline-none transition placeholder:text-text-lo focus:border-sky-300/40 focus:bg-[#1c2939]"
+            <Textarea
+              className="mt-1 min-h-[140px] rounded-[14px] font-mono text-xs"
               value={contextJson}
               onChange={(event) => setContextJson(event.target.value)}
             />
@@ -5332,8 +5342,10 @@ export default function WorkflowStudio() {
     <section className="flex h-full flex-col px-2.5 py-2.5 text-text-hi">
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs font-semibold text-text-md">Recent drafts</div>
-        <button
-          className="rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold text-text-md transition hover:text-text-hi"
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-auto rounded-lg px-2.5 py-1 text-[10px]"
           onClick={() => {
             void queryClient.invalidateQueries({
               queryKey: workflowLibraryKeys.definitions(workspaceUserId),
@@ -5344,7 +5356,7 @@ export default function WorkflowStudio() {
           }}
         >
           Refresh
-        </button>
+        </Button>
       </div>
 
       {savedWorkflowDefinition ? (
@@ -5365,12 +5377,14 @@ export default function WorkflowStudio() {
       )}
 
       <div className="mt-2 flex items-center justify-end">
-        <Link
-          href="/workflows"
-          className="rounded-lg border border-subtle bg-surface-1 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-hi transition hover:border-sky-300/35"
+        <Button
+          asChild
+          variant="secondary"
+          size="sm"
+          className="h-auto rounded-lg px-2.5 py-1 text-[10px] tracking-[0.12em]"
         >
-          Open Workflows →
-        </Link>
+          <Link href="/workflows">Open Workflows →</Link>
+        </Button>
       </div>
 
       <div className="mt-2 flex-1 space-y-1.5 overflow-auto">
@@ -5417,12 +5431,14 @@ export default function WorkflowStudio() {
                   <div className="line-clamp-2 text-xs leading-5 text-text-md">
                     {definition.goal || "No goal recorded for this workflow."}
                   </div>
-                  <button
-                    className="rounded-full border border-subtle bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-hi transition hover:border-sky-300/35 hover:bg-surface-1"
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-auto rounded-full px-3 py-1.5 text-[11px] tracking-[0.16em]"
                     onClick={() => restoreWorkflowDefinition(definition)}
                   >
                     Open
-                  </button>
+                  </Button>
                 </div>
               </article>
             );
@@ -5768,18 +5784,6 @@ export default function WorkflowStudio() {
               ),
       };
     });
-  };
-
-  const resetFloatingStudioWorkspaceLayout = () => {
-    const stageWidth = studioWorkspaceStageSize.width || 1440;
-    const stageHeight = studioWorkspaceStageSize.height || 1040;
-    const defaults = createInitialFloatingStudioPanelLayouts(stageWidth, stageHeight);
-    focusGraphPanelSnapshotRef.current = null;
-    setStudioWorkspaceMode("default");
-    setActiveStudioPanelMenuId(null);
-    setStudioBottomTray(initialStudioBottomTrayState());
-    setFloatingStudioPanels(defaults);
-    setStudioNotice("Workspace layout reset.");
   };
 
   const enterFocusGraphMode = () => {
@@ -6228,7 +6232,7 @@ export default function WorkflowStudio() {
               {workflowActionLoading === "save" ? "Saving..." : "Save"}
             </Button>
             <Button
-              variant="secondary"
+              variant="primary"
               size="sm"
               className="uppercase tracking-[0.16em]"
               onClick={publishWorkflowVersion}
@@ -6237,7 +6241,7 @@ export default function WorkflowStudio() {
               {workflowActionLoading === "publish" ? "Publishing..." : "Publish"}
             </Button>
             <Button
-              variant="secondary"
+              variant="primary"
               size="sm"
               className="uppercase tracking-[0.16em]"
               onClick={runWorkflowVersion}
@@ -6287,32 +6291,11 @@ export default function WorkflowStudio() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
-                    <button
-                      type="button"
-                      className={`rounded-full border px-3 py-1 transition ${
-                        studioWorkspaceMode === "focus_graph"
-                          ? "border-sky-300/35 bg-accent-sky text-text-hi"
-                          : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                      }`}
-                      onClick={toggleFocusGraphMode}
-                    >
-                      {studioWorkspaceMode === "focus_graph" ? "exit focus" : "focus graph"}
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi transition hover:border-subtle hover:bg-surface-1"
-                      onClick={resetFloatingStudioWorkspaceLayout}
-                    >
-                      reset layout
-                    </button>
                     <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                       steps {visualChainSummary.steps}
                     </span>
                     <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
                       edges {visualChainSummary.dagEdges}
-                    </span>
-                    <span className="rounded-full border border-subtle bg-surface-1 px-3 py-1 text-text-hi">
-                      zoom {Math.round(dagCanvasZoom * 100)}%
                     </span>
                     <span
                       className={`rounded-full border px-3 py-1 ${
@@ -6358,13 +6341,13 @@ export default function WorkflowStudio() {
                             Add your first step from the catalog, or start from a template below.
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-2 rounded-xl border border-sky-300/35 bg-accent-sky px-5 py-2.5 text-sm font-semibold text-text-hi transition hover:border-sky-300/55"
+                        <Button
+                          variant="primary"
+                          className="rounded-xl px-5 py-2.5 text-sm"
                           onClick={() => addCapabilityNodeToStudio("codegen.autonomous")}
                         >
                           + Add first step
-                        </button>
+                        </Button>
                         <div className="w-full border-t border-white/8 pt-4">
                           <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-lo">
                             Start from a template
@@ -6457,9 +6440,6 @@ export default function WorkflowStudio() {
                       zoomOutDisabled={dagCanvasZoom <= DAG_CANVAS_ZOOM_MIN}
                       onToggleFocusGraph={toggleFocusGraphMode}
                       focusGraphActive={studioWorkspaceMode === "focus_graph"}
-                      onRunWorkflow={runWorkflowVersion}
-                      runWorkflowPending={workflowActionLoading === "run"}
-                      runWorkflowDisabled={workflowActionLoading !== null}
                     />
                   </div>
 
