@@ -16,13 +16,17 @@ export type LlmProviderOption = {
 export const LLM_PROVIDERS: LlmProviderOption[] = [
   { value: "", label: "Platform default", models: [] },
   { value: "mock", label: "Mock (no API calls)", models: [] },
-  { value: "openai", label: "OpenAI", models: ["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"] },
-  { value: "anthropic", label: "Anthropic", models: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"] },
-  { value: "gemini", label: "Google Gemini", models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"] },
+  { value: "openai", label: "OpenAI", models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] },
+  {
+    value: "anthropic",
+    label: "Anthropic",
+    models: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+  },
+  { value: "gemini", label: "Google Gemini", models: ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-pro"] },
   {
     value: "bedrock-anthropic",
     label: "Bedrock (Anthropic)",
-    models: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
+    models: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
   },
 ];
 
