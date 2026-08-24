@@ -35,7 +35,6 @@ import type {
 } from "./types";
 
 type WorkbenchMode = "capability" | "agent";
-type AgentEditorMode = "structured" | "raw";
 type AgentStepRole = "agent" | "step";
 
 type CapabilityInputDraft = Record<string, string | boolean>;
@@ -639,8 +638,6 @@ export default function StudioWorkbenchSurface({
   const [catalogCollapsed, setCatalogCollapsed] = useState(false);
   const [showDebugData, setShowDebugData] = useState(false);
   const [activeDebugPanelId, setActiveDebugPanelId] = useState<WorkbenchDebugPanelId>("run_spec");
-  const [showAgentAdvanced, setShowAgentAdvanced] = useState(false);
-  const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [confirmDeleteProfile, setConfirmDeleteProfile] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState("all");
@@ -658,8 +655,6 @@ export default function StudioWorkbenchSurface({
   const [agentTitle, setAgentTitle] = useState("Agent workbench run");
   const [agentGoal, setAgentGoal] = useState("");
   const [agentUserId, setAgentUserId] = useState(workspaceUserId);
-  const [agentContextJsonText, setAgentContextJsonText] = useState("{\n  \n}");
-  const [agentEditorMode, setAgentEditorMode] = useState<AgentEditorMode>("structured");
   const [agentSteps, setAgentSteps] = useState<AgentStepDraft[]>([
     createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent"),
   ]);
@@ -667,7 +662,6 @@ export default function StudioWorkbenchSurface({
   const [toolPickerQuery, setToolPickerQuery] = useState("");
   const [toolPickerOpen, setToolPickerOpen] = useState(false);
   const toolPickerInputRef = useRef<HTMLInputElement>(null);
-  const [agentRawRunSpecText, setAgentRawRunSpecText] = useState("{\n  \n}");
   const [selectedAgentDefinitionId, setSelectedAgentDefinitionId] = useState("");
   const [selectedAgentDefinitionVersionId, setSelectedAgentDefinitionVersionId] = useState("");
   const [agentProfileVersionNote, setAgentProfileVersionNote] = useState("");
@@ -907,116 +901,72 @@ export default function StudioWorkbenchSurface({
     );
   }, [capabilityLaunchInputs.value, capabilityRetryPolicy.value, selectedCapability]);
 
-  const agentContextJson = useMemo(
-    () => parseJsonObject(agentContextJsonText, "Agent context JSON"),
-    [agentContextJsonText]
-  );
-
-  const structuredAgentRunSpec = useMemo(() => {
+  const agentRunSpecPreview = useMemo(() => {
     const normalizedTitle = agentTitle.trim() || "Agent workbench run";
-    const normalizedGoal =
-      agentGoal.trim() || stringInputValue(agentSteps[0]?.inputDraft ?? {}, "goal").trim();
-    if (agentSteps.length === 0) {
-      return { value: null, error: "Add at least one step to launch an agent run." };
+    const step = agentSteps[0];
+    const normalizedGoal = agentGoal.trim() || stringInputValue(step?.inputDraft ?? {}, "goal").trim();
+    if (!step) {
+      return { value: null, error: "The agent's primary step is missing." };
     }
-
-    const steps: Record<string, unknown>[] = [];
-    const capabilityRequests: Record<string, unknown>[] = [];
-    const stepIds = new Set<string>();
-    const dagEdges: string[][] = [];
-
-    for (let index = 0; index < agentSteps.length; index += 1) {
-      const step = agentSteps[index];
-      const capabilityId = step.capabilityId.trim();
-      if (!capabilityId) {
-        return { value: null, error: `Step ${index + 1} is missing a capability id.` };
-      }
-      const stepId = slugify(step.stepId || step.name || capabilityId, `step_${index + 1}`);
-      if (stepIds.has(stepId)) {
-        return { value: null, error: `Step id '${stepId}' is duplicated.` };
-      }
-      stepIds.add(stepId);
-      const stepCapability = catalog.find((item) => item.id === capabilityId) ?? null;
-      const parsedInputs =
-        step.rawInputOverrideEnabled || !stepCapability
-          ? parseJsonObject(step.inputJsonText, `Inputs for step '${step.name || stepId}'`)
-          : buildStructuredCapabilityInputs(
-              stepCapability,
-              step.inputDraft,
-              `Input for step '${step.name || stepId}'`
-            );
-      if (!parsedInputs.value) {
-        return parsedInputs;
-      }
-      const parsedRetryPolicy = parseJsonObject(
-        step.retryPolicyText,
-        `Retry policy for step '${step.name || stepId}'`,
-        {}
-      );
-      if (!parsedRetryPolicy.value) {
-        return parsedRetryPolicy;
-      }
-      const dependsOn = splitDependencyList(step.dependsOnText);
-      for (const dependency of dependsOn) {
-        dagEdges.push([dependency, stepId]);
-      }
-      const capabilityRequest = {
-        request_id: capabilityId,
-        capability_id: capabilityId,
-        execution_request_id: capabilityId,
-      };
-      const stepCapabilityItem = catalog.find((c) => c.id === capabilityId) ?? null;
-      const stepIsAgentic = stepCapabilityItem
-        ? isAgenticCapability(stepCapabilityItem)
-        : capabilityId.includes(".autonomous");
-      const stepIntent = stepIsAgentic ? "generate" : undefined;
-      steps.push({
-        step_id: stepId,
-        name: step.name.trim() || stepId,
-        description: step.description.trim() || `Workbench step for ${capabilityId}`,
-        instruction: step.instruction.trim() || `Execute capability ${capabilityId}.`,
-        ...(stepIntent ? { intent: stepIntent } : {}),
-        capability_request: capabilityRequest,
-        input_bindings: isAgentRunCapability(capabilityId)
-          ? {
-              ...parsedInputs.value,
-              ...(agentInstructions.trim() ? { instructions: agentInstructions.trim() } : {}),
-              ...(agentAllowedCapabilityIds.length > 0
-                ? { allowed_capability_ids: agentAllowedCapabilityIds }
-                : {}),
-            }
-          : parsedInputs.value,
-        retry_policy:
-          Object.keys(parsedRetryPolicy.value).length > 0
-            ? parsedRetryPolicy.value
-            : DEFAULT_RETRY_POLICY_PREVIEW,
-        acceptance_policy: {
-          acceptance_criteria: [],
-          critic_required: false,
-        },
-        depends_on: dependsOn,
-      });
-      capabilityRequests.push(capabilityRequest);
+    const capabilityId = step.capabilityId.trim();
+    if (!capabilityId) {
+      return { value: null, error: "Choose an agent capability before launching a run." };
     }
-
-    for (const edge of dagEdges) {
-      if (!stepIds.has(edge[0])) {
-        return {
-          value: null,
-          error: `Dependency '${edge[0]}' does not match any step id in the structured agent editor.`,
-        };
-      }
+    const stepId = slugify(step.stepId || step.name || capabilityId, "agent");
+    const stepCapability = catalog.find((item) => item.id === capabilityId) ?? null;
+    const parsedInputs =
+      step.rawInputOverrideEnabled || !stepCapability
+        ? parseJsonObject(step.inputJsonText, `Inputs for step '${step.name || stepId}'`)
+        : buildStructuredCapabilityInputs(
+            stepCapability,
+            step.inputDraft,
+            `Input for step '${step.name || stepId}'`
+          );
+    if (!parsedInputs.value) {
+      return parsedInputs;
     }
-
+    const capabilityRequest = {
+      request_id: capabilityId,
+      capability_id: capabilityId,
+      execution_request_id: capabilityId,
+    };
+    const stepIsAgentic = stepCapability
+      ? isAgenticCapability(stepCapability)
+      : capabilityId.includes(".autonomous");
+    const stepIntent = stepIsAgentic ? "generate" : undefined;
     return {
       value: {
         version: "1",
         kind: "api",
         planner_version: "workbench_v1",
         tasks_summary: normalizedGoal || normalizedTitle,
-        steps,
-        dag_edges: dagEdges,
-        capability_requests: capabilityRequests,
+        steps: [
+          {
+            step_id: stepId,
+            name: step.name.trim() || stepId,
+            description: step.description.trim() || `Workbench step for ${capabilityId}`,
+            instruction: step.instruction.trim() || `Execute capability ${capabilityId}.`,
+            ...(stepIntent ? { intent: stepIntent } : {}),
+            capability_request: capabilityRequest,
+            input_bindings: isAgentRunCapability(capabilityId)
+              ? {
+                  ...parsedInputs.value,
+                  ...(agentInstructions.trim() ? { instructions: agentInstructions.trim() } : {}),
+                  ...(agentAllowedCapabilityIds.length > 0
+                    ? { allowed_capability_ids: agentAllowedCapabilityIds }
+                    : {}),
+                }
+              : parsedInputs.value,
+            retry_policy: DEFAULT_RETRY_POLICY_PREVIEW,
+            acceptance_policy: {
+              acceptance_criteria: [],
+              critic_required: false,
+            },
+            depends_on: [],
+          },
+        ],
+        dag_edges: [],
+        capability_requests: [capabilityRequest],
         metadata: {
           surface: "studio_workbench",
           workbench_mode: "agent",
@@ -1026,26 +976,6 @@ export default function StudioWorkbenchSurface({
       error: null,
     };
   }, [agentAllowedCapabilityIds, agentGoal, agentInstructions, agentSteps, agentTitle, catalog]);
-
-  const rawAgentRunSpec = useMemo(
-    () => parseJsonObject(agentRawRunSpecText, "Agent RunSpec"),
-    [agentRawRunSpecText]
-  );
-
-  const agentRunSpecPreview = useMemo(
-    () => (agentEditorMode === "raw" ? rawAgentRunSpec : structuredAgentRunSpec),
-    [agentEditorMode, rawAgentRunSpec, structuredAgentRunSpec]
-  );
-
-  useEffect(() => {
-    if (agentEditorMode !== "structured" || structuredAgentRunSpec.error || !structuredAgentRunSpec.value) {
-      return;
-    }
-    const nextRawRunSpecText = formatJson(structuredAgentRunSpec.value);
-    setAgentRawRunSpecText((current) =>
-      current === nextRawRunSpecText ? current : nextRawRunSpecText
-    );
-  }, [agentEditorMode, structuredAgentRunSpec.error, structuredAgentRunSpec.value]);
 
   const predictedExecutionRequestPreview = useMemo(() => {
     const previewValue =
@@ -1059,8 +989,7 @@ export default function StudioWorkbenchSurface({
     }
     const firstStep = steps[0];
     const capabilityRequest = isRecord(firstStep.capability_request) ? firstStep.capability_request : {};
-    const contextPreview =
-      workbenchMode === "capability" ? capabilityContextJson.value : agentContextJson.value;
+    const contextPreview = workbenchMode === "capability" ? capabilityContextJson.value : {};
     return {
       step_id: firstStep.step_id,
       request_id: capabilityRequest.execution_request_id ?? capabilityRequest.request_id,
@@ -1085,7 +1014,6 @@ export default function StudioWorkbenchSurface({
       },
     };
   }, [
-    agentContextJson.value,
     agentRunSpecPreview.value,
     capabilityContextJson.value,
     capabilityRunSpecPreview,
@@ -1135,7 +1063,6 @@ export default function StudioWorkbenchSurface({
   const applyAgentDefinitionDraft = (definition: AgentDefinition) => {
     const primaryStep = createAgentStepDraftFromDefinition(definition);
     setWorkbenchMode("agent");
-    setAgentEditorMode("structured");
     setSelectedAgentDefinitionId(definition.id);
     setSelectedAgentDefinitionVersionId("");
     setAgentProfileName(definition.name);
@@ -1157,7 +1084,6 @@ export default function StudioWorkbenchSurface({
   const applyAgentDefinitionVersionDraft = (version: AgentDefinitionVersion) => {
     const primaryStep = createAgentStepDraftFromDefinition(version);
     setWorkbenchMode("agent");
-    setAgentEditorMode("structured");
     setSelectedAgentDefinitionId(version.agent_definition_id);
     setSelectedAgentDefinitionVersionId(version.id);
     setAgentProfileName(version.name);
@@ -1224,7 +1150,6 @@ export default function StudioWorkbenchSurface({
 
   const handleNewAgentProfile = () => {
     setWorkbenchMode("agent");
-    setAgentEditorMode("structured");
     setSelectedAgentDefinitionId("");
     setSelectedAgentDefinitionVersionId("");
     setAgentProfileVersionNote("");
@@ -1426,51 +1351,47 @@ export default function StudioWorkbenchSurface({
     setAgentTitle(forkResult.draft.title || "Agent workbench run");
     setAgentGoal(forkResult.draft.goal);
     setAgentUserId(forkResult.draft.userId || workspaceUserId);
-    setAgentContextJsonText(formatJson(forkResult.draft.contextJson));
     setLaunchError(null);
     if (forkResult.mode === "agent_structured") {
-      setAgentEditorMode("structured");
-      setAgentSteps(
-        forkResult.draft.steps.length > 0
-          ? forkResult.draft.steps.map((step, index) => ({
-              ...(() => {
-                const stepCapability = catalog.find((item) => item.id === step.capabilityId) ?? null;
-                const nextInputState = capabilityEditorStateFromInputs(
-                  stepCapability,
-                  step.inputBindings
-                );
-                return {
-                  localId: `forked-step-${step.stepId}-${Math.random().toString(36).slice(2, 8)}`,
-                  stepId: step.stepId,
-                  name: step.name,
-                  description: step.description,
-                  instruction: step.instruction,
-                  capabilityId: step.capabilityId,
-                  dependsOnText: step.dependsOn.join(", "),
-                  inputDraft: nextInputState.inputDraft,
-                  rawInputOverrideEnabled:
-                    index === 0 ? false : nextInputState.rawOverrideEnabled,
-                  inputJsonText: nextInputState.rawOverrideText,
-                  retryPolicyText:
-                    step.retryPolicy && Object.keys(step.retryPolicy).length > 0
-                      ? formatJson(step.retryPolicy)
-                      : "",
-                };
-              })(),
-            }))
-          : [createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]
-      );
+      const [primaryStep, ...extraSteps] = forkResult.draft.steps;
+      if (primaryStep) {
+        const stepCapability = catalog.find((item) => item.id === primaryStep.capabilityId) ?? null;
+        const nextInputState = capabilityEditorStateFromInputs(
+          stepCapability,
+          primaryStep.inputBindings
+        );
+        setAgentSteps([
+          {
+            localId: `forked-step-${primaryStep.stepId}-${Math.random().toString(36).slice(2, 8)}`,
+            stepId: primaryStep.stepId,
+            name: primaryStep.name,
+            description: primaryStep.description,
+            instruction: primaryStep.instruction,
+            capabilityId: primaryStep.capabilityId,
+            dependsOnText: "",
+            inputDraft: nextInputState.inputDraft,
+            rawInputOverrideEnabled: false,
+            inputJsonText: nextInputState.rawOverrideText,
+            retryPolicyText: "",
+          },
+        ]);
+      } else {
+        setAgentSteps([createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]);
+      }
       setWorkbenchBanner({
-        tone: "info",
-        message: forkResult.draft.notice,
+        tone: extraSteps.length > 0 ? "warning" : "info",
+        message:
+          extraSteps.length > 0
+            ? `${forkResult.draft.notice} This run has ${forkResult.draft.steps.length} steps — only the first was loaded here. Use Promote to Workflow to edit the full multi-step run.`
+            : forkResult.draft.notice,
       });
       return;
     }
-    setAgentEditorMode("raw");
-    setAgentRawRunSpecText(formatJson(forkResult.draft.runSpec));
+    // mode === "agent_raw": the source run's primary step couldn't be reconstructed automatically.
+    setAgentSteps([createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]);
     setWorkbenchBanner({
       tone: "warning",
-      message: forkResult.draft.notice,
+      message: `${forkResult.draft.notice} Reconfigure the agent step manually, or use Promote to Workflow / Debug Data to inspect the original run.`,
     });
   };
 
@@ -1498,7 +1419,6 @@ export default function StudioWorkbenchSurface({
 
   const handleAgentInsert = (item: CapabilityItem) => {
     setWorkbenchMode("agent");
-    setAgentEditorMode("structured");
     if (isAgenticCapability(item)) {
       setAgentSteps((current) => {
         const [first, ...rest] =
@@ -1539,44 +1459,6 @@ export default function StudioWorkbenchSurface({
 
   const handleToolRemove = (capabilityId: string) => {
     setAgentAllowedCapabilityIds((prev) => prev.filter((id) => id !== capabilityId));
-  };
-
-  const updateAgentStepCapability = (localId: string, capabilityId: string) => {
-    const targetCapability = catalog.find((item) => item.id === capabilityId) ?? null;
-    setAgentSteps((current) =>
-      current.map((step) => {
-        if (step.localId !== localId) {
-          return step;
-        }
-        if (!targetCapability) {
-          return {
-            ...step,
-            capabilityId,
-            name: step.name || capabilityId,
-          };
-        }
-        const parsedInputs = parseJsonObject(step.inputJsonText, "Step inputs");
-        const nextInputState = capabilityEditorStateFromInputs(
-          targetCapability,
-          parsedInputs.value ?? {}
-        );
-        return {
-          ...step,
-          capabilityId,
-          name: step.name || capabilityId,
-          inputDraft: nextInputState.inputDraft,
-          rawInputOverrideEnabled: nextInputState.rawOverrideEnabled,
-          inputJsonText: nextInputState.rawOverrideText,
-        };
-      })
-    );
-  };
-
-  const updateAgentStep = (
-    localId: string,
-    updater: (current: AgentStepDraft) => AgentStepDraft
-  ) => {
-    setAgentSteps((current) => current.map((step) => (step.localId === localId ? updater(step) : step)));
   };
 
   const updatePrimaryAgentStep = (updater: (current: AgentStepDraft) => AgentStepDraft) => {
@@ -1652,37 +1534,26 @@ export default function StudioWorkbenchSurface({
               : null,
         });
       } else {
-        if (agentContextJson.error) {
-          throw new Error(agentContextJson.error);
-        }
         if (agentRunSpecPreview.error || !agentRunSpecPreview.value) {
           throw new Error(agentRunSpecPreview.error || "Agent RunSpec is invalid.");
         }
-        // Pre-flight: validate step capability IDs against loaded catalog
+        // Pre-flight: validate the agent's capability id against the loaded catalog
         const catalogIds = new Set(catalog.map((c) => c.id));
-        const stepIssues: string[] = [];
-        for (const step of agentSteps) {
-          const cid = step.capabilityId.trim();
-          if (!cid) {
-            stepIssues.push(`Step "${step.name || step.stepId}" has no capability selected.`);
-          } else if (catalogIds.size > 0 && !catalogIds.has(cid)) {
-            const suggestion = catalog.find((c) =>
-              c.id.includes(cid.toLowerCase()) || cid.toLowerCase().includes(c.id.split(".")[0])
-            );
-            stepIssues.push(
-              `"${cid}" is not a known capability.${suggestion ? ` Did you mean "${suggestion.id}"?` : " Browse the catalog to find the right ID."}`
-            );
-          }
-        }
-        if (stepIssues.length > 0) {
-          throw new Error(stepIssues.join("\n"));
+        const cid = primaryAgentStep?.capabilityId.trim() ?? "";
+        if (catalogIds.size > 0 && cid && !catalogIds.has(cid)) {
+          const suggestion = catalog.find((c) =>
+            c.id.includes(cid.toLowerCase()) || cid.toLowerCase().includes(c.id.split(".")[0])
+          );
+          throw new Error(
+            `"${cid}" is not a known capability.${suggestion ? ` Did you mean "${suggestion.id}"?` : " Browse the catalog to find the right ID."}`
+          );
         }
         const primaryAgentGoal = stringInputValue(primaryAgentStep?.inputDraft ?? {}, "goal").trim();
         response = await launchAgentRun({
           title: agentTitle.trim(),
           goal: agentGoal.trim() || primaryAgentGoal,
           user_id: agentUserId.trim() || null,
-          context_json: agentContextJson.value ?? {},
+          context_json: {},
           run_spec: agentRunSpecPreview.value,
           ...(selectedAgentDefinitionId
             ? { agent_definition_id: selectedAgentDefinitionId }
@@ -2173,7 +2044,11 @@ export default function StudioWorkbenchSurface({
               ) : (
                 <div className="mt-4 space-y-4">
 
-                  {/* ── Profile header: compact select + version + Manage button ── */}
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-sky-token">
+                    Definition
+                  </div>
+
+                  {/* ── Profile header: compact select + version ── */}
                   <div className="flex flex-wrap items-center gap-2">
                     <select
                       value={selectedAgentDefinitionId}
@@ -2231,15 +2106,6 @@ export default function StudioWorkbenchSurface({
                         </option>
                       ))}
                     </select>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="ml-auto uppercase tracking-[0.14em]"
-                      onClick={() => setProfileDrawerOpen(true)}
-                    >
-                      Manage Profile
-                    </Button>
                   </div>
                   {(agentDefinitionVersionsError || agentDefinitionsError || agentProfileError) ? (
                     <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
@@ -2247,107 +2113,81 @@ export default function StudioWorkbenchSurface({
                     </div>
                   ) : null}
 
-                  {/* ── Profile Drawer (slide-in) ── */}
-                  {profileDrawerOpen ? (
-                    <div className="fixed inset-0 z-50 flex justify-end">
-                      <button
-                        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-                        onClick={() => setProfileDrawerOpen(false)}
-                        aria-label="Close profile drawer"
-                      />
-                      <div className="relative z-10 flex w-full max-w-sm flex-col gap-4 border-l border-subtle bg-surface-1 p-6 shadow-[0_0_48px_rgba(15,23,42,0.4)]">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-text-hi">Manage Profile</div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            aria-label="Close profile drawer"
-                            onClick={() => setProfileDrawerOpen(false)}
-                          >
-                            ✕
-                          </Button>
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          <Button
-                            type="button"
-                            variant="primary"
-                            className="w-full uppercase tracking-[0.14em]"
-                            onClick={() => { void handleSaveAgentProfileAs(); setProfileDrawerOpen(false); }}
-                            disabled={agentProfileSaving}
-                          >
-                            {agentProfileSaving ? "Saving…" : "Save as new profile"}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="w-full uppercase tracking-[0.14em]"
-                            onClick={() => { void handleSaveAgentProfile(); }}
-                            disabled={!selectedAgentDefinitionId || agentProfileSaving}
-                          >
-                            {agentProfileSaving ? "Saving…" : "Save (update in-place)"}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="primary"
-                            className="w-full border-emerald-300/24 bg-accent-emerald uppercase tracking-[0.14em] hover:border-emerald-300/36 hover:bg-accent-emerald/80"
-                            onClick={() => void handlePublishAgentProfile()}
-                            disabled={!selectedAgentDefinitionId || agentProfileSaving || agentProfilePublishing}
-                          >
-                            {agentProfilePublishing ? "Publishing…" : "Publish version"}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="w-full uppercase tracking-[0.14em]"
-                            onClick={() => { handleNewAgentProfile(); setProfileDrawerOpen(false); }}
-                          >
-                            New profile
-                          </Button>
-                          {confirmDeleteProfile ? (
-                            <div className="flex items-center gap-2">
-                              <span className="flex-1 text-[11px] text-text-rose-token">Delete this profile?</span>
-                              <Button
-                                type="button"
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => {
-                                  void handleDeleteAgentProfile();
-                                  setProfileDrawerOpen(false);
-                                }}
-                                disabled={agentProfileDeleting}
-                              >
-                                {agentProfileDeleting ? "Deleting…" : "Yes, delete"}
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => setConfirmDeleteProfile(false)}
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              className="w-full uppercase tracking-[0.14em]"
-                              onClick={() => setConfirmDeleteProfile(true)}
-                              disabled={!selectedAgentDefinitionId || agentProfileDeleting}
-                            >
-                              Delete profile
-                            </Button>
-                          )}
-                        </div>
-                        {agentProfileError ? (
-                          <div className="rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
-                            {agentProfileError}
-                          </div>
-                        ) : null}
+                  {/* ── Save / publish / delete ── */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      className="uppercase tracking-[0.14em]"
+                      onClick={() => void handleSaveAgentProfileAs()}
+                      disabled={agentProfileSaving}
+                    >
+                      {agentProfileSaving ? "Saving…" : "Save as new"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="uppercase tracking-[0.14em]"
+                      onClick={() => void handleSaveAgentProfile()}
+                      disabled={!selectedAgentDefinitionId || agentProfileSaving}
+                    >
+                      {agentProfileSaving ? "Saving…" : "Save"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      className="border-emerald-300/24 bg-accent-emerald uppercase tracking-[0.14em] hover:border-emerald-300/36 hover:bg-accent-emerald/80"
+                      onClick={() => void handlePublishAgentProfile()}
+                      disabled={!selectedAgentDefinitionId || agentProfileSaving || agentProfilePublishing}
+                    >
+                      {agentProfilePublishing ? "Publishing…" : "Publish version"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="uppercase tracking-[0.14em]"
+                      onClick={() => handleNewAgentProfile()}
+                    >
+                      New
+                    </Button>
+                    {confirmDeleteProfile ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-text-rose-token">Delete this profile?</span>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => void handleDeleteAgentProfile()}
+                          disabled={agentProfileDeleting}
+                        >
+                          {agentProfileDeleting ? "Deleting…" : "Yes, delete"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => setConfirmDeleteProfile(false)}
+                        >
+                          Cancel
+                        </Button>
                       </div>
-                    </div>
-                  ) : null}
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        className="uppercase tracking-[0.14em]"
+                        onClick={() => setConfirmDeleteProfile(true)}
+                        disabled={!selectedAgentDefinitionId || agentProfileDeleting}
+                      >
+                        Delete
+                      </Button>
+                    )}
+                  </div>
 
                   {/* ── Agent identity ── */}
                   <div className="space-y-3">
@@ -2381,26 +2221,23 @@ export default function StudioWorkbenchSurface({
                         className="rounded-2xl bg-slate-950/45 py-3"
                       />
                     </label>
+                    {primaryAgentStep ? (
+                      <label className="text-xs text-text-md">
+                        <span className="mb-1 block uppercase tracking-[0.16em] text-text-lo">Agent capability</span>
+                        <Input
+                          list="studio-agent-capability-options"
+                          value={primaryAgentStep.capabilityId}
+                          onChange={(event) => updatePrimaryAgentCapability(event.target.value)}
+                          className="bg-slate-950/45"
+                        />
+                        {primaryAgentCapability ? (
+                          <span className="mt-1 block text-[11px] leading-5 text-text-md">
+                            {primaryAgentCapability.description}
+                          </span>
+                        ) : null}
+                      </label>
+                    ) : null}
                   </div>
-
-                  {/* ── Goal ── */}
-                  <label className="block text-xs text-text-md">
-                    <span className="mb-1 block text-sm font-semibold text-text-hi">Goal</span>
-                    <Textarea
-                      rows={4}
-                      value={agentGoal}
-                      onChange={(event) => {
-                        const nextGoal = event.target.value;
-                        if (agentEditorMode === "structured") {
-                          updatePrimaryAgentInput("goal", nextGoal);
-                        } else {
-                          setAgentGoal(nextGoal);
-                        }
-                      }}
-                      placeholder="Describe what this agent should accomplish…"
-                      className="rounded-2xl bg-slate-950/45 py-3"
-                    />
-                  </label>
 
                   {/* ── Tools ── */}
                   <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
@@ -2502,390 +2339,67 @@ export default function StudioWorkbenchSurface({
                     </div>
                   </div>
 
-                  {/* ── Advanced ── */}
-                  <div>
-                    <button
-                      type="button"
-                      className="flex items-center gap-1.5 text-[11px] text-text-lo transition hover:text-text-md"
-                      onClick={() => setShowAgentAdvanced((v) => !v)}
-                    >
-                      <span className={`transition-transform ${showAgentAdvanced ? "rotate-90" : ""}`}>▶</span>
-                      Advanced
-                    </button>
-                    {showAgentAdvanced ? (
-                      <div className="mt-3 space-y-4">
-                        {/* Title / User Id / Context JSON */}
-                        <div className="grid gap-3 lg:grid-cols-2">
-                          <WorkbenchTitleField value={agentTitle} onChange={setAgentTitle} />
-                          <WorkbenchUserIdField value={agentUserId} onChange={setAgentUserId} />
-                          <WorkbenchContextJsonField
-                            value={agentContextJsonText}
-                            onChange={setAgentContextJsonText}
-                            className="block text-xs text-text-md lg:col-span-2"
-                          />
-                        </div>
-
-                        {/* Editor mode toggle */}
-                        <div className="flex flex-wrap items-center gap-2">
-                          {(["structured", "raw"] as AgentEditorMode[]).map((mode) => (
-                            <button
-                              key={mode}
-                              type="button"
-                              className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
-                                agentEditorMode === mode
-                                  ? "border-sky-300/35 bg-accent-sky text-text-hi"
-                                  : "border-subtle bg-surface-1 text-text-hi hover:border-subtle hover:bg-surface-1"
-                              }`}
-                              onClick={() => {
-                                setAgentEditorMode(mode);
-                                setWorkbenchBanner(null);
-                              }}
-                            >
-                              {mode === "structured" ? "Structured editor" : "Raw RunSpec"}
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Structured / Raw editor content */}
-                        {agentEditorMode === "structured" ? (
-                          <div className="space-y-3">
-                            {/* Primary agent step */}
-                            {primaryAgentStep ? (
-                              <div className="rounded-2xl border border-sky-300/18 bg-accent-sky p-3">
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div>
-                                    <div className="text-sm font-semibold text-text-hi">Agent</div>
-                                    {primaryAgentCapability ? (
-                                      <div className="mt-1 text-xs leading-5 text-text-md">
-                                        {primaryAgentCapability.description}
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                  <span className="rounded-full border border-sky-300/22 bg-accent-sky px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-sky-token">
-                                    primary step
-                                  </span>
-                                </div>
-                                <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                                  <label className="text-xs text-text-md lg:col-span-2">
-                                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                      Agent capability
-                                    </span>
-                                    <Input
-                                      list="studio-agent-capability-options"
-                                      value={primaryAgentStep.capabilityId}
-                                      onChange={(event) =>
-                                        updatePrimaryAgentCapability(event.target.value)
-                                      }
-                                      className="bg-slate-950/45"
-                                    />
-                                  </label>
-                                  {!isAgentRunCapability(primaryAgentStep.capabilityId) ? (
-                                    <label className="text-xs text-text-md">
-                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                        Workspace path
-                                      </span>
-                                      <Input
-                                        value={stringInputValue(
-                                          primaryAgentStep.inputDraft,
-                                          "workspace_path"
-                                        )}
-                                        onChange={(event) =>
-                                          updatePrimaryAgentInput("workspace_path", event.target.value)
-                                        }
-                                        className="bg-slate-950/45"
-                                      />
-                                    </label>
-                                  ) : null}
-                                  <label className="text-xs text-text-md">
-                                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                      Max steps
-                                    </span>
-                                    <Input
-                                      type="number"
-                                      min={1}
-                                      max={32}
-                                      value={stringInputValue(primaryAgentStep.inputDraft, "max_steps")}
-                                      onChange={(event) =>
-                                        updatePrimaryAgentInput("max_steps", event.target.value)
-                                      }
-                                      className="bg-slate-950/45"
-                                    />
-                                  </label>
-                                  <label className="text-xs text-text-md lg:col-span-2">
-                                    <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                      Constraints
-                                    </span>
-                                    <Textarea
-                                      rows={3}
-                                      value={stringInputValue(
-                                        primaryAgentStep.inputDraft,
-                                        "constraints"
-                                      )}
-                                      onChange={(event) =>
-                                        updatePrimaryAgentInput("constraints", event.target.value)
-                                      }
-                                      className="rounded-2xl bg-slate-950/45 py-3"
-                                    />
-                                  </label>
-                                </div>
-                              </div>
-                            ) : null}
-
-                            {/* Additional steps */}
-                            {agentSteps.slice(1).map((step, index) => {
-                              const stepCapability =
-                                catalog.find((item) => item.id === step.capabilityId) ?? null;
-                              const stepSchemaProperties = getCapabilitySchemaProperties(stepCapability);
-                              return (
-                                <div
-                                  key={step.localId}
-                                  className="rounded-2xl border border-white/8 bg-black/18 p-3"
-                                >
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div className="text-sm font-semibold text-text-hi">Step {index + 2}</div>
-                                    <Button
-                                      type="button"
-                                      variant="destructive"
-                                      size="sm"
-                                      className="uppercase tracking-[0.14em]"
-                                      onClick={() =>
-                                        setAgentSteps((current) =>
-                                          current.length > 1
-                                            ? current.filter((item) => item.localId !== step.localId)
-                                            : current
-                                        )
-                                      }
-                                    >
-                                      remove
-                                    </Button>
-                                  </div>
-                                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                                    <label className="text-xs text-text-md">
-                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                        Capability id
-                                      </span>
-                                      <Input
-                                        list="studio-capability-id-options"
-                                        value={step.capabilityId}
-                                        onChange={(event) =>
-                                          updateAgentStepCapability(step.localId, event.target.value)
-                                        }
-                                        className="bg-slate-950/45"
-                                      />
-                                    </label>
-                                    <label className="text-xs text-text-md">
-                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                        Name
-                                      </span>
-                                      <Input
-                                        value={step.name}
-                                        onChange={(event) =>
-                                          updateAgentStep(step.localId, (current) => ({
-                                            ...current,
-                                            name: event.target.value,
-                                          }))
-                                        }
-                                        className="bg-slate-950/45"
-                                      />
-                                    </label>
-                                    <label className="text-xs text-text-md lg:col-span-2">
-                                      <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                        Depends on
-                                      </span>
-                                      <Input
-                                        value={step.dependsOnText}
-                                        onChange={(event) =>
-                                          updateAgentStep(step.localId, (current) => ({
-                                            ...current,
-                                            dependsOnText: event.target.value,
-                                          }))
-                                        }
-                                        placeholder="comma-separated step ids"
-                                        className="bg-slate-950/45"
-                                      />
-                                    </label>
-                                    <div className="rounded-2xl border border-white/8 bg-slate-950/30 p-3 text-xs text-text-md lg:col-span-2">
-                                      <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                          <div className="font-semibold uppercase tracking-[0.16em] text-text-md">
-                                            Inputs
-                                          </div>
-                                          <div className="mt-1 text-text-md">
-                                            Fill required fields from the selected capability schema.
-                                          </div>
-                                        </div>
-                                        <label className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-md">
-                                          <input
-                                            type="checkbox"
-                                            checked={step.rawInputOverrideEnabled}
-                                            onChange={(event) =>
-                                              updateAgentStep(step.localId, (current) => ({
-                                                ...current,
-                                                rawInputOverrideEnabled: event.target.checked,
-                                              }))
-                                            }
-                                          />
-                                          Raw overrides
-                                        </label>
-                                      </div>
-                                      {!step.rawInputOverrideEnabled && stepSchemaProperties.length > 0 ? (
-                                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                                          {stepSchemaProperties.map(([fieldName, schema]) => {
-                                            const fieldType = normalizeSchemaType(schema);
-                                            const required =
-                                              stepCapability?.required_inputs?.includes(fieldName) ?? false;
-                                            const rawFieldValue = step.inputDraft[fieldName];
-                                            const fieldValue =
-                                              typeof rawFieldValue === "string" ? rawFieldValue : "";
-                                            if (fieldType === "boolean") {
-                                              return (
-                                                <label
-                                                  key={fieldName}
-                                                  className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-2 text-sm text-text-hi"
-                                                >
-                                                  <span>
-                                                    {fieldName}
-                                                    {required ? (
-                                                      <span className="ml-2 text-[10px] uppercase text-text-sky-token">
-                                                        required
-                                                      </span>
-                                                    ) : null}
-                                                  </span>
-                                                  <input
-                                                    type="checkbox"
-                                                    checked={step.inputDraft[fieldName] === true}
-                                                    onChange={(event) =>
-                                                      updateAgentStep(step.localId, (current) => ({
-                                                        ...current,
-                                                        inputDraft: {
-                                                          ...current.inputDraft,
-                                                          [fieldName]: event.target.checked,
-                                                        },
-                                                      }))
-                                                    }
-                                                  />
-                                                </label>
-                                              );
-                                            }
-                                            const multiLine = fieldType === "object" || fieldType === "array";
-                                            return (
-                                              <label
-                                                key={fieldName}
-                                                className={`block text-xs text-text-md ${
-                                                  multiLine ? "lg:col-span-2" : ""
-                                                }`.trim()}
-                                              >
-                                                <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                                  {fieldName}
-                                                  {required ? " *" : ""}
-                                                </span>
-                                                {multiLine ? (
-                                                  <Textarea
-                                                    rows={4}
-                                                    value={fieldValue}
-                                                    onChange={(event) =>
-                                                      updateAgentStep(step.localId, (current) => ({
-                                                        ...current,
-                                                        inputDraft: {
-                                                          ...current.inputDraft,
-                                                          [fieldName]: event.target.value,
-                                                        },
-                                                      }))
-                                                    }
-                                                    className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
-                                                  />
-                                                ) : (
-                                                  <Input
-                                                    value={fieldValue}
-                                                    onChange={(event) =>
-                                                      updateAgentStep(step.localId, (current) => ({
-                                                        ...current,
-                                                        inputDraft: {
-                                                          ...current.inputDraft,
-                                                          [fieldName]: event.target.value,
-                                                        },
-                                                      }))
-                                                    }
-                                                    className="bg-slate-950/45"
-                                                  />
-                                                )}
-                                              </label>
-                                            );
-                                          })}
-                                        </div>
-                                      ) : null}
-                                      {!step.rawInputOverrideEnabled && stepSchemaProperties.length === 0 ? (
-                                        <div className="mt-3 rounded-2xl border border-white/8 bg-slate-950/38 px-3 py-4 text-xs text-text-md">
-                                          Select a catalog capability with an input schema to show generated fields.
-                                        </div>
-                                      ) : null}
-                                      {step.rawInputOverrideEnabled ? (
-                                        <div className="mt-3 space-y-3">
-                                          <label className="block text-xs text-text-md">
-                                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                              Raw input override JSON
-                                            </span>
-                                            <Textarea
-                                              rows={5}
-                                              value={step.inputJsonText}
-                                              onChange={(event) =>
-                                                updateAgentStep(step.localId, (current) => ({
-                                                  ...current,
-                                                  inputJsonText: event.target.value,
-                                                }))
-                                              }
-                                              className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
-                                            />
-                                          </label>
-                                          <label className="block text-xs text-text-md">
-                                            <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                                              Retry policy JSON
-                                            </span>
-                                            <Textarea
-                                              rows={4}
-                                              value={step.retryPolicyText}
-                                              onChange={(event) =>
-                                                updateAgentStep(step.localId, (current) => ({
-                                                  ...current,
-                                                  retryPolicyText: event.target.value,
-                                                }))
-                                              }
-                                              className="rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
-                                            />
-                                          </label>
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              size="sm"
-                              className="uppercase tracking-[0.14em]"
-                              onClick={() => setAgentSteps((current) => [...current, createAgentStepDraft()])}
-                            >
-                              + Add Step
-                            </Button>
-                          </div>
-                        ) : (
-                          <label className="block text-xs text-text-md">
+                  {/* ── Execution ── */}
+                  <div className="space-y-3 rounded-2xl border border-white/8 bg-black/18 p-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-md">
+                      Execution
+                    </div>
+                    <label className="block text-xs text-text-md">
+                      <span className="mb-1 block text-sm font-semibold text-text-hi">Goal</span>
+                      <Textarea
+                        rows={4}
+                        value={agentGoal}
+                        onChange={(event) => updatePrimaryAgentInput("goal", event.target.value)}
+                        placeholder="Describe what this agent should accomplish…"
+                        className="rounded-2xl bg-slate-950/45 py-3"
+                      />
+                    </label>
+                    {primaryAgentStep ? (
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        {!isAgentRunCapability(primaryAgentStep.capabilityId) ? (
+                          <label className="text-xs text-text-md">
                             <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
-                              Raw RunSpec JSON
+                              Workspace path
                             </span>
-                            <Textarea
-                              rows={18}
-                              value={agentRawRunSpecText}
-                              onChange={(event) => setAgentRawRunSpecText(event.target.value)}
-                              className="resize-y rounded-2xl bg-slate-950/45 py-3 font-mono text-[12px]"
+                            <Input
+                              value={stringInputValue(primaryAgentStep.inputDraft, "workspace_path")}
+                              onChange={(event) =>
+                                updatePrimaryAgentInput("workspace_path", event.target.value)
+                              }
+                              className="bg-slate-950/45"
                             />
                           </label>
-                        )}
-
+                        ) : null}
+                        <label className="text-xs text-text-md">
+                          <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                            Max steps
+                          </span>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={32}
+                            value={stringInputValue(primaryAgentStep.inputDraft, "max_steps")}
+                            onChange={(event) => updatePrimaryAgentInput("max_steps", event.target.value)}
+                            className="bg-slate-950/45"
+                          />
+                        </label>
+                        <label className="text-xs text-text-md lg:col-span-2">
+                          <span className="mb-1 block uppercase tracking-[0.16em] text-text-md">
+                            Constraints
+                          </span>
+                          <Textarea
+                            rows={3}
+                            value={stringInputValue(primaryAgentStep.inputDraft, "constraints")}
+                            onChange={(event) => updatePrimaryAgentInput("constraints", event.target.value)}
+                            className="rounded-2xl bg-slate-950/45 py-3"
+                          />
+                        </label>
                       </div>
                     ) : null}
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <WorkbenchTitleField value={agentTitle} onChange={setAgentTitle} />
+                      <WorkbenchUserIdField value={agentUserId} onChange={setAgentUserId} />
+                    </div>
                   </div>
                 </div>
               )}
@@ -2933,11 +2447,11 @@ export default function StudioWorkbenchSurface({
 
               {(workbenchMode === "capability"
                 ? capabilityLaunchInputs.error || capabilityContextJson.error || capabilityRetryPolicy.error
-                : agentContextJson.error || agentRunSpecPreview.error) ? (
+                : agentRunSpecPreview.error) ? (
                 <div className="mt-4 rounded-2xl border border-rose-300/18 bg-accent-rose px-3 py-3 text-xs text-text-rose-token">
                   {workbenchMode === "capability"
                     ? capabilityLaunchInputs.error || capabilityContextJson.error || capabilityRetryPolicy.error
-                    : agentContextJson.error || agentRunSpecPreview.error}
+                    : agentRunSpecPreview.error}
                 </div>
               ) : null}
 
