@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import Button from "../../components/ui/Button";
@@ -664,6 +664,9 @@ export default function StudioWorkbenchSurface({
     createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent"),
   ]);
   const [agentAllowedCapabilityIds, setAgentAllowedCapabilityIds] = useState<string[]>([]);
+  const [toolPickerQuery, setToolPickerQuery] = useState("");
+  const [toolPickerOpen, setToolPickerOpen] = useState(false);
+  const toolPickerInputRef = useRef<HTMLInputElement>(null);
   const [agentRawRunSpecText, setAgentRawRunSpecText] = useState("{\n  \n}");
   const [selectedAgentDefinitionId, setSelectedAgentDefinitionId] = useState("");
   const [selectedAgentDefinitionVersionId, setSelectedAgentDefinitionVersionId] = useState("");
@@ -1790,6 +1793,27 @@ export default function StudioWorkbenchSurface({
   ];
   const activeDebugPanel = debugPanels.find((panel) => panel.id === activeDebugPanelId) ?? debugPanels[0];
 
+  const toolPickerCandidates = useMemo(() => {
+    const q = toolPickerQuery.trim().toLowerCase();
+    return catalog
+      .filter(
+        (item) =>
+          !isAgenticCapability(item) &&
+          !agentAllowedCapabilityIds.includes(item.id) &&
+          (!q ||
+            item.id.toLowerCase().includes(q) ||
+            (item.description || "").toLowerCase().includes(q) ||
+            (item.group || "").toLowerCase().includes(q))
+      )
+      .slice(0, 20);
+  }, [catalog, toolPickerQuery, agentAllowedCapabilityIds]);
+
+  const addToolFromPicker = (capabilityId: string) => {
+    handleToolInsert(capabilityId);
+    setToolPickerQuery("");
+    toolPickerInputRef.current?.focus();
+  };
+
   return (
     <section className={active ? "block" : "hidden"} aria-hidden={!active}>
       <div className="relative">
@@ -1946,15 +1970,27 @@ export default function StudioWorkbenchSurface({
                           ) : null}
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            className="uppercase tracking-[0.14em]"
-                            onClick={() => handleAgentInsert(item)}
-                          >
-                            {isAgenticCapability(item) ? "Use as Agent" : "Add as Tool"}
-                          </Button>
+                          {!isAgenticCapability(item) && agentAllowedCapabilityIds.includes(item.id) ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="cursor-default uppercase tracking-[0.14em] text-text-sky-token"
+                              disabled
+                            >
+                              ✓ Added
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              className="uppercase tracking-[0.14em]"
+                              onClick={() => handleAgentInsert(item)}
+                            >
+                              {isAgenticCapability(item) ? "Use as Agent" : "Add as Tool"}
+                            </Button>
+                          )}
                           <Button
                             type="button"
                             variant="ghost"
@@ -2406,34 +2442,63 @@ export default function StudioWorkbenchSurface({
                       </div>
                     ) : (
                       <div className="mt-3 text-[11px] text-text-lo">
-                        No tools added. Click <span className="font-semibold text-text-md">Add as Tool</span> in the catalog.
+                        No tools added yet. Search below to add one.
                       </div>
                     )}
-                    <div className="mt-3 flex items-center gap-2">
+                    <div className="relative mt-3">
                       <Input
-                        list="studio-capability-id-options"
-                        className="flex-1 bg-slate-950/45"
-                        placeholder="capability.id"
+                        ref={toolPickerInputRef}
+                        value={toolPickerQuery}
+                        onChange={(e) => {
+                          setToolPickerQuery(e.target.value);
+                          setToolPickerOpen(true);
+                        }}
+                        onFocus={() => setToolPickerOpen(true)}
+                        onBlur={() => setToolPickerOpen(false)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            handleToolInsert((e.target as HTMLInputElement).value.trim());
-                            (e.target as HTMLInputElement).value = "";
+                          if (e.key === "Enter" && toolPickerCandidates[0]) {
+                            e.preventDefault();
+                            addToolFromPicker(toolPickerCandidates[0].id);
+                          } else if (e.key === "Escape") {
+                            setToolPickerOpen(false);
                           }
                         }}
+                        placeholder="Search capabilities to add as tools..."
+                        className="bg-slate-950/45"
                       />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        className="uppercase tracking-[0.14em]"
-                        onClick={(e) => {
-                          const input = (e.currentTarget.previousElementSibling as HTMLInputElement);
-                          handleToolInsert(input.value.trim());
-                          input.value = "";
-                        }}
-                      >
-                        + Add
-                      </Button>
+                      {toolPickerOpen ? (
+                        <div className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-subtle bg-surface-2 shadow-[0_18px_36px_rgba(15,23,42,0.32)]">
+                          {toolPickerCandidates.length > 0 ? (
+                            toolPickerCandidates.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left transition hover:bg-surface-1"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  addToolFromPicker(item.id);
+                                }}
+                              >
+                                <span className="flex w-full items-center justify-between gap-2 text-xs font-semibold text-text-hi">
+                                  {item.id}
+                                  <span className="shrink-0 rounded-full border border-subtle bg-surface-1 px-1.5 py-0.5 text-[9px] font-normal uppercase tracking-[0.12em] text-text-lo">
+                                    {item.group || "ungrouped"}
+                                  </span>
+                                </span>
+                                {item.description ? (
+                                  <span className="line-clamp-1 text-[11px] text-text-md">{item.description}</span>
+                                ) : null}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-3 py-2 text-xs text-text-lo">
+                              {toolPickerQuery.trim()
+                                ? "No matching capabilities."
+                                : "All eligible capabilities are already added."}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 
