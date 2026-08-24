@@ -23339,6 +23339,20 @@ def _workbench_apply_agent_definition_defaults(
         if _workbench_missing_binding_value(input_bindings.get("max_steps")):
             if definition.default_max_steps is not None:
                 input_bindings["max_steps"] = int(definition.default_max_steps)
+        llm_config = definition.model_config_json or {}
+        if _workbench_missing_binding_value(input_bindings.get("provider")):
+            # Caller left provider unset -> inherit provider AND model from the
+            # definition together, as one pair. A model name only makes sense
+            # paired with the provider it belongs to, so if the caller already
+            # supplied a provider of their own, the definition's model must not
+            # be mixed in underneath it.
+            provider_override = str(llm_config.get("provider") or "").strip()
+            if provider_override:
+                input_bindings["provider"] = provider_override
+                if _workbench_missing_binding_value(input_bindings.get("model")):
+                    model_override = str(llm_config.get("model") or "").strip()
+                    if model_override:
+                        input_bindings["model"] = model_override
         if _workbench_step_hydrates_prompt(
             str(primary_step.capability_request.capability_id or ""),
             str(primary_step.capability_request.request_id or ""),

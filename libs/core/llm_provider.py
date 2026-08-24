@@ -605,6 +605,40 @@ def resolve_provider(
     )
 
 
+_override_provider_cache: Dict[tuple, LLMProvider] = {}
+
+
+def resolve_provider_cached(provider_name: str, model: Optional[str] = None) -> LLMProvider:
+    """Resolve (and cache) an ``LLMProvider`` for a per-call provider/model override.
+
+    Sources credentials from the same environment variables the process's default
+    provider construction already reads (``resolve_provider`` itself does this
+    internally for ``anthropic``/``gemini``/``bedrock-anthropic``; ``openai`` and
+    ``openai_compatible`` require the caller to supply ``api_key``/``base_url``, so
+    this reads ``OPENAI_API_KEY``/``OPENAI_BASE_URL`` for those). Cached by
+    ``(provider, model)`` since construction (SDK client setup) is comparatively
+    expensive and an override may be resolved on every task.
+    """
+    name = (provider_name or "mock").strip().lower()
+    cache_key = (name, (model or "").strip())
+    cached = _override_provider_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    if name in {"openai", "openai_compatible", "openai-chat", "chat_completions"}:
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")
+        if name == "openai":
+            # Plain "openai" has a natural env-var default model, same as
+            # anthropic/gemini self-source theirs inside resolve_provider() --
+            # so a provider-only override (no explicit model) still works.
+            model = model or os.getenv("OPENAI_MODEL")
+    provider = resolve_provider(name, api_key=api_key, model=model, base_url=base_url)
+    _override_provider_cache[cache_key] = provider
+    return provider
+
+
 def _extract_output_text(response: Dict[str, Any]) -> str:
     parts: list[str] = []
     for item in response.get("output", []):

@@ -387,6 +387,8 @@ def test_workbench_agent_run_with_definition_applies_defaults_and_stores_snapsho
         "workspace_path": "workbench-agent",
         "constraints": "keep the change scoped\nrun focused tests",
         "max_steps": 5,
+        "provider": "openai",
+        "model": "gpt-5.4",
         "prompt": "Implement the saved profile goal.",
     }
     assert body["run"]["metadata"]["agent_definition_id"] == agent_definition_id
@@ -412,6 +414,100 @@ def test_workbench_agent_run_with_definition_applies_defaults_and_stores_snapsho
     assert persisted_snapshot["name"] == "Codegen launch profile"
     assert persisted_snapshot["instructions"] == "Use the saved agent profile instructions."
     assert persisted_snapshot["model_config"] == {"provider": "openai", "model": "gpt-5.4"}
+
+
+def test_workbench_agent_run_model_config_precedence(monkeypatch) -> None:
+    monkeypatch.setattr(main.capability_registry, "load_capability_registry", _agent_registry)
+    user_id = f"agent-model-override-{uuid.uuid4()}"
+
+    create_response = client.post(
+        "/agents/definitions",
+        json={
+            "name": "Model override profile",
+            "agent_capability_id": "codegen.autonomous",
+            "instructions": "Use the saved agent profile instructions.",
+            "default_goal": "Do the thing.",
+            "default_workspace_path": "model-override-workspace",
+            "model_config": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+            "user_id": user_id,
+        },
+    )
+    assert create_response.status_code == 200
+    agent_definition_id = create_response.json()["id"]
+
+    # No model_config on the definition -> no provider/model keys injected at all.
+    no_override_response = client.post(
+        "/agents/definitions",
+        json={
+            "name": "No model override profile",
+            "agent_capability_id": "codegen.autonomous",
+            "instructions": "Use the saved agent profile instructions.",
+            "default_goal": "Do the thing.",
+            "default_workspace_path": "model-override-workspace",
+            "user_id": user_id,
+        },
+    )
+    assert no_override_response.status_code == 200
+    no_override_definition_id = no_override_response.json()["id"]
+
+    no_override_launch = client.post(
+        "/workbench/agent-runs",
+        json={
+            "agent_definition_id": no_override_definition_id,
+            "run_spec": _profile_agent_run_spec(extra_capability_id=None),
+        },
+    )
+    assert no_override_launch.status_code == 200, no_override_launch.json()
+    no_override_bindings = no_override_launch.json()["run_spec"]["steps"][0]["input_bindings"]
+    assert "provider" not in no_override_bindings
+    assert "model" not in no_override_bindings
+
+    # Definition's model_config fills in when the caller leaves provider/model blank.
+    default_launch = client.post(
+        "/workbench/agent-runs",
+        json={
+            "agent_definition_id": agent_definition_id,
+            "run_spec": _profile_agent_run_spec(extra_capability_id=None),
+        },
+    )
+    assert default_launch.status_code == 200, default_launch.json()
+    default_bindings = default_launch.json()["run_spec"]["steps"][0]["input_bindings"]
+    assert default_bindings["provider"] == "anthropic"
+    assert default_bindings["model"] == "claude-sonnet-4-6"
+
+    # Caller-supplied provider/model in the run_spec wins over the definition's default.
+    overriding_run_spec = _profile_agent_run_spec(extra_capability_id=None)
+    overriding_run_spec["steps"][0]["input_bindings"]["provider"] = "openai"
+    overriding_run_spec["steps"][0]["input_bindings"]["model"] = "gpt-4o"
+    caller_override_launch = client.post(
+        "/workbench/agent-runs",
+        json={
+            "agent_definition_id": agent_definition_id,
+            "run_spec": overriding_run_spec,
+        },
+    )
+    assert caller_override_launch.status_code == 200, caller_override_launch.json()
+    caller_bindings = caller_override_launch.json()["run_spec"]["steps"][0]["input_bindings"]
+    assert caller_bindings["provider"] == "openai"
+    assert caller_bindings["model"] == "gpt-4o"
+
+    # Caller sets provider but leaves model blank -- the definition's model (from a
+    # DIFFERENT provider, anthropic) must not leak in underneath the caller's
+    # provider choice. provider+model are inherited from the definition as one
+    # pair, never mixed across sources.
+    provider_only_run_spec = _profile_agent_run_spec(extra_capability_id=None)
+    provider_only_run_spec["steps"][0]["input_bindings"]["provider"] = "openai"
+    provider_only_launch = client.post(
+        "/workbench/agent-runs",
+        json={
+            "agent_definition_id": agent_definition_id,
+            "run_spec": provider_only_run_spec,
+        },
+    )
+    assert provider_only_launch.status_code == 200, provider_only_launch.json()
+    provider_only_bindings = provider_only_launch.json()["run_spec"]["steps"][0]["input_bindings"]
+    assert provider_only_bindings["provider"] == "openai"
+    assert "model" not in provider_only_bindings
 
 
 def test_workbench_agent_run_with_definition_version_uses_published_snapshot(
