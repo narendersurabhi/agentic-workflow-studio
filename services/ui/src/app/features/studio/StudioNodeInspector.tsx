@@ -105,7 +105,10 @@ type StudioNodeInspectorProps = {
   removeSwitchCase: (nodeId: string, caseId: string) => void;
 };
 
-const bindingModeForField = (binding: ComposerInputBinding | undefined) => {
+const bindingModeForField = (
+  binding: ComposerInputBinding | undefined,
+  unboundDefault: "context" | "literal" = "context"
+) => {
   if (binding?.kind === "step_output") {
     return "from";
   }
@@ -121,7 +124,7 @@ const bindingModeForField = (binding: ComposerInputBinding | undefined) => {
   if (binding?.kind === "workflow_variable") {
     return "workflow_variable";
   }
-  return "context";
+  return unboundDefault;
 };
 
 const schemaPropertyEnum = (property: Record<string, unknown> | null) =>
@@ -546,7 +549,11 @@ export default function StudioNodeInspector({
           ) : null}
           {inputFields.map((status) => {
             const binding = selectedDagNode.inputBindings[status.field];
-            const bindingMode = bindingModeForField(binding);
+            // Agent nodes only expose goal/max_steps here (instructions and tools
+            // come from the linked agent profile); a fresh, unbound goal is far
+            // more often a plain prompt than something wired from context, so
+            // default it to "literal" instead of the generic "context" fallback.
+            const bindingMode = bindingModeForField(binding, isAgentNode ? "literal" : "context");
             const sourceNodes = visualChainNodes.filter((candidate) => candidate.id !== selectedDagNode.id);
             const sourcePathListId = `studio-inspector-${selectedDagNode.id}-${status.field}-source-path-options`;
             const contextPathListId = `studio-inspector-${selectedDagNode.id}-${status.field}-context-path-options`;
