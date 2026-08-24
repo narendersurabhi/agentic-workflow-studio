@@ -629,6 +629,11 @@ def resolve_provider_cached(provider_name: str, model: Optional[str] = None) -> 
     if name in {"openai", "openai_compatible", "openai-chat", "chat_completions"}:
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("OPENAI_BASE_URL")
+        if name == "openai":
+            # Plain "openai" has a natural env-var default model, same as
+            # anthropic/gemini self-source theirs inside resolve_provider() --
+            # so a provider-only override (no explicit model) still works.
+            model = model or os.getenv("OPENAI_MODEL")
     provider = resolve_provider(name, api_key=api_key, model=model, base_url=base_url)
     _override_provider_cache[cache_key] = provider
     return provider

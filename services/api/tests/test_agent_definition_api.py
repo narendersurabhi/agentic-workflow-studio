@@ -491,6 +491,24 @@ def test_workbench_agent_run_model_config_precedence(monkeypatch) -> None:
     assert caller_bindings["provider"] == "openai"
     assert caller_bindings["model"] == "gpt-4o"
 
+    # Caller sets provider but leaves model blank -- the definition's model (from a
+    # DIFFERENT provider, anthropic) must not leak in underneath the caller's
+    # provider choice. provider+model are inherited from the definition as one
+    # pair, never mixed across sources.
+    provider_only_run_spec = _profile_agent_run_spec(extra_capability_id=None)
+    provider_only_run_spec["steps"][0]["input_bindings"]["provider"] = "openai"
+    provider_only_launch = client.post(
+        "/workbench/agent-runs",
+        json={
+            "agent_definition_id": agent_definition_id,
+            "run_spec": provider_only_run_spec,
+        },
+    )
+    assert provider_only_launch.status_code == 200, provider_only_launch.json()
+    provider_only_bindings = provider_only_launch.json()["run_spec"]["steps"][0]["input_bindings"]
+    assert provider_only_bindings["provider"] == "openai"
+    assert "model" not in provider_only_bindings
+
 
 def test_workbench_agent_run_with_definition_version_uses_published_snapshot(
     monkeypatch,

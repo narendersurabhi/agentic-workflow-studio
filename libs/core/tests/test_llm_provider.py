@@ -603,3 +603,13 @@ def test_resolve_provider_cached_sources_openai_credentials_from_env(monkeypatch
     assert provider.api_key == "cached-openai-key"
     assert provider.model == unique_model
     assert provider.base_url == "https://example.invalid/v1"
+
+
+def test_resolve_provider_cached_openai_falls_back_to_env_model_when_unset(monkeypatch) -> None:
+    env_default_model = f"gpt-env-default-{uuid.uuid4()}"
+    monkeypatch.setenv("OPENAI_API_KEY", "cached-openai-key")
+    monkeypatch.setenv("OPENAI_MODEL", env_default_model)
+
+    provider = llm_provider_module.resolve_provider_cached("openai")
+
+    assert provider.model == env_default_model
