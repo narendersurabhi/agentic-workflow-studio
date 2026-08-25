@@ -1710,7 +1710,7 @@ def _suggested_capabilities_for_clause(
         if any(
             token in lowered for token in ("code changes", "codegen", "code change", "source code")
         ):
-            suggestions = _prepend_unique(suggestions, "codegen.generate")
+            suggestions = _prepend_unique(suggestions, "agent.run")
         if "markdown" in lowered:
             suggestions = _prepend_unique(suggestions, "document.spec.generate_from_markdown")
         if any(

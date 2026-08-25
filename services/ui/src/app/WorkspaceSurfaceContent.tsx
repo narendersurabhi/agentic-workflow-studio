@@ -1601,7 +1601,7 @@ const BUILT_IN_TEMPLATES: Template[] = [
     description:
       "Use the coding agent to autonomously plan and implement code in the workspace (no GitHub actions).",
     goal:
-      "Use coding_agent_autonomous to create {{workspace_path}}/IMPLEMENTATION_PLAN.md and then implement each step " +
+      "Use agent.run to create {{workspace_path}}/IMPLEMENTATION_PLAN.md and then implement each step " +
       "until complete for this goal: {{code_goal}}. " +
       "Keep the implementation compact. If constraints are provided, follow them. " +
       "All file paths must be workspace-relative (repo-relative), e.g., docker-compose.yml or .github/workflows/ci.yml. " +
@@ -1652,7 +1652,7 @@ const BUILT_IN_TEMPLATES: Template[] = [
       "Use github.repo.list only to verify that repository '{{repo_owner}}/{{repo_name}}' exists. " +
       "Build the repository search from explicit repo_owner and repo_name context fields; do not invent or rewrite the GitHub search query. " +
       "If the repository is missing, stop and do not proceed. " +
-      "Then use codegen.autonomous with explicit tool_inputs for implementation in the existing workspace path 'repos/{{repo_name}}': " +
+      "Then use agent.run with explicit tool_inputs for implementation in the existing workspace path 'repos/{{repo_name}}': " +
       "{goal: '{{code_goal}}', workspace_path: 'repos/{{repo_name}}', constraints: '{{constraints}}', max_steps: {{max_steps}}}. " +
       "The coding task must create repos/{{repo_name}}/IMPLEMENTATION_PLAN.md and implement each step for this goal. " +
       "Keep the implementation compact. If constraints are provided, follow them. " +
@@ -1662,7 +1662,7 @@ const BUILT_IN_TEMPLATES: Template[] = [
       "{owner: '{{repo_owner}}', repo: '{{repo_name}}', branch: '{{pr_branch}}', base: '{{default_branch}}', " +
       "workspace_path: 'repos/{{repo_name}}'}.",
     contextJson:
-  '{\n  "code_goal": "{{code_goal}}",\n  "constraints": "{{constraints}}",\n  "goal": "{{code_goal}}",\n  "github_query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "max_steps": "{{max_steps}}",\n  "owner": "{{repo_owner}}",\n  "repo": "{{repo_name}}",\n  "branch": "{{pr_branch}}",\n  "base": "{{default_branch}}",\n  "repo_name": "{{repo_name}}",\n  "repo_owner": "{{repo_owner}}",\n  "default_branch": "{{default_branch}}",\n  "workspace_path": "repos/{{repo_name}}",\n  "pr_branch": "{{pr_branch}}",\n  "tool_inputs": {\n    "github.repo.list": {},\n    "codegen.autonomous": {\n      "goal": "{{code_goal}}",\n      "workspace_path": "repos/{{repo_name}}",\n      "constraints": "{{constraints}}",\n      "max_steps": "{{max_steps}}"\n    },\n    "codegen.publish_pr": {\n      "owner": "{{repo_owner}}",\n      "repo": "{{repo_name}}",\n      "branch": "{{pr_branch}}",\n      "base": "{{default_branch}}",\n      "workspace_path": "repos/{{repo_name}}"\n    }\n  }\n}',
+  '{\n  "code_goal": "{{code_goal}}",\n  "constraints": "{{constraints}}",\n  "goal": "{{code_goal}}",\n  "github_query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "max_steps": "{{max_steps}}",\n  "owner": "{{repo_owner}}",\n  "repo": "{{repo_name}}",\n  "branch": "{{pr_branch}}",\n  "base": "{{default_branch}}",\n  "repo_name": "{{repo_name}}",\n  "repo_owner": "{{repo_owner}}",\n  "default_branch": "{{default_branch}}",\n  "workspace_path": "repos/{{repo_name}}",\n  "pr_branch": "{{pr_branch}}",\n  "tool_inputs": {\n    "github.repo.list": {},\n    "agent.run": {\n      "goal": "{{code_goal}}",\n      "workspace_path": "repos/{{repo_name}}",\n      "constraints": "{{constraints}}",\n      "max_steps": "{{max_steps}}"\n    },\n    "codegen.publish_pr": {\n      "owner": "{{repo_owner}}",\n      "repo": "{{repo_name}}",\n      "branch": "{{pr_branch}}",\n      "base": "{{default_branch}}",\n      "workspace_path": "repos/{{repo_name}}"\n    }\n  }\n}',
     priority: 2,
     builtIn: true,
     variables: [
@@ -1724,7 +1724,7 @@ const BUILT_IN_TEMPLATES: Template[] = [
     description:
       "Implement a goal in an already prepared workspace and open a PR.",
     goal:
-      "Use codegen.autonomous to implement repos/{{repo_name}}/IMPLEMENTATION_PLAN.md and each step for this goal: {{code_goal}}. " +
+      "Use agent.run to implement repos/{{repo_name}}/IMPLEMENTATION_PLAN.md and each step for this goal: {{code_goal}}. " +
       "Keep the implementation compact. If constraints are provided, follow them. " +
       "All file paths must be workspace-relative (repo-relative), e.g., docker-compose.yml or .github/workflows/ci.yml. " +
       "Use existing workspace path 'repos/{{repo_name}}' consistently. " +
@@ -1732,10 +1732,10 @@ const BUILT_IN_TEMPLATES: Template[] = [
       "and repo '{{repo_name}}'. Do not create or update the repository. " +
       "Use repo_name exactly as provided (it must be a GitHub-safe slug). " +
       "The PR branch must differ from the base branch. " +
-      "Set tool_inputs explicitly for codegen.autonomous(goal: '{{code_goal}}', workspace_path: 'repos/{{repo_name}}', constraints: '{{constraints}}', max_steps: {{max_steps}}) and codegen.publish_pr " +
+      "Set tool_inputs explicitly for agent.run(goal: '{{code_goal}}', workspace_path: 'repos/{{repo_name}}', constraints: '{{constraints}}', max_steps: {{max_steps}}) and codegen.publish_pr " +
       "with required fields: {owner: '{{repo_owner}}', repo: '{{repo_name}}', branch: '{{pr_branch}}', base: '{{base_branch}}', workspace_path: 'repos/{{repo_name}}'}.",
     contextJson:
-  '{\n  "code_goal": "{{code_goal}}",\n  "constraints": "{{constraints}}",\n  "goal": "{{code_goal}}",\n  "github_query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "max_steps": "{{max_steps}}",\n  "owner": "{{repo_owner}}",\n  "repo": "{{repo_name}}",\n  "branch": "{{pr_branch}}",\n  "base": "{{base_branch}}",\n  "repo_name": "{{repo_name}}",\n  "repo_owner": "{{repo_owner}}",\n  "base_branch": "{{base_branch}}",\n  "workspace_path": "repos/{{repo_name}}",\n  "pr_branch": "{{pr_branch}}",\n  "tool_inputs": {\n    "github.repo.list": {\n      "query": "repo:{{repo_name}} owner:{{repo_owner}}"\n    },\n    "codegen.autonomous": {\n      "goal": "{{code_goal}}",\n      "workspace_path": "repos/{{repo_name}}",\n      "constraints": "{{constraints}}",\n      "max_steps": "{{max_steps}}"\n    },\n    "codegen.publish_pr": {\n      "owner": "{{repo_owner}}",\n      "repo": "{{repo_name}}",\n      "branch": "{{pr_branch}}",\n      "base": "{{base_branch}}",\n      "workspace_path": "repos/{{repo_name}}"\n    }\n  }\n}',
+  '{\n  "code_goal": "{{code_goal}}",\n  "constraints": "{{constraints}}",\n  "goal": "{{code_goal}}",\n  "github_query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "query": "repo:{{repo_name}} owner:{{repo_owner}}",\n  "max_steps": "{{max_steps}}",\n  "owner": "{{repo_owner}}",\n  "repo": "{{repo_name}}",\n  "branch": "{{pr_branch}}",\n  "base": "{{base_branch}}",\n  "repo_name": "{{repo_name}}",\n  "repo_owner": "{{repo_owner}}",\n  "base_branch": "{{base_branch}}",\n  "workspace_path": "repos/{{repo_name}}",\n  "pr_branch": "{{pr_branch}}",\n  "tool_inputs": {\n    "github.repo.list": {\n      "query": "repo:{{repo_name}} owner:{{repo_owner}}"\n    },\n    "agent.run": {\n      "goal": "{{code_goal}}",\n      "workspace_path": "repos/{{repo_name}}",\n      "constraints": "{{constraints}}",\n      "max_steps": "{{max_steps}}"\n    },\n    "codegen.publish_pr": {\n      "owner": "{{repo_owner}}",\n      "repo": "{{repo_name}}",\n      "branch": "{{pr_branch}}",\n      "base": "{{base_branch}}",\n      "workspace_path": "repos/{{repo_name}}"\n    }\n  }\n}',
     priority: 2,
     builtIn: true,
     variables: [

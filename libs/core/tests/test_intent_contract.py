@@ -119,7 +119,7 @@ def test_decompose_goal_intent_prefers_github_publish_capabilities() -> None:
     )
     segments = graph["segments"]
     assert [segment["intent"] for segment in segments[:3]] == ["generate", "io", "io"]
-    assert segments[0]["suggested_capabilities"][0] == "codegen.generate"
+    assert segments[0]["suggested_capabilities"][0] == "agent.run"
     assert segments[1]["suggested_capabilities"][0] == "github.files.push"
     assert segments[2]["suggested_capabilities"][0] == "github.pull_request.create"
 

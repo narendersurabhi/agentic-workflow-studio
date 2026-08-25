@@ -109,11 +109,11 @@ cases:
     goal: Generate code changes, push files to GitHub, and create a pull request.
     expected_intents: [generate, io, io]
     expected_capabilities:
-      - codegen.generate
+      - agent.run
       - github.files.push
       - github.pull_request.create
     expected_capabilities_by_segment:
-      - [codegen.generate]
+      - [agent.run]
       - [github.files.push]
       - [github.pull_request.create]
 

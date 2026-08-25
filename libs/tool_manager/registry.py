@@ -22,7 +22,7 @@ from libs.framework.tool_runtime import (
     ToolRegistry,
 )
 from libs.harness.agent import _agent
-from libs.mcp import mcp_client, mcp_gateway
+from libs.mcp import mcp_gateway
 from libs.tool_manager import tool_governance, tool_plugins
 from libs.tools import coder_tools
 from libs.tools.core_ops import CoreOpsHandlers, register_core_ops_tools
@@ -44,26 +44,19 @@ from libs.tools.file_ops import (
     _artifact_rename,
     _derive_output_filename,
     _file_read_text,
-    _file_write_code,
     _list_files,
     _list_workspace_files,
-    _math_eval,
-    _run_tests,
     _search_text,
     _workspace_copy,
     _workspace_delete,
     _workspace_mkdir,
     _workspace_read_text,
     _workspace_rename,
-    _workspace_write_code,
     _write_text_file,
-    _write_workspace_text_file,
 )
-from libs.tools.github_tools import register_github_tools
-from libs.tools.http_ops import _http_fetch
 from libs.tools.llm_tool_groups import (
     register_agent_tool,
-    register_coding_agent_tools,
+    register_coding_agent_publish_pr_tool,
     register_llm_contextual_text_tool,
     register_llm_text_tool,
 )
@@ -90,8 +83,8 @@ ToolAllowDecision = tool_governance.ToolAllowDecision
 
 
 # ─── Coder-agent adapters ──────────────────────────────────────────────────
-# Thin wiring that binds this module's LOGGER/tracing and libs.tools.file_ops'
-# workspace helpers into coder_tools.py's already-implemented handlers.
+# Thin wiring that binds this module's LOGGER/tracing into coder_tools.py's
+# already-implemented handlers.
 
 
 def _resolve_coding_agent_timeout_s() -> int:
@@ -102,85 +95,6 @@ def _resolve_coding_agent_timeout_s() -> int:
         except ValueError:
             return 30
     return 30
-
-
-def _resolve_coder_http_timeout_s() -> int:
-    for key in ("CODER_HTTP_TIMEOUT_S", "CODING_AGENT_TIMEOUT_S"):
-        env_timeout = os.getenv(key)
-        if env_timeout:
-            try:
-                return max(1, int(math.ceil(float(env_timeout))))
-            except ValueError:
-                return 30
-    return 30
-
-
-def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return coder_tools.post_json(url, payload, timeout_s=_resolve_coder_http_timeout_s())
-
-
-def _post_mcp_tool_call(
-    service_url: str,
-    tool_name: str,
-    arguments: Dict[str, Any],
-) -> Dict[str, Any]:
-    from libs.core import tracing as core_tracing
-    from libs.framework.tool_runtime import classify_tool_error
-
-    return mcp_client.post_mcp_tool_call(
-        service_url,
-        tool_name,
-        arguments,
-        call_mcp_tool_sdk=_call_mcp_tool_sdk,
-        classify_tool_error=classify_tool_error,
-        logger=LOGGER,
-        tracing_module=core_tracing,
-    )
-
-
-def _call_mcp_tool_sdk(
-    mcp_url: str,
-    tool_name: str,
-    arguments: Dict[str, Any],
-    timeout_s: float,
-    headers: Dict[str, str] | None = None,
-) -> Dict[str, Any]:
-    from libs.core import tracing as core_tracing
-
-    return mcp_client.call_mcp_tool_sdk(
-        mcp_url,
-        tool_name,
-        arguments,
-        timeout_s,
-        headers=headers,
-        tracing_module=core_tracing,
-        logger=LOGGER,
-    )
-
-
-def _build_plan_prompt(goal: str, constraints: Optional[str], max_steps: int) -> str:
-    return coder_tools.build_plan_prompt(goal, constraints, max_steps)
-
-
-def _render_plan_markdown(goal: str, steps: list[dict[str, Any]], statuses: list[bool]) -> str:
-    return coder_tools.render_plan_markdown(goal, steps, statuses)
-
-
-def _coding_agent_generate(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return coder_tools.coding_agent_generate(
-        payload,
-        post_mcp_tool_call=_post_mcp_tool_call,
-        write_workspace_text_file=_write_workspace_text_file,
-    )
-
-
-def _coding_agent_autonomous(payload: Dict[str, Any], provider: LLMProvider) -> Dict[str, Any]:
-    return coder_tools.coding_agent_autonomous(
-        payload,
-        provider,
-        post_mcp_tool_call=_post_mcp_tool_call,
-        write_workspace_text_file=_write_workspace_text_file,
-    )
 
 
 def _coding_agent_publish_pr(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -220,8 +134,6 @@ class ToolCatalogHandlers:
     resolve_llm_iterative_timeout_s: Callable[[Optional[LLMProvider]], int]
     llm_generate: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
     llm_generate_with_context: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
-    coding_agent_generate: Callable[[Dict[str, Any]], Dict[str, Any]]
-    coding_agent_autonomous: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
     coding_agent_publish_pr: Callable[[Dict[str, Any]], Dict[str, Any]]
     agent: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
     llm_generate_document_spec: Callable[[Dict[str, Any], LLMProvider], Dict[str, Any]]
@@ -233,19 +145,16 @@ def register_default_tools(
     registry: ToolRegistry,
     *,
     handlers: ToolCatalogHandlers,
-    http_fetch_enabled: bool = False,
     llm_enabled: bool = False,
     llm_provider: Optional[LLMProvider] = None,
 ) -> None:
     register_core_ops_tools(
         registry,
         handlers=handlers.core_ops_handlers,
-        http_fetch_enabled=http_fetch_enabled,
     )
     register_docx_tools(registry)
     register_pdf_tools(registry)
     register_document_spec_tools(registry)
-    register_github_tools(registry)
 
     if not llm_enabled:
         return
@@ -268,13 +177,9 @@ def register_default_tools(
             payload, provider
         ),
     )
-    register_coding_agent_tools(
+    register_coding_agent_publish_pr_tool(
         registry,
         timeout_s=coding_agent_timeout_s,
-        handler_generate=handlers.coding_agent_generate,
-        handler_autonomous=lambda payload, provider=llm_provider: handlers.coding_agent_autonomous(
-            payload, provider
-        ),
         handler_publish_pr=handlers.coding_agent_publish_pr,
     )
     register_agent_tool(
@@ -309,13 +214,9 @@ def build_planner_support_tool_specs() -> list[Any]:
 
 def _build_core_ops_handlers() -> CoreOpsHandlers:
     return CoreOpsHandlers(
-        math_eval=_math_eval,
         file_write_text=_write_text_file,
-        file_write_code=_file_write_code,
         file_read_text=_file_read_text,
         list_files=_list_files,
-        workspace_write_text=_write_workspace_text_file,
-        workspace_write_code=_workspace_write_code,
         workspace_read_text=_workspace_read_text,
         workspace_list_files=_list_workspace_files,
         artifact_mkdir=_artifact_mkdir,
@@ -328,14 +229,12 @@ def _build_core_ops_handlers() -> CoreOpsHandlers:
         workspace_copy=_workspace_copy,
         artifact_move=_artifact_move_to_workspace,
         derive_output_filename=_derive_output_filename,
-        run_tests=_run_tests,
         search_text=_search_text,
         memory_read=_memory_read,
         memory_write=_memory_write,
         memory_semantic_write=_memory_semantic_write,
         memory_semantic_search=_memory_semantic_search,
         docx_render=_docx_render,
-        http_fetch=_http_fetch,
     )
 
 
@@ -347,8 +246,6 @@ def _default_catalog_handlers() -> ToolCatalogHandlers:
         resolve_llm_iterative_timeout_s=_resolve_llm_iterative_tool_timeout_s,
         llm_generate=_llm_generate,
         llm_generate_with_context=_llm_generate_with_context,
-        coding_agent_generate=_coding_agent_generate,
-        coding_agent_autonomous=_coding_agent_autonomous,
         coding_agent_publish_pr=_coding_agent_publish_pr,
         agent=_agent,
         llm_generate_document_spec=_llm_generate_document_spec,
@@ -369,7 +266,6 @@ def build_tool_registry(
     register_default_tools(
         registry,
         handlers=handlers,
-        http_fetch_enabled=http_fetch_enabled,
         llm_enabled=llm_enabled,
         llm_provider=llm_provider,
     )

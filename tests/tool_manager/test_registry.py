@@ -222,31 +222,6 @@ def test_file_write_text_requires_path() -> None:
     assert "input schema validation failed" in call.output_or_error["error"]
 
 
-def test_file_write_code_requires_extension() -> None:
-    registry = default_registry()
-    call = registry.execute(
-        "file_write_code", {"content": "hello", "path": "output"}, "id", "trace"
-    )
-    assert call.status == "failed"
-    assert "Unsupported code file extension" in call.output_or_error["error"]
-
-
-def test_workspace_write_text_requires_path() -> None:
-    registry = default_registry()
-    call = registry.execute("workspace_write_text", {"content": "hello"}, "id", "trace")
-    assert call.status == "failed"
-    assert "input schema validation failed" in call.output_or_error["error"]
-
-
-def test_workspace_write_code_requires_extension() -> None:
-    registry = default_registry()
-    call = registry.execute(
-        "workspace_write_code", {"content": "hello", "path": "output"}, "id", "trace"
-    )
-    assert call.status == "failed"
-    assert "Unsupported code file extension" in call.output_or_error["error"]
-
-
 def test_derive_output_filename() -> None:
     registry = default_registry()
     call = registry.execute(
@@ -341,11 +316,11 @@ def test_default_registry_loads_module_plugins(monkeypatch, tmp_path) -> None:
 
 def test_default_registry_applies_enabled_disabled_tool_filters(monkeypatch) -> None:
     monkeypatch.delenv("TOOL_PLUGIN_MODULES", raising=False)
-    monkeypatch.setenv("ENABLED_TOOLS", "math_eval,text_summarize")
+    monkeypatch.setenv("ENABLED_TOOLS", "search_text,text_summarize")
     monkeypatch.setenv("DISABLED_TOOLS", "text_summarize")
     registry = default_registry()
     specs = {spec.name for spec in registry.list_specs()}
-    assert specs == {"math_eval"}
+    assert specs == {"search_text"}
 
 
 def test_tool_allowlist_precedence_service_and_global(monkeypatch) -> None:
@@ -363,12 +338,12 @@ def test_tool_allowlist_precedence_service_and_global(monkeypatch) -> None:
 
 def test_default_registry_applies_service_specific_allowlist(monkeypatch) -> None:
     monkeypatch.setenv("TOOL_GOVERNANCE_ENABLED", "false")
-    monkeypatch.setenv("ENABLED_TOOLS", "math_eval,text_summarize,file_write_text")
-    monkeypatch.setenv("WORKER_ENABLED_TOOLS", "math_eval,file_write_text")
+    monkeypatch.setenv("ENABLED_TOOLS", "search_text,text_summarize,file_write_text")
+    monkeypatch.setenv("WORKER_ENABLED_TOOLS", "search_text,file_write_text")
     monkeypatch.setenv("WORKER_DISABLED_TOOLS", "file_write_text")
     registry = default_registry(service_name="worker")
     specs = {spec.name for spec in registry.list_specs()}
-    assert specs == {"math_eval"}
+    assert specs == {"search_text"}
 
 
 def test_default_registry_api_includes_chat_direct_read_tools(monkeypatch) -> None:

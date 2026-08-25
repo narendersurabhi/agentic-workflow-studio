@@ -14,13 +14,9 @@ PayloadHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 @dataclass(frozen=True)
 class CoreOpsHandlers:
-    math_eval: PayloadHandler
     file_write_text: PayloadHandler
-    file_write_code: PayloadHandler
     file_read_text: PayloadHandler
     list_files: PayloadHandler
-    workspace_write_text: PayloadHandler
-    workspace_write_code: PayloadHandler
     workspace_read_text: PayloadHandler
     workspace_list_files: PayloadHandler
     artifact_mkdir: PayloadHandler
@@ -33,24 +29,12 @@ class CoreOpsHandlers:
     workspace_copy: PayloadHandler
     artifact_move: PayloadHandler
     derive_output_filename: PayloadHandler
-    run_tests: PayloadHandler
     search_text: PayloadHandler
     memory_read: PayloadHandler
     memory_write: PayloadHandler
     memory_semantic_write: PayloadHandler
     memory_semantic_search: PayloadHandler
     docx_render: PayloadHandler
-    http_fetch: PayloadHandler
-
-
-class MathEvalInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    expr: str = Field(min_length=1, description="Math expression to evaluate, e.g. '14*12'")
-
-
-class MathEvalOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    value: float
 
 
 class FileWriteTextInput(BaseModel):
@@ -90,12 +74,6 @@ class ListFilesEntryItem(BaseModel):
 class ListFilesOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     entries: list[ListFilesEntryItem]
-
-
-class WorkspaceWriteTextInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    path: str = Field(description="File path relative to workspace root")
-    content: str = Field(min_length=1, description="Text content to write")
 
 
 class WorkspaceReadTextInput(BaseModel):
@@ -222,20 +200,6 @@ class DeriveOutputFilenameOutput(BaseModel):
     output_extension: str
 
 
-class RunTestsInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    command: str = Field(min_length=1, description="Test command to run (must be allowlisted)")
-    args: list[str] | None = None
-    cwd: str | None = None
-
-
-class RunTestsOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    exit_code: int
-    stdout: str
-    stderr: str
-
-
 class SearchTextInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1, description="Text query to search for")
@@ -338,41 +302,11 @@ class MemorySemanticSearchOutput(BaseModel):
     count: int
 
 
-class HttpFetchInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    url: str = Field(min_length=1, description="Public HTTP(S) URL to fetch")
-
-
-class HttpFetchOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    body: str
-
-
 def register_core_ops_tools(
     registry,
     *,
     handlers: CoreOpsHandlers,
-    http_fetch_enabled: bool,
 ) -> None:
-    registry.register(
-        Tool(
-            spec=ToolSpec(
-                name="math_eval",
-                description="Evaluate a safe math expression",
-                usage_guidance=(
-                    "Use for deterministic math when you can provide a concrete expression. "
-                    "Pass the expression as a string in the 'expr' field (example: '14*12')."
-                ),
-                input_schema=MathEvalInput.model_json_schema(),
-                output_schema=MathEvalOutput.model_json_schema(),
-                timeout_s=3,
-                risk_level=RiskLevel.low,
-                tool_intent=ToolIntent.transform,
-            ),
-            handler=handlers.math_eval,
-        )
-    )
-
     registry.register(
         Tool(
             spec=ToolSpec(
@@ -389,26 +323,6 @@ def register_core_ops_tools(
                 tool_intent=ToolIntent.io,
             ),
             handler=handlers.file_write_text,
-        )
-    )
-
-    registry.register(
-        Tool(
-            spec=ToolSpec(
-                name="file_write_code",
-                description="Write code content to a file under /shared/artifacts",
-                usage_guidance=(
-                    "Use to write code files to /shared/artifacts. Provide 'content' and 'path' "
-                    "(required, include the filename). The tool creates missing directories and "
-                    "expects a code file extension (e.g., .py, .js, .ts, .html, .css)."
-                ),
-                input_schema=FileWriteTextInput.model_json_schema(),
-                output_schema=FilePathOutput.model_json_schema(),
-                timeout_s=5,
-                risk_level=RiskLevel.medium,
-                tool_intent=ToolIntent.io,
-            ),
-            handler=handlers.file_write_code,
         )
     )
 
@@ -447,45 +361,6 @@ def register_core_ops_tools(
                 tool_intent=ToolIntent.io,
             ),
             handler=handlers.list_files,
-        )
-    )
-
-    registry.register(
-        Tool(
-            spec=ToolSpec(
-                name="workspace_write_text",
-                description="Write text content to a file under the workspace",
-                usage_guidance=(
-                    "Use to write text to the workspace. Provide 'content' (required) "
-                    "and 'path' (required, include the filename)."
-                ),
-                input_schema=WorkspaceWriteTextInput.model_json_schema(),
-                output_schema=FilePathOutput.model_json_schema(),
-                timeout_s=5,
-                risk_level=RiskLevel.medium,
-                tool_intent=ToolIntent.io,
-            ),
-            handler=handlers.workspace_write_text,
-        )
-    )
-
-    registry.register(
-        Tool(
-            spec=ToolSpec(
-                name="workspace_write_code",
-                description="Write code content to a file under the workspace",
-                usage_guidance=(
-                    "Use to write code files to the workspace. Provide 'content' and 'path' "
-                    "(required, include the filename). The tool creates missing directories and "
-                    "expects a code file extension (e.g., .py, .js, .ts, .html, .css)."
-                ),
-                input_schema=WorkspaceWriteTextInput.model_json_schema(),
-                output_schema=FilePathOutput.model_json_schema(),
-                timeout_s=5,
-                risk_level=RiskLevel.medium,
-                tool_intent=ToolIntent.io,
-            ),
-            handler=handlers.workspace_write_code,
         )
     )
 
@@ -732,25 +607,6 @@ def register_core_ops_tools(
     registry.register(
         Tool(
             spec=ToolSpec(
-                name="run_tests",
-                description="Run tests within /shared/artifacts using an allowlisted command",
-                usage_guidance=(
-                    "Use to run tests in /shared/artifacts. Provide 'command' and optional 'args' "
-                    "and 'cwd' (relative). Only allowlisted commands are permitted."
-                ),
-                input_schema=RunTestsInput.model_json_schema(),
-                output_schema=RunTestsOutput.model_json_schema(),
-                timeout_s=30,
-                risk_level=RiskLevel.medium,
-                tool_intent=ToolIntent.validate,
-            ),
-            handler=handlers.run_tests,
-        )
-    )
-
-    registry.register(
-        Tool(
-            spec=ToolSpec(
                 name="search_text",
                 description="Search for text in files under /shared/artifacts",
                 usage_guidance=(
@@ -878,22 +734,3 @@ def register_core_ops_tools(
             handler=handlers.docx_render,
         )
     )
-
-    if http_fetch_enabled:
-        registry.register(
-            Tool(
-                spec=ToolSpec(
-                    name="http_fetch",
-                    description="Fetch HTTP content",
-                    usage_guidance=(
-                        "Use to fetch public HTTP(S) URLs. The host must be in TOOL_HTTP_FETCH_ALLOWLIST."
-                    ),
-                    input_schema=HttpFetchInput.model_json_schema(),
-                    output_schema=HttpFetchOutput.model_json_schema(),
-                    timeout_s=10,
-                    risk_level=RiskLevel.high,
-                    tool_intent=ToolIntent.io,
-                ),
-                handler=handlers.http_fetch,
-            )
-        )

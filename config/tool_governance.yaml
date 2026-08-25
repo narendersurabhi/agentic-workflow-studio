@@ -24,23 +24,7 @@ tool_governance:
         - list_files
         - search_text
       deny:
-        - run_tests
         - sleep
-        - http_fetch
-        - workspace_write_text
-        - workspace_write_code
-        - file_write_code
-        - coding_agent_generate
-        - coding_agent_autonomous
-        - github_repo_create
-        - github_repo_update
-        - github_repo_list
-        - github_branch_list
-        - github_file_write
-        - github_pr_create
-        - github_repo_push
-        - github_repo_clone_or_pull
-        - github_repo_push_pr
     worker:
       allow:
         - json_transform
@@ -75,25 +59,9 @@ tool_governance:
         - workspace_list_files
         - memory_read
         - memory_semantic_search
-        - coding_agent_generate
-        - coding_agent_autonomous
         - coding_agent_publish_pr
       deny:
-        - run_tests
         - sleep
-        - http_fetch
-        - workspace_write_text
-        - workspace_write_code
-        - file_write_code
-        - github_repo_create
-        - github_repo_update
-        - github_repo_list
-        - github_branch_list
-        - github_file_write
-        - github_pr_create
-        - github_repo_push
-        - github_repo_clone_or_pull
-        - github_repo_push_pr
     api:
       allow:
         - json_transform
@@ -118,23 +86,7 @@ tool_governance:
         - memory_read
         - memory_semantic_search
       deny:
-        - run_tests
         - sleep
-        - http_fetch
-        - workspace_write_text
-        - workspace_write_code
-        - file_write_code
-        - coding_agent_generate
-        - coding_agent_autonomous
-        - github_repo_create
-        - github_repo_update
-        - github_repo_list
-        - github_branch_list
-        - github_file_write
-        - github_pr_create
-        - github_repo_push
-        - github_repo_clone_or_pull
-        - github_repo_push_pr
   tenants: {}
   job_types: {}
   risk:

@@ -542,7 +542,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--primary-capability-id",
-        default=os.getenv("AGENT_REGISTRY_E2E_PRIMARY_CAPABILITY", "codegen.autonomous"),
+        default=os.getenv("AGENT_REGISTRY_E2E_PRIMARY_CAPABILITY", "agent.run"),
         help="Primary agent capability id to verify.",
     )
     parser.add_argument(

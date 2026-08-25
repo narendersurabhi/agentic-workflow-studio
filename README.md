@@ -373,7 +373,7 @@ Example:
 TOOL_PLUGIN_MODULES=my_tools.my_plugin
 ENABLED_TOOLS=llm_generate,my_custom_tool
 DISABLED_TOOLS=sleep
-WORKER_DISABLED_TOOLS=run_tests,workspace_write_code
+WORKER_DISABLED_TOOLS=search_text,workspace_delete
 ```
 
 In `dry_run`, violations are logged (`tool_governance_violation_dry_run`) but not blocked.

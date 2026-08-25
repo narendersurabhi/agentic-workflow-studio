@@ -2387,7 +2387,7 @@ def _agent_definition_is_agentic_capability(
     capability_id = str(spec.capability_id or "").strip().lower()
     tags = {str(tag or "").strip().lower() for tag in spec.tags or ()}
     return (
-        capability_id == "codegen.autonomous"
+        capability_id == "agent.run"
         or ".autonomous" in capability_id
         or "autonomous" in tags
         or "coding-agent" in tags
@@ -23112,7 +23112,7 @@ def _workbench_step_hydrates_prompt(capability_id: str, request_id: str) -> bool
     }
     return any(
         identifier == "llm.text.generate"
-        or identifier == "codegen.autonomous"
+        or identifier == "agent.run"
         or identifier.endswith(".autonomous")
         or ".autonomous." in identifier
         for identifier in identifiers

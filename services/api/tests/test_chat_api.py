@@ -2501,7 +2501,7 @@ def test_pending_clarification_state_drops_known_intent_action_question() -> Non
     assert pending_state["known_slot_values"]["intent_action"] == "generate"
     assert pending_state["pending_fields"] == ["goal", "workspace_path"]
     assert pending_state["current_question_field"] == "goal"
-    assert pending_state["questions"] == ["What should this repository or workspace be used for?"]
+    assert pending_state["questions"] == ["What should the agent accomplish?"]
 
 
 def test_candidate_goal_preserves_multiturn_execution_requirements() -> None:
