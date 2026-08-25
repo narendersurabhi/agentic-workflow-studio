@@ -111,3 +111,23 @@ def test_planner_collectible_inputs_fallback_to_schema_required(monkeypatch):
         "llm.text.generate",
         registry=registry,
     ) == ["prompt"]
+
+
+def test_capability_registry_parses_agent_hint(monkeypatch):
+    monkeypatch.delenv("CAPABILITY_REGISTRY_PATH", raising=False)
+
+    registry = capability_registry.load_capability_registry()
+    spec = registry.require("memory.write")
+
+    assert spec.agent_hint is not None
+    assert "memory.write" not in spec.agent_hint
+    assert spec.agent_hint != spec.description
+
+
+def test_capability_registry_all_capabilities_have_agent_hint(monkeypatch):
+    monkeypatch.delenv("CAPABILITY_REGISTRY_PATH", raising=False)
+
+    registry = capability_registry.load_capability_registry()
+
+    missing = [cap_id for cap_id, spec in registry.capabilities.items() if not spec.agent_hint]
+    assert missing == []
