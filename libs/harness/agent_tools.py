@@ -578,7 +578,10 @@ def agent(
             continue
         # Tool names must be [a-zA-Z0-9_-], max 64 chars
         tool_name = cap_id.replace(".", "__").replace("/", "__")[:64]
-        description = (spec.description or cap_id)[:1024]
+        description = spec.description or cap_id
+        if spec.agent_hint:
+            description = f"{description} {spec.agent_hint}"
+        description = description[:1024]
         tools.append(
             {
                 "name": tool_name,

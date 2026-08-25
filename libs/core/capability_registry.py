@@ -67,6 +67,7 @@ class CapabilitySpec:
     aliases: tuple[str, ...] = ()
     exports: tuple[CapabilityExportSpec, ...] = ()
     planner_hints: dict[str, Any] = field(default_factory=dict)
+    agent_hint: str | None = None
     enabled: bool = True
 
 
@@ -428,6 +429,7 @@ def _parse_capability(raw: dict[str, Any], idx: int) -> CapabilitySpec:
     planner_hints = raw.get("planner_hints", {})
     if not isinstance(planner_hints, dict):
         raise CapabilityRegistryError(f"capabilities[{idx}].planner_hints must be an object")
+    agent_hint = _optional_str(raw.get("agent_hint"), None)
     enabled = bool(raw.get("enabled", True))
 
     adapters_raw = raw.get("adapters", [])
@@ -451,6 +453,7 @@ def _parse_capability(raw: dict[str, Any], idx: int) -> CapabilitySpec:
         aliases=aliases,
         exports=exports,
         planner_hints=dict(planner_hints),
+        agent_hint=agent_hint,
         enabled=enabled,
     )
 
