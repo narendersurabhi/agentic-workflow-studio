@@ -55,9 +55,7 @@ type AgentStepDraft = {
 };
 
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "canceled", "accepted", "completed"]);
-const DEFAULT_AGENT_CAPABILITY_ID = "codegen.autonomous";
 const AGENT_RUN_CAPABILITY_ID = "agent.run";
-const DEFAULT_AGENT_WORKSPACE_PATH = "workbench-agent";
 const DEFAULT_AGENT_MAX_STEPS = "6";
 
 const DEFAULT_RETRY_POLICY_PREVIEW = {
@@ -115,12 +113,6 @@ function slugify(value: string, fallback: string): string {
 }
 
 function defaultAgentInputDraft(capabilityId: string): CapabilityInputDraft {
-  if (capabilityId === DEFAULT_AGENT_CAPABILITY_ID) {
-    return {
-      workspace_path: DEFAULT_AGENT_WORKSPACE_PATH,
-      max_steps: DEFAULT_AGENT_MAX_STEPS,
-    };
-  }
   if (isAgentRunCapability(capabilityId)) {
     return { max_steps: DEFAULT_AGENT_MAX_STEPS };
   }
@@ -161,7 +153,6 @@ function isAgenticCapability(item: CapabilityItem): boolean {
   const id = item.id.toLowerCase();
   const tags = item.tags.map((tag) => tag.toLowerCase());
   return (
-    id === DEFAULT_AGENT_CAPABILITY_ID ||
     id === AGENT_RUN_CAPABILITY_ID ||
     id.includes(".autonomous") ||
     tags.includes("autonomous") ||
@@ -285,12 +276,9 @@ function createAgentProfileInputDraft(
   if (definition.default_goal.trim()) {
     inputDraft.goal = definition.default_goal;
   }
-  const agentCapId = definition.agent_capability_id || DEFAULT_AGENT_CAPABILITY_ID;
+  const agentCapId = definition.agent_capability_id || AGENT_RUN_CAPABILITY_ID;
   const workspacePath =
-    isAgentRunCapability(agentCapId)
-      ? ""
-      : definition.default_workspace_path?.trim() ||
-        (agentCapId === DEFAULT_AGENT_CAPABILITY_ID ? DEFAULT_AGENT_WORKSPACE_PATH : "");
+    isAgentRunCapability(agentCapId) ? "" : definition.default_workspace_path?.trim() || "";
   if (workspacePath) {
     inputDraft.workspace_path = workspacePath;
   }
@@ -299,9 +287,7 @@ function createAgentProfileInputDraft(
   }
   const maxSteps =
     definition.default_max_steps ??
-    (agentCapId === DEFAULT_AGENT_CAPABILITY_ID || isAgentRunCapability(agentCapId)
-      ? Number(DEFAULT_AGENT_MAX_STEPS)
-      : null);
+    (isAgentRunCapability(agentCapId) ? Number(DEFAULT_AGENT_MAX_STEPS) : null);
   if (maxSteps !== null) {
     inputDraft.max_steps = String(maxSteps);
   }
@@ -331,7 +317,7 @@ function createAgentStepDraft(capabilityId = "", role: AgentStepRole = "step"): 
 function createAgentStepDraftFromDefinition(
   definition: AgentDefinition | AgentDefinitionVersion
 ): AgentStepDraft {
-  const capabilityId = definition.agent_capability_id || DEFAULT_AGENT_CAPABILITY_ID;
+  const capabilityId = definition.agent_capability_id || AGENT_RUN_CAPABILITY_ID;
   const inputDraft = createAgentProfileInputDraft(definition);
   const draft = createAgentStepDraft(capabilityId, "agent");
   return {
@@ -710,7 +696,7 @@ export default function StudioWorkbenchSurface({
   const [agentGoal, setAgentGoal] = useState("");
   const [agentUserId, setAgentUserId] = useState(workspaceUserId);
   const [agentSteps, setAgentSteps] = useState<AgentStepDraft[]>([
-    createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent"),
+    createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent"),
   ]);
   const [agentAllowedCapabilityIds, setAgentAllowedCapabilityIds] = useState<string[]>([]);
   const [toolPickerQuery, setToolPickerQuery] = useState("");
@@ -769,15 +755,6 @@ export default function StudioWorkbenchSurface({
       return;
     }
     setSelectedCapabilityId((current) => current || items[0]?.id || "");
-    const agentRunInCatalog = items.some((item) => item.id === AGENT_RUN_CAPABILITY_ID);
-    if (agentRunInCatalog) {
-      setAgentSteps((current) => {
-        if (current.length === 1 && current[0].capabilityId === DEFAULT_AGENT_CAPABILITY_ID) {
-          return [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
-        }
-        return current;
-      });
-    }
   }, [catalogQueryResult.data]);
 
   const agentDefinitionsQueryResult = useQuery({
@@ -1193,8 +1170,8 @@ export default function StudioWorkbenchSurface({
   };
 
   const buildAgentDefinitionPayload = (): AgentDefinitionCreateRequest => {
-    const primaryStep = primaryAgentStep ?? createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent");
-    const capabilityId = primaryStep.capabilityId.trim() || DEFAULT_AGENT_CAPABILITY_ID;
+    const primaryStep = primaryAgentStep ?? createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent");
+    const capabilityId = primaryStep.capabilityId.trim() || AGENT_RUN_CAPABILITY_ID;
     const defaultGoal =
       agentGoal.trim() || stringInputValue(primaryStep.inputDraft, "goal").trim();
     const workspacePath = stringInputValue(primaryStep.inputDraft, "workspace_path").trim();
@@ -1251,7 +1228,7 @@ export default function StudioWorkbenchSurface({
     setAgentProfileDescription("");
     setAgentTitle("Agent workbench run");
     setAgentGoal("");
-    setAgentSteps([createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]);
+    setAgentSteps([createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")]);
     setRunLlmProvider("");
     setRunLlmModel("");
     setAgentProfileError(null);
@@ -1472,7 +1449,7 @@ export default function StudioWorkbenchSurface({
           },
         ]);
       } else {
-        setAgentSteps([createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]);
+        setAgentSteps([createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")]);
       }
       setWorkbenchBanner({
         tone: extraSteps.length > 0 ? "warning" : "info",
@@ -1484,7 +1461,7 @@ export default function StudioWorkbenchSurface({
       return;
     }
     // mode === "agent_raw": the source run's primary step couldn't be reconstructed automatically.
-    setAgentSteps([createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")]);
+    setAgentSteps([createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")]);
     setWorkbenchBanner({
       tone: "warning",
       message: `${forkResult.draft.notice} Reconfigure the agent step manually, or use Promote to Workflow / Debug Data to inspect the original run.`,
@@ -1520,7 +1497,7 @@ export default function StudioWorkbenchSurface({
         const [first, ...rest] =
           current.length > 0
             ? current
-            : [createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")];
+            : [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
         return [
           {
             ...first,
@@ -1562,7 +1539,7 @@ export default function StudioWorkbenchSurface({
       const [first, ...rest] =
         current.length > 0
           ? current
-          : [createAgentStepDraft(DEFAULT_AGENT_CAPABILITY_ID, "agent")];
+          : [createAgentStepDraft(AGENT_RUN_CAPABILITY_ID, "agent")];
       return [updater(first), ...rest];
     });
   };

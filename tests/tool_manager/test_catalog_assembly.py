@@ -10,13 +10,12 @@ def test_register_default_tools_adds_builtin_specs() -> None:
     tool_registry.register_default_tools(
         registry,
         handlers=tool_registry._default_catalog_handlers(),
-        http_fetch_enabled=False,
         llm_enabled=False,
         llm_provider=None,
     )
 
     specs = {spec.name for spec in registry.list_specs()}
-    assert "math_eval" in specs
+    assert "search_text" in specs
     assert "docx_render_from_spec" in specs
     assert "file_write_text" in specs
 
@@ -28,7 +27,6 @@ def test_register_default_tools_adds_llm_tool_when_enabled(mocker) -> None:
     tool_registry.register_default_tools(
         registry,
         handlers=tool_registry._default_catalog_handlers(),
-        http_fetch_enabled=False,
         llm_enabled=True,
         llm_provider=mock_provider,
     )
@@ -44,7 +42,6 @@ def test_register_default_tools_requires_provider_when_llm_enabled() -> None:
         tool_registry.register_default_tools(
             registry,
             handlers=tool_registry._default_catalog_handlers(),
-            http_fetch_enabled=False,
             llm_enabled=True,
             llm_provider=None,
         )

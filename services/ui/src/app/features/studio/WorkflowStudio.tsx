@@ -3182,8 +3182,8 @@ export default function WorkflowStudio() {
 
   const addTemplateToStudio = (template: "single" | "sequential" | "agent") => {
     const templates: Record<string, string[]> = {
-      single: ["codegen.autonomous"],
-      sequential: ["llm.generate", "codegen.autonomous", "codegen.publish_pr"],
+      single: ["agent.run"],
+      sequential: ["llm.generate", "agent.run", "codegen.publish_pr"],
       agent: ["agent.run"],
     };
     const caps = templates[template] ?? [];
@@ -6336,7 +6336,7 @@ export default function WorkflowStudio() {
                         <Button
                           variant="primary"
                           className="rounded-xl px-5 py-2.5 text-sm"
-                          onClick={() => addCapabilityNodeToStudio("codegen.autonomous")}
+                          onClick={() => addCapabilityNodeToStudio("agent.run")}
                         >
                           + Add first step
                         </Button>

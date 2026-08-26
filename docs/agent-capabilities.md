@@ -12,13 +12,10 @@ The short version is:
 - validate inputs and outputs with schemas
 - let governance, planner, Studio, worker, and chat interact with the capability through the same stable contract
 
-The existing in-repo reference implementation is the coding-agent path:
+The existing in-repo reference implementations are:
 
-- `codegen.generate`
-- `codegen.autonomous`
-- `codegen.publish_pr`
-
-Those capabilities are registered in `config/capability_registry.yaml` and implemented through the tool path in `libs/tools/coder_tools.py`.
+- `agent.run` — a general-purpose agentic loop, registered in `config/capability_registry.yaml` and implemented in `libs/harness/agent_tools.py`.
+- `codegen.publish_pr` — a bounded, single-purpose native-tool capability, implemented through the tool path in `libs/tools/coder_tools.py`.
 
 ## 1. What "Agent as a Capability" Means
 
@@ -66,7 +63,7 @@ Use an agent as a capability when:
 Examples:
 
 - `research.agent.run`
-- `codegen.autonomous`
+- `agent.run`
 - `requirements.agent.expand`
 - `openapi.agent.refine`
 - `evaluation.agent.review`
@@ -97,7 +94,7 @@ Pattern:
 2. register the tool in the tool catalog
 3. expose the tool through a capability adapter of type `tool`
 
-This is how `codegen.autonomous` works.
+This is how `codegen.publish_pr` works.
 
 Advantages:
 
@@ -786,7 +783,7 @@ Bad:
 Better:
 
 - `research.agent.run`
-- `codegen.autonomous`
+- `codegen.publish_pr`
 - `repo.review.run`
 
 ### 16.2 Hiding required inputs inside a `job` object

@@ -1,7 +1,6 @@
 policy:
   allowlist:
     - json_transform
-    - math_eval
     - file_read_text
     - file_write_text
     - llm_generate

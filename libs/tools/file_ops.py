@@ -8,23 +8,14 @@ only the file moved.
 
 from __future__ import annotations
 
-import math
 import os
 import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from subprocess import CompletedProcess, run
 from typing import Any, Dict
 
 from libs.framework.tool_runtime import ToolExecutionError
-
-
-def _math_eval(payload: Dict[str, Any]) -> Dict[str, Any]:
-    expr = payload.get("expr", "0")
-    allowed = {"sqrt": math.sqrt, "pow": pow}
-    value = eval(expr, {"__builtins__": {}}, allowed)  # noqa: S307
-    return {"value": value}
 
 
 def _safe_artifact_path(path: str, default_name: str) -> Path:
@@ -76,63 +67,6 @@ def _write_text_file(
     candidate.parent.mkdir(parents=True, exist_ok=True)
     candidate.write_text(content, encoding="utf-8")
     return {"path": str(candidate)}
-
-
-def _write_workspace_text_file(
-    payload: Dict[str, Any], default_filename: str | None = None
-) -> Dict[str, Any]:
-    path = payload.get("path", "")
-    content = payload.get("content", "")
-    if not isinstance(path, str) or not path.strip():
-        if not default_filename:
-            raise ToolExecutionError("Missing path")
-        path = default_filename
-    path = path.strip()
-    if path and path.endswith("/"):
-        raise ToolExecutionError("Missing file name in path")
-    candidate = _safe_workspace_path(path, default_filename or "")
-    candidate.parent.mkdir(parents=True, exist_ok=True)
-    candidate.write_text(content, encoding="utf-8")
-    return {"path": str(candidate)}
-
-
-def _file_write_code(payload: Dict[str, Any]) -> Dict[str, Any]:
-    path = payload.get("path", "")
-    if not path:
-        raise ToolExecutionError("Missing file name in path")
-    _ensure_code_extension(path)
-    return _write_text_file(payload)
-
-
-def _workspace_write_code(payload: Dict[str, Any]) -> Dict[str, Any]:
-    path = payload.get("path", "")
-    if not path:
-        raise ToolExecutionError("Missing file name in path")
-    _ensure_code_extension(path)
-    return _write_workspace_text_file(payload)
-
-
-def _ensure_code_extension(path: str) -> None:
-    code_extensions = {
-        ".py",
-        ".js",
-        ".ts",
-        ".tsx",
-        ".jsx",
-        ".html",
-        ".css",
-        ".json",
-        ".md",
-        ".yml",
-        ".yaml",
-        ".toml",
-        ".sh",
-        ".sql",
-        ".txt",
-    }
-    suffix = Path(path).suffix.lower()
-    if not suffix or suffix not in code_extensions:
-        raise ToolExecutionError("Unsupported code file extension")
 
 
 def _file_read_text(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -573,28 +507,6 @@ def _select_job_context_from_memory(memory: Any) -> Dict[str, Any]:
                 if isinstance(context_json, dict):
                     return context_json
     return {}
-
-
-def _run_tests(payload: Dict[str, Any]) -> Dict[str, Any]:
-    command = payload.get("command", "")
-    args = payload.get("args") or []
-    cwd = payload.get("cwd", "")
-    if not isinstance(args, list):
-        args = []
-    allowlist = {"pytest", "python"}
-    if command not in allowlist:
-        raise ToolExecutionError("Command not allowed")
-    cmd = [command, *args]
-    if command == "python":
-        if len(args) < 2 or args[0] != "-m" or args[1] != "pytest":
-            raise ToolExecutionError("Only python -m pytest is allowed")
-    run_cwd = _safe_artifact_path(cwd, "")
-    if not run_cwd.exists():
-        raise ToolExecutionError("Working directory not found")
-    result: CompletedProcess[str] = run(
-        cmd, cwd=str(run_cwd), capture_output=True, text=True, check=False
-    )
-    return {"exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
 
 def _search_text(payload: Dict[str, Any]) -> Dict[str, Any]:
