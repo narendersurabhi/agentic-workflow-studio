@@ -16,7 +16,6 @@ from jsonschema import Draft202012Validator
 from prometheus_client import start_http_server
 
 from libs.core import (
-    capability_registry,
     document_store,
     execution_contracts,
     events,
@@ -36,11 +35,7 @@ from services.worker.app.memory_semantics import (
     select_memory_payload,
     stable_memory_keys,
 )
-from services.worker.app import (
-    capability_runtime_adapter,
-    execution_service,
-    tool_runtime_adapter,
-)
+from services.worker.app import execution_service
 
 core_logging.configure_logging("worker")
 LOGGER = core_logging.get_logger("worker")
@@ -197,8 +192,9 @@ if LLM_ENABLED:
     _CACHE_SESSION_STORE = CacheSessionStore(redis_client)
 
     def _current_catalog_hash() -> str:
-        catalog_json = capability_registry.load_capability_catalog_json()
-        return hashlib.sha256(catalog_json.encode()).hexdigest()
+        # capability_registry (and its catalog) was removed with the tools framework;
+        # this cache-key input is now constant.
+        return hashlib.sha256(b"").hexdigest()
 
     LLM_PROVIDER_INSTANCE = TimingLLMProvider(
         CachingLLMProvider(
@@ -219,23 +215,11 @@ def execute_task(task_payload: dict) -> models.TaskResult:
 def execute_task_request(
     request: execution_contracts.TaskExecutionRequest,
 ) -> models.TaskResult:
-    tool_runtime = tool_runtime_adapter.build_worker_tool_runtime(
-        http_fetch_enabled=TOOL_HTTP_FETCH_ENABLED,
-        llm_enabled=LLM_ENABLED,
-        llm_provider_instance=LLM_PROVIDER_INSTANCE,
-        service_name="worker",
-    )
-    capability_runtime = capability_runtime_adapter.build_worker_capability_runtime(
-        logger=LOGGER,
-        hooks=capability_runtime_adapter.WorkerCapabilityHooks(
-            load_memory_inputs=_load_memory_inputs,
-            apply_memory_defaults=apply_memory_defaults,
-            missing_memory_only_inputs=missing_memory_only_inputs,
-            persist_memory_outputs=_persist_memory_outputs,
-        ),
-        output_size_cap=OUTPUT_SIZE_CAP,
-        service_name="worker",
-    )
+    # tool_runtime_adapter / capability_runtime_adapter were removed with the tools
+    # framework; execution_service no longer dispatches through a registry-backed
+    # tool/capability runtime, so these are left unset here.
+    tool_runtime = None
+    capability_runtime = None
     return execution_service.execute_task_request(
         request,
         context=execution_service.WorkerExecutionContext(
@@ -474,7 +458,7 @@ def _intent_mismatch(
 
 def _capability_intent_mismatch(
     task_intent: str,
-    capability_spec: capability_registry.CapabilitySpec,
+    capability_spec: Any,
 ) -> str | None:
     hints = capability_spec.planner_hints if isinstance(capability_spec.planner_hints, dict) else {}
     raw_allowed = hints.get("task_intents")
@@ -1272,7 +1256,7 @@ def _prune_capability_payload_by_schema(
 
 
 def _enforce_capability_input_contract(
-    capability: capability_registry.CapabilitySpec,
+    capability: Any,
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any], str | None, list[str]]:
     normalized_payload = dict(payload) if isinstance(payload, dict) else {}

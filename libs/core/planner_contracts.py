@@ -4,11 +4,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import os
 import re
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from libs.core import capability_registry, intent_contract, models, workflow_contracts
+from libs.core import intent_contract, models, workflow_contracts
 
 
 RENDER_PATH_MODE_AUTO = "auto"
@@ -539,13 +539,13 @@ def build_plan_request(
     *,
     tools: Sequence[models.ToolSpec],
     planner_tools: Sequence[models.ToolSpec] | None = None,
-    capabilities: Mapping[str, capability_registry.CapabilitySpec]
-    | Sequence[capability_registry.CapabilitySpec]
+    capabilities: Mapping[str, Any]
+    | Sequence[Any]
     | None = None,
     semantic_capability_hints: Sequence[Mapping[str, Any]] | None = None,
     max_dependency_depth: int | None = None,
 ) -> PlanRequest:
-    capability_values: Sequence[capability_registry.CapabilitySpec]
+    capability_values: Sequence[Any]
     if isinstance(capabilities, Mapping):
         capability_values = list(capabilities.values())
     elif capabilities is None:
@@ -674,20 +674,20 @@ def _planner_capability_candidates(
     raw = context.get("capability_candidates")
     if isinstance(raw, list):
         for capability_id in raw:
-            normalized = capability_registry.canonicalize_capability_id(capability_id)
+            normalized = str(capability_id or "").strip()
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 capability_ids.append(normalized)
     if normalized_intent_envelope is not None:
         for capability_list in normalized_intent_envelope.candidate_capabilities.values():
             for capability_id in capability_list:
-                normalized = capability_registry.canonicalize_capability_id(capability_id)
+                normalized = str(capability_id or "").strip()
                 if normalized and normalized not in seen:
                     seen.add(normalized)
                     capability_ids.append(normalized)
         for segment in normalized_intent_envelope.graph.segments:
             for capability_id in segment.suggested_capabilities:
-                normalized = capability_registry.canonicalize_capability_id(capability_id)
+                normalized = str(capability_id or "").strip()
                 if normalized and normalized not in seen:
                     seen.add(normalized)
                     capability_ids.append(normalized)
@@ -793,24 +793,12 @@ def _capability_values(
 
 
 def _full_capability_values(
-    full_capabilities: capability_registry.CapabilityRegistry
-    | Mapping[str, Any]
-    | Sequence[Any]
-    | PlanRequest
-    | None,
+    full_capabilities: Any | Mapping[str, Any] | Sequence[Any] | PlanRequest | None,
 ) -> list[Any]:
-    if isinstance(full_capabilities, capability_registry.CapabilityRegistry):
-        # mypy fails to narrow away `PlanRequest` here (confirmed via reveal_type: the
-        # isinstance check above evaluates true at runtime but mypy still infers
-        # `CapabilityRegistry | PlanRequest`, a narrowing gap reproducible even with a
-        # 2-member union). The cast reflects what the isinstance check already verified.
-        registry = cast("capability_registry.CapabilityRegistry", full_capabilities)
-        return list(registry.capabilities.values())
+    # Registry-wide fallback (loading the full capability catalog when no explicit
+    # capabilities are supplied) was removed with the tools framework.
     if full_capabilities is None:
-        try:
-            return list(capability_registry.load_capability_registry().capabilities.values())
-        except Exception:  # noqa: BLE001
-            return []
+        return []
     return _capability_values(full_capabilities)
 
 
@@ -941,7 +929,7 @@ def validate_planner_request_language(
     request_id: str,
     *,
     capabilities: Mapping[str, Any] | Sequence[Any] | PlanRequest | None = None,
-    full_capabilities: capability_registry.CapabilityRegistry
+    full_capabilities: Any
     | Mapping[str, Any]
     | Sequence[Any]
     | PlanRequest

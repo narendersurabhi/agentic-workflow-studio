@@ -12,7 +12,6 @@ from typing import Any, Callable, Mapping, Sequence
 from pydantic import BaseModel
 
 from libs.core import (
-    capability_registry,
     intent_contract,
     job_projection,
     llm_provider,
@@ -22,7 +21,6 @@ from libs.core import (
     planner_contracts,
 )
 from libs.core.cache_session_store import CacheSessionStore
-from libs.tool_manager import tool_governance
 
 
 @dataclass(frozen=True)
@@ -118,29 +116,7 @@ def _intent_segment_contract_reason(detail: str) -> str:
     return reason or "unknown"
 
 
-def _filtered_capabilities_for_job(
-    job: models.Job,
-    capabilities: Mapping[str, Any],
-) -> dict[str, Any]:
-    metadata = job.metadata if isinstance(job.metadata, Mapping) else {}
-    raw_allowed = metadata.get("allowed_capability_ids")
-    if not isinstance(raw_allowed, Sequence) or isinstance(raw_allowed, (str, bytes)):
-        return dict(capabilities)
-    allowed_ids = {
-        capability_registry.canonicalize_capability_id(raw_id)
-        for raw_id in raw_allowed
-        if capability_registry.canonicalize_capability_id(raw_id)
-    }
-    if not allowed_ids:
-        return dict(capabilities)
-    filtered: dict[str, Any] = {}
-    for key, spec in capabilities.items():
-        capability_id = capability_registry.canonicalize_capability_id(
-            getattr(spec, "capability_id", None) or key
-        )
-        if capability_id and capability_id in allowed_ids:
-            filtered[key] = spec
-    return filtered
+# _filtered_capabilities_for_job removed with the tools framework (capability_registry).
 
 
 def build_plan_request(
@@ -152,7 +128,7 @@ def build_plan_request(
     runtime: PlannerServiceRuntime,
     include_semantic_hints: bool | None = None,
 ) -> planner_contracts.PlanRequest:
-    capabilities = _filtered_capabilities_for_job(job, runtime.load_capabilities())
+    capabilities = dict(runtime.load_capabilities())
     use_semantic_hints = (
         config.mode == "llm" if include_semantic_hints is None else include_semantic_hints
     )
@@ -1124,176 +1100,7 @@ def validate_capability_inputs(
     return errors.get(capability.capability_id)
 
 
-def validate_plan_request(
-    plan: models.PlanCreate,
-    request: planner_contracts.PlanRequest,
-    *,
-    schema_registry_path: str,
-) -> tuple[bool, str]:
-    tool_map = {tool.name: tool for tool in request.tools}
-    tool_schemas = {tool.name: tool.input_schema or {} for tool in request.tools}
-    capabilities = planner_contracts.capability_map(request)
-    try:
-        full_capabilities = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        full_capabilities = None
-    goal_intent_segments = planner_contracts.goal_intent_segments(request)
-    for task_index, task in enumerate(plan.tasks):
-        for request_id in planner_contracts.planner_task_request_ids(task):
-            language_error = planner_contracts.validate_planner_request_language(
-                request_id,
-                capabilities=request.capabilities,
-                full_capabilities=full_capabilities,
-                runtime_tool_names=list(tool_map.keys()),
-            )
-            if language_error:
-                return False, f"{language_error}:task={task.name}"
-        normalized_task = canonicalize_task_request_ids(task, capabilities=request.capabilities)
-        if not normalized_task.tool_requests:
-            continue
-        goal_intent_segment = select_goal_intent_segment_for_task(
-            task=normalized_task,
-            task_index=task_index,
-            task_intent="",
-            goal_intent_segments=goal_intent_segments,
-            total_tasks=len(plan.tasks),
-            capabilities=capabilities,
-        )
-        task_intent = resolve_task_intent_for_validation(
-            normalized_task,
-            tool_map,
-            goal_text=request.goal,
-            goal_intent_segment=goal_intent_segment,
-        )
-        if not task_intent:
-            return False, f"missing_task_intent:{normalized_task.name}"
-        if goal_intent_segment is None:
-            goal_intent_segment = select_goal_intent_segment_for_task(
-                task=normalized_task,
-                task_index=task_index,
-                task_intent=task_intent,
-                goal_intent_segments=goal_intent_segments,
-                total_tasks=len(plan.tasks),
-                capabilities=capabilities,
-            )
-        for tool_name in normalized_task.tool_requests:
-            tool = tool_map.get(tool_name)
-            capability = capabilities.get(tool_name)
-            raw_tool_inputs: dict[str, Any] = {}
-            if (
-                isinstance(normalized_task.tool_inputs, dict)
-                and tool_name in normalized_task.tool_inputs
-            ):
-                entry = normalized_task.tool_inputs.get(tool_name)
-                if not isinstance(entry, dict):
-                    return False, (
-                        f"tool_inputs_invalid:{tool_name}:{normalized_task.name}:payload_not_object"
-                    )
-                raw_tool_inputs = dict(entry)
-            segment_payload: dict[str, Any] = raw_tool_inputs
-            if tool is not None:
-                segment_payload = build_validation_payload(
-                    normalized_task,
-                    tool,
-                    request,
-                    raw_tool_inputs,
-                )
-            elif capability is not None:
-                segment_payload = build_capability_validation_payload(
-                    normalized_task,
-                    tool_name,
-                    raw_tool_inputs,
-                    request,
-                )
-            render_path_error = planner_contracts.validate_render_path_requirement(
-                request_id=tool_name,
-                raw_payload=raw_tool_inputs,
-                resolved_payload=segment_payload,
-                job_context=request.job_context if isinstance(request.job_context, dict) else {},
-                render_path_mode=planner_contracts.render_path_mode(request),
-            )
-            if render_path_error:
-                return False, f"{render_path_error}:task={normalized_task.name}"
-            segment_contract_error = intent_contract.validate_intent_segment_contract(
-                segment=goal_intent_segment,
-                task_intent=task_intent,
-                tool_name=tool_name,
-                payload=segment_payload,
-                capability_id=tool_name if capability is not None else None,
-                capability_risk_tier=capability.risk_tier if capability is not None else None,
-            )
-            if segment_contract_error:
-                core_logging.get_logger("planner").warning(
-                    "intent_segment_rejected",
-                    tool_name=tool_name,
-                    task_name=normalized_task.name,
-                    job_id=request.job_id,
-                    reason=_intent_segment_contract_reason(segment_contract_error),
-                    detail=segment_contract_error,
-                )
-                return (
-                    False,
-                    f"intent_segment_invalid:{tool_name}:{normalized_task.name}:{segment_contract_error}",
-                )
-            if tool is None and capability is None:
-                return False, f"unknown_tool_or_capability:{tool_name}"
-            if tool is None and capability is not None:
-                mismatch = capability_intent_mismatch(task_intent, capability, tool_name)
-                if mismatch:
-                    return False, (
-                        f"capability_intent_invalid:{tool_name}:{normalized_task.name}:{mismatch}"
-                    )
-                validation_error = validate_capability_inputs(
-                    capability,
-                    normalized_task,
-                    raw_tool_inputs,
-                    request,
-                    schema_registry_path=schema_registry_path,
-                )
-                if validation_error:
-                    return (
-                        False,
-                        f"capability_inputs_invalid:{tool_name}:{normalized_task.name}:{validation_error}",
-                    )
-                continue
-            allow_decision = tool_governance.evaluate_tool_allowlist(
-                tool_name,
-                "planner",
-                context=planner_contracts.governance_context(request),
-                tool_spec=tool,
-            )
-            if not allow_decision.allowed:
-                return False, f"tool_not_allowed:{tool_name}:{allow_decision.reason}"
-            if allow_decision.violated and allow_decision.mode == "dry_run":
-                core_logging.get_logger("planner").warning(
-                    "tool_governance_violation_dry_run",
-                    tool_name=tool_name,
-                    mode=allow_decision.mode,
-                    reason=allow_decision.reason,
-                    task_name=normalized_task.name,
-                    job_id=request.job_id,
-                )
-            mismatch = intent_contract.validate_tool_intent_compatibility(
-                task_intent,
-                tool.tool_intent,
-                tool_name,
-            )
-            if mismatch:
-                return False, f"{mismatch}:task={normalized_task.name}"
-            validation_payload = build_validation_payload(
-                normalized_task,
-                tool,
-                request,
-                raw_tool_inputs,
-            )
-            validation_errors = payload_resolver.validate_tool_inputs(
-                {tool_name: validation_payload},
-                tool_schemas,
-            )
-            message = validation_errors.get(tool_name)
-            if message:
-                return False, f"tool_inputs_invalid:{tool_name}:{normalized_task.name}:{message}"
-    return True, "ok"
+# validate_plan_request removed with the tools framework (capability_registry + tool_governance).
 
 
 def postprocess_llm_plan(
@@ -1325,8 +1132,7 @@ def llm_plan(
     blocks = build_llm_prompt_blocks(request)
     static_blocks = [b for b in blocks if b.stability == llm_provider.Stability.STATIC]
     session = provider.open_cache_session(request.job_id or "", static_blocks)
-    catalog_json = capability_registry.load_capability_catalog_json()
-    session.metadata["catalog_hash"] = hashlib.sha256(catalog_json.encode()).hexdigest()
+    # catalog_hash removed with the tools framework (capability_registry.load_capability_catalog_json).
     if session_store is not None and request.job_id:
         session_store.save(request.job_id, session)
     base_meta = {
@@ -1372,14 +1178,7 @@ def llm_plan(
         raise ValueError("Invalid plan generated: parse_failed")
     candidate = postprocess_llm_plan(candidate, request, runtime=runtime)
     logger.info("llm_plan_candidate", plan=candidate.model_dump())
-    valid, reason = validate_plan_request(
-        candidate,
-        request,
-        schema_registry_path=config.schema_registry_path,
-    )
-    if not valid:
-        logger.warning("llm_plan_invalid", reason=reason)
-        raise ValueError(f"Invalid plan generated: {reason}")
+    # validate_plan_request call removed with the tools framework.
     return candidate
 
 

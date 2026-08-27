@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-from libs.core import capability_registry, intent_contract, workflow_contracts
+from libs.core import intent_contract, workflow_contracts
 from libs.core.intent_eval import evaluate_intent_cases, load_intent_eval_cases
 from services.api.app import intent_service
 
@@ -77,19 +77,9 @@ def _build_decomposer(
 
 
 def _load_required_inputs_lookup() -> Any:
-    registry = capability_registry.load_capability_registry()
-    required_inputs_by_capability: dict[str, list[str]] = {}
-    for capability_id in registry.enabled_capabilities():
-        required_inputs_by_capability[capability_id] = (
-            capability_registry.planner_collectible_inputs_for_capability(
-                capability_id,
-                registry=registry,
-            )
-        )
-
+    # Removed with the tools/capability-registry framework.
     def _lookup(capability_id: str) -> list[str]:
-        canonical = registry.canonicalize_id(capability_id) or str(capability_id or "").strip()
-        return list(required_inputs_by_capability.get(canonical, ()))
+        return []
 
     return _lookup
 
@@ -381,7 +371,8 @@ def main() -> int:
 
     _, decompose_goal = _build_decomposer(args.mode, args.runtime_intent_mode)
     _, normalize_goal_intent = _build_normalizer(args.mode, args.runtime_intent_mode)
-    allowed_capability_ids = set(capability_registry.load_capability_registry().enabled_capabilities())
+    # Removed with the tools/capability-registry framework.
+    allowed_capability_ids: set[str] = set()
     report = evaluate_intent_cases(
         cases,
         decompose_goal=decompose_goal,

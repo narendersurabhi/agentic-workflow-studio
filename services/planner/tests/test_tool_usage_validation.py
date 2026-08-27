@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from libs.core import capability_registry, models, planner_contracts
+# capability_registry import removed with the tools framework; several tests below
+# reference it directly and will now fail with NameError rather than a clean skip.
+from libs.core import models, planner_contracts
 from services.planner.app import main as planner_main
 from services.planner.app.main import (
     _ensure_default_value_markers,

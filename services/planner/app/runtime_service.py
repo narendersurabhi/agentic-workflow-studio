@@ -14,7 +14,6 @@ from libs.core import (
     logging as core_logging,
     models,
     run_specs,
-    tool_registry,
 )
 from libs.core.llm_provider_timing import TimingLLMProvider
 
@@ -70,22 +69,11 @@ def resolve_execution_context(config: PlannerRuntimeConfig) -> PlannerExecutionC
             component="planner",
             model=(config.openai_model or "unknown").strip(),
         )
-        registry = tool_registry.build_default_registry(
-            http_fetch_enabled=False,
-            llm_enabled=True,
-            llm_provider=provider,
-            service_name="planner",
-        )
-    else:
-        registry = tool_registry.build_default_registry(
-            http_fetch_enabled=False,
-            service_name="planner",
-        )
-    planner_tool_specs = tool_registry.build_planner_support_tool_specs()
+    # tool/planner-support-tool registry wiring removed with the tools framework.
     return PlannerExecutionContext(
         provider=provider,
-        tool_specs=registry.list_specs(),
-        planner_tool_specs=planner_tool_specs,
+        tool_specs=[],
+        planner_tool_specs=[],
     )
 
 

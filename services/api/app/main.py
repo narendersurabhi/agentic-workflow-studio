@@ -29,7 +29,6 @@ from sqlalchemy.orm import Session
 
 from libs.core import (
     capability_search,
-    capability_registry,
     chat_routing_calibrator,
     chat_routing_reranker,
     chat_contracts,
@@ -46,7 +45,6 @@ from libs.core import (
     run_specs,
     runtime_manifest,
     state_machine,
-    tool_registry,
     workflow_contracts,
 )
 from libs.core.llm_provider import (
@@ -59,7 +57,7 @@ from libs.core.llm_provider import (
 )
 from libs.core.cache_session_store import CacheSessionStore, CachingLLMProvider
 from libs.core.llm_provider_timing import TimingLLMProvider
-from libs.mcp import mcp_gateway
+# mcp_gateway import removed with tools framework
 from .database import Base, SessionLocal, engine
 from .models import (
     AgentCheckpointRecord,
@@ -557,40 +555,10 @@ TASK_RESULT_KEY_PREFIX = "task_result:"
 CHAT_DIRECT_SYNC_WORKER_CONSUMER = "api.chat_sync"
 
 
-def _build_api_tool_registry_llm_provider() -> LLMProvider | None:
-    provider_name = (LLM_PROVIDER_NAME or "").strip().lower()
-    if not provider_name or provider_name == "mock":
-        return None
-    model_name = (CHAT_RESPONSE_MODEL or LLM_MODEL_NAME or "").strip()
-    if not model_name:
-        return None
-    try:
-        return resolve_provider(
-            provider_name,
-            api_key=OPENAI_API_KEY or None,
-            model=model_name,
-            base_url=OPENAI_BASE_URL or None,
-            max_output_tokens=CHAT_RESPONSE_MAX_OUTPUT_TOKENS or None,
-            timeout_s=max(1.0, OPENAI_TIMEOUT_S),
-            max_retries=max(0, OPENAI_MAX_RETRIES),
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "api_tool_registry_llm_provider_init_failed",
-            extra={"provider": provider_name, "model": model_name},
-        )
-        return None
-
-
-_api_tool_registry_llm_provider = _build_api_tool_registry_llm_provider()
-_tool_spec_registry = tool_registry.build_default_registry(
-    http_fetch_enabled=False,
-    llm_enabled=_api_tool_registry_llm_provider is not None,
-    llm_provider=_api_tool_registry_llm_provider,
-    service_name="api",
-)
-TOOL_INPUT_SCHEMAS = {spec.name: spec.input_schema for spec in _tool_spec_registry.list_specs()}
-TOOL_INTENTS_BY_NAME = {spec.name: spec.tool_intent for spec in _tool_spec_registry.list_specs()}
+# Tool registry / tool spec registry removed with the tools framework.
+_tool_spec_registry: Any = None
+TOOL_INPUT_SCHEMAS: dict[str, Any] = {}
+TOOL_INTENTS_BY_NAME: dict[str, Any] = {}
 
 
 def _build_composer_recommender_provider() -> LLMProvider | None:
@@ -1048,7 +1016,7 @@ def _rag_retriever_request_json(
     query: Mapping[str, Any] | None = None,
     timeout_s: float = 20.0,
 ) -> Any:
-    server = mcp_gateway.load_mcp_server_registry().get("rag_retriever_qdrant")
+    server = None  # mcp_gateway server registry removed with the tools framework
     if server is None or not server.enabled:
         raise HTTPException(status_code=503, detail="rag_retriever_service_unavailable")
     url = f"{server.base_url.rstrip('/')}{path}"
@@ -2371,75 +2339,36 @@ def _agent_definition_string_list(values: Any, *, max_items: int = 64) -> list[s
     return normalized
 
 
-def _agent_definition_capability_registry() -> capability_registry.CapabilityRegistry:
-    try:
-        return capability_registry.load_capability_registry()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=500,
-            detail=f"agent_definition_capability_registry_load_failed:{exc}",
-        ) from exc
-
-
-def _agent_definition_is_agentic_capability(
-    spec: capability_registry.CapabilitySpec,
-) -> bool:
-    capability_id = str(spec.capability_id or "").strip().lower()
-    tags = {str(tag or "").strip().lower() for tag in spec.tags or ()}
-    return (
-        capability_id == "agent.run"
-        or ".autonomous" in capability_id
-        or "autonomous" in tags
-        or "coding-agent" in tags
-    )
+# _agent_definition_capability_registry and _agent_definition_is_agentic_capability
+# removed with the tools framework: capability lookups no longer resolve against a registry.
 
 
 def _agent_definition_validate_primary_capability(
     capability_id: str,
-    registry: capability_registry.CapabilityRegistry,
 ) -> str:
     normalized = _agent_definition_text(capability_id, max_len=240, collapse=True)
     if not normalized:
         raise HTTPException(status_code=422, detail="agent_definition_capability_id_required")
-    spec = registry.get(normalized)
-    if spec is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"agent_definition_capability_not_found:{normalized}",
-        )
-    if not _agent_definition_is_agentic_capability(spec):
-        raise HTTPException(
-            status_code=422,
-            detail=f"agent_definition_primary_capability_not_agentic:{spec.capability_id}",
-        )
-    return spec.capability_id
+    return normalized
 
 
 def _agent_definition_validate_allowed_capabilities(
     capability_ids: Any,
-    registry: capability_registry.CapabilityRegistry,
 ) -> list[str]:
     normalized_ids = _agent_definition_string_list(capability_ids)
     allowed: list[str] = []
     seen: set[str] = set()
     for capability_id in normalized_ids:
-        spec = registry.get(capability_id)
-        if spec is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"agent_definition_allowed_capability_not_found:{capability_id}",
-            )
-        if spec.capability_id in seen:
+        if capability_id in seen:
             continue
-        seen.add(spec.capability_id)
-        allowed.append(spec.capability_id)
+        seen.add(capability_id)
+        allowed.append(capability_id)
     return allowed
 
 
 def _agent_definition_validate_create_payload(
     payload: models.AgentDefinitionCreate,
 ) -> tuple[str, str, str, list[str]]:
-    registry = _agent_definition_capability_registry()
     name = _agent_definition_text(payload.name, max_len=120, collapse=True)
     if not name:
         raise HTTPException(status_code=422, detail="agent_definition_name_required")
@@ -2448,11 +2377,9 @@ def _agent_definition_validate_create_payload(
         raise HTTPException(status_code=422, detail="agent_definition_instructions_required")
     agent_capability_id = _agent_definition_validate_primary_capability(
         payload.agent_capability_id,
-        registry,
     )
     allowed_capability_ids = _agent_definition_validate_allowed_capabilities(
         payload.allowed_capability_ids,
-        registry,
     )
     return name, instructions, agent_capability_id, allowed_capability_ids
 
@@ -3183,11 +3110,13 @@ def _task_create_from_record(record: TaskRecord) -> models.TaskCreate:
 
 
 def _api_enabled_capabilities() -> Mapping[str, Any]:
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return {}
-    return registry.enabled_capabilities()
+    # capability registry removed with the tools framework
+    return {}
+
+
+def _canonicalize_capability_id(capability_id: str) -> str:
+    # alias resolution via capability registry removed with the tools framework
+    return str(capability_id or "").strip()
 
 
 def _task_capability_bindings(
@@ -4002,28 +3931,13 @@ def _is_capability_discovery_request(content: str) -> bool:
     return _classify_chat_request_intent(content) == "capability_discovery"
 
 
-def _chat_visible_capabilities() -> list[tuple[str, capability_registry.CapabilitySpec]]:
-    if capability_registry.resolve_capability_mode() == "disabled":
-        return []
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return []
-
-    visible: list[tuple[str, capability_registry.CapabilitySpec]] = []
-    for capability_id, spec in sorted(registry.enabled_capabilities().items()):
-        allow_decision = capability_registry.evaluate_capability_allowlist(
-            capability_id,
-            "api",
-        )
-        if not allow_decision.allowed:
-            continue
-        visible.append((capability_id, spec))
-    return visible
+def _chat_visible_capabilities() -> list[tuple[str, Any]]:
+    # capability registry removed with the tools framework
+    return []
 
 
 def _chat_capability_search_entries(
-    capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
+    capabilities: list[tuple[str, Any]],
 ) -> list[dict[str, Any]]:
     capability_map = {capability_id: spec for capability_id, spec in capabilities}
     return capability_search.build_capability_search_entries(capability_map)
@@ -4043,18 +3957,12 @@ def _is_chat_direct_capability(capability_id: str) -> bool:
         return False
     if capability_id in CHAT_DIRECT_CAPABILITIES:
         return True
-    try:
-        registry = capability_registry.load_capability_registry()
-        spec = registry.capabilities.get(capability_id)
-        if spec is not None:
-            return bool((spec.planner_hints or {}).get("allow_chat_direct"))
-    except Exception:  # noqa: BLE001
-        pass
+    # capability registry planner_hints lookup removed with the tools framework
     return False
 
 
 def _chat_capability_vector_namespace(
-    capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
+    capabilities: list[tuple[str, Any]],
 ) -> str:
     payload: list[dict[str, Any]] = []
     for capability_id, spec in capabilities:
@@ -4077,7 +3985,7 @@ def _chat_capability_vector_namespace(
 
 def _chat_capability_vector_document(
     capability_id: str,
-    spec: capability_registry.CapabilitySpec,
+    spec: Any,
     entry: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     description = str(spec.description or "").strip()
@@ -4182,7 +4090,7 @@ def _cleanup_stale_chat_capability_vector_namespaces(current_namespace: str) -> 
 
 
 def _ensure_chat_capability_vector_index(
-    capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
+    capabilities: list[tuple[str, Any]],
     entries: list[dict[str, Any]],
 ) -> str | None:
     global _chat_capability_vector_synced_namespace
@@ -4296,8 +4204,8 @@ def _capability_discovery_scope_query(content: str) -> str:
 
 def _scoped_chat_visible_capabilities(
     content: str,
-    capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
-) -> tuple[str, list[tuple[str, capability_registry.CapabilitySpec]]]:
+    capabilities: list[tuple[str, Any]],
+) -> tuple[str, list[tuple[str, Any]]]:
     scope_query = _capability_discovery_scope_query(content)
     if not scope_query or not capabilities:
         return "", capabilities
@@ -4320,7 +4228,7 @@ def _scoped_chat_visible_capabilities(
     if not hybrid_matches:
         return scope_query, []
 
-    matched_capabilities: list[tuple[str, capability_registry.CapabilitySpec]] = []
+    matched_capabilities: list[tuple[str, Any]] = []
     for match in hybrid_matches:
         capability_id = str(match.get("id") or "").strip()
         spec = capability_map.get(capability_id)
@@ -4333,7 +4241,7 @@ def _scoped_chat_visible_capabilities(
 def _vector_chat_capability_matches(
     *,
     query: str,
-    capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
+    capabilities: list[tuple[str, Any]],
     entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     namespace = _ensure_chat_capability_vector_index(capabilities, entries)
@@ -4391,7 +4299,7 @@ def _vector_chat_capability_matches(
 def _hybrid_chat_capability_matches(
     *,
     query: str,
-    capabilities: list[tuple[str, capability_registry.CapabilitySpec]],
+    capabilities: list[tuple[str, Any]],
     lexical_matches: list[dict[str, Any]],
     entries: list[dict[str, Any]],
     require_lexical_signal: bool | None = None,
@@ -4523,10 +4431,8 @@ def _plan_derived_normalized_intent_envelope(
     plan: models.PlanCreate,
     source: str,
 ) -> workflow_contracts.NormalizedIntentEnvelope:
-    try:
-        capability_map = capability_registry.load_capability_registry().enabled_capabilities()
-    except Exception:  # noqa: BLE001
-        capability_map = {}
+    # capability registry removed with the tools framework
+    capability_map: dict[str, Any] = {}
     segments: list[workflow_contracts.IntentGraphSegment] = []
     candidate_capabilities: dict[str, list[str]] = {}
     intent_order: list[str] = []
@@ -5573,7 +5479,7 @@ def _chat_route_candidate_hints(
     hinted: set[str] = set()
     for capability_ids in normalized.candidate_capabilities.values():
         for capability_id in capability_ids:
-            canonical = capability_registry.canonicalize_capability_id(capability_id)
+            canonical = _canonicalize_capability_id(capability_id)
             if canonical:
                 hinted.add(canonical)
     return hinted
@@ -6059,7 +5965,7 @@ def _build_chat_route_candidates(
         }
 
         def _sort_key(
-            item: tuple[str, capability_registry.CapabilitySpec],
+            item: tuple[str, Any],
         ) -> tuple[float, int, str]:
             capability_id, _spec = item
             match = match_by_id.get(capability_id, {})
@@ -6523,7 +6429,7 @@ def _chat_boundary_scoped_query_text(
         parts.append(normalized_family)
     capability_hints: list[str] = []
     for raw_capability_id in preferred_capability_ids or ():
-        capability_id = capability_registry.canonicalize_capability_id(raw_capability_id)
+        capability_id = _canonicalize_capability_id(raw_capability_id)
         if not capability_id:
             continue
         hint = capability_id.replace(".", " ").strip().lower()
@@ -6740,7 +6646,7 @@ def _build_chat_boundary_evidence(
         for raw_capability_id in [pending_state.active_capability_id] + list(
             pending_state.candidate_capabilities or []
         ):
-            capability_id = capability_registry.canonicalize_capability_id(raw_capability_id)
+            capability_id = _canonicalize_capability_id(raw_capability_id)
             if capability_id and capability_id not in preferred_capability_ids:
                 preferred_capability_ids.append(capability_id)
     pending_fields = list(
@@ -6961,9 +6867,8 @@ def _capability_offer_hint(content: str, boundary_decision: Mapping[str, Any] | 
     cap_score = float(top.get("score") or 0.0)
     if not cap_id or cap_score < 0.65:
         return ""
-    registry = capability_registry.load_capability_registry()
-    spec = registry.capabilities.get(cap_id)
-    description = str(spec.description or cap_id).strip() if spec else cap_id
+    # capability registry lookup removed with the tools framework
+    description = cap_id
     return (
         f"The user asked a question about something this platform can do directly. "
         f"Top matching capability: '{cap_id}' — {description}. "
@@ -7967,7 +7872,7 @@ def _candidate_capability_ids_for_envelope(
                 capability_id for capability_id in ordered if capability_id != preferred_capability
             ]
         for capability_id in ordered:
-            normalized = capability_registry.canonicalize_capability_id(capability_id)
+            normalized = _canonicalize_capability_id(capability_id)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 capability_ids.append(normalized)
@@ -7978,13 +7883,13 @@ def _candidate_capability_ids_for_envelope(
     seen: set[str] = set()
     for capability_list in envelope.candidate_capabilities.values():
         for capability_id in capability_list:
-            normalized = capability_registry.canonicalize_capability_id(capability_id)
+            normalized = _canonicalize_capability_id(capability_id)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 capability_ids.append(normalized)
     for segment in envelope.graph.segments:
         for capability_id in segment.suggested_capabilities:
-            normalized = capability_registry.canonicalize_capability_id(capability_id)
+            normalized = _canonicalize_capability_id(capability_id)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 capability_ids.append(normalized)
@@ -8008,17 +7913,10 @@ def _pending_clarification_state_from_metadata(
 
 
 def _capability_family_for_id(capability_id: str) -> str | None:
-    normalized = capability_registry.canonicalize_capability_id(capability_id)
+    normalized = _canonicalize_capability_id(capability_id)
     if not normalized:
         return None
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        registry = None
-    spec = registry.get(normalized) if registry is not None else None
-    family = str(spec.group or spec.subgroup or "").strip() if spec is not None else ""
-    if family:
-        return family
+    # capability registry group/subgroup lookup removed with the tools framework
     prefix = normalized.split(".", 1)[0].strip()
     return prefix or None
 
@@ -8056,32 +7954,8 @@ def _active_execution_target_for_chat(
 def _chat_submit_capability_contracts(
     capability_ids: Sequence[str],
 ) -> list[dict[str, Any]]:
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return []
-    contracts: list[dict[str, Any]] = []
-    for capability_id in capability_ids:
-        spec = registry.get(capability_id)
-        if spec is None:
-            continue
-        planner_hints = dict(spec.planner_hints or {})
-        contracts.append(
-            {
-                "capability_id": spec.capability_id,
-                "description": spec.description,
-                "required_inputs": _capability_required_inputs_for_intent_normalization(
-                    spec.capability_id
-                ),
-                "chat_collectible_fields": planner_hints.get("chat_collectible_fields"),
-                "chat_required_fields": planner_hints.get("chat_required_fields"),
-                "field_descriptions": planner_hints.get("chat_field_descriptions"),
-                "field_examples": planner_hints.get("chat_field_examples"),
-                "field_aliases": planner_hints.get("chat_field_aliases"),
-                "field_questions": planner_hints.get("chat_field_questions"),
-            }
-        )
-    return contracts
+    # capability registry removed with the tools framework
+    return []
 
 
 def _chat_submit_clarification_questions(
@@ -8513,25 +8387,12 @@ def _chat_direct_capability_spec(
         raise RuntimeError("chat_direct_missing_capability_id")
     if not _is_chat_direct_capability(normalized_capability_id):
         raise RuntimeError(f"chat_direct_capability_not_allowed:{normalized_capability_id}")
-    if capability_registry.resolve_capability_mode() == "disabled":
-        raise RuntimeError("chat_direct_capabilities_disabled")
-    registry = capability_registry.load_capability_registry()
-    spec = registry.require(normalized_capability_id)
-    if not spec.enabled:
-        raise RuntimeError(f"chat_direct_capability_disabled:{normalized_capability_id}")
-    allow_decision = capability_registry.evaluate_capability_allowlist(
-        normalized_capability_id,
-        RUNTIME_CONFORMANCE_SERVICE,
-    )
-    if not allow_decision.allowed:
-        raise RuntimeError(
-            f"chat_direct_capability_blocked:{normalized_capability_id}:{allow_decision.reason}"
-        )
-    return spec
+    # capability registry removed with the tools framework
+    raise RuntimeError(f"chat_direct_capability_unavailable:{normalized_capability_id}")
 
 
 def _build_chat_direct_run_plan(
-    capability_spec: capability_registry.CapabilitySpec,
+    capability_spec: Any,
     *,
     arguments: Mapping[str, Any] | None,
 ) -> tuple[models.PlanCreate, models.RunSpec]:
@@ -9700,7 +9561,7 @@ def _flatten_schema_fields(
 
 
 def _capability_required_input_fields(
-    spec: capability_registry.CapabilitySpec,
+    spec: Any,
 ) -> list[str]:
     """The declared required input field names for a capability (from its schema)."""
     try:
@@ -9730,7 +9591,7 @@ def _json_schema_declared_types(schema: Mapping[str, Any] | None) -> set[str]:
 
 
 def _capability_input_property_schema(
-    spec: capability_registry.CapabilitySpec,
+    spec: Any,
     field_name: str,
 ) -> Mapping[str, Any] | None:
     try:
@@ -9829,77 +9690,22 @@ def _coerce_literal_for_schema(value: Any, schema: Mapping[str, Any] | None) -> 
     return value
 
 
-def _normalize_capability_input_payload(
-    spec: capability_registry.CapabilitySpec,
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    return {
-        str(field): _coerce_literal_for_schema(
-            value,
-            _capability_input_property_schema(spec, str(field)),
-        )
-        for field, value in payload.items()
-    }
+# _normalize_capability_input_payload removed with the tools framework (only used by
+# _normalize_plan_capability_inputs / _normalize_run_spec_capability_inputs, now no-ops).
 
 
 def _normalize_plan_capability_inputs(plan: models.PlanCreate) -> models.PlanCreate:
-    registry = capability_registry.load_capability_registry()
-    normalized_tasks: list[models.TaskCreate] = []
-    changed = False
-    for task in plan.tasks:
-        tool_inputs = dict(task.tool_inputs or {})
-        task_changed = False
-        request_ids = [
-            request_id
-            for request_id in [
-                *list(task.tool_requests or []),
-                *list(task.capability_requests or []),
-            ]
-            if isinstance(request_id, str) and request_id.strip()
-        ]
-        for request_id in request_ids:
-            spec = registry.get(request_id)
-            payload = tool_inputs.get(request_id)
-            if spec is None or not isinstance(payload, Mapping):
-                continue
-            normalized_payload = _normalize_capability_input_payload(spec, payload)
-            if normalized_payload != payload:
-                tool_inputs[request_id] = normalized_payload
-                task_changed = True
-        if task_changed:
-            normalized_tasks.append(task.model_copy(update={"tool_inputs": tool_inputs}))
-            changed = True
-        else:
-            normalized_tasks.append(task)
-    if not changed:
-        return plan
-    return plan.model_copy(update={"tasks": normalized_tasks})
+    # capability registry input normalization removed with the tools framework
+    return plan
 
 
 def _normalize_run_spec_capability_inputs(run_spec: models.RunSpec) -> models.RunSpec:
-    registry = capability_registry.load_capability_registry()
-    normalized_steps: list[models.StepSpec] = []
-    changed = False
-    for step in run_spec.steps:
-        capability_id = str(step.capability_request.capability_id or "").strip()
-        request_id = str(step.capability_request.request_id or "").strip()
-        spec = registry.get(capability_id) or registry.get(request_id)
-        if spec is None or not isinstance(step.input_bindings, Mapping):
-            normalized_steps.append(step)
-            continue
-        normalized_inputs = _normalize_capability_input_payload(spec, step.input_bindings)
-        if normalized_inputs != step.input_bindings:
-            normalized_steps.append(step.model_copy(update={"input_bindings": normalized_inputs}))
-            changed = True
-        else:
-            normalized_steps.append(step)
-    if not changed:
-        return run_spec
-    return run_spec.model_copy(update={"steps": normalized_steps})
+    # capability registry input normalization removed with the tools framework
+    return run_spec
 
 
 def _resolve_capability_schemas(
-    spec: capability_registry.CapabilitySpec,
+    spec: Any,
     *,
     include_schemas: bool,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -9909,48 +9715,13 @@ def _resolve_capability_schemas(
     output_schema = (
         _load_schema_from_ref(spec.output_schema_ref) if spec.output_schema_ref else None
     )
-    if input_schema is not None and output_schema is not None:
-        return input_schema, output_schema
-    for adapter in spec.adapters:
-        if not adapter.enabled:
-            continue
-        try:
-            tool = _tool_spec_registry.get(adapter.tool_name)
-        except KeyError:
-            continue
-        if input_schema is None:
-            input_schema = dict(tool.spec.input_schema)
-        if output_schema is None:
-            output_schema = dict(tool.spec.output_schema)
-        if input_schema is not None and output_schema is not None:
-            break
+    # tool-registry adapter fallback removed with the tools framework
     return input_schema, output_schema
 
 
 def _capability_required_inputs_for_intent_normalization(capability_id: str) -> list[str]:
-    normalized = str(capability_id or "").strip()
-    if not normalized:
-        return []
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return []
-    spec = registry.get(normalized)
-    if spec is None:
-        return []
-    planner_inputs = capability_registry.planner_collectible_inputs_for_capability(
-        normalized,
-        registry=registry,
-    )
-    if planner_inputs:
-        return planner_inputs
-    input_schema, _ = _resolve_capability_schemas(spec, include_schemas=True)
-    if not isinstance(input_schema, dict):
-        return []
-    required = input_schema.get("required")
-    if not isinstance(required, list):
-        return []
-    return [entry for entry in required if isinstance(entry, str)]
+    # capability registry removed with the tools framework
+    return []
 
 
 def _coerce_context_object(value: Any) -> dict[str, Any]:
@@ -10012,27 +9783,8 @@ def _collect_recommendation_capabilities(
     *,
     include_disabled: bool = False,
 ) -> list[dict[str, Any]]:
-    registry = capability_registry.load_capability_registry()
-    items: list[dict[str, Any]] = []
-    for capability_id, spec in sorted(registry.capabilities.items()):
-        if not include_disabled and not spec.enabled:
-            continue
-        input_schema, _ = _resolve_capability_schemas(spec, include_schemas=True)
-        required_inputs: list[str] = []
-        if isinstance(input_schema, dict):
-            required = input_schema.get("required")
-            if isinstance(required, list):
-                required_inputs = [entry for entry in required if isinstance(entry, str)]
-        items.append(
-            {
-                "id": capability_id,
-                "description": spec.description or "",
-                "group": spec.group or "",
-                "subgroup": spec.subgroup or "",
-                "required_inputs": required_inputs,
-            }
-        )
-    return items
+    # capability registry removed with the tools framework
+    return []
 
 
 def _is_capability_mentioned(goal_text: str, capability_id: str) -> bool:
@@ -10409,81 +10161,17 @@ def _coerce_confidence(value: Any, default: float) -> float:
 
 
 def _intent_catalog_capability_ids() -> set[str]:
-    try:
-        registry = capability_registry.load_capability_registry()
-        if hasattr(registry, "capabilities") and isinstance(
-            getattr(registry, "capabilities"), Mapping
-        ):
-            return set(getattr(registry, "capabilities").keys())
-        if isinstance(registry, Mapping):
-            return set(registry.keys())
-        return set()
-    except Exception:  # noqa: BLE001
-        logger.exception("intent_catalog_capability_registry_load_failed")
-        return set()
+    # capability registry removed with the tools framework
+    return set()
 
 
 def _intent_catalog_capability_entries() -> list[dict[str, Any]]:
-    try:
-        registry = capability_registry.load_capability_registry()
-        capabilities = registry.enabled_capabilities()
-        entries = capability_search.build_capability_search_entries(capabilities)
-        return [
-            _with_intent_capability_contract_fields(
-                entry, capabilities.get(str(entry.get("id") or ""))
-            )
-            for entry in entries
-        ]
-    except Exception:  # noqa: BLE001
-        logger.exception("intent_catalog_capability_registry_load_failed")
-        return []
+    # capability registry removed with the tools framework
+    return []
 
 
-def _with_intent_capability_contract_fields(
-    entry: Mapping[str, Any],
-    spec: capability_registry.CapabilitySpec | None,
-) -> dict[str, Any]:
-    item = dict(entry)
-    if spec is None:
-        return item
-    input_schema, _ = _resolve_capability_schemas(spec, include_schemas=True)
-    schema_required = _schema_required_fields(input_schema)
-    planner_required = capability_registry.planner_collectible_inputs_for_capability(
-        spec.capability_id
-    )
-    required_inputs = _dedupe_strings(
-        [
-            *schema_required,
-            *planner_required,
-            *_coerce_string_list(spec.planner_hints.get("required_inputs")),
-        ]
-    )
-    item.update(
-        {
-            "risk_tier": spec.risk_tier,
-            "idempotency": spec.idempotency,
-            "allowed_task_intents": _capability_allowed_task_intents(spec),
-            "required_inputs": required_inputs,
-            "optional_inputs": _schema_optional_fields(input_schema, required_inputs)[:8],
-            "input_schema_ref": spec.input_schema_ref or "",
-            "output_schema_ref": spec.output_schema_ref or "",
-            "exports": [
-                {
-                    "name": export.name,
-                    "path": export.path,
-                }
-                for export in spec.exports
-            ],
-        }
-    )
-    search_blob_parts = [
-        str(item.get("search_blob") or ""),
-        " ".join(required_inputs),
-        " ".join(str(export.get("name") or "") for export in item["exports"]),
-        " ".join(item["allowed_task_intents"]),
-    ]
-    item["search_blob"] = " ".join(part for part in search_blob_parts if part).lower()
-    return item
+# _with_intent_capability_contract_fields and _capability_allowed_task_intents removed
+# with the tools framework (only used by _intent_catalog_capability_entries, now a no-op).
 
 
 def _schema_required_fields(schema: Mapping[str, Any] | None) -> list[str]:
@@ -10518,20 +10206,6 @@ def _dedupe_strings(values: Iterable[Any]) -> list[str]:
         if normalized and normalized not in deduped:
             deduped.append(normalized)
     return deduped
-
-
-def _capability_allowed_task_intents(spec: capability_registry.CapabilitySpec) -> list[str]:
-    raw_task_intents = spec.planner_hints.get("task_intents")
-    if isinstance(raw_task_intents, list):
-        normalized = _dedupe_strings(
-            intent_contract.normalize_task_intent(item) or "" for item in raw_task_intents
-        )
-        if normalized:
-            return normalized
-    hinted = _capability_task_intent_hint(spec.capability_id)
-    if hinted:
-        return [hinted]
-    return []
 
 
 def _semantic_goal_capability_hints(
@@ -10633,7 +10307,7 @@ def _canonical_capability_id(
     capability_id: str,
     allowed_capability_ids: set[str],
 ) -> str | None:
-    candidate = capability_registry.canonicalize_capability_id(capability_id)
+    candidate = _canonicalize_capability_id(capability_id)
     if not candidate:
         return None
     if not allowed_capability_ids:
@@ -10645,30 +10319,10 @@ def _canonical_capability_id(
 
 
 def _capability_task_intent_hint(capability_id: str) -> str | None:
-    normalized_capability_id = capability_registry.canonicalize_capability_id(capability_id)
+    # capability registry removed with the tools framework
+    normalized_capability_id = _canonicalize_capability_id(capability_id)
     if not normalized_capability_id:
         return None
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return None
-    spec = registry.get(normalized_capability_id)
-    if spec is None:
-        return None
-    planner_hints = spec.planner_hints if isinstance(spec.planner_hints, Mapping) else {}
-    raw_task_intents = planner_hints.get("task_intents")
-    if isinstance(raw_task_intents, list):
-        normalized = [
-            intent_contract.normalize_task_intent(item)
-            for item in raw_task_intents
-            if intent_contract.normalize_task_intent(item)
-        ]
-        if len(set(normalized)) == 1:
-            return normalized[0]
-    subgroup = str(spec.subgroup or "").strip().lower()
-    tags = {str(tag).strip().lower() for tag in spec.tags if str(tag).strip()}
-    if subgroup == "rendering" or "render" in tags:
-        return "render"
     return None
 
 
@@ -12706,7 +12360,7 @@ def _build_plan_from_composer_draft(
         )
         return None, diagnostics_errors, diagnostics_warnings
 
-    registry = capability_registry.load_capability_registry()
+    # capability registry removed with the tools framework: capability lookups always miss below.
     canonical_nodes: list[dict[str, Any]] = []
     node_by_id: dict[str, dict[str, Any]] = {}
     used_task_names: set[str] = set()
@@ -12769,7 +12423,7 @@ def _build_plan_from_composer_draft(
                 )
             )
         else:
-            capability_spec = registry.get(capability_id)
+            capability_spec = None  # capability registry removed with the tools framework
         if not is_control_node and capability_spec is None:
             diagnostics_errors.append(
                 {
@@ -15813,13 +15467,9 @@ def _compile_plan_preflight(
     render_path_mode: str = planner_contracts.RENDER_PATH_MODE_EXPLICIT,
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
-    full_capability_registry: capability_registry.CapabilityRegistry | None = None
-    capabilities: dict[str, capability_registry.CapabilitySpec] = {}
-    try:
-        full_capability_registry = capability_registry.load_capability_registry()
-        capabilities = full_capability_registry.enabled_capabilities()
-    except Exception:  # noqa: BLE001
-        capabilities = {}
+    # capability registry removed with the tools framework
+    full_capability_registry: Any | None = None
+    capabilities: dict[str, Any] = {}
     tasks_by_name: dict[str, models.TaskCreate] = {}
     duplicate_names: set[str] = set()
     for task in plan.tasks:
@@ -16288,10 +15938,8 @@ def _select_goal_intent_segment_for_task(
 ) -> dict[str, Any] | None:
     if not goal_intent_segments:
         return None
-    try:
-        capability_map = capability_registry.load_capability_registry().enabled_capabilities()
-    except Exception:  # noqa: BLE001
-        capability_map = {}
+    # capability registry removed with the tools framework
+    capability_map: dict[str, Any] = {}
     has_suggested_capabilities = any(
         isinstance(segment.get("suggested_capabilities"), list)
         and bool(segment.get("suggested_capabilities"))
@@ -16499,7 +16147,7 @@ def _task_intent_summary(
 def _preflight_capability_intent_mismatch(
     task_intent: str,
     capability_id: str,
-    capability_spec: capability_registry.CapabilitySpec | None,
+    capability_spec: Any | None,
 ) -> str | None:
     if capability_spec is None:
         return None
@@ -19554,142 +19202,8 @@ def list_jobs(db: Session = Depends(get_db)) -> List[models.Job]:
     return [_job_from_record(job) for job in jobs]
 
 
-@app.get("/capabilities")
-def list_capabilities(
-    include_disabled: bool = Query(False),
-    with_schemas: bool = Query(True),
-) -> dict[str, Any]:
-    mode = capability_registry.resolve_capability_mode()
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=500, detail=f"capability_registry_load_failed:{exc}"
-        ) from exc
-
-    items: list[dict[str, Any]] = []
-    for capability_id, spec in sorted(registry.capabilities.items()):
-        if not include_disabled and not spec.enabled:
-            continue
-        input_schema, output_schema = _resolve_capability_schemas(
-            spec, include_schemas=with_schemas
-        )
-        required_inputs: list[str] = []
-        if isinstance(input_schema, dict):
-            required = input_schema.get("required")
-            if isinstance(required, list):
-                required_inputs = [entry for entry in required if isinstance(entry, str)]
-        input_fields = _flatten_schema_fields(input_schema) if with_schemas else []
-        output_fields = _flatten_schema_fields(output_schema) if with_schemas else []
-        items.append(
-            {
-                "id": capability_id,
-                "description": spec.description,
-                "enabled": spec.enabled,
-                "risk_tier": spec.risk_tier,
-                "idempotency": spec.idempotency,
-                "group": spec.group,
-                "subgroup": spec.subgroup,
-                "tags": list(spec.tags),
-                "input_schema_ref": spec.input_schema_ref,
-                "output_schema_ref": spec.output_schema_ref,
-                "exports": [
-                    {
-                        "name": export.name,
-                        "path": export.path,
-                        "description": export.description,
-                        "required": export.required,
-                    }
-                    for export in spec.exports
-                ],
-                "input_schema": input_schema,
-                "output_schema": output_schema,
-                "required_inputs": required_inputs,
-                "input_fields": input_fields,
-                "output_fields": output_fields,
-                "planner_hints": spec.planner_hints if isinstance(spec.planner_hints, dict) else {},
-                "adapters": [
-                    {
-                        "type": adapter.type,
-                        "server_id": adapter.server_id,
-                        "tool_name": adapter.tool_name,
-                    }
-                    for adapter in spec.adapters
-                    if adapter.enabled
-                ],
-            }
-        )
-    return {"mode": mode, "items": items}
-
-
-@app.post("/capabilities/search")
-def search_capabilities(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    query = str(payload.get("query") or "").strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="query_required")
-    try:
-        limit = int(payload.get("limit", 8))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="limit_invalid")
-    if limit < 1 or limit > 50:
-        raise HTTPException(status_code=400, detail="limit_out_of_range")
-    intent_hint = str(payload.get("intent") or "").strip().lower() or None
-    request_source = str(payload.get("request_source") or "api").strip().lower() or "api"
-    correlation_id = str(payload.get("correlation_id") or "").strip() or None
-    job_id = str(payload.get("job_id") or "").strip() or None
-    mode = capability_registry.resolve_capability_mode()
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=500, detail=f"capability_registry_load_failed:{exc}"
-        ) from exc
-
-    entries = capability_search.build_capability_search_entries(registry.enabled_capabilities())
-    started = time.perf_counter()
-    matches = capability_search.search_capabilities(
-        query=query,
-        capability_entries=entries,
-        limit=limit,
-        intent_hint=intent_hint,
-    )
-    latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
-    _emit_capability_search_event(
-        query=query,
-        intent_hint=intent_hint,
-        limit=limit,
-        matches=matches,
-        request_source=request_source,
-        latency_ms=latency_ms,
-        correlation_id=correlation_id,
-        job_id=job_id,
-    )
-    details_by_id = {str(entry.get("id") or ""): entry for entry in entries}
-    items: list[dict[str, Any]] = []
-    for match in matches:
-        capability_id = str(match.get("id") or "").strip()
-        if not capability_id:
-            continue
-        entry = details_by_id.get(capability_id, {})
-        items.append(
-            {
-                "id": capability_id,
-                "score": float(match.get("score") or 0.0),
-                "reason": str(match.get("reason") or "").strip() or "semantic match",
-                "source": str(match.get("source") or "semantic_search"),
-                "description": str(entry.get("description") or "").strip(),
-                "group": str(entry.get("group") or "").strip(),
-                "subgroup": str(entry.get("subgroup") or "").strip(),
-                "tags": [tag for tag in entry.get("tags", []) if isinstance(tag, str)],
-            }
-        )
-    return {
-        "mode": mode,
-        "query": query,
-        "intent": intent_hint,
-        "limit": limit,
-        "items": items,
-    }
+# GET /capabilities and POST /capabilities/search removed with the tools framework
+# (capability listing/search against the capability registry no longer exists).
 
 
 @app.get("/jobs/{job_id}", response_model=models.Job)
@@ -21708,9 +21222,6 @@ def update_agent_definition(
         raise HTTPException(status_code=404, detail="agent_definition_not_found")
 
     fields_set = payload.model_fields_set
-    registry: capability_registry.CapabilityRegistry | None = None
-    if "agent_capability_id" in fields_set or "allowed_capability_ids" in fields_set:
-        registry = _agent_definition_capability_registry()
 
     if "name" in fields_set:
         name = _agent_definition_text(payload.name, max_len=120, collapse=True)
@@ -21720,10 +21231,8 @@ def update_agent_definition(
     if "description" in fields_set:
         record.description = _agent_definition_text(payload.description, max_len=2000) or None
     if "agent_capability_id" in fields_set:
-        assert registry is not None
         record.agent_capability_id = _agent_definition_validate_primary_capability(
             payload.agent_capability_id or "",
-            registry,
         )
     if "instructions" in fields_set:
         instructions = _agent_definition_text(payload.instructions, max_len=12000)
@@ -21748,10 +21257,8 @@ def update_agent_definition(
             dict(payload.llm_config) if isinstance(payload.llm_config, dict) else {}
         )
     if "allowed_capability_ids" in fields_set:
-        assert registry is not None
         record.allowed_capability_ids_json = _agent_definition_validate_allowed_capabilities(
             payload.allowed_capability_ids or [],
-            registry,
         )
     if "memory_policy" in fields_set:
         record.memory_policy_json = (
@@ -22647,7 +22154,7 @@ def recommend_composer_capabilities(payload: dict[str, Any]) -> dict[str, Any]:
         capabilities = _collect_recommendation_capabilities(include_disabled=include_disabled)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status_code=500, detail=f"capability_registry_load_failed:{exc}"
+            status_code=500, detail=f"capability_recommendation_failed:{exc}"
         ) from exc
     heuristic_recommendations = _heuristic_capability_recommendations(
         goal=goal,
@@ -22856,34 +22363,18 @@ _WORKBENCH_SURFACE_TAG = "studio_workbench"
 
 def _workbench_validate_capability(
     capability_id: str,
-) -> capability_registry.CapabilitySpec:
+) -> Any:
     """Raise HTTPException if capability is unknown, disabled, or has no enabled adapter."""
     normalized = str(capability_id or "").strip()
     if not normalized:
         raise HTTPException(status_code=400, detail="workbench_capability_id_required")
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=500, detail=f"workbench_capability_registry_load_failed:{exc}"
-        ) from exc
-    spec = registry.get(normalized)
-    if spec is None:
-        raise HTTPException(status_code=404, detail=f"workbench_capability_not_found:{normalized}")
-    if not spec.enabled:
-        raise HTTPException(status_code=422, detail=f"workbench_capability_disabled:{normalized}")
-    enabled_adapters = [a for a in spec.adapters if a.enabled]
-    if not enabled_adapters:
-        raise HTTPException(
-            status_code=422,
-            detail=f"workbench_capability_no_enabled_adapters:{normalized}",
-        )
-    return spec
+    # capability registry removed with the tools framework
+    raise HTTPException(status_code=404, detail=f"workbench_capability_not_found:{normalized}")
 
 
 def _workbench_validate_inputs_against_schema(
     inputs: dict[str, Any],
-    spec: capability_registry.CapabilitySpec,
+    spec: Any,
     capability_id: str,
 ) -> None:
     """Validate workbench inputs against the capability JSON schema."""
@@ -23127,7 +22618,7 @@ def _workbench_step_canonical_capability_id(step: models.StepSpec) -> str:
 
 
 def _workbench_capability_risk_level(
-    spec: capability_registry.CapabilitySpec,
+    spec: Any,
 ) -> str:
     risk_tier = str(spec.risk_tier or "").strip().lower()
     if "high" in risk_tier or risk_tier in {"unsafe_write", "write"}:

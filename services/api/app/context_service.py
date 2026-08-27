@@ -7,10 +7,16 @@ from typing import Any, Sequence
 
 from sqlalchemy.orm import Session
 
-from libs.core import capability_registry, workflow_contracts
+from libs.core import workflow_contracts
 from libs.core.llm_provider import PromptBlock, Stability
 
 from . import memory_profile_service
+
+
+def _canonicalize_capability_id(capability_id: str) -> str:
+    # alias resolution via capability registry removed with the tools framework
+    return str(capability_id or "").strip()
+
 
 _WORKFLOW_CONTEXT_KEYS = (
     "workflow",
@@ -816,7 +822,7 @@ def _rank_capability_candidates(
     }
     scored: list[tuple[int, int, str]] = []
     for index, capability_id in enumerate(capability_candidates):
-        normalized = capability_registry.canonicalize_capability_id(capability_id)
+        normalized = _canonicalize_capability_id(capability_id)
         if not normalized:
             continue
         score = 0
@@ -1103,13 +1109,13 @@ def _capability_candidates_from_envelope(
     seen: set[str] = set()
     for capability_list in envelope.candidate_capabilities.values():
         for capability_id in capability_list:
-            normalized = capability_registry.canonicalize_capability_id(capability_id)
+            normalized = _canonicalize_capability_id(capability_id)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 capability_ids.append(normalized)
     for segment in envelope.graph.segments:
         for capability_id in segment.suggested_capabilities:
-            normalized = capability_registry.canonicalize_capability_id(capability_id)
+            normalized = _canonicalize_capability_id(capability_id)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 capability_ids.append(normalized)

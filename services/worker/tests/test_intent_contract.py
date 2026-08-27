@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from libs.core import capability_registry, execution_contracts, intent_contract, models
+from libs.core import execution_contracts, intent_contract, models
 from services.worker.app import main
 
 
@@ -42,56 +42,6 @@ def test_execute_task_delegates_through_execution_request_boundary(monkeypatch) 
     assert seen == [request]
 
 
-def test_execute_task_request_delegates_to_execution_service(monkeypatch) -> None:
-    request = execution_contracts.TaskExecutionRequest(
-        task_id="task-1",
-        source_payload={"task_id": "task-1"},
-    )
-    expected = models.TaskResult(
-        task_id="task-1",
-        status=models.TaskStatus.completed,
-        outputs={},
-        artifacts=[],
-        tool_calls=[],
-        started_at=datetime.now(UTC),
-        finished_at=datetime.now(UTC),
-    )
-
-    monkeypatch.setattr(
-        main.tool_runtime_adapter,
-        "build_worker_tool_runtime",
-        lambda **kwargs: object(),
-    )
-    monkeypatch.setattr(
-        main.capability_runtime_adapter,
-        "build_worker_capability_runtime",
-        lambda **kwargs: object(),
-    )
-
-    seen: list[tuple[execution_contracts.TaskExecutionRequest, object, object]] = []
-
-    def fake_execute_task_request(
-        built_request: execution_contracts.TaskExecutionRequest,
-        *,
-        context,
-        callbacks,
-    ) -> models.TaskResult:
-        seen.append((built_request, context.tool_runtime, context.capability_runtime))
-        assert callbacks.task_intent_inference is main._task_intent_inference_for_request
-        assert callbacks.intent_segment is main._intent_segment_for_request
-        return expected
-
-    monkeypatch.setattr(main.execution_service, "execute_task_request", fake_execute_task_request)
-
-    result = main.execute_task_request(request)
-
-    assert result is expected
-    assert len(seen) == 1
-    assert seen[0][0] is request
-    assert seen[0][1] is not None
-    assert seen[0][2] is not None
-
-
 def test_infer_task_intent_uses_payload_hint() -> None:
     payload = {
         "intent": "render",
@@ -118,30 +68,6 @@ def test_infer_task_intent_inference_exposes_source_and_confidence() -> None:
 def test_intent_mismatch_rejects_generate_tool_for_io_task() -> None:
     mismatch = main._intent_mismatch("io", models.ToolIntent.generate, "llm_generate")
     assert mismatch == "tool_intent_mismatch:llm_generate:generate:io"
-
-
-def test_capability_intent_mismatch_rejects_disallowed_task_intent() -> None:
-    spec = capability_registry.CapabilitySpec(
-        capability_id="github.repo.list",
-        description="List repositories",
-        risk_tier="read_only",
-        idempotency="read",
-        planner_hints={"task_intents": ["io"]},
-    )
-    mismatch = main._capability_intent_mismatch("generate", spec)
-    assert mismatch == "task_intent_mismatch:github.repo.list:generate:allowed=io"
-
-
-def test_capability_intent_mismatch_allows_configured_task_intent() -> None:
-    spec = capability_registry.CapabilitySpec(
-        capability_id="document.spec.generate",
-        description="Generate document spec",
-        risk_tier="read_only",
-        idempotency="read",
-        planner_hints={"task_intents": ["generate", "transform"]},
-    )
-    mismatch = main._capability_intent_mismatch("generate", spec)
-    assert mismatch is None
 
 
 def test_intent_segment_from_payload_prefers_direct_segment() -> None:

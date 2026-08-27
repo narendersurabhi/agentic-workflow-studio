@@ -12,7 +12,6 @@ import redis
 from sqlalchemy.orm import Session
 
 from libs.core import (
-    capability_registry,
     execution_contracts,
     intent_contract,
     models,
@@ -60,11 +59,8 @@ class ApiDispatchCallbacks:
 
 
 def _enabled_capabilities() -> Mapping[str, Any]:
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return {}
-    return registry.enabled_capabilities()
+    # capability registry removed with the tools framework
+    return {}
 
 
 def publish_envelope_to_redis(

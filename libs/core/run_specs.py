@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from libs.core import capability_registry, execution_contracts, models, planner_contracts
+from libs.core import execution_contracts, models, planner_contracts
 
 
 def parse_run_spec(value: Any) -> models.RunSpec | None:
@@ -26,7 +26,8 @@ def plan_to_run_spec(
     kind: models.RunKind = models.RunKind.studio,
     metadata: Mapping[str, Any] | None = None,
 ) -> models.RunSpec:
-    enabled_capabilities = _enabled_capabilities()
+    # Capability-registry enablement lookup removed with the tools framework.
+    enabled_capabilities: Mapping[str, Any] = {}
     used_step_ids: set[str] = set()
     step_id_by_task_name = {
         task.name: _step_id_for_name(task.name, index=index, used_ids=used_step_ids)
@@ -245,14 +246,6 @@ def _restored_planner_request(step: models.StepSpec) -> tuple[str, str]:
     if str(step.capability_request.execution_request_id or "").strip() != request_id:
         return restored_request_id, "capability_requests"
     return restored_request_id, "tool_requests"
-
-
-def _enabled_capabilities() -> Mapping[str, Any]:
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return {}
-    return registry.enabled_capabilities()
 
 
 def _run_spec_edges(run_spec: models.RunSpec) -> list[tuple[str, str]]:
