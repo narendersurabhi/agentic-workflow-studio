@@ -14,7 +14,6 @@ from typing import Any, Callable, Sequence
 from sqlalchemy.orm import Session
 
 from libs.core import (
-    capability_registry,
     chat_contracts,
     intent_contract,
     llm_provider,
@@ -873,34 +872,8 @@ def _ensure_inferred_clarification_slots(
 def _clarification_collectible_fields(
     capability_ids: Sequence[str] | None,
 ) -> set[str]:
-    normalized_capability_ids = [
-        capability_registry.canonicalize_capability_id(capability_id)
-        or str(capability_id or "").strip()
-        for capability_id in (capability_ids or [])
-        if str(capability_id or "").strip()
-    ]
-    if not normalized_capability_ids:
-        return set()
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return set()
-
-    allowed: set[str] = set()
-    for capability_id in normalized_capability_ids:
-        spec = registry.get(capability_id)
-        if spec is None:
-            continue
-        planner_hints = dict(spec.planner_hints or {})
-        for collection_name in ("chat_collectible_fields", "chat_required_fields"):
-            raw_fields = planner_hints.get(collection_name)
-            if not isinstance(raw_fields, Sequence) or isinstance(raw_fields, (str, bytes)):
-                continue
-            for raw_field in raw_fields:
-                field = _normalize_clarification_field_key(raw_field)
-                if field:
-                    allowed.add(field)
-    return allowed
+    # capability registry removed with the tools framework
+    return set()
 
 
 def _sanitize_clarification_field_queue(
@@ -1367,18 +1340,16 @@ def _workflow_target_state(context_json: Mapping[str, Any] | None) -> dict[str, 
     return workflow_target
 
 
+def _canonicalize_capability_id(capability_id: str) -> str:
+    # alias resolution via capability registry removed with the tools framework
+    return str(capability_id or "").strip()
+
+
 def _execution_family_for_capability(capability_id: str | None) -> str | None:
-    normalized = capability_registry.canonicalize_capability_id(str(capability_id or "").strip())
+    normalized = _canonicalize_capability_id(str(capability_id or "").strip())
     if not normalized:
         return None
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        registry = None
-    spec = registry.get(normalized) if registry is not None else None
-    family = str(spec.group or spec.subgroup or "").strip() if spec is not None else ""
-    if family:
-        return family
+    # capability registry group/subgroup lookup removed with the tools framework
     prefix = normalized.split(".", 1)[0].strip()
     return prefix or None
 
@@ -1435,7 +1406,7 @@ def _active_execution_target(
         )
     if active_capability_id:
         active_capability_id = (
-            capability_registry.canonicalize_capability_id(active_capability_id)
+            _canonicalize_capability_id(active_capability_id)
             or active_capability_id
         )
         active_family = _execution_family_for_capability(active_capability_id) or active_family
@@ -2771,57 +2742,8 @@ def _resolve_tool_chain(
     planner_hints and wires the step-1 output automatically into step-2 arguments.
     Returns None when no chain applies so the caller falls through to ToolCallPlan.
     """
-    spec = capability_registry.load_capability_registry().capabilities.get(capability_id)
-    if spec is None:
-        return None
-    hints = spec.planner_hints if isinstance(spec.planner_hints, Mapping) else {}
-    chains_to = hints.get("chains_to")
-    if not isinstance(chains_to, Mapping) or not chains_to:
-        return None
-
-    output_format = str(arguments.get("output_format") or "").strip().lower()
-    if not output_format:
-        lowered = content.lower()
-        for token, fmt in (hints.get("chat_output_format_tokens") or {}).items():
-            if token in lowered:
-                output_format = str(fmt).lower()
-                break
-
-    downstream_id = str(chains_to.get(output_format) or "").strip()
-    if not downstream_id:
-        return None
-    downstream_spec = capability_registry.load_capability_registry().capabilities.get(downstream_id)
-    if downstream_spec is None or not downstream_spec.enabled:
-        return None
-
-    step1 = ToolCallPlan(
-        resolved_goal=resolved_goal,
-        capability_id=capability_id,
-        arguments=arguments,
-        merged_context=merged_context,
-        assessment=assessment,
-        assistant_content="",
-    )
-    step2_args = {k: v for k, v in arguments.items() if k not in {"output_format"}}
-    if "path" not in step2_args:
-        topic = str(arguments.get("topic") or resolved_goal or "document").strip()
-        safe = re.sub(r"[^\w\s-]", "", topic)[:60].strip()
-        step2_args["path"] = f"{safe}.{output_format}"
-    step2 = ToolCallPlan(
-        resolved_goal=resolved_goal,
-        capability_id=downstream_id,
-        arguments=step2_args,
-        merged_context=merged_context,
-        assessment=assessment,
-        assistant_content=assistant_content,
-    )
-    return ToolChainPlan(
-        steps=[step1, step2],
-        resolved_goal=resolved_goal,
-        merged_context=merged_context,
-        assessment=assessment,
-        assistant_content=assistant_content,
-    )
+    # capability registry removed with the tools framework: no chain can be resolved.
+    return None
 
 
 def _execute_turn(plan: TurnPlan, ctx: TurnContext) -> TurnResult:
@@ -3273,13 +3195,7 @@ def _execute_tool_chain(plan: ToolChainPlan, ctx: TurnContext) -> TurnResult:
 
 def _capability_wants_grounded_synthesis(capability_id: str) -> bool:
     """Return True if the capability declared rag_grounded_synthesis in its planner_hints."""
-    try:
-        registry = capability_registry.load_capability_registry()
-        spec = registry.get(capability_id)
-        if spec is not None:
-            return bool((spec.planner_hints or {}).get("rag_grounded_synthesis"))
-    except Exception:  # noqa: BLE001
-        pass
+    # capability registry removed with the tools framework
     return False
 
 
@@ -3804,54 +3720,21 @@ _CHAT_THREAD_HINTS_CACHE_KEY: int | None = None
 
 def _chat_thread_hints() -> ChatThreadHints:
     global _CHAT_THREAD_HINTS_CACHE, _CHAT_THREAD_HINTS_CACHE_KEY
-    # Check our own cache first — avoids calling load_capability_registry (which
-    # runs stat() on the YAML file) on every hot turn.
+    # capability registry removed with the tools framework: always fall back to
+    # the bootstrap token sets below.
     if _CHAT_THREAD_HINTS_CACHE is not None:
-        try:
-            registry = capability_registry.load_capability_registry()
-        except Exception:  # noqa: BLE001
-            return _CHAT_THREAD_HINTS_CACHE
-        if _CHAT_THREAD_HINTS_CACHE_KEY == id(registry):
-            return _CHAT_THREAD_HINTS_CACHE
+        return _CHAT_THREAD_HINTS_CACHE
 
     action_tokens = set(_BOOTSTRAP_EXECUTION_ACTION_TOKENS)
     artifact_tokens = set(_BOOTSTRAP_EXECUTION_ARTIFACT_TOKENS)
     continuation_tokens = set(_BOOTSTRAP_CONTINUATION_TOKENS)
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return ChatThreadHints(
-            action_tokens=frozenset(action_tokens),
-            artifact_tokens=frozenset(artifact_tokens),
-            continuation_tokens=frozenset(continuation_tokens),
-        )
-
-    cache_key = id(registry)
-
-    for spec in registry.enabled_capabilities().values():
-        artifact_tokens.update(_tokens_from_text(spec.capability_id))
-        artifact_tokens.update(_tokens_from_text(spec.group or ""))
-        artifact_tokens.update(_tokens_from_text(spec.subgroup or ""))
-        for value in (*spec.tags, *spec.aliases):
-            artifact_tokens.update(_tokens_from_text(value))
-        hints = spec.planner_hints if isinstance(spec.planner_hints, Mapping) else {}
-        action_tokens.update(_tokens_from_sequence(hints.get("task_intents")))
-        raw_thread_hints = hints.get("chat_thread_hints")
-        if not isinstance(raw_thread_hints, Mapping):
-            continue
-        action_tokens.update(_tokens_from_sequence(raw_thread_hints.get("action_tokens")))
-        artifact_tokens.update(_tokens_from_sequence(raw_thread_hints.get("artifact_tokens")))
-        continuation_tokens.update(
-            _tokens_from_sequence(raw_thread_hints.get("continuation_tokens"))
-        )
-
     result = ChatThreadHints(
         action_tokens=frozenset(action_tokens),
         artifact_tokens=frozenset(artifact_tokens),
         continuation_tokens=frozenset(continuation_tokens),
     )
     _CHAT_THREAD_HINTS_CACHE = result
-    _CHAT_THREAD_HINTS_CACHE_KEY = cache_key
+    _CHAT_THREAD_HINTS_CACHE_KEY = id(result)
     return result
 
 

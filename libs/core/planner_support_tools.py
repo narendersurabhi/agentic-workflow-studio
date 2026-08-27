@@ -7,8 +7,6 @@ from typing import Any, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from libs.core import (
-    capability_registry,
-    capability_search,
     models,
     run_specs,
 )
@@ -149,54 +147,8 @@ def build_planner_support_tool_specs() -> list[models.ToolSpec]:
     ]
 
 
-def search_capabilities_support(
-    *,
-    query: str,
-    capabilities: Mapping[str, capability_registry.CapabilitySpec],
-    intent_hint: str | None = None,
-    limit: int = 8,
-) -> dict[str, Any]:
-    entries = capability_search.build_capability_search_entries(capabilities)
-    matches = capability_search.search_capabilities(
-        query=query,
-        capability_entries=entries,
-        intent_hint=intent_hint,
-        limit=limit,
-        rerank_feedback_rows=[],
-    )
-    return {"matches": matches}
-
-
-def get_capability_contract_support(
-    *,
-    capability_id: str,
-    capabilities: Mapping[str, capability_registry.CapabilitySpec],
-) -> dict[str, Any]:
-    spec = capabilities.get(capability_id)
-    if spec is None:
-        return {"contract": {}, "error": f"capability_not_found:{capability_id}"}
-    return {
-        "contract": {
-            "capability_id": spec.capability_id,
-            "description": spec.description,
-            "risk_tier": spec.risk_tier,
-            "idempotency": spec.idempotency,
-            "group": spec.group,
-            "subgroup": spec.subgroup,
-            "input_schema_ref": spec.input_schema_ref,
-            "output_schema_ref": spec.output_schema_ref,
-            "aliases": list(spec.aliases),
-            "planner_hints": dict(spec.planner_hints or {}),
-            "adapters": [
-                {
-                    "type": adapter.type,
-                    "server_id": adapter.server_id,
-                }
-                for adapter in spec.adapters
-                if adapter.enabled
-            ],
-        }
-    }
+# search_capabilities_support and get_capability_contract_support removed with
+# the tools/capability-registry framework.
 
 
 def get_schema_support(

@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from libs.core import (
     capability_search,
-    capability_registry,
     execution_contracts,
     intent_contract,
     job_projection,
@@ -1052,10 +1051,8 @@ def _ensure_renderer_required_inputs(plan: models.PlanCreate) -> models.PlanCrea
     tasks = [task.model_copy(deep=True) for task in plan.tasks]
     task_by_name = {task.name: task for task in tasks}
     changed = False
-    try:
-        capabilities = capability_registry.load_capability_registry().enabled_capabilities()
-    except Exception:  # noqa: BLE001
-        capabilities = {}
+    # capability_registry lookup removed with the tools framework.
+    capabilities: dict[str, Any] = {}
     exported_paths_by_request: dict[str, set[str]] = {}
     for capability_id, spec in capabilities.items():
         paths = {
@@ -1275,7 +1272,7 @@ def _resolve_task_intent_for_validation(
 
 def _capability_intent_mismatch(
     task_intent: str,
-    capability: capability_registry.CapabilitySpec,
+    capability: Any,
     capability_id: str,
 ) -> str | None:
     return planner_service.capability_intent_mismatch(
@@ -1319,20 +1316,7 @@ def _dependency_fill_defaults() -> dict[str, object]:
     return planner_service.dependency_fill_defaults()
 
 
-def _planner_capabilities() -> dict[str, capability_registry.CapabilitySpec]:
-    mode = capability_registry.resolve_capability_mode()
-    if mode == "disabled":
-        return {}
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception as exc:  # noqa: BLE001
-        core_logging.get_logger("planner").warning(
-            "capability_registry_load_failed",
-            mode=mode,
-            error=str(exc),
-        )
-        return {}
-    return dict(sorted(registry.enabled_capabilities().items()))
+# _planner_capabilities removed with the tools framework (capability_registry).
 
 
 def _emit_plan_event(
@@ -1353,7 +1337,7 @@ def _emit_plan_event(
 
 def _planner_semantic_capability_hints(
     job: models.Job,
-    capabilities: Mapping[str, capability_registry.CapabilitySpec],
+    capabilities: Mapping[str, Any],
     *,
     correlation_id: str | None = None,
     limit: int = 10,
@@ -1410,7 +1394,7 @@ def _emit_planner_capability_selection_event(
 
 
 def _validate_capability_inputs(
-    capability: capability_registry.CapabilitySpec | planner_contracts.PlanRequestCapability,
+    capability: Any,
     task: models.TaskCreate,
     raw_tool_inputs: dict[str, Any],
     job_or_request: models.Job | planner_contracts.PlanRequest,

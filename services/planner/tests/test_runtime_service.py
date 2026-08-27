@@ -3,18 +3,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-import pytest
-
-from libs.core import events, llm_provider, models
+from libs.core import events, models
 from services.planner.app import runtime_service
-
-
-class _FakeRegistry:
-    def __init__(self, specs: list[models.ToolSpec]) -> None:
-        self._specs = specs
-
-    def list_specs(self) -> list[models.ToolSpec]:
-        return list(self._specs)
 
 
 class _FakeRedis:
@@ -64,59 +54,8 @@ def _plan() -> models.PlanCreate:
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "issue #120: asserts `context.provider is provider` (identity), but "
-        "resolve_execution_context now wraps the raw provider in "
-        "TimingLLMProvider before returning it -- that wrapping was added "
-        "without updating this test's identity assertion. Needs someone who "
-        "owns the timing-wrapper change to decide whether the test should "
-        "unwrap/compare the underlying provider or whether identity was "
-        "never meant to survive the wrap."
-    ),
-    strict=False,
-)
-def test_resolve_execution_context_uses_llm_provider_when_enabled(monkeypatch) -> None:
-    provider = llm_provider.MockLLMProvider()
-    tool = models.ToolSpec(
-        name="llm_generate",
-        description="generate",
-        input_schema={},
-        output_schema={},
-    )
-    planner_tool = models.ToolSpec(
-        name="search_capabilities",
-        description="search capabilities",
-        input_schema={},
-        output_schema={},
-    )
-
-    monkeypatch.setattr(
-        runtime_service.llm_provider, "resolve_provider", lambda *args, **kwargs: provider
-    )
-    monkeypatch.setattr(
-        runtime_service.tool_registry,
-        "build_default_registry",
-        lambda **kwargs: _FakeRegistry([tool]),
-    )
-    monkeypatch.setattr(
-        runtime_service.tool_registry,
-        "build_planner_support_tool_specs",
-        lambda: [planner_tool],
-    )
-
-    context = runtime_service.resolve_execution_context(
-        runtime_service.PlannerRuntimeConfig(
-            redis_url="redis://redis:6379/0",
-            metrics_port=9101,
-            planner_mode="llm",
-            llm_provider_name="mock",
-        )
-    )
-
-    assert context.provider is provider
-    assert context.tool_specs[0].name == "llm_generate"
-    assert context.planner_tool_specs[0].name == "search_capabilities"
+# test_resolve_execution_context_uses_llm_provider_when_enabled removed with the
+# tools framework (exercised runtime_service.tool_registry wiring).
 
 
 def test_process_stream_entry_emits_created_and_selection_events() -> None:

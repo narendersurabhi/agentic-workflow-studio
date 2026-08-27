@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from libs.core import capability_registry, intent_contract
+from libs.core import intent_contract
 from libs.core.llm_provider import LLMProvider, LLMProviderError, LLMRequest
 
 _BOOTSTRAP_FORMAT_TOKENS = {"docx": "docx", "pdf": "pdf"}
@@ -538,83 +538,9 @@ def _normalize_output_format_token(value: str) -> str:
 
 
 def _chat_field_metadata() -> ChatClarificationFieldMetadata:
-    try:
-        registry = capability_registry.load_capability_registry()
-    except Exception:  # noqa: BLE001
-        return ChatClarificationFieldMetadata(output_format_tokens=dict(_BOOTSTRAP_FORMAT_TOKENS))
-
-    aliases: dict[str, list[str]] = {}
-    questions: dict[str, str] = {}
-    examples: dict[str, list[str]] = {}
-    format_tokens: dict[str, str] = {}
-
-    def _append_alias(field: str, alias: str) -> None:
-        normalized_field = intent_contract.normalize_required_input_key(field)
-        normalized_alias = intent_contract.normalize_required_input_key(alias)
-        if not normalized_field or not normalized_alias:
-            return
-        values = aliases.setdefault(normalized_field, [])
-        if normalized_field not in values:
-            values.append(normalized_field)
-        if normalized_alias not in values:
-            values.append(normalized_alias)
-
-    def _append_example(field: str, example: str) -> None:
-        normalized_field = intent_contract.normalize_required_input_key(field)
-        normalized_example = str(example or "").strip()
-        if not normalized_field or not normalized_example:
-            return
-        values = examples.setdefault(normalized_field, [])
-        if normalized_example not in values:
-            values.append(normalized_example)
-
-    for spec in registry.enabled_capabilities().values():
-        hints = spec.planner_hints if isinstance(spec.planner_hints, Mapping) else {}
-        raw_aliases = hints.get("chat_field_aliases")
-        if isinstance(raw_aliases, Mapping):
-            for raw_field, raw_values in raw_aliases.items():
-                field = intent_contract.normalize_required_input_key(raw_field)
-                if not field:
-                    continue
-                _append_alias(field, field)
-                for alias in _normalize_example_list(raw_values):
-                    _append_alias(field, alias)
-
-        raw_questions = hints.get("chat_field_questions")
-        if isinstance(raw_questions, Mapping):
-            for raw_field, raw_question in raw_questions.items():
-                field = intent_contract.normalize_required_input_key(raw_field)
-                question = str(raw_question or "").strip()
-                if field and question:
-                    questions.setdefault(field, question)
-
-        raw_examples = hints.get("chat_field_examples")
-        if isinstance(raw_examples, Mapping):
-            for raw_field, raw_values in raw_examples.items():
-                for example in _normalize_example_list(raw_values):
-                    _append_example(str(raw_field), example)
-
-        raw_tokens = hints.get("chat_output_format_tokens")
-        if isinstance(raw_tokens, Mapping):
-            for raw_token, raw_value in raw_tokens.items():
-                token = str(raw_token or "").strip().strip("\"'").lower()
-                value = str(raw_value or "").strip().strip("\"'").lower()
-                if token and value:
-                    format_tokens[token] = value
-
-        required_extension = str(hints.get("required_output_extension") or "").strip().lower()
-        if required_extension:
-            format_tokens.setdefault(required_extension, required_extension)
-
-    for key, value in _BOOTSTRAP_FORMAT_TOKENS.items():
-        format_tokens.setdefault(key, value)
-
-    return ChatClarificationFieldMetadata(
-        field_aliases={key: tuple(values) for key, values in aliases.items()},
-        field_questions=questions,
-        field_examples={key: tuple(values) for key, values in examples.items()},
-        output_format_tokens=format_tokens,
-    )
+    # capability registry removed with the tools framework: no per-capability
+    # field aliases/questions/examples to harvest, only the bootstrap format tokens.
+    return ChatClarificationFieldMetadata(output_format_tokens=dict(_BOOTSTRAP_FORMAT_TOKENS))
 
 
 def _unique_field_aliases(*collections: Sequence[str]) -> tuple[str, ...]:

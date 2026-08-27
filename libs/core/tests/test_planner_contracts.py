@@ -4,7 +4,14 @@ from datetime import datetime
 
 import pytest
 
-from libs.core import capability_registry, models, planner_contracts, workflow_contracts
+from libs.core import models, planner_contracts, workflow_contracts
+
+# Tests that constructed capability_registry.CapabilitySpec fixtures were removed
+# with the tools framework: test_build_plan_request_extracts_intent_graph_and_capabilities,
+# test_canonicalize_planner_request_ids_rewrites_aliases_and_adapter_tools,
+# test_compile_task_request_payloads_compiles_capability_requests_to_runtime_tools,
+# test_validate_planner_request_language_rejects_raw_adapter_tool_name,
+# test_validate_planner_request_language_supports_compat_mode.
 
 
 def _job() -> models.Job:
@@ -29,60 +36,6 @@ def _job() -> models.Job:
             },
         },
     )
-
-
-def test_build_plan_request_extracts_intent_graph_and_capabilities() -> None:
-    tool = models.ToolSpec(
-        name="docx_render_from_spec",
-        description="Render a DOCX",
-        input_schema={},
-        output_schema={},
-        tool_intent=models.ToolIntent.render,
-    )
-    capability = capability_registry.CapabilitySpec(
-        capability_id="github.repo.list",
-        description="Check for a repo",
-        group="github",
-        subgroup="repo",
-        risk_tier="low",
-        idempotency="read",
-        input_schema_ref="schemas/github.repo.list",
-        output_schema_ref="schemas/github.repo.list.output",
-        adapters=(
-            capability_registry.CapabilityAdapterSpec(
-                type="mcp",
-                server_id="github_local",
-                tool_name="github.repo.list",
-                enabled=True,
-            ),
-        ),
-        exports=(
-            capability_registry.CapabilityExportSpec(
-                name="repos",
-                path="repos",
-                description="Repository search results",
-            ),
-        ),
-        planner_hints={"task_intents": ["io"]},
-    )
-
-    request = planner_contracts.build_plan_request(
-        _job(),
-        tools=[tool],
-        capabilities={"github.repo.list": capability},
-        semantic_capability_hints=[{"capability_id": "github.repo.list", "score": 0.9}],
-        max_dependency_depth=4,
-    )
-
-    assert request.job_id == "job-1"
-    assert request.goal_intent_graph is not None
-    assert planner_contracts.goal_intent_sequence(request) == ["render"]
-    assert planner_contracts.capability_map(request)["github.repo.list"].planner_hints == {
-        "task_intents": ["io"]
-    }
-    assert planner_contracts.capability_map(request)["github.repo.list"].exports[0].name == "repos"
-    assert request.semantic_capability_hints[0]["capability_id"] == "github.repo.list"
-    assert request.max_dependency_depth == 4
 
 
 def test_build_plan_request_prefers_normalized_envelope_graph_when_present() -> None:
@@ -293,138 +246,3 @@ def test_validate_render_path_requirement_rejects_dependency_reference() -> None
 
     assert error == "render_path_derived_not_allowed:docx_render_from_spec"
 
-
-def test_canonicalize_planner_request_ids_rewrites_aliases_and_adapter_tools() -> None:
-    capability = capability_registry.CapabilitySpec(
-        capability_id="document.docx.render",
-        description="Render a DOCX",
-        group="documents",
-        subgroup="rendering",
-        risk_tier="read_only",
-        idempotency="read",
-        aliases=("document.docx.generate",),
-        adapters=(
-            capability_registry.CapabilityAdapterSpec(
-                type="tool",
-                server_id="local_worker",
-                tool_name="docx_render_from_spec",
-                enabled=True,
-            ),
-        ),
-    )
-
-    canonicalized, rewrites = planner_contracts.canonicalize_planner_request_ids(
-        [
-            "document.docx.generate",
-            "docx_render_from_spec",
-            "document.docx.render",
-        ],
-        capabilities={"document.docx.render": capability},
-    )
-
-    assert canonicalized == ["document.docx.render"]
-    assert rewrites == {
-        "document.docx.generate": "document.docx.render",
-        "docx_render_from_spec": "document.docx.render",
-    }
-
-
-def test_compile_task_request_payloads_compiles_capability_requests_to_runtime_tools() -> None:
-    capability = capability_registry.CapabilitySpec(
-        capability_id="document.spec.generate",
-        description="Generate a document spec",
-        group="documents",
-        subgroup="generation",
-        risk_tier="read_only",
-        idempotency="read",
-        adapters=(
-            capability_registry.CapabilityAdapterSpec(
-                type="tool",
-                server_id="local_worker",
-                tool_name="llm_generate_document_spec",
-                enabled=True,
-            ),
-        ),
-    )
-
-    compiled = planner_contracts.compile_task_request_payloads(
-        capability_requests=["document.spec.generate"],
-        tool_inputs={"document.spec.generate": {"instruction": "Generate a document"}},
-        capabilities={"document.spec.generate": capability},
-    )
-
-    assert compiled.request_ids == ["llm_generate_document_spec"]
-    assert compiled.request_id_rewrites == {"document.spec.generate": "llm_generate_document_spec"}
-    assert compiled.tool_inputs == {
-        "llm_generate_document_spec": {"instruction": "Generate a document"}
-    }
-    assert compiled.capability_bindings["llm_generate_document_spec"]["capability_id"] == (
-        "document.spec.generate"
-    )
-
-
-def test_validate_planner_request_language_rejects_raw_adapter_tool_name() -> None:
-    capability = capability_registry.CapabilitySpec(
-        capability_id="document.spec.generate",
-        description="Generate a document spec",
-        group="documents",
-        subgroup="generation",
-        risk_tier="read_only",
-        idempotency="read",
-        enabled=True,
-        adapters=(
-            capability_registry.CapabilityAdapterSpec(
-                type="tool",
-                server_id="local_worker",
-                tool_name="llm_generate_document_spec",
-                enabled=True,
-            ),
-        ),
-    )
-
-    error = planner_contracts.validate_planner_request_language(
-        "llm_generate_document_spec",
-        capabilities={"document.spec.generate": capability},
-        full_capabilities={"document.spec.generate": capability},
-        runtime_tool_names=["llm_generate_document_spec"],
-    )
-
-    assert error == (
-        "planner_request_language_invalid:llm_generate_document_spec:"
-        "use_capability_id:document.spec.generate"
-    )
-
-
-def test_validate_planner_request_language_supports_compat_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    capability = capability_registry.CapabilitySpec(
-        capability_id="document.spec.generate",
-        description="Generate a document spec",
-        group="documents",
-        subgroup="generation",
-        risk_tier="read_only",
-        idempotency="read",
-        enabled=True,
-        adapters=(
-            capability_registry.CapabilityAdapterSpec(
-                type="tool",
-                server_id="local_worker",
-                tool_name="llm_generate_document_spec",
-                enabled=True,
-            ),
-        ),
-    )
-    monkeypatch.setenv(
-        "PLANNER_CAPABILITY_LANGUAGE_MODE",
-        planner_contracts.PLANNER_CAPABILITY_LANGUAGE_MODE_COMPAT,
-    )
-
-    error = planner_contracts.validate_planner_request_language(
-        "llm_generate_document_spec",
-        capabilities={"document.spec.generate": capability},
-        full_capabilities={"document.spec.generate": capability},
-        runtime_tool_names=["llm_generate_document_spec"],
-    )
-
-    assert error is None

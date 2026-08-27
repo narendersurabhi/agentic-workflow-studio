@@ -5,24 +5,14 @@ from typing import Any, Mapping
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from libs.core import capability_registry, intent_contract, workflow_contracts
+from libs.core import intent_contract, workflow_contracts
 from services.api.app import intent_service
 
 
 def load_required_inputs_lookup() -> Any:
-    registry = capability_registry.load_capability_registry()
-    required_inputs_by_capability: dict[str, list[str]] = {}
-    for capability_id, spec in registry.enabled_capabilities().items():
-        required_inputs_by_capability[capability_id] = (
-            capability_registry.planner_collectible_inputs_for_capability(
-                capability_id,
-                registry=registry,
-            )
-        )
-
+    # Removed with the tools/capability-registry framework.
     def _lookup(capability_id: str) -> list[str]:
-        canonical = registry.canonicalize_id(capability_id) or str(capability_id or "").strip()
-        return list(required_inputs_by_capability.get(canonical, ()))
+        return []
 
     return _lookup
 
